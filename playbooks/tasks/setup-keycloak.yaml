@@ -1,0 +1,22 @@
+---
+# tasks/setup-keycloak.yaml
+# Setup Keycloak authentication integration
+
+- name: Configure Keycloak realm for application
+  ansible.builtin.debug:
+    msg: |
+      Keycloak integration would:
+      1. Create realm: {{ features.keycloak.realm | default(app_name) }}
+      2. Create client for application
+      3. Configure redirect URIs
+      4. Create secret with client credentials
+      5. Inject KEYCLOAK_* environment variables
+      
+      This requires Keycloak to be deployed and accessible.
+      Implementation depends on Keycloak API access.
+
+# Placeholder for actual implementation
+# Would typically:
+# 1. Use Keycloak Admin API to create realm/client
+# 2. Create Kubernetes secret with OIDC configuration
+# 3. Update deployment with auth environment variables

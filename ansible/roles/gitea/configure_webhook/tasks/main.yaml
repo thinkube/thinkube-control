@@ -1,0 +1,100 @@
+---
+# IMPORTANT: This file has a duplicate that must be kept in sync!
+# Original: /home/thinkube/thinkube/ansible/roles/gitea/configure_webhook/tasks/main.yaml
+# Copy: /home/thinkube/thinkube/thinkube-control/ansible/roles/gitea/configure_webhook/tasks/main.yaml
+# If you modify this file, ensure the changes are reflected in both locations.
+
+# Configure webhook for a Gitea repository
+#
+# Variables required:
+#   - gitea_org: Organization name
+#   - gitea_repo_name: Repository name
+#   - gitea_token: Admin token for authentication
+#   - kubeconfig: Path to kubeconfig file
+
+- name: Verify required variables
+  ansible.builtin.assert:
+    that:
+      - gitea_org is defined
+      - gitea_repo_name is defined
+      - gitea_token is defined
+      - kubeconfig is defined
+    fail_msg: "Required variables missing: gitea_org, gitea_repo_name, gitea_token, or kubeconfig"
+
+- name: Check if Argo Events webhook service exists
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: v1
+    kind: Service
+    namespace: "{{ argo_namespace }}"
+    name: gitea-webhook-eventsource
+  register: argo_events_check
+  failed_when: false
+
+- name: Skip webhook configuration if Argo Events not available
+  when: argo_events_check.resources | length == 0
+  ansible.builtin.debug:
+    msg: "Argo Events webhook service not found. Skipping webhook configuration."
+
+- name: Configure webhook if Argo Events is available
+  when: argo_events_check.resources | length > 0
+  block:
+    - name: Get webhook secret from Argo namespace
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: v1
+        kind: Secret
+        namespace: "{{ argo_namespace }}"
+        name: gitea-webhook-secret
+      register: webhook_secret_data
+      failed_when: webhook_secret_data.resources | length == 0
+
+    - name: Decode webhook secret
+      ansible.builtin.set_fact:
+        webhook_secret: "{{ webhook_secret_data.resources[0].data.secret | b64decode }}"
+
+    - name: Check existing webhooks for repository
+      ansible.builtin.uri:
+        url: "{{ gitea_api_url }}/repos/{{ gitea_org }}/{{ gitea_repo_name }}/hooks"
+        method: GET
+        headers:
+          Authorization: "token {{ gitea_token }}"
+          Content-Type: "application/json"
+        status_code: 200
+        validate_certs: yes
+      register: existing_webhooks
+
+    - name: Check if webhook already exists
+      ansible.builtin.set_fact:
+        webhook_exists: "{{ existing_webhooks.json | selectattr('config.url', 'defined') | selectattr('config.url', 'equalto', webhook_url) | list | length > 0 }}"
+
+    - name: Create webhook in repository
+      ansible.builtin.uri:
+        url: "{{ gitea_api_url }}/repos/{{ gitea_org }}/{{ gitea_repo_name }}/hooks"
+        method: POST
+        headers:
+          Authorization: "token {{ gitea_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          type: "gitea"
+          config:
+            url: "{{ webhook_url }}"
+            content_type: "json"
+            secret: "{{ webhook_secret }}"
+          events: "{{ webhook_events }}"
+          active: true
+        status_code: 201
+        validate_certs: yes
+      when: not webhook_exists
+
+    - name: Report webhook status
+      ansible.builtin.debug:
+        msg: |
+          {% if webhook_exists %}
+          ✅ Webhook already configured for {{ gitea_org }}/{{ gitea_repo_name }}
+          {% else %}
+          ✅ Webhook configured for {{ gitea_org }}/{{ gitea_repo_name }}
+          {% endif %}
+          Webhook URL: {{ webhook_url }}
+          Events: {{ webhook_events | join(', ') }}

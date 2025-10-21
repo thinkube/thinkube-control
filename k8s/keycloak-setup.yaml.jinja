@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ namespace }}-keycloak
+  namespace: {{ namespace }}
+type: Opaque
+stringData:
+  client_id: "{{ namespace }}"
+  client_secret: "${KEYCLOAK_CLIENT_SECRET}"  # Replace with actual secret
+  realm: "{{ keycloak_realm }}"
+  auth_url: "https://{{ auth_subdomain }}.{{ domain_name }}/realms/{{ keycloak_realm }}/protocol/openid-connect/auth"
+  token_url: "https://{{ auth_subdomain }}.{{ domain_name }}/realms/{{ keycloak_realm }}/protocol/openid-connect/token"
+  api_url: "https://{{ auth_subdomain }}.{{ domain_name }}/realms/{{ keycloak_realm }}/protocol/openid-connect/userinfo"
+---
+# This ConfigMap contains a script that can be used to create the Keycloak client
+# It's not directly executed by K8s but provides documentation for manual setup
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-client-setup
+  namespace: {{ namespace }}
+data:
+  setup-instructions.sh: |
+    #!/bin/bash
+    # Keycloak Client Setup Script
+    # 
+    # This script provides instructions for setting up the required Keycloak client
+    # for the Dashboard Hub application.
+    #
+    # Prerequisites:
+    # - A running Keycloak server
+    # - The Keycloak admin CLI (kcadm.sh)
+    # - Appropriate admin credentials
+    
+    # Log in to Keycloak
+    ./kcadm.sh config credentials --server https://auth.thinkube.com \
+      --realm master --user admin --password "$KEYCLOAK_ADMIN_PASSWORD"
+    
+    # Create client
+    ./kcadm.sh create clients -r thinkube -s clientId={{ namespace }} \
+      -s name="{{ project_name | title }}" \
+      -s description="{{ project_name | title }} for platform management" \
+      -s enabled=true \
+      -s publicClient=false \
+      -s bearerOnly=false \
+      -s standardFlowEnabled=true \
+      -s serviceAccountsEnabled=true \
+      -s directAccessGrantsEnabled=false \
+      -s implicitFlowEnabled=false \
+      -s 'redirectUris=["https://control.thinkube.com/*"]' \
+      -s 'webOrigins=["https://control.thinkube.com"]' \
+      -s baseUrl="https://control.thinkube.com" \
+      -s rootUrl="https://control.thinkube.com" \
+      -o --id > client_id.txt
+    
+    CLIENT_ID=$(cat client_id.txt)
+    
+    # Generate client secret
+    CLIENT_SECRET=$(./kcadm.sh create clients/$CLIENT_ID/client-secret -r thinkube -o json | jq -r '.value')
+    echo "Client Secret: $CLIENT_SECRET"
+    
+    # Create client roles for each service
+    ./kcadm.sh create clients/$CLIENT_ID/roles -r thinkube -s name=storage-admin \
+      -s 'description=Access to storage services like MinIO'
+    
+    ./kcadm.sh create clients/$CLIENT_ID/roles -r thinkube -s name=logs-viewer \
+      -s 'description=Access to logging and monitoring services'
+    
+    ./kcadm.sh create clients/$CLIENT_ID/roles -r thinkube -s name=registry-user \
+      -s 'description=Access to container registry'
+    
+    ./kcadm.sh create clients/$CLIENT_ID/roles -r thinkube -s name=ai-user \
+      -s 'description=Access to AI and ML services'
+    
+    ./kcadm.sh create clients/$CLIENT_ID/roles -r thinkube -s name=automation-user \
+      -s 'description=Access to automation services'
+    
+    ./kcadm.sh create clients/$CLIENT_ID/roles -r thinkube -s name=db-admin \
+      -s 'description=Access to database management services'
+    
+    ./kcadm.sh create clients/$CLIENT_ID/roles -r thinkube -s name=developer \
+      -s 'description=Access to development services'
+    
+    ./kcadm.sh create clients/$CLIENT_ID/roles -r thinkube -s name=data-scientist \
+      -s 'description=Access to data science services'
+    
+    echo "=== CLIENT SETUP COMPLETE ==="
+    echo "Client ID: {{ namespace }}"
+    echo "Client Secret: $CLIENT_SECRET"
+    echo ""
+    echo "You must create the following Kubernetes secret:"
+    echo ""
+    echo "kubectl create secret generic {{ namespace }}-keycloak \\"
+    echo "  --namespace {{ namespace }} \\"
+    echo "  --from-literal=client_id={{ namespace }} \\"
+    echo "  --from-literal=client_secret=$CLIENT_SECRET \\"
+    echo "  --from-literal=realm=thinkube"

@@ -1,0 +1,105 @@
+---
+# tasks/create-ingress.yaml
+# Create Ingress resources based on configuration
+
+- name: Get TLS certificate from default namespace
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: v1
+    kind: Secret
+    namespace: default
+    name: thinkube-com-tls
+  register: wildcard_cert
+  failed_when: wildcard_cert.resources | length == 0
+
+- name: Copy TLS certificate to application namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ app_name }}-tls-secret"
+        namespace: "{{ namespace }}"
+      type: kubernetes.io/tls
+      data:
+        tls.crt: "{{ wildcard_cert.resources[0].data['tls.crt'] }}"
+        tls.key: "{{ wildcard_cert.resources[0].data['tls.key'] }}"
+
+# Subdomain-based routing (preferred approach)
+- name: Create subdomain-based Ingress
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata:
+        name: "{{ app_name }}-ingress"
+        namespace: "{{ namespace }}"
+        labels:
+          app.kubernetes.io/name: "{{ app_name }}"
+          app.kubernetes.io/part-of: thinkube
+        annotations:
+          nginx.ingress.kubernetes.io/ssl-redirect: "true"
+          {% if ingress_config.annotations is defined %}
+          {% for key, value in ingress_config.annotations.items() %}
+          {{ key }}: "{{ value }}"
+          {% endfor %}
+          {% endif %}
+      spec:
+        ingressClassName: "{{ ingress_config.className | default('nginx') }}"
+        tls:
+          - hosts:
+              {% if ingress_config.subdomains is defined %}
+              {% for subdomain in ingress_config.subdomains %}
+              - "{{ subdomain.name }}.{{ app_name }}.{{ domain_name }}"
+              {% endfor %}
+              {% else %}
+              - "{{ app_name }}.{{ domain_name }}"
+              {% endif %}
+            secretName: "{{ app_name }}-tls-secret"
+        rules:
+          {% if ingress_config.subdomains is defined %}
+          # Subdomain-based routing
+          {% for subdomain in ingress_config.subdomains %}
+          - host: "{{ subdomain.name }}.{{ app_name }}.{{ domain_name }}"
+            http:
+              paths:
+                - path: "{{ subdomain.path | default('/') }}"
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: "{{ app_name }}-{{ subdomain.container }}"
+                      port:
+                        number: {{ subdomain.port | default(containers | selectattr('name', 'equalto', subdomain.container) | map(attribute='port') | first) }}
+          {% endfor %}
+          {% elif ingress_config.paths is defined %}
+          # Path-based routing
+          - host: "{{ app_name }}.{{ domain_name }}"
+            http:
+              paths:
+                {% for path in ingress_config.paths %}
+                - path: "{{ path.path }}"
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: "{{ app_name }}-{{ path.container }}"
+                      port:
+                        number: {{ path.port | default(containers | selectattr('name', 'equalto', path.container) | map(attribute='port') | first) }}
+                {% endfor %}
+          {% else %}
+          # Default: single container exposed
+          - host: "{{ app_name }}.{{ domain_name }}"
+            http:
+              paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: "{{ app_name }}-{{ containers[0].name }}"
+                      port:
+                        number: {{ containers[0].port }}
+          {% endif %}
+  when: ingress_config.enabled | default(true)

@@ -1,0 +1,49 @@
+---
+# tasks/setup-api-tokens.yaml
+# Setup API token management
+
+- name: Create API token secret for application
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ app_name }}-api-tokens"
+        namespace: "{{ namespace }}"
+        labels:
+          app.kubernetes.io/name: "{{ app_name }}"
+          app.kubernetes.io/component: api-tokens
+      type: Opaque
+      data:
+        # Generate a default API token
+        default-token: "{{ lookup('password', '/dev/null length=32 chars=ascii_letters,digits') | b64encode }}"
+
+- name: Create ConfigMap for API token configuration
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "{{ app_name }}-api-config"
+        namespace: "{{ namespace }}"
+        labels:
+          app.kubernetes.io/name: "{{ app_name }}"
+          app.kubernetes.io/component: api-tokens
+      data:
+        token-config.yaml: |
+          # API Token Configuration
+          tokens:
+            - name: default
+              description: Default API token
+              scopes:
+                - read
+                - write
+              rateLimit: 1000
+              enabled: true
+
+# Note: Actual implementation would integrate with thinkube-control's
+# API token management system for centralized token lifecycle management

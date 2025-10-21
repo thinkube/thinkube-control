@@ -1,0 +1,111 @@
+# Copier configuration for Thinkube Control template
+_envops:
+  block_start_string: "{%"
+  block_end_string: "%}"
+  variable_start_string: "{{"
+  variable_end_string: "}}"
+  comment_start_string: "{#"
+  comment_end_string: "#}"
+  keep_trailing_newline: true
+
+# Questions for the user
+project_name:
+  type: str
+  default: thinkube-control
+  help: "Project name (used for namespaces, resources)"
+
+domain_name:
+  type: str
+  default: thinkube.com
+  help: "Your base domain name"
+
+control_subdomain:
+  type: str
+  default: control
+  help: "Subdomain for the control interface"
+
+auth_subdomain:
+  type: str
+  default: auth
+  help: "Subdomain for authentication (Keycloak)"
+
+registry_subdomain:
+  type: str
+  default: registry
+  help: "Subdomain for container registry"
+
+namespace:
+  type: str
+  default: "{{ project_name }}"
+  help: "Kubernetes namespace"
+
+keycloak_realm:
+  type: str
+  default: thinkube
+  help: "Keycloak realm name"
+
+github_org:
+  type: str
+  default: "{{ domain_name.split('.')[0] }}"
+  help: "GitHub organization for the repository"
+
+enable_dev_mode:
+  type: bool
+  default: true
+  help: "Enable development mode with hot-reload"
+
+system_username:
+  type: str
+  help: "System username where shared-code is located"
+  # No default - must be provided during deployment
+
+master_node_name:
+  type: str
+  help: "Kubernetes master node hostname"
+  # No default - must be provided during deployment
+
+master_node_ip:
+  type: str
+  help: "Kubernetes master node IP address"
+  # No default - must be provided during deployment
+
+# Computed values (not asked to user)
+_templates_suffix: .jinja
+
+# Additional variables for templates
+backend_image_repo:
+  type: str
+  default: "{{ registry_subdomain }}.{{ domain_name }}/thinkube/{{ project_name }}-backend"
+  when: false  # Don't ask user
+
+frontend_image_repo:
+  type: str
+  default: "{{ registry_subdomain }}.{{ domain_name }}/thinkube/{{ project_name }}-frontend"
+  when: false  # Don't ask user
+
+container_registry:
+  type: str
+  default: "{{ registry_subdomain }}.{{ domain_name }}"
+  when: false  # Don't ask user
+
+# Files to skip
+# Removed _skip_if_exists to allow updates during development
+
+# Post-generation message
+_message_after_copy: |
+  
+  ✨ Thinkube Control has been generated!
+  
+  Next steps:
+  1. cd {{ project_name }}
+  2. git init && git add . && git commit -m "Initial commit"
+  3. git remote add origin git@github.com:{{ github_org }}/{{ project_name }}.git
+  4. git push -u origin main
+  
+  To deploy:
+  1. Ensure Thinkube core components are installed
+  2. Run: tkube deploy (coming soon)
+  3. Or use Ansible: ./scripts/run_ansible.sh ansible/40_thinkube/core/thinkube-control/10_deploy.yaml
+  
+  Your control interface will be available at:
+  https://{{ control_subdomain }}.{{ domain_name }}

@@ -1,0 +1,22 @@
+---
+# tasks/setup-redis.yaml
+# Setup Redis integration for the application
+
+- name: Create Redis configuration for application
+  ansible.builtin.debug:
+    msg: |
+      Redis integration would:
+      1. Deploy Redis instance or connect to shared Redis
+      2. Create Redis password secret
+      3. Inject REDIS_* environment variables
+      
+      Mode: {{ features.redis.mode | default('standalone') }}
+      
+      This feature requires Redis operator or external Redis instance.
+      Implementation depends on infrastructure setup.
+
+# Placeholder for actual implementation
+# Would typically:
+# 1. Deploy Redis via operator or connect to existing
+# 2. Create Kubernetes secret with connection details
+# 3. Update deployment to reference secret

@@ -1,0 +1,20 @@
+---
+# Test SD Template Deployment
+# Purpose: Test the new paused-backend template structure with lookup('template')
+
+- name: Deploy SD template to test paused-backend structure
+  hosts: localhost
+  gather_facts: true
+  vars:
+    template_name: "sd"
+    template_url: "https://github.com/cmxela/sd"
+    execution_mode: "foreground"
+
+  tasks:
+    - name: Deploy SD template using container_deployment role
+      include_role:
+        name: container_deployment/deploy_template
+      vars:
+        template_name: "{{ template_name }}"
+        template_url: "{{ template_url }}"
+        execution_mode: "{{ execution_mode }}"

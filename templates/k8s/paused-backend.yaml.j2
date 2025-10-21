@@ -1,0 +1,224 @@
+---
+# Paused Backend Service for {{ project_name }}
+# Shows "Resource Optimized" page when service is scaled to zero
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: paused-backend-script
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: paused-backend
+    app.kubernetes.io/component: fallback
+    app.kubernetes.io/part-of: {{ project_name }}
+data:
+  server.py: |
+    #!/usr/bin/env python3
+    """
+    Paused backend server for Thinkube services.
+    Shows a nice "Resource Optimized" page when services are scaled to zero.
+    Generated for {{ project_name }} in namespace {{ k8s_namespace }}
+    """
+{% raw %}
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import os
+    
+    class PausedHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            # Return 200 OK (not 503) so nginx knows we handled it
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.end_headers()
+            
+            # Extract service name from Host header
+            host = self.headers.get('Host', '')
+            service = host.split('.')[0] if '.' in host else 'service'
+            
+            # Get domain for dashboard link
+            domain = '.'.join(host.split('.')[1:]) if '.' in host else '{% endraw %}{{ domain_name }}{% raw %}'
+            
+            html = f"""<!DOCTYPE html>
+    <html data-theme="thinkube">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{service.replace('-', ' ').title()} - Resource Optimized</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <link href="https://cdn.jsdelivr.net/npm/daisyui@4.4.24/dist/full.min.css" rel="stylesheet" type="text/css" />
+        <style>
+            [data-theme="thinkube"] {{
+                --p: 211 100% 50%;
+                --pf: 211 100% 45%;
+                --pc: 0 0% 100%;
+                --s: 158 64% 52%;
+                --sf: 158 64% 47%;
+                --sc: 0 0% 100%;
+                --a: 36 100% 50%;
+                --af: 36 100% 45%;
+                --ac: 0 0% 100%;
+                --n: 217 24% 17%;
+                --nf: 217 24% 12%;
+                --nc: 0 0% 100%;
+                --b1: 229 24% 21%;
+                --b2: 229 24% 17%;
+                --b3: 229 24% 13%;
+                --bc: 0 0% 100%;
+            }}
+        </style>
+    </head>
+    <body class="min-h-screen bg-base-200">
+        <div class="hero min-h-screen">
+            <div class="hero-content text-center">
+                <div class="max-w-2xl">
+                    <h1 class="text-5xl font-bold mb-4">{service.replace('-', ' ').title()}</h1>
+                    
+                    <div class="badge badge-info badge-lg gap-2 mb-6">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                        Resource Optimized
+                    </div>
+                    
+                    <div class="card bg-base-100 shadow-xl mb-6">
+                        <div class="card-body">
+                            <p class="text-lg">
+                                This service is currently <strong>paused</strong> to optimize resource allocation 
+                                for active development and experiments.
+                            </p>
+                            <p class="text-sm opacity-75 mt-2">
+                                Enable this service from the Thinkube Control dashboard when needed.
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <div class="card bg-base-100 shadow-xl">
+                        <div class="card-body">
+                            <h2 class="card-title justify-center">Quick Actions</h2>
+                            <div class="card-actions justify-center">
+                                <a href="https://control.{domain}/" class="btn btn-primary">
+                                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                                    </svg>
+                                    Go to Dashboard
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-8 p-4 bg-base-300 rounded-lg">
+                        <p class="text-sm opacity-75">
+                            <strong>Thinkube Platform</strong><br>
+                            Intelligently manages resources across development environments 
+                            to ensure optimal performance for active workloads.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </body>
+    </html>"""
+            
+            self.wfile.write(html.encode())
+        
+        def do_HEAD(self):
+            # Health check support
+            self.send_response(200)
+            self.end_headers()
+        
+        def log_message(self, format, *args):
+            # Suppress logs for cleaner output
+            pass
+    
+    if __name__ == '__main__':
+        port = int(os.environ.get('PORT', 8080))
+        print(f"Paused backend server for {% endraw %}{{ project_name }}{% raw %} listening on port {port}")
+        server = HTTPServer(('0.0.0.0', port), PausedHandler)
+        server.serve_forever()
+{% endraw %}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paused-backend
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: paused-backend
+    app.kubernetes.io/component: fallback
+    app.kubernetes.io/part-of: {{ project_name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: paused-backend
+      app.kubernetes.io/instance: {{ project_name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: paused-backend
+        app.kubernetes.io/instance: {{ project_name }}
+    spec:
+      containers:
+      - name: server
+        image: registry.{{ domain_name }}/library/python-base:3.12-slim
+        command: ["python", "/app/server.py"]
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        env:
+        - name: PORT
+          value: "8080"
+        - name: SERVICE_NAME
+          value: "{{ project_name }}"
+        resources:
+          requests:
+            memory: "24Mi"
+            cpu: "5m"
+          limits:
+            memory: "48Mi"
+            cpu: "20m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 10
+        volumeMounts:
+        - name: script
+          mountPath: /app
+          readOnly: true
+      volumes:
+      - name: script
+        configMap:
+          name: paused-backend-script
+          items:
+          - key: server.py
+            path: server.py
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paused-backend
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: paused-backend
+    app.kubernetes.io/component: fallback
+    app.kubernetes.io/part-of: {{ project_name }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: paused-backend
+    app.kubernetes.io/instance: {{ project_name }}
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP

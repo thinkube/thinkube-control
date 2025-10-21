@@ -1,0 +1,26 @@
+# Kaniko cache warmer job to pre-populate layer cache
+# Run this periodically or after base image updates
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kaniko-cache-warmer
+  namespace: argo
+spec:
+  template:
+    spec:
+      containers:
+      - name: warmer
+        image: {{ container_registry }}/library/kaniko-warmer:latest
+        args:
+          - --cache-dir=/cache
+          - --image={{ container_registry }}/library/python:3.12-slim
+          - --image={{ container_registry }}/library/node:18-alpine
+          - --image={{ container_registry }}/library/nginx:stable-alpine
+        volumeMounts:
+        - name: docker-config
+          mountPath: /kaniko/.docker
+      restartPolicy: Never
+      volumes:
+      - name: docker-config
+        secret:
+          secretName: docker-config

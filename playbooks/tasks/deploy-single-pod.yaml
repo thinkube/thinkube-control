@@ -1,0 +1,190 @@
+---
+# tasks/deploy-single-pod.yaml
+# Deploy all containers in a single Pod (for GPU sharing or tight coupling)
+
+- name: Create single Deployment with all containers
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: "{{ app_name }}"
+        namespace: "{{ namespace }}"
+        labels:
+          app.kubernetes.io/name: "{{ app_name }}"
+          app.kubernetes.io/part-of: thinkube
+      spec:
+        replicas: "{{ app_config.spec.deployment.replicas | default(1) }}"
+        strategy:
+          type: "{{ app_config.spec.deployment.strategy | default('RollingUpdate') }}"
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: "{{ app_name }}"
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: "{{ app_name }}"
+              app.kubernetes.io/part-of: thinkube
+              # Add component labels for all containers
+              {% for container in containers %}
+              app.kubernetes.io/has-component-{{ container.name }}: "true"
+              {% endfor %}
+          spec:
+            containers:
+              {% for container in containers %}
+              - name: "{{ container.name }}"
+                image: "{{ registry }}/thinkube/{{ app_name }}-{{ container.name }}:latest"
+                ports:
+                  - containerPort: "{{ container.port }}"
+                    name: "{{ container.name }}-http"
+                    protocol: TCP
+                  # Additional ports
+                  {% if container.additionalPorts is defined %}
+                  {% for port in container.additionalPorts %}
+                  - containerPort: "{{ port.port }}"
+                    name: "{{ container.name }}-{{ port.name }}"
+                    protocol: "{{ port.protocol | default('TCP') }}"
+                  {% endfor %}
+                  {% endif %}
+                
+                # Environment variables
+                {% if container.env is defined %}
+                env:
+                  {% for env in container.env %}
+                  - name: "{{ env.name }}"
+                    value: "{{ env.value }}"
+                  {% endfor %}
+                {% endif %}
+                
+                # Environment from ConfigMaps/Secrets
+                {% if container.envFrom is defined %}
+                envFrom:
+                  {% for source in container.envFrom %}
+                  {% if source.configMapRef is defined %}
+                  - configMapRef:
+                      name: "{{ source.configMapRef.name }}"
+                  {% endif %}
+                  {% if source.secretRef is defined %}
+                  - secretRef:
+                      name: "{{ source.secretRef.name }}"
+                  {% endif %}
+                  {% endfor %}
+                {% endif %}
+                
+                # Resources
+                {% if container.resources is defined %}
+                resources:
+                  {% if container.resources.requests is defined %}
+                  requests:
+                    {% if container.resources.requests.memory is defined %}
+                    memory: "{{ container.resources.requests.memory }}"
+                    {% endif %}
+                    {% if container.resources.requests.cpu is defined %}
+                    cpu: "{{ container.resources.requests.cpu }}"
+                    {% endif %}
+                    {% if container.resources.requests.gpu is defined %}
+                    nvidia.com/gpu: "{{ container.resources.requests.gpu }}"
+                    {% endif %}
+                  {% endif %}
+                  {% if container.resources.limits is defined %}
+                  limits:
+                    {% if container.resources.limits.memory is defined %}
+                    memory: "{{ container.resources.limits.memory }}"
+                    {% endif %}
+                    {% if container.resources.limits.cpu is defined %}
+                    cpu: "{{ container.resources.limits.cpu }}"
+                    {% endif %}
+                    {% if container.resources.limits.gpu is defined %}
+                    nvidia.com/gpu: "{{ container.resources.limits.gpu }}"
+                    {% endif %}
+                  {% endif %}
+                {% endif %}
+                
+                # Health checks
+                {% if container.livenessProbe is defined %}
+                livenessProbe:
+                  httpGet:
+                    path: "{{ container.livenessProbe.httpGet.path }}"
+                    port: "{{ container.livenessProbe.httpGet.port }}"
+                  initialDelaySeconds: "{{ container.livenessProbe.initialDelaySeconds | default(30) }}"
+                  periodSeconds: "{{ container.livenessProbe.periodSeconds | default(10) }}"
+                {% endif %}
+                
+                {% if container.readinessProbe is defined %}
+                readinessProbe:
+                  httpGet:
+                    path: "{{ container.readinessProbe.httpGet.path }}"
+                    port: "{{ container.readinessProbe.httpGet.port }}"
+                  initialDelaySeconds: "{{ container.readinessProbe.initialDelaySeconds | default(5) }}"
+                  periodSeconds: "{{ container.readinessProbe.periodSeconds | default(5) }}"
+                {% endif %}
+                
+                # Volume mounts
+                {% if container.volumeMounts is defined %}
+                volumeMounts:
+                  {% for mount in container.volumeMounts %}
+                  - name: "{{ mount.name }}"
+                    mountPath: "{{ mount.mountPath }}"
+                    {% if mount.readOnly is defined %}
+                    readOnly: {{ mount.readOnly }}
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
+              {% endfor %}
+            
+            # Volumes (PVCs) - shared by all containers
+            {% if volumes | length > 0 %}
+            volumes:
+              {% for volume in volumes %}
+              - name: "{{ volume.name }}"
+                persistentVolumeClaim:
+                  claimName: "{{ app_name }}-{{ volume.name }}"
+              {% endfor %}
+            {% endif %}
+            
+            # Advanced settings
+            {% if app_config.spec.advanced is defined %}
+            {% if app_config.spec.advanced.nodeSelector is defined %}
+            nodeSelector: {{ app_config.spec.advanced.nodeSelector | to_json }}
+            {% endif %}
+            {% if app_config.spec.advanced.tolerations is defined %}
+            tolerations: {{ app_config.spec.advanced.tolerations | to_json }}
+            {% endif %}
+            {% if app_config.spec.advanced.affinity is defined %}
+            affinity: {{ app_config.spec.advanced.affinity | to_json }}
+            {% endif %}
+            {% if app_config.spec.advanced.serviceAccount is defined %}
+            serviceAccountName: "{{ app_config.spec.advanced.serviceAccount }}"
+            {% endif %}
+            {% if app_config.spec.advanced.securityContext is defined %}
+            securityContext: {{ app_config.spec.advanced.securityContext | to_json }}
+            {% endif %}
+            {% endif %}
+
+# For single pod mode, we need to update service creation
+# Services should still target individual containers using ports
+- name: Create services for containers in single pod mode
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: "{{ app_name }}-{{ item.name }}"
+        namespace: "{{ namespace }}"
+        labels:
+          app.kubernetes.io/name: "{{ app_name }}"
+          app.kubernetes.io/component: "{{ item.name }}"
+      spec:
+        type: ClusterIP
+        selector:
+          app.kubernetes.io/name: "{{ app_name }}"
+        ports:
+          - name: http
+            port: "{{ item.port }}"
+            targetPort: "{{ item.port }}"
+            protocol: TCP
+  loop: "{{ containers }}"

@@ -1,0 +1,49 @@
+# DEPRECATED: This ConfigMap is no longer used
+#
+# Buildah configuration is now baked into the custom tk-buildah image
+# built in ansible/40_thinkube/core/harbor/14_build_base_images.yaml
+#
+# The tk-buildah image uses GitLab's approach for rootless/unprivileged builds:
+# - Runs as build user (UID 1000)
+# - VFS storage driver configured in /home/build/.config/containers/storage.conf
+# - Chroot isolation via BUILDAH_ISOLATION environment variable
+# - User namespace mappings in /etc/subuid and /etc/subgid
+#
+# This file is retained for reference only and should not be deployed
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: buildah-storage-config
+  namespace: argo
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/part-of: thinkube
+    app.kubernetes.io/component: ci-cd
+data:
+  storage.conf: |
+    [storage]
+    # Use VFS driver (works without user namespaces)
+    # Running as root (UID 0) but unprivileged
+    driver = "vfs"
+
+    # Storage paths
+    runroot = "/storage/run/containers/storage"
+    graphroot = "/storage/.local/share/containers/storage"
+
+    [storage.options]
+    # VFS-specific options
+    additionalimagestores = []
+
+  policy.json: |
+    {
+      "default": [
+        {
+          "type": "insecureAcceptAnything"
+        }
+      ],
+      "transports": {
+        "docker-daemon": {
+          "": [{"type": "insecureAcceptAnything"}]
+        }
+      }
+    }

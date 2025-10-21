@@ -1,0 +1,64 @@
+# IMPORTANT: This file has a duplicate that must be kept in sync!
+# Original: /home/thinkube/thinkube/ansible/roles/keycloak/keycloak_user_attributes/tasks/main.yaml
+# Copy: /home/thinkube/thinkube/thinkube-control/ansible/roles/keycloak/keycloak_user_attributes/tasks/main.yaml
+# If you modify this file, ensure the changes are reflected in both locations.
+
+
+# roles/keycloak/keycloak_user_attributes/tasks/main.yaml
+---
+- name: Include common Keycloak tasks to get admin token
+  include_role:
+    name: keycloak/keycloak_common
+
+- name: GET user "{{ keycloak_user_name }}"
+  uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/users?username={{ keycloak_user_name }}&exact=true"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+    validate_certs: "{{ keycloak_validate_certs }}"
+    status_code: 200
+  register: user_search
+
+- name: Fail if user "{{ keycloak_user_name }}" not found
+  fail:
+    msg: "User '{{ keycloak_user_name }}' not found in realm '{{ keycloak_realm }}'"
+  when: user_search.json | length == 0
+
+- name: Set fact for user UUID
+  set_fact:
+    keycloak_user_uuid: "{{ user_search.json[0].id }}"
+
+- name: Patch user with attributes
+  uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/users/{{ keycloak_user_uuid }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      username: "{{ keycloak_user_name }}"
+      enabled: true
+      firstName: "{{ user_search.json[0].firstName | default('') }}"
+      lastName: "{{ user_search.json[0].lastName | default('') }}"
+      email: "{{ user_search.json[0].email | default('') }}"
+      attributes: "{{ keycloak_user_attributes }}"
+    validate_certs: "{{ keycloak_validate_certs }}"
+    status_code: 204
+
+- name: Retrieve updated user details
+  uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/users/{{ keycloak_user_uuid }}?briefRepresentation=false"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+    validate_certs: "{{ keycloak_validate_certs }}"
+    status_code: 200
+  register: updated_user_data
+  when: keycloak_debug_user | default(false)
+
+- name: Display updated user data
+  debug:
+    var: updated_user_data.json
+  when: keycloak_debug_user | default(false)

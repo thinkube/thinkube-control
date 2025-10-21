@@ -1,0 +1,91 @@
+---
+# IMPORTANT: This file has a duplicate that must be kept in sync!
+# Original: /home/thinkube/thinkube/ansible/roles/container_deployment/sync_status/tasks/main.yaml
+# Copy: /home/thinkube/thinkube/thinkube-control/ansible/roles/container_deployment/sync_status/tasks/main.yaml
+# If you modify this file, ensure the changes are reflected in both locations.
+
+- name: Re-authenticate with ArgoCD if needed
+  shell: |
+    # Check if current token is valid
+    if ! argocd app list >/dev/null 2>&1; then
+      echo "ArgoCD token expired, re-authenticating..."
+      argocd login {{ argocd_server }} \
+        --username {{ argocd_admin_username }} \
+        --password {{ argocd_admin_password }} \
+        --insecure \
+        --grpc-web
+    fi
+  environment:
+    ARGOCD_OPTS: "--grpc-web"
+  when: 
+    - argocd_server is defined
+    - argocd_admin_username is defined
+    - argocd_admin_password is defined
+
+- name: Wait for ArgoCD sync to create deployment
+  shell: |
+    #!/bin/bash
+    for i in $(seq 1 30); do
+      # Try ArgoCD CLI first (with grpc-web flag)
+      SYNC_STATUS=$(argocd app get {{ app_name }} --grpc-web -o json 2>/dev/null | jq -r '.status.sync.status' 2>/dev/null || echo "Unknown")
+      HEALTH_STATUS=$(argocd app get {{ app_name }} --grpc-web -o json 2>/dev/null | jq -r '.status.health.status' 2>/dev/null || echo "Unknown")
+      
+      if [ "$SYNC_STATUS" != "Unknown" ]; then
+        echo "Sync Status: $SYNC_STATUS, Health Status: $HEALTH_STATUS"
+        
+        if [ "$SYNC_STATUS" = "Synced" ] && [ "$HEALTH_STATUS" = "Healthy" ]; then
+          echo "ArgoCD application is synced and healthy"
+          exit 0
+        fi
+      fi
+      
+      # Check for deployments directly (handle both single and multiple deployments)
+      {% if deployment_names is defined %}
+      # Check multiple deployments
+      ALL_READY=true
+      {% for deployment in deployment_names %}
+      DEPLOYMENT_EXISTS=$({{ kubectl_bin }} -n {{ app_namespace }} get deployment {{ deployment }} -o name 2>/dev/null || echo "not found")
+      if [ "$DEPLOYMENT_EXISTS" != "not found" ]; then
+        READY=$({{ kubectl_bin }} -n {{ app_namespace }} get deployment {{ deployment }} -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+        DESIRED=$({{ kubectl_bin }} -n {{ app_namespace }} get deployment {{ deployment }} -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
+        echo "Deployment {{ deployment }} found, Ready: $READY/$DESIRED"
+        
+        if [ "$READY" != "$DESIRED" ] || [ -z "$READY" ]; then
+          ALL_READY=false
+        fi
+      else
+        echo "Deployment {{ deployment }} not found yet"
+        ALL_READY=false
+      fi
+      {% endfor %}
+      
+      if [ "$ALL_READY" = "true" ]; then
+        echo "All deployments are fully ready"
+        exit 0
+      fi
+      {% else %}
+      # Check single deployment
+      DEPLOYMENT_EXISTS=$({{ kubectl_bin }} -n {{ app_namespace }} get deployment {{ app_name }} -o name 2>/dev/null || echo "not found")
+      if [ "$DEPLOYMENT_EXISTS" != "not found" ]; then
+        READY=$({{ kubectl_bin }} -n {{ app_namespace }} get deployment {{ app_name }} -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+        DESIRED=$({{ kubectl_bin }} -n {{ app_namespace }} get deployment {{ app_name }} -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "1")
+        echo "Deployment found, Ready: $READY/$DESIRED"
+        
+        if [ "$READY" = "$DESIRED" ] && [ -n "$READY" ]; then
+          echo "Deployment is fully ready"
+          exit 0
+        fi
+      else
+        echo "Deployment not found yet"
+      fi
+      {% endif %}
+      
+      echo "Waiting for ArgoCD sync to complete... attempt $i/30"
+      sleep 10
+    done
+    
+    echo "Timed out waiting for ArgoCD sync"
+    exit 1
+  environment:
+    ARGOCD_OPTS: "--grpc-web"
+  register: argocd_sync_wait

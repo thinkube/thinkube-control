@@ -1,0 +1,78 @@
+# IMPORTANT: This file has a duplicate that must be kept in sync!
+# Original: /home/thinkube/thinkube/ansible/roles/keycloak/keycloak_user/tasks/main.yaml
+# Copy: /home/thinkube/thinkube/thinkube-control/ansible/roles/keycloak/keycloak_user/tasks/main.yaml
+# If you modify this file, ensure the changes are reflected in both locations.
+
+
+---
+- name: Include common Keycloak tasks to get admin token
+  include_role:
+    name: keycloak/keycloak_common
+
+- name: Retrieve user "{{ keycloak_user_name }}"
+  uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/users?username={{ keycloak_user_name }}&exact=true"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+    validate_certs: "{{ keycloak_validate_certs }}"
+    status_code: 200
+  register: user_search
+
+- name: Fail if user "{{ keycloak_user_name }}" not found or multiple found
+  fail:
+    msg: "User '{{ keycloak_user_name }}' not found or multiple entries returned in realm '{{ keycloak_realm }}'"
+  when: user_search.json | length != 1
+
+- name: Set fact for user UUID
+  set_fact:
+    keycloak_user_uuid: "{{ user_search.json[0].id }}"
+
+- name: Retrieve realm role "{{ keycloak_realm_role_name }}"
+  uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/roles/{{ keycloak_realm_role_name }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+    validate_certs: "{{ keycloak_validate_certs }}"
+    status_code: [200, 404]
+  register: role_check
+
+- name: Create realm role "{{ keycloak_realm_role_name }}" if missing
+  uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/roles"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ keycloak_realm_role_name }}"
+      description: "{{ keycloak_realm_role_description }}"
+    validate_certs: "{{ keycloak_validate_certs }}"
+    status_code: 201
+  when: role_check.status == 404
+
+- name: Retrieve updated realm role "{{ keycloak_realm_role_name }}"
+  uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/roles/{{ keycloak_realm_role_name }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+    validate_certs: "{{ keycloak_validate_certs }}"
+    status_code: 200
+  register: realm_role
+
+- name: Assign realm role "{{ keycloak_realm_role_name }}" to user "{{ keycloak_user_name }}"
+  uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/users/{{ keycloak_user_uuid }}/role-mappings/realm"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      - name: "{{ keycloak_realm_role_name }}"
+        id: "{{ realm_role.json.id }}"
+    validate_certs: "{{ keycloak_validate_certs }}"
+    status_code: [204, 409]

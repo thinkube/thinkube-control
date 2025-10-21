@@ -1,0 +1,66 @@
+# IMPORTANT: This file has a duplicate that must be kept in sync!
+# Original: /home/thinkube/thinkube/ansible/roles/keycloak/keycloak_realm_role/tasks/main.yaml
+# Copy: /home/thinkube/thinkube/thinkube-control/ansible/roles/keycloak/keycloak_realm_role/tasks/main.yaml
+# If you modify this file, ensure the changes are reflected in both locations.
+
+
+---
+# roles/keycloak/keycloak_realm_role/tasks/main.yaml
+#
+# Description:
+#   Creates or updates a realm role in Keycloak.
+#
+# Parameters:
+#   keycloak_role_name: Name of the realm role to create (required)
+#   keycloak_role_description: Description of the realm role (optional)
+
+- name: Include common Keycloak tasks to get admin token
+  include_role:
+    name: keycloak/keycloak_common
+
+- name: Check if realm role "{{ keycloak_role_name }}" exists
+  uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/roles/{{ keycloak_role_name }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+    validate_certs: "{{ keycloak_validate_certs | default(true) }}"
+    status_code: [200, 404]
+  register: role_check
+
+- name: Create realm role "{{ keycloak_role_name }}" if missing
+  uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/roles"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ keycloak_role_name }}"
+      description: "{{ keycloak_role_description | default('') }}"
+    validate_certs: "{{ keycloak_validate_certs | default(true) }}"
+    status_code: [201, 409]
+  when: role_check.status == 404
+
+- name: Get updated realm role details
+  uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/roles/{{ keycloak_role_name }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+    validate_certs: "{{ keycloak_validate_certs | default(true) }}"
+    status_code: 200
+  register: updated_role
+  when: keycloak_debug | default(false)
+
+- name: Debug role details
+  debug:
+    var: updated_role
+  when: keycloak_debug | default(false)
+
+- name: Set fact for role details
+  set_fact:
+    keycloak_role_uuid: "{{ updated_role.json.id }}"
+    keycloak_role_details: "{{ updated_role.json }}"
+  when: updated_role is defined and updated_role.json is defined

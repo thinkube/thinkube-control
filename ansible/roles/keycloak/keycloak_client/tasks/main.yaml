@@ -1,0 +1,131 @@
+# IMPORTANT: This file has a duplicate that must be kept in sync!
+# Original: /home/thinkube/thinkube/ansible/roles/keycloak/keycloak_client/tasks/main.yaml
+# Copy: /home/thinkube/thinkube/thinkube-control/ansible/roles/keycloak/keycloak_client/tasks/main.yaml
+# If you modify this file, ensure the changes are reflected in both locations.
+
+# roles/keycloak/keycloak_client/tasks/main.yaml
+---
+- name: Include common Keycloak tasks to get admin token
+  include_role:
+    name: keycloak/keycloak_common
+
+- name: Debug admin token
+  debug:
+    msg: "Admin token length: {{ keycloak_token.json.access_token | length }} chars, expires in {{ keycloak_token.json.expires_in }} seconds"
+
+- name: Debug query parameters
+  debug:
+    msg: 
+      - "Querying for client '{{ keycloak_client_id }}' in realm '{{ keycloak_realm }}'"
+      - "Using URL: {{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId={{ keycloak_client_id }}"
+
+- name: Query Keycloak for existing client "{{ keycloak_client_id }}"
+  uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId={{ keycloak_client_id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+    validate_certs: "{{ keycloak_validate_certs | default(true) }}"
+    status_code: [200, 401, 403]
+  register: existing_client
+
+- name: Debug GET client response
+  debug:
+    msg:
+      - "Status code: {{ existing_client.status }}"
+      - "Response body length: {{ existing_client.json | length }}"
+      - "Response JSON: {{ existing_client.json }}"
+
+- name: Create client "{{ keycloak_client_id }}" if missing
+  uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/clients"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: "{{ keycloak_client_body }}"
+    validate_certs: "{{ keycloak_validate_certs | default(true) }}"
+    status_code: [201, 409, 400, 401, 403]
+  when: existing_client.json | length == 0
+  register: create_client_result
+
+- name: Debug client creation result
+  debug:
+    msg:
+      - "Client creation status code: {{ create_client_result.status | default('Task skipped') }}"
+      - "Was task skipped? {{ create_client_result is skipped }}"
+      - "Response body: {{ create_client_result.json | default({}) }}"
+  when: create_client_result is defined
+
+- name: Debug GET final client query
+  debug:
+    msg: "Querying for created client '{{ keycloak_client_id }}'"
+
+- name: Retrieve final client details for "{{ keycloak_client_id }}"
+  uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId={{ keycloak_client_id }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+    validate_certs: "{{ keycloak_validate_certs | default(true) }}"
+    status_code: [200, 401, 403]
+  register: final_client
+
+- name: Debug final client response
+  debug:
+    msg:
+      - "Final client query status: {{ final_client.status }}"
+      - "Final client count: {{ final_client.json | length }}"
+      - "Final client JSON: {{ final_client.json }}"
+
+- name: Set fact for client UUID
+  set_fact:
+    keycloak_client_uuid: "{{ final_client.json[0].id }}"
+  when: final_client.json | length > 0
+
+- name: Debug client UUID
+  debug:
+    msg: "Client UUID set to: {{ keycloak_client_uuid | default('UUID NOT SET!') }}"
+
+# Get client secret (for confidential clients)
+- name: Check if client is confidential
+  set_fact:
+    is_confidential_client: "{{ not keycloak_client_body.publicClient | default(false) }}"
+
+- name: Debug client type
+  debug:
+    msg: "Client '{{ keycloak_client_id }}' is {{ 'confidential' if is_confidential_client else 'public' }}"
+
+- name: Get client secret for "{{ keycloak_client_id }}" (if client is confidential)
+  uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ keycloak_client_uuid }}/client-secret"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+    validate_certs: "{{ keycloak_validate_certs | default(true) }}"
+    status_code: [200, 404, 401, 403]
+  register: keycloak_client_secret_response
+  when: is_confidential_client and keycloak_client_uuid is defined
+
+- name: Debug client secret response
+  debug:
+    msg:
+      - "Client secret status: {{ keycloak_client_secret_response.status | default('Not queried') }}"
+      - "Client secret response: {{ keycloak_client_secret_response.json | default({}) }}"
+  when: keycloak_client_secret_response is defined
+
+- name: Set fact for client secret
+  set_fact:
+    keycloak_client_secret: "{{ keycloak_client_secret_response.json.value }}"
+  when: 
+    - is_confidential_client
+    - keycloak_client_secret_response is defined 
+    - keycloak_client_secret_response.status == 200
+
+- name: Debug final results
+  debug:
+    msg:
+      - "Client ID: {{ keycloak_client_id }}"
+      - "Client UUID: {{ keycloak_client_uuid | default('NOT SET!') }}"
+      - "Client secret: {{ keycloak_client_secret | default('NOT SET!') if is_confidential_client else 'N/A (public client)' }}"

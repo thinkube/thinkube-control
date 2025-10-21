@@ -1,0 +1,164 @@
+# IMPORTANT: This file has a duplicate that must be kept in sync!
+# Original: /home/thinkube/thinkube/ansible/roles/keycloak/keycloak_setup/tasks/main.yaml
+# Copy: /home/thinkube/thinkube/thinkube-control/ansible/roles/keycloak/keycloak_setup/tasks/main.yaml
+# If you modify this file, ensure the changes are reflected in both locations.
+
+
+# roles/keycloak/keycloak_setup/tasks/main.yaml
+---
+# Step 1: Create client
+- name: Create Keycloak client
+  include_role:
+    name: keycloak/keycloak_client
+  vars:
+    keycloak_client_id: "{{ keycloak_setup_client_id }}"
+    keycloak_client_body: "{{ keycloak_setup_client_body }}"
+
+# Step 2: Create scopes
+- name: Create client scopes
+  include_role:
+    name: keycloak/keycloak_scope
+  vars:
+    keycloak_scope_name: "{{ item.name }}"
+    keycloak_scope_body: "{{ item }}"
+  loop: "{{ keycloak_setup_scopes | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: keycloak_setup_scopes is defined and keycloak_setup_scopes | length > 0
+  register: created_scopes
+
+# Step 3: Create client mappers
+- name: Create client protocol mappers
+  include_role:
+    name: keycloak/keycloak_mapper
+  vars:
+    keycloak_mapper_target_type: "client"
+    keycloak_mapper_target_uuid: "{{ keycloak_client_uuid }}"
+    keycloak_mapper_body: "{{ item }}"
+  loop: "{{ keycloak_setup_client_mappers | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: keycloak_setup_client_mappers is defined and keycloak_setup_client_mappers | length > 0
+
+# Step 4: Create scope mappers
+- name: Create scope protocol mappers for each scope
+  include_role:
+    name: keycloak/keycloak_mapper
+  vars:
+    keycloak_mapper_target_type: "scope"
+    keycloak_mapper_target_uuid: "{{ keycloak_scope_uuid }}"
+    keycloak_mapper_body: "{{ item.mapper }}"
+  loop: "{{ keycloak_setup_scope_mappers | default([]) }}"
+  loop_control:
+    label: "{{ item.scope_name }} - {{ item.mapper.name }}"
+  when: keycloak_setup_scope_mappers is defined and keycloak_setup_scope_mappers | length > 0
+
+# In roles/keycloak/keycloak_setup/tasks/main.yaml
+# Replace the problematic task with this fixed version:
+
+# Step 5: Assign scopes to client
+- name: Get created scope UUIDs
+  set_fact:
+    created_scope_uuids: >-
+      {% set result = {} %}
+      {% for item in created_scopes.results %}
+        {% if item.keycloak_scope_uuid is defined %}
+          {% set _ = result.update({item.item.name: item.keycloak_scope_uuid}) %}
+        {% endif %}
+      {% endfor %}
+      {{ result }}
+  when: keycloak_setup_scopes is defined and keycloak_setup_scopes | length > 0 and created_scopes is defined and not created_scopes.skipped | default(false)
+
+- name: Debug created scope UUIDs
+  debug:
+    var: created_scope_uuids
+  when: created_scope_uuids is defined
+
+- name: Include common Keycloak tasks to get admin token
+  include_role:
+    name: keycloak/keycloak_common
+  when: keycloak_setup_scopes is defined and keycloak_setup_scopes | length > 0 and keycloak_client_uuid is defined
+
+- name: Assign each scope to client directly
+  uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ keycloak_client_uuid }}/default-client-scopes/{{ item.uuid | default(created_scope_uuids[item.name] | default(keycloak_scope_uuid)) }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+    validate_certs: "{{ keycloak_validate_certs | default(true) }}"
+    status_code: [204, 409]
+  loop: "{{ keycloak_setup_scopes | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: keycloak_setup_scopes is defined and keycloak_setup_scopes | length > 0 and keycloak_client_uuid is defined
+  register: scope_assignments
+  
+- name: Debug scope assignment results
+  debug:
+    msg: "Assigned scope '{{ item.item.name }}' to client with status: {{ item.status | default('SKIPPED') }}"
+  loop: "{{ scope_assignments.results | default([]) }}"
+  when: scope_assignments is defined and not scope_assignments.skipped | default(false)
+
+# Step 6: Create/assign roles to users
+- name: Create and assign roles to users
+  include_role:
+    name: keycloak/keycloak_user
+  vars:
+    keycloak_user_name: "{{ item.username }}"
+    keycloak_realm_role_name: "{{ item.role_name }}"
+    keycloak_realm_role_description: "{{ item.role_description | default('') }}"
+  loop: "{{ keycloak_setup_user_roles | default([]) }}"
+  loop_control:
+    label: "{{ item.username }} - {{ item.role_name }}"
+  when: keycloak_setup_user_roles is defined and keycloak_setup_user_roles | length > 0
+
+# Step 7: Set user attributes (NEW)
+- name: Set user attributes
+  include_role:
+    name: keycloak/keycloak_user_attributes
+  vars:
+    keycloak_user_name: "{{ item.username }}"
+    keycloak_user_attributes: "{{ item.attributes }}"
+    keycloak_debug_user: "{{ item.debug | default(false) }}"
+  loop: "{{ keycloak_setup_user_attributes | default([]) }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: keycloak_setup_user_attributes is defined and keycloak_setup_user_attributes | length > 0
+
+# Step 8: Verify scope assignments
+- name: Verify client scope assignments
+  include_role:
+    name: keycloak/keycloak_common
+  when: keycloak_setup_scopes is defined and keycloak_setup_scopes | length > 0 and keycloak_client_uuid is defined
+
+- name: Get current default scopes for client
+  uri:
+    url: "{{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ keycloak_client_uuid }}/default-client-scopes"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+    validate_certs: "{{ keycloak_validate_certs | default(true) }}"
+    status_code: 200
+  register: verification_scopes
+  when: keycloak_setup_scopes is defined and keycloak_setup_scopes | length > 0 and keycloak_client_uuid is defined
+
+- name: Debug final scope assignments
+  debug:
+    msg:
+      - "Current assigned scopes for client: {{ verification_scopes.json | default([]) | map(attribute='name') | list }}"
+      - "Expected scopes: {{ keycloak_setup_scopes | default([]) | map(attribute='name') | list }}"
+  when: verification_scopes is defined and verification_scopes.json is defined
+  
+# Step 9: Create Kubernetes secret with client credentials if requested
+- name: Create Kubernetes secret with client credentials
+  include_role:
+    name: keycloak/keycloak_kubernetes_secret
+  vars:
+    keycloak_k8s_namespace: "{{ keycloak_setup_k8s_secret.namespace }}"
+    keycloak_k8s_secret_name: "{{ keycloak_setup_k8s_secret.name }}" 
+    keycloak_k8s_kubeconfig: "{{ keycloak_setup_k8s_secret.kubeconfig | default(omit) }}"
+    keycloak_client_id: "{{ keycloak_setup_client_id }}"
+  when: 
+    - keycloak_setup_k8s_secret is defined
+    - keycloak_client_uuid is defined
+    - keycloak_client_secret is defined

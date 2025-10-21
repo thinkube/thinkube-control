@@ -1,0 +1,100 @@
+---
+# IMPORTANT: This file has a duplicate that must be kept in sync!
+# Original: /home/thinkube/thinkube/ansible/roles/container_deployment/image_mirror/tasks/main.yaml
+# Copy: /home/thinkube/thinkube/thinkube-control/ansible/roles/container_deployment/image_mirror/tasks/main.yaml
+# If you modify this file, ensure the changes are reflected in both locations.
+
+# tasks/main.yaml for image_mirror role
+# Description: Mirrors container images from a source registry to a destination registry
+# Parameters:
+#   source_image: Source image to pull from
+#   destination_image: Full path to the destination image
+#   harbor_api_user: Harbor API username (default: admin)
+#   harbor_api_password: Harbor API password
+
+- name: Display processing
+  ansible.builtin.debug:
+    msg: "Processing {{ source_image }} → {{ destination_image }}"
+
+- name: Parse destination image
+  ansible.builtin.set_fact:
+    dest_parts: "{{ destination_image.split('/') }}"
+    dest_repo_tag: "{{ destination_image.split('/')[-1] }}"
+
+- name: Extract tag and repository name
+  ansible.builtin.set_fact:
+    dest_tag: "{{ dest_repo_tag.split(':')[1] if ':' in dest_repo_tag else 'latest' }}"
+    repo_name: "{{ dest_repo_tag.split(':')[0] }}"
+    harbor_host: "{{ dest_parts[0] }}"
+    project_name: "{{ dest_parts[1] }}"
+
+- name: Check if image already exists in Harbor
+  ansible.builtin.uri:
+    url: "https://{{ harbor_host }}/api/v2.0/projects/{{ project_name }}/repositories/{{ repo_name }}/artifacts/{{ dest_tag }}"
+    method: GET
+    headers:
+      Authorization: "Basic {{ (harbor_api_user + ':' + harbor_api_password) | b64encode }}"
+    validate_certs: true
+    status_code: [200, 404]
+  register: image_check
+  no_log: "{{ harbor_api_password is defined }}"
+
+- name: Check image in local podman cache
+  ansible.builtin.command: podman image exists {{ destination_image }}
+  register: local_image_exists
+  changed_when: false
+  failed_when: false
+
+- name: Display status
+  ansible.builtin.debug:
+    msg: "Image {{ destination_image }} already exists in Harbor or local cache. Skipping pull."
+  when: image_check.status == 200 or local_image_exists.rc == 0
+
+# Check if image exists locally but not in registry
+- name: Display image exists locally but not in registry
+  ansible.builtin.debug:
+    msg: "Image exists in local cache but not in Harbor registry. Will push local image."
+  when: image_check.status != 200 and local_image_exists.rc == 0
+
+# If image exists locally but not in registry, push it directly
+- block:
+  - name: Tag local source image for destination registry
+    ansible.builtin.command: >
+      podman tag {{ source_image }} {{ destination_image }}
+    register: tag_result
+    changed_when: tag_result.rc == 0
+    failed_when: tag_result.rc != 0
+
+  - name: Push local image to destination registry
+    ansible.builtin.command: >
+      podman push {{ destination_image }}
+      --tls-verify=true
+    register: push_result
+    changed_when: push_result.rc == 0
+    failed_when: push_result.rc != 0
+  when: image_check.status != 200 and local_image_exists.rc == 0
+
+# If image doesn't exist locally or in registry, pull from source and push
+- block:
+  - name: Pull source image from original registry
+    ansible.builtin.command: >
+      podman pull {{ source_image }}
+    register: pull_result
+    changed_when: pull_result.rc == 0
+    failed_when: pull_result.rc != 0
+
+  - name: Tag source image for destination registry
+    ansible.builtin.command: >
+      podman tag {{ source_image }} {{ destination_image }}
+    register: tag_result
+    changed_when: tag_result.rc == 0
+    failed_when: tag_result.rc != 0
+
+  - name: Push image to destination registry
+    ansible.builtin.command: >
+      podman push {{ destination_image }}
+      --tls-verify=true
+    register: push_result
+    changed_when: push_result.rc == 0
+    failed_when: push_result.rc != 0
+  when: image_check.status != 200 and local_image_exists.rc != 0

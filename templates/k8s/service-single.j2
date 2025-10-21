@@ -1,0 +1,24 @@
+# Generated service for single_pod mode
+# Single service exposing all container ports
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ project_name }}
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/managed-by: argocd
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ project_name }}
+  ports:
+    {% for container in thinkube_spec.spec.containers %}
+    {% if container.port is defined %}
+    - port: {{ container.port }}
+      targetPort: {{ container.port }}
+      protocol: TCP
+      name: {{ container.name }}-port
+    {% endif %}
+    {% endfor %}

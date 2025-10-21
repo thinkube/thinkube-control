@@ -1,0 +1,44 @@
+{
+    "name": "k8s-dashboard-hub",
+    "version": "1.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build",
+        "preview": "vite preview",
+        "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs --fix --ignore-path .gitignore",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "test:coverage": "vitest run --coverage"
+    },
+    "dependencies": {
+        "@heroicons/vue": "^2.1.5",
+        "axios": "^1.6.2",
+        "element-plus": "^2.4.3",
+        "keycloak-js": "^22.0.4",
+        "pinia": "^2.1.7",
+        "vue": "^3.3.8",
+        "vue-i18n": "^9.8.0",
+        "vue-router": "^4.2.5",
+        "vuedraggable": "^4.1.0"
+    },
+    "devDependencies": {
+        "@tailwindcss/typography": "^0.5.16",
+        "@tailwindcss/vite": "^4.1.11",
+        "@vitejs/plugin-vue": "^6.0.0",
+        "@vitest/coverage-v8": "^1.0.4",
+        "@vue/test-utils": "^2.4.3",
+        "autoprefixer": "^10.4.16",
+        "css-tree": "^2.3.1",
+        "daisyui": "^5.0.43",
+        "eslint": "^8.54.0",
+        "eslint-plugin-vue": "^9.18.1",
+        "jsdom": "^23.0.1",
+        "mdn-data": "^2.0.30",
+        "postcss": "^8.4.33",
+        "tailwindcss": "^4.1.11",
+        "vite": "^7.0.0",
+        "vitest": "^1.0.4"
+    }
+}

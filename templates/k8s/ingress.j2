@@ -1,0 +1,61 @@
+# Generated ingress configuration
+# Always generate ingress for applications with routes or containers with ports
+{% if (thinkube_spec.spec.routes is defined and thinkube_spec.spec.routes | length > 0) or (thinkube_spec.spec.containers | selectattr('port', 'defined') | list | length > 0) %}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ project_name }}
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    {%- set ns = namespace(has_large_uploads=false) -%}
+    {%- for container in thinkube_spec.spec.containers -%}
+      {%- if container.capabilities is defined and 'large-uploads' in container.capabilities -%}
+        {%- set ns.has_large_uploads = true -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {%- if ns.has_large_uploads %}
+    # Large file upload support
+    nginx.ingress.kubernetes.io/proxy-body-size: "1024m"
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+    nginx.ingress.kubernetes.io/client-body-buffer-size: "50m"
+    {%- endif %}
+
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - {{ project_name }}.{{ domain_name }}
+      secretName: {{ k8s_namespace }}-tls-secret
+  rules:
+    - host: {{ project_name }}.{{ domain_name }}
+      http:
+        paths:
+          {%- if thinkube_spec.spec.routes is defined %}
+          {%- for route in thinkube_spec.spec.routes %}
+          - path: {{ route.path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ route.to }}
+                port:
+                  {% set container = thinkube_spec.spec.containers | selectattr('name', 'equalto', route.to) | first -%}
+                  number: {{ container.port }}
+          {%- endfor %}
+          {% else %}
+          {#- Default route to first container with a port #}
+          {%- set default_container = thinkube_spec.spec.containers | selectattr('port', 'defined') | first %}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ default_container.name }}
+                port:
+                  number: {{ default_container.port }}
+          {%- endif %}
+{% endif %}

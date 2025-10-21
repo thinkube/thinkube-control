@@ -1,0 +1,155 @@
+# IMPORTANT: This file was originally based on:
+# /home/thinkube/thinkube/ansible/roles/container_deployment/repo/tasks/main.yaml
+# but has been modified for thinkube-control's specific template deployment needs.
+# These files are NO LONGER kept in sync.
+
+- name: Debug Repository Information
+  debug:
+    msg:
+      - "Template URL: {{ template_url }}"
+      - "Target Repo Name: {{ gitea_repo_name }}"
+      - "Local Repo Path: {{ code_source_path }}/{{ gitea_repo_name }}"
+
+- name: Check if Copier is installed in virtualenv
+  ansible.builtin.command:
+    cmd: ~/.venv/bin/pip show copier
+  register: copier_check
+  failed_when: false
+  changed_when: false
+
+- name: Install Copier in virtualenv
+  ansible.builtin.pip:
+    name: copier
+    state: present
+    virtualenv: ~/.venv
+  when: copier_check.rc != 0
+
+- name: Ensure parent directory exists
+  file:
+    path: "{{ code_source_path }}"
+    state: directory
+    mode: '0755'
+
+- name: Use Copier to copy and process template from GitHub
+  ansible.builtin.shell: |
+    cd {{ code_source_path }}
+    
+    # Debug environment
+    echo "=== DEBUG: Environment Info ==="
+    echo "Current user: $(whoami)"
+    echo "Current directory: $(pwd)"
+    echo "HOME: $HOME"
+    echo "PATH: $PATH"
+    echo "Directory permissions: $(ls -ld {{ code_source_path }})"
+    echo "Can write to directory: $(touch {{ code_source_path }}/test-write && echo 'YES' || echo 'NO')"
+    rm -f {{ code_source_path }}/test-write
+    echo "Copier location: $(which copier || echo 'copier not in PATH')"
+    echo "Copier in venv: $(ls -la ~/.venv/bin/copier 2>&1)"
+    echo "Python in venv: $(~/.venv/bin/python --version 2>&1)"
+    echo "=== END DEBUG ==="
+    
+    # Remove existing directory if it exists
+    if [ -d "{{ gitea_repo_name }}" ]; then
+      rm -rf "{{ gitea_repo_name }}"
+    fi
+    
+    # Clear any existing Copier cache to force fresh clone
+    rm -rf /tmp/copier*
+    
+    # Configure SSH for private repositories if key path is provided
+    {% if ssh_private_key_path is defined and ssh_private_key_path %}
+    export GIT_SSH_COMMAND="ssh -i {{ ssh_private_key_path }} -o StrictHostKeyChecking=no"
+    {% endif %}
+    
+    # Build copier command with dynamic parameters
+    COPIER_CMD="~/.venv/bin/copier copy --trust --defaults --vcs-ref=HEAD"
+    
+    # Add required parameters
+    COPIER_CMD="$COPIER_CMD --data 'project_name={{ app_name }}'"
+    COPIER_CMD="$COPIER_CMD --data 'project_description={{ project_description | default(app_name + ' application') }}'"
+    COPIER_CMD="$COPIER_CMD --data 'domain_name={{ domain_name }}'"
+    COPIER_CMD="$COPIER_CMD --data 'container_registry={{ container_registry }}'"
+    COPIER_CMD="$COPIER_CMD --data 'author_name={{ author_name }}'"
+    COPIER_CMD="$COPIER_CMD --data 'author_email={{ author_email }}'"
+    
+    # Add template-specific parameters (excluding system vars)
+    {% set system_vars = ['ansible_user', 'ansible_ssh_private_key_file', 'ansible_ssh_pass', 
+                          'ansible_become_pass', 'app_name', 'template_url', 'deployment_namespace',
+                          'domain_name', 'admin_username', 'admin_password', 'github_token',
+                          'author_name', 'author_email', 'project_name', 'project_description',
+                          'container_registry', 'overwrite_existing'] %}
+    {% for key, value in vars.items() %}
+    {% if key not in system_vars and not key.startswith('ansible_') and not key.startswith('gitea_') 
+          and not key.startswith('keycloak_') and not key.startswith('argocd_') 
+          and not key.startswith('harbor_') and not key.startswith('shared_')
+          and not key.startswith('local_') and not key.startswith('code_')
+          and not key.startswith('use_') and not key.startswith('enable_')
+          and key not in ['kubeconfig', 'groups', 'group_names', 'inventory_hostname', 'hostvars', 'vars', 'omit',
+                          'wildcard_cert', 'admin_credentials_secret', 'harbor_robot_secret', 
+                          'admin_password_from_secret', 'copier_check', 'playbook_dir', 'role_names',
+                          'role_name', 'role_path', 'role_uuid', 'play_hosts', 'environment',
+                          'gather_subset', 'module_setup', 'k8s_namespace', 'app_host']
+          and value is defined and value != '' and value is string %}
+    COPIER_CMD="$COPIER_CMD --data {{ key }}={{ value | quote }}"
+    {% endif %}
+    {% endfor %}
+    
+    # Execute copier with all parameters
+    echo "=== DEBUG: Copier Command ==="
+    echo "Full command: $COPIER_CMD '{{ template_url }}' '{{ gitea_repo_name }}'"
+    echo "=== Running Copier ==="
+    
+    # Run with timeout to prevent hanging
+    timeout 120 bash -c "eval \"$COPIER_CMD '{{ template_url }}' '{{ gitea_repo_name }}'\"" 2>&1
+    COPIER_EXIT=$?
+    
+    echo "=== Copier Exit Code: $COPIER_EXIT ==="
+    if [ $COPIER_EXIT -eq 124 ]; then
+      echo "ERROR: Copier command timed out after 120 seconds"
+      exit 1
+    elif [ $COPIER_EXIT -ne 0 ]; then
+      echo "ERROR: Copier command failed with exit code $COPIER_EXIT"
+      exit 1
+    fi
+  args:
+    executable: /bin/bash
+  async: 180  # Give ansible 3 minutes before timing out
+  poll: 5     # Check every 5 seconds
+
+- name: Read manifest.yaml if it exists
+  ansible.builtin.slurp:
+    src: "{{ code_source_path }}/{{ gitea_repo_name }}/manifest.yaml"
+  register: manifest_file
+  ignore_errors: true
+
+- name: Parse manifest content
+  ansible.builtin.set_fact:
+    manifest_content: "{{ manifest_file.content | b64decode | from_yaml }}"
+  when: manifest_file is not failed
+
+- name: Process application secrets
+  ansible.builtin.include_tasks: "/home/thinkube-control/tasks/inject_secrets.yaml"
+  vars:
+    api_token: "{{ cicd_api_token }}"
+    k8s_namespace: "{{ deployment_namespace }}"
+    app_name: "{{ project_name }}"
+  when: manifest_file is not failed
+
+- name: Generate k8s manifests from thinkube.yaml
+  ansible.builtin.include_tasks: "/home/thinkube-control/tasks/generate_k8s_manifests.yaml"
+  vars:
+    local_repo_path: "{{ code_source_path }}/{{ gitea_repo_name }}"
+
+- name: Initialize git repository in the copied directory
+  ansible.builtin.shell: |
+    cd {{ code_source_path }}/{{ gitea_repo_name }}
+    git init -b main
+
+    # Configure git user for this repository
+    git config user.name "{{ git_user_name | default('Thinkube Automation') }}"
+    git config user.email "{{ git_user_email | default('automation@' + domain_name) }}"
+
+    git add -A
+    git commit -m "Initial deployment for {{ domain_name }}"
+  args:
+    executable: /bin/bash

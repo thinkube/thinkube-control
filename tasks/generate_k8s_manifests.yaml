@@ -1,0 +1,393 @@
+---
+# tasks/generate_k8s_manifests.yaml
+# Generate Kubernetes manifests from thinkube.yaml specification
+# Uses Jinja2 templates for everything except ingress (which uses Python to avoid YAML syntax issues)
+# 
+# This task reads the thinkube.yaml file and generates all necessary
+# Kubernetes manifests (deployments, services, ingress, etc.) in the k8s/ directory
+#
+# 🤖 [AI-assisted]
+
+- name: Ensure k8s directory exists
+  ansible.builtin.file:
+    path: "{{ local_repo_path }}/k8s"
+    state: directory
+    mode: '0755'
+
+- name: Read thinkube.yaml (static file, no rendering needed)
+  ansible.builtin.slurp:
+    src: "{{ local_repo_path }}/thinkube.yaml"
+  register: thinkube_content
+
+- name: Parse thinkube.yaml
+  ansible.builtin.set_fact:
+    thinkube_spec: "{{ thinkube_content.content | b64decode | from_yaml }}"
+
+- name: Debug thinkube spec
+  ansible.builtin.debug:
+    msg: "Processing {{ project_name }} with {{ thinkube_spec.spec.containers | length }} containers"
+
+# Generate namespace manifest
+- name: Generate namespace manifest
+  ansible.builtin.copy:
+    dest: "{{ local_repo_path }}/k8s/namespace.yaml"
+    content: |
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: {{ k8s_namespace }}
+        labels:
+          app.kubernetes.io/name: {{ project_name }}
+          app.kubernetes.io/managed-by: argocd
+
+# Generate ConfigMap for app metadata (used by webhook adapter)
+- name: Generate app metadata ConfigMap
+  ansible.builtin.copy:
+    dest: "{{ local_repo_path }}/k8s/app-metadata.yaml"
+    content: |
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: {{ project_name }}-metadata
+        namespace: {{ k8s_namespace }}
+      data:
+        app_name: "{{ project_name }}"
+        containers: |
+          {{ thinkube_spec.spec.containers | to_json }}
+
+# Generate deployment manifests (always separate deployments per container)
+- name: Generate deployment manifests for each container
+  ansible.builtin.template:
+    src: "/home/thinkube-control/templates/k8s/{{ item.src }}"
+    dest: "{{ local_repo_path }}/k8s/{{ item.dest }}"
+  loop:
+    - { src: "deployment-separate.j2", dest: "deployments.yaml" }
+    - { src: "services-separate.j2", dest: "services.yaml" }
+
+# Generate ingress using Python to avoid Jinja2 whitespace issues
+- name: Create temporary Python script for ingress generation
+  ansible.builtin.template:
+    src: "/home/thinkube-control/templates/k8s/ingress_generator.py.j2"
+    dest: "/tmp/generate_ingress_{{ project_name }}.py"
+    mode: '0755'
+
+- name: Generate ingress manifest using Python
+  ansible.builtin.command:
+    cmd: python3 /tmp/generate_ingress_{{ project_name }}.py
+  register: ingress_generation
+
+- name: Clean up temporary Python script
+  ansible.builtin.file:
+    path: "/tmp/generate_ingress_{{ project_name }}.py"
+    state: absent
+
+# Generate paused-backend for handling scaled-to-zero scenarios
+- name: Generate paused-backend manifest
+  ansible.builtin.template:
+    src: "/home/thinkube-control/templates/k8s/paused-backend.yaml.j2"
+    dest: "{{ local_repo_path }}/k8s/paused-backend.yaml"
+
+# Generate service-specific resources based on services list
+- name: Generate PostgreSQL resources
+  when: "thinkube_spec.spec.services is defined and 'database' in thinkube_spec.spec.services"
+  ansible.builtin.template:
+    src: "/home/thinkube-control/templates/k8s/postgresql.j2"
+    dest: "{{ local_repo_path }}/k8s/postgresql.yaml"
+
+- name: Check if storage PVCs are needed
+  ansible.builtin.set_fact:
+    needs_storage_pvcs: >-
+      {{
+        (thinkube_spec.spec.services is defined and 'storage' in thinkube_spec.spec.services) or
+        (thinkube_spec.spec.containers | selectattr('gpu', 'defined') | selectattr('gpu.count', 'defined') | list | length > 0) or
+        (thinkube_spec.spec.containers | selectattr('volume', 'defined') | list | length > 0)
+      }}
+
+- name: Generate storage PVC
+  when: needs_storage_pvcs | bool
+  ansible.builtin.template:
+    src: "/home/thinkube-control/templates/k8s/storage-pvc.j2"
+    dest: "{{ local_repo_path }}/k8s/storage-pvc.yaml"
+
+# Generate CI/CD workflow template
+- name: Generate CI/CD workflow template
+  ansible.builtin.template:
+    src: "/home/thinkube-control/templates/k8s/build-workflow.j2"
+    dest: "{{ local_repo_path }}/k8s/build-workflow.yaml"
+
+# Generate kustomization.yaml for ArgoCD
+- name: Generate kustomization.yaml
+  ansible.builtin.copy:
+    dest: "{{ local_repo_path }}/k8s/kustomization.yaml"
+    content: |
+      apiVersion: kustomize.config.k8s.io/v1beta1
+      kind: Kustomization
+      
+      resources:
+        - namespace.yaml
+        - app-metadata.yaml
+        - deployments.yaml
+        - services.yaml
+        - ingress.yaml
+      {% if thinkube_spec.spec.services is defined and 'database' in thinkube_spec.spec.services %}
+        - postgresql.yaml
+      {% endif %}
+      {% if needs_storage_pvcs | bool %}
+        - storage-pvc.yaml
+      {% endif %}
+        - argocd-postsync-hook.yaml
+      
+      images:
+      {% for container in thinkube_spec.spec.containers %}
+        - name: {{ container_registry }}/thinkube/{{ project_name }}-{{ container.name }}
+          newTag: latest
+      {% endfor %}
+
+# Generate ArgoCD PostSync hook for CI/CD monitoring
+- name: Generate PostSync hook manifest
+  ansible.builtin.copy:
+    dest: "{{ local_repo_path }}/k8s/argocd-postsync-hook.yaml"
+    content: |
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: {{ project_name }}-deployment-completed
+        namespace: {{ k8s_namespace }}
+        annotations:
+          argocd.argoproj.io/hook: PostSync
+          argocd.argoproj.io/hook-delete-policy: HookSucceeded
+      spec:
+        ttlSecondsAfterFinished: 300
+        template:
+          spec:
+            restartPolicy: Never
+            serviceAccountName: default
+            containers:
+            - name: report-deployment
+              image: {{ container_registry }}/library/ci-utils:latest
+              imagePullPolicy: Always
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -e
+                  
+                  # Get the image tag from the current deployment using Kubernetes API
+                  K8S_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+                  K8S_CERT=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+                  
+                  # Get deployment info from Kubernetes API
+                  DEPLOYMENT_JSON=$(curl -s --cacert $K8S_CERT \
+                    -H "Authorization: Bearer $K8S_TOKEN" \
+                    "https://kubernetes.default.svc/apis/apps/v1/namespaces/{{ k8s_namespace }}/deployments")
+                  
+                  # Extract image tag from first deployment
+                  # Use jq if available, otherwise fallback to grep with proper escaping
+                  if command -v jq >/dev/null 2>&1; then
+                    IMAGE_TAG=$(echo "$DEPLOYMENT_JSON" | jq -r '.items[0].spec.template.spec.containers[0].image' | cut -d: -f2)
+                  else
+                    # Use a more robust grep pattern that handles quote escaping
+                    IMAGE_TAG=$(echo "$DEPLOYMENT_JSON" | grep -o '"image":"[^"]*"' | head -1 | sed 's/"image":"//' | sed 's/".*//' | cut -d: -f2)
+                  fi
+                  
+                  if [ -z "$IMAGE_TAG" ]; then
+                    echo "Could not determine image tag from deployment"
+                    exit 0
+                  fi
+                  
+                  echo "Current deployment tag (workflow UID): $IMAGE_TAG"
+                  
+                  # Get the pipeline by workflow UID
+                  echo "Fetching pipeline for {{ project_name }} with workflow UID: $IMAGE_TAG"
+                  
+                  PIPELINE_RESPONSE=$(curl -s -X GET \
+                    "https://control.{{ domain_name }}/api/v1/cicd/pipelines?app_name={{ project_name }}&workflow_uid=${IMAGE_TAG}&limit=1" \
+                    -H "Authorization: Bearer ${CICD_TOKEN}")
+                  
+                  echo "API Response: $PIPELINE_RESPONSE"
+                  
+                  # Extract pipeline ID
+                  PIPELINE_ID=$(echo "$PIPELINE_RESPONSE" | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
+                  
+                  if [ -z "$PIPELINE_ID" ]; then
+                    echo "No pipeline found for {{ project_name }} with workflow UID: $IMAGE_TAG"
+                    exit 0
+                  fi
+                  
+                  echo "Found pipeline: $PIPELINE_ID"
+                  
+                  # Create deployment_completed stage using ArgoCD-specific endpoint
+                  STAGE_DATA='{
+                    "stageName": "deployment_completed",
+                    "component": "argocd",
+                    "appName": "{{ project_name }}",
+                    "namespace": "{{ k8s_namespace }}",
+                    "adapterVersion": "1.0.0"
+                  }'
+                  
+                  echo "Creating deployment_completed stage..."
+                  
+                  # Create stage using ArgoCD endpoint (automatically marked as SUCCEEDED)
+                  STAGE_RESPONSE=$(curl -s -X POST \
+                    "https://control.{{ domain_name }}/api/v1/cicd/pipelines/${PIPELINE_ID}/stages/argocd" \
+                    -H "Authorization: Bearer ${CICD_TOKEN}" \
+                    -H "Content-Type: application/json" \
+                    -d "$STAGE_DATA")
+                  
+                  echo "Stage creation response: $STAGE_RESPONSE"
+                  
+                  # Check if stage was created successfully
+                  if echo "$STAGE_RESPONSE" | grep -q '"status":"created"'; then
+                    echo "Successfully created deployment_completed stage as SUCCEEDED"
+                  else
+                    echo "Failed to create stage"
+                    echo "Response: $STAGE_RESPONSE"
+                    exit 1
+                  fi
+                  
+                  # Now mark the entire pipeline as SUCCEEDED
+                  echo "Marking pipeline as SUCCEEDED..."
+                  
+                  PIPELINE_UPDATE_DATA='{
+                    "status": "SUCCEEDED",
+                    "completedAt": '$(date +%s)'
+                  }'
+                  
+                  PIPELINE_UPDATE_RESPONSE=$(curl -s -X PATCH \
+                    "https://control.{{ domain_name }}/api/v1/cicd/pipelines/${PIPELINE_ID}" \
+                    -H "Authorization: Bearer ${CICD_TOKEN}" \
+                    -H "Content-Type: application/json" \
+                    -d "$PIPELINE_UPDATE_DATA")
+                  
+                  echo "Pipeline update response: $PIPELINE_UPDATE_RESPONSE"
+                  echo "Deployment completed successfully"
+              env:
+              - name: CICD_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: {{ project_name }}-cicd-token
+                    key: token
+
+# Generate ArgoCD SyncFail hook for CI/CD monitoring
+- name: Generate SyncFail hook manifest
+  ansible.builtin.copy:
+    dest: "{{ local_repo_path }}/k8s/argocd-syncfail-hook.yaml"
+    content: |
+      apiVersion: batch/v1
+      kind: Job
+      metadata:
+        name: {{ project_name }}-deployment-failed
+        namespace: {{ k8s_namespace }}
+        annotations:
+          argocd.argoproj.io/hook: SyncFail
+          argocd.argoproj.io/hook-delete-policy: HookSucceeded
+      spec:
+        ttlSecondsAfterFinished: 300
+        template:
+          spec:
+            restartPolicy: Never
+            serviceAccountName: default
+            containers:
+            - name: report-deployment-failure
+              image: {{ container_registry }}/library/ci-utils:latest
+              imagePullPolicy: Always
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -e
+                  
+                  # Get the image tag from the current deployment using Kubernetes API
+                  K8S_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+                  K8S_CERT=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+                  
+                  # Get deployment info from Kubernetes API
+                  DEPLOYMENT_JSON=$(curl -s --cacert $K8S_CERT \
+                    -H "Authorization: Bearer $K8S_TOKEN" \
+                    "https://kubernetes.default.svc/apis/apps/v1/namespaces/{{ k8s_namespace }}/deployments")
+                  
+                  # Extract image tag from first deployment
+                  if command -v jq >/dev/null 2>&1; then
+                    IMAGE_TAG=$(echo "$DEPLOYMENT_JSON" | jq -r '.items[0].spec.template.spec.containers[0].image' | cut -d: -f2)
+                  else
+                    IMAGE_TAG=$(echo "$DEPLOYMENT_JSON" | grep -o '"image":"[^"]*"' | head -1 | sed 's/"image":"//' | sed 's/".*//' | cut -d: -f2)
+                  fi
+                  
+                  if [ -z "$IMAGE_TAG" ]; then
+                    echo "Could not determine image tag from deployment"
+                    # Still try to mark pipeline as failed without specific workflow UID
+                    IMAGE_TAG="unknown"
+                  fi
+                  
+                  echo "Failed deployment tag (workflow UID): $IMAGE_TAG"
+                  
+                  # Get the pipeline by workflow UID
+                  echo "Fetching pipeline for {{ project_name }} with workflow UID: $IMAGE_TAG"
+                  
+                  PIPELINE_RESPONSE=$(curl -s -X GET \
+                    "https://control.{{ domain_name }}/api/v1/cicd/pipelines?app_name={{ project_name }}&workflow_uid=${IMAGE_TAG}&limit=1" \
+                    -H "Authorization: Bearer ${CICD_TOKEN}")
+                  
+                  echo "API Response: $PIPELINE_RESPONSE"
+                  
+                  # Extract pipeline ID
+                  PIPELINE_ID=$(echo "$PIPELINE_RESPONSE" | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
+                  
+                  if [ -z "$PIPELINE_ID" ]; then
+                    echo "ERROR: No pipeline found for {{ project_name }} with workflow UID: $IMAGE_TAG"
+                    exit 1
+                  fi
+                  
+                  echo "Found pipeline: $PIPELINE_ID"
+                  
+                  # Create deployment_failed stage using ArgoCD-specific endpoint
+                  STAGE_DATA='{
+                    "stageName": "deployment_failed",
+                    "component": "argocd",
+                    "appName": "{{ project_name }}",
+                    "namespace": "{{ k8s_namespace }}",
+                    "adapterVersion": "1.0.0",
+                    "status": "FAILED"
+                  }'
+                  
+                  echo "Creating deployment_failed stage..."
+                  
+                  # Create stage using ArgoCD endpoint (marked as FAILED)
+                  STAGE_RESPONSE=$(curl -s -X POST \
+                    "https://control.{{ domain_name }}/api/v1/cicd/pipelines/${PIPELINE_ID}/stages/argocd" \
+                    -H "Authorization: Bearer ${CICD_TOKEN}" \
+                    -H "Content-Type: application/json" \
+                    -d "$STAGE_DATA")
+                  
+                  echo "Stage creation response: $STAGE_RESPONSE"
+                  
+                  # Now mark the entire pipeline as FAILED
+                  echo "Marking pipeline as FAILED..."
+                  
+                  PIPELINE_UPDATE_DATA='{
+                    "status": "FAILED",
+                    "completedAt": '$(date +%s)'
+                  }'
+                  
+                  PIPELINE_UPDATE_RESPONSE=$(curl -s -X PATCH \
+                    "https://control.{{ domain_name }}/api/v1/cicd/pipelines/${PIPELINE_ID}" \
+                    -H "Authorization: Bearer ${CICD_TOKEN}" \
+                    -H "Content-Type: application/json" \
+                    -d "$PIPELINE_UPDATE_DATA")
+                  
+                  echo "Pipeline update response: $PIPELINE_UPDATE_RESPONSE"
+                  echo "Deployment failure reported successfully"
+              env:
+              - name: CICD_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: {{ project_name }}-cicd-token
+                    key: token
+
+- name: List generated k8s files
+  ansible.builtin.find:
+    paths: "{{ local_repo_path }}/k8s"
+    patterns: "*.yaml"
+  register: k8s_files
+
+- name: Display generated files
+  ansible.builtin.debug:
+    msg: "Generated {{ k8s_files.files | length }} Kubernetes manifest files"

@@ -1,0 +1,7 @@
+---
+# Common tasks for template deployment
+# This is a placeholder role to demonstrate the structure
+
+- name: Placeholder task
+  ansible.builtin.debug:
+    msg: "This is a placeholder role for template deployment"

@@ -1,0 +1,43 @@
+---
+# IMPORTANT: This file has a duplicate that must be kept in sync!
+# Original: /home/thinkube/thinkube/ansible/roles/container_deployment/deployment/tasks/main.yaml
+# Copy: /home/thinkube/thinkube/thinkube-control/ansible/roles/container_deployment/deployment/tasks/main.yaml
+# If you modify this file, ensure the changes are reflected in both locations.
+
+- name: Check if deployment exists
+  shell: microk8s kubectl -n {{ app_namespace }} get deployment {{ app_name }} -o name 2>/dev/null || echo "not found"
+  register: deployment_check
+  changed_when: false
+
+- name: Check if service exists
+  shell: microk8s kubectl -n {{ app_namespace }} get service {{ app_name }} -o name 2>/dev/null || echo "not found"
+  register: service_check
+  changed_when: false
+
+- name: Display deployment summary
+  debug:
+    msg: 
+      - "{{ app_name | capitalize }} Deployment Summary:"
+      - "-----------------------------------"
+      - "Workflow execution: {{ 'Successful' if workflow_wait_result is defined and workflow_wait_result.rc == 0 else 'Not Required' if workflow_wait_result is not defined else 'Failed' }}"
+      - "Deployment exists: {{ 'Yes' if 'not found' not in deployment_check.stdout else 'No' }}"
+      - "Service exists: {{ 'Yes' if 'not found' not in service_check.stdout else 'No' }}"
+      - "ArgoCD sync status: {{ argocd_sync_wait.stdout_lines[-1] if argocd_sync_wait is defined and argocd_sync_wait.stdout_lines is defined else 'Unknown' }}"
+
+- name: Get service details
+  shell: |
+    microk8s kubectl -n {{ app_namespace }} get svc {{ app_name }} -o jsonpath='{.spec.clusterIP}:{.spec.ports[0].port}'
+  register: service_details
+  changed_when: false
+  when: "'not found' not in service_check.stdout"
+  failed_when: false  # Service might not have ports defined
+
+- name: Display access information
+  debug:
+    msg:
+      - "DevPi service access information:"
+      - "-----------------------------------"
+      - "Internal URL: http://{{ service_details.stdout if service_details is defined and service_details.rc == 0 else 'service not available' }}"
+      - "To access from outside the cluster, create an ingress or use port-forwarding:"
+      - "kubectl -n {{ app_namespace }} port-forward svc/{{ app_name }} 3141:3141"
+  when: "'not found' not in service_check.stdout"

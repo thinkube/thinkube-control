@@ -1,0 +1,183 @@
+# Template for creating CI/CD pipeline records
+# This template provides the script for creating pipeline records in thinkube-control
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cicd-pipeline-script
+  namespace: argo
+  labels:
+    version: "0.1.0"
+  annotations:
+    description: "CI/CD pipeline creation script"
+    {% raw %}last-updated: "{{ ansible_date_time.iso8601 }}"{% endraw %}
+data:
+  create-pipeline.sh: |
+    #!/bin/sh
+    set -e
+    
+    # Script version: 0.1.0
+    echo "create-pipeline.sh version 0.1.0"
+
+    # Configure git safe directory
+    git config --global --add safe.directory /workspace
+
+    # Debug: Check if workspace exists and has git
+    echo "Checking workspace..."
+    ls -la /workspace || echo "ERROR: /workspace does not exist"
+    
+    # Extract git information
+    echo "Extracting git information..."
+    COMMIT_SHA=$(cd /workspace && git rev-parse HEAD) || {
+        echo "ERROR: Failed to get commit SHA"
+        exit 1
+    }
+    echo "Commit SHA: $COMMIT_SHA"
+    
+    COMMIT_MESSAGE=$(cd /workspace && git log -1 --pretty=%B) || {
+        echo "ERROR: Failed to get commit message"
+        exit 1
+    }
+    echo "Commit message extracted"
+    
+    AUTHOR_EMAIL=$(cd /workspace && git log -1 --pretty=%ae) || {
+        echo "ERROR: Failed to get author email"
+        exit 1
+    }
+    echo "Author email: $AUTHOR_EMAIL"
+    
+    BRANCH=$(cd /workspace && git rev-parse --abbrev-ref HEAD) || {
+        echo "ERROR: Failed to get branch name"
+        exit 1
+    }
+    echo "Branch: $BRANCH"
+
+    # Get webhook timestamp (passed as environment variable)
+    # MUST be provided - no fallbacks
+    if [ -z "$WEBHOOK_TIMESTAMP" ] || [ "$WEBHOOK_TIMESTAMP" = "" ]; then
+      echo "ERROR: WEBHOOK_TIMESTAMP is required but not provided"
+      echo "This should be passed from Argo Events sensor"
+      exit 1
+    fi
+    
+    echo "Webhook timestamp: $WEBHOOK_TIMESTAMP"
+
+    # Create pipeline record using source-specific endpoint
+    PIPELINE_DATA=$(cat <<EOF
+    {
+      "appName": "${APP_NAME}",
+      "branch": "${BRANCH}",
+      "commitSha": "${COMMIT_SHA}",
+      "commitMessage": "${COMMIT_MESSAGE}",
+      "authorEmail": "${AUTHOR_EMAIL}",
+      "webhookTimestamp": "${WEBHOOK_TIMESTAMP}",
+      "triggerType": "${TRIGGER_TYPE:-webhook}",
+      "workflowUid": "${WORKFLOW_UID}"
+    }
+    EOF
+    )
+
+    # Debug: Show environment
+    echo "API URL: ${CICD_API_URL}"
+    echo "API Token length: $(echo -n "${CICD_API_TOKEN}" | wc -c)"
+    echo "Pipeline data:"
+    echo "$PIPELINE_DATA"
+    
+    # Send request and capture pipeline ID
+    echo "Sending request to create pipeline..."
+    RESPONSE=$(curl -X POST \
+      "${CICD_API_URL}/api/v1/cicd/pipelines/argo-workflow" \
+      -H "Authorization: Bearer ${CICD_API_TOKEN}" \
+      -H "Content-Type: application/json" \
+      -d "$PIPELINE_DATA" \
+      --fail \
+      --show-error \
+      --silent 2>&1) || {
+      echo "ERROR: curl failed with exit code $?"
+      echo "Response: $RESPONSE"
+      exit 1
+    }
+    
+    echo "Response received: $RESPONSE"
+
+    # Extract pipeline ID from response
+    PIPELINE_ID=$(echo "$RESPONSE" | grep -o '"id":"[^"]*' | grep -o '[^"]*$')
+
+    if [ -z "$PIPELINE_ID" ]; then
+      echo "Failed to create pipeline record - no ID in response"
+      echo "Full response: $RESPONSE"
+      exit 1
+    fi
+
+    echo "$PIPELINE_ID" > /tmp/pipeline-id.txt
+    echo "Created pipeline: $PIPELINE_ID"
+
+    # Now create initial stages for webhook and workflow events
+    echo "Creating initial stages..."
+
+    # Create webhook_received stage (already completed)
+    STAGE_DATA=$(cat <<EOF
+    {
+      "stageName": "webhook_received",
+      "component": "argo-events",
+      "status": "SUCCEEDED",
+      "startedAt": "${WEBHOOK_TIMESTAMP}",
+      "completedAt": "${WEBHOOK_TIMESTAMP}",
+      "details": {
+        "repository": "${APP_NAME}",
+        "branch": "${BRANCH}",
+        "event": "push"
+      }
+    }
+    EOF
+    )
+
+    # Create the stage using argo-workflow endpoint (accepts ISO8601 timestamps)
+    WEBHOOK_STAGE_RESPONSE=$(curl -X POST \
+      "${CICD_API_URL}/api/v1/cicd/pipelines/${PIPELINE_ID}/stages/argo-workflow" \
+      -H "Authorization: Bearer ${CICD_API_TOKEN}" \
+      -H "Content-Type: application/json" \
+      -d "$STAGE_DATA" \
+      --fail \
+      --show-error \
+      --silent) || { echo "Warning: Failed to create webhook_received stage"; WEBHOOK_STAGE_RESPONSE=""; }
+    
+    # Extract stage ID for later use
+    if [ -n "$WEBHOOK_STAGE_RESPONSE" ]; then
+      WEBHOOK_STAGE_ID=$(echo "$WEBHOOK_STAGE_RESPONSE" | grep -o '"id":"[^"]*' | grep -o '[^"]*$')
+      echo "Created webhook_received stage: $WEBHOOK_STAGE_ID (already completed)"
+    fi
+
+    # Get current timestamp for workflow_triggered stage completion
+    CURRENT_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    
+    # Create workflow_triggered stage (already completed - workflow is running now)
+    STAGE_DATA=$(cat <<EOF
+    {
+      "stageName": "workflow_triggered",
+      "component": "argo-workflows",
+      "status": "SUCCEEDED",
+      "startedAt": "${CURRENT_TIME}",
+      "completedAt": "${CURRENT_TIME}",
+      "details": {
+        "workflowName": "${WORKFLOW_NAME:-unknown}",
+        "template": "build-${APP_NAME}-template"
+      }
+    }
+    EOF
+    )
+
+    # Create the stage using argo-workflow endpoint (for completed stages)
+    WORKFLOW_STAGE_RESPONSE=$(curl -X POST \
+      "${CICD_API_URL}/api/v1/cicd/pipelines/${PIPELINE_ID}/stages/argo-workflow" \
+      -H "Authorization: Bearer ${CICD_API_TOKEN}" \
+      -H "Content-Type: application/json" \
+      -d "$STAGE_DATA" \
+      --fail \
+      --show-error \
+      --silent) || { echo "Warning: Failed to create workflow_triggered stage"; WORKFLOW_STAGE_RESPONSE=""; }
+    
+    if [ -n "$WORKFLOW_STAGE_RESPONSE" ]; then
+      echo "Created workflow_triggered stage (already completed)"
+    fi
+
+    echo "Initial stages created successfully"

@@ -1,0 +1,51 @@
+---
+# ansible/test/hello-world.yaml
+# Description:
+#   Simple test playbook to verify WebSocket-based Ansible execution
+#
+# Usage:
+#   This playbook will be called from thinkube-control WebSocket endpoint
+#
+# Variables:
+#   - greeting: Custom greeting message (default: "Hello")
+#   - target_name: Name to greet (default: "World")
+
+- name: Hello World Test Playbook
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  
+  vars:
+    greeting: "{{ greeting | default('Hello') }}"
+    target_name: "{{ target_name | default('World') }}"
+    
+  tasks:
+    - name: Display greeting message
+      ansible.builtin.debug:
+        msg: "{{ greeting }}, {{ target_name }}! This is a test from thinkube-control."
+        
+    - name: Show current timestamp
+      ansible.builtin.debug:
+        msg: "Current time: {{ current_time }}"
+      vars:
+        current_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        
+    - name: Simulate some work
+      ansible.builtin.pause:
+        seconds: 2
+        prompt: "Simulating work for 2 seconds..."
+        
+    - name: Display completion message
+      ansible.builtin.debug:
+        msg: "WebSocket Ansible execution test completed successfully!"
+        
+    - name: Return some structured data
+      ansible.builtin.set_fact:
+        test_result:
+          status: "success"
+          message: "{{ greeting }}, {{ target_name }}!"
+          timestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+          
+    - name: Display final result
+      ansible.builtin.debug:
+        var: test_result

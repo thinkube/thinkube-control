@@ -1,0 +1,294 @@
+# CI/CD Workflow for thinkube-control with Test-Driven Development
+# This workflow is triggered by Gitea webhooks and builds container images
+# Tests must pass before builds proceed
+# NOTE: thinkube-control does NOT use CI/CD monitoring to avoid circular dependencies
+#
+# Build Tool: Kaniko executor from Google (gcr.io/kaniko-project/executor:latest)
+# Security: Runs as non-root user, no special privileges required
+# Cache: Uses local cache directory only (no registry cache push to avoid permission issues)
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: {{ project_name }}-build
+  namespace: argo
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/part-of: thinkube
+    app.kubernetes.io/component: ci-cd
+    thinkube.io/trigger: webhook
+    thinkube.io/build-type: container
+    # 🤖 Critical for webhook adapter to identify the app
+    thinkube.io/app-name: {{ project_name }}
+    thinkube.io/namespace: {{ namespace }}
+spec:
+  entrypoint: build-and-push
+  serviceAccountName: kaniko-builder  # ServiceAccount with Harbor registry credentials
+  arguments:
+    parameters:
+    - name: webhook-timestamp
+      value: ""  # Will be set by Argo Events sensor
+
+  # Run on master node where shared-code exists
+  nodeSelector:
+    kubernetes.io/hostname: {{ master_node_name }}
+
+  # Use artifact repository for build artifacts
+  artifactRepositoryRef:
+    configMap: artifact-repositories
+    key: default-v1
+
+  # Volumes
+  volumes:
+  - name: docker-config
+    secret:
+      secretName: docker-config
+  - name: shared-code
+    hostPath:
+      path: /home/{{ system_username }}/shared-code/{{ project_name }}
+      type: Directory
+  - name: build-cache
+    hostPath:
+      path: /home/{{ system_username }}/.cache/thinkube-builds
+      type: DirectoryOrCreate
+
+  templates:
+  - name: build-and-push
+    dag:
+      tasks:
+      # TEST STAGES - Run directly on shared code
+      - name: test-backend
+        template: test-backend
+      
+      - name: test-frontend
+        template: test-frontend
+      
+      # BUILD STAGES - Only run if tests pass
+      - name: build-backend
+        template: build-backend
+        dependencies:
+        - test-backend  # Must pass tests first
+        arguments:
+          parameters:
+          - name: image-tag
+            value: "{% raw %}{{workflow.uid}}{% endraw %}"
+      
+      - name: build-frontend
+        template: build-frontend
+        dependencies:
+        - test-frontend  # Must pass tests first
+        arguments:
+          parameters:
+          - name: image-tag
+            value: "{% raw %}{{workflow.uid}}{% endraw %}"
+  
+  # Test Backend Template
+  - name: test-backend
+    container:
+      image: {{ container_registry }}/library/python-base:3.12-slim
+      imagePullPolicy: Always
+      command: ["/bin/bash", "-c"]
+      env:
+      - name: POSTGRES_PASSWORD
+        value: "{{ admin_password }}"
+      - name: ADMIN_PASSWORD
+        value: "{{ admin_password }}"
+      - name: ADMIN_USERNAME
+        value: "{{ admin_username }}"
+      - name: PIP_CACHE_DIR
+        value: "/workspace/.cache/pip"
+      args:
+        - |
+          set -e
+          cd /workspace/backend
+          
+          # Create error capture file
+          ERROR_FILE=/tmp/test-error.txt
+          touch $ERROR_FILE
+          
+          # Function to capture errors
+          capture_error() {
+            echo "$1" > $ERROR_FILE
+            echo "$1" >&2
+            exit 1
+          }
+          
+          echo "Loading test environment variables..."
+          if [ -f .env.test ]; then
+            export $(cat .env.test | grep -v '^#' | xargs)
+          fi
+          
+          # Set PostgreSQL credentials from environment
+          export POSTGRES_PASSWORD="${ADMIN_PASSWORD}"
+          export POSTGRES_USER="${ADMIN_USERNAME}"
+          
+          # Construct DATABASE_URL with the credentials
+          export DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
+          echo "Database URL configured for user ${POSTGRES_USER} at host: ${POSTGRES_HOST}"
+          
+          echo "Installing dependencies with cache..."
+          # Most dependencies are in base image, install only missing ones
+          pip install -r requirements.txt
+
+          echo "Installing fastapi-mcp-extended..."
+          # Install the local fastapi-mcp-extended package
+          pip install /workspace/backend/fastapi-mcp-extended
+          
+          echo "Running linter checks..."
+          flake8 app/ --max-line-length=120 --exclude=__pycache__ || true
+          
+          echo "Checking code formatting..."
+          black --check app/ || true
+          
+          echo "Running unit tests with coverage..."
+          if [ -f run_tests.sh ]; then
+            chmod +x run_tests.sh
+            ./run_tests.sh || capture_error "Backend tests failed during run_tests.sh"
+          else
+            # Run pytest with coverage
+            pytest tests/ -v --cov=app --cov-report=term-missing || capture_error "Backend pytest tests failed"
+          fi
+          
+          echo "Backend tests completed successfully!"
+          echo "" > $ERROR_FILE  # Clear error file on success
+      volumeMounts:
+      - name: shared-code
+        mountPath: /workspace
+      - name: build-cache
+        mountPath: /workspace/.cache
+      resources:
+        requests:
+          memory: "512Mi"
+          cpu: "500m"
+        limits:
+          memory: "1Gi"
+          cpu: "1"
+    outputs:
+      parameters:
+      - name: error-message
+        valueFrom:
+          path: /tmp/test-error.txt
+          default: ""
+  
+  # Test Frontend Template
+  - name: test-frontend
+    container:
+      image: {{ container_registry }}/library/node-base:22-alpine
+      imagePullPolicy: Always
+      command: ["/bin/sh", "-c"]
+      env:
+      - name: NPM_CONFIG_CACHE
+        value: "/workspace/.cache/npm"
+      args:
+        - |
+          set -e
+          cd /workspace/frontend
+          
+          # Create error capture file
+          ERROR_FILE=/tmp/test-error.txt
+          touch $ERROR_FILE
+          
+          # Function to capture errors
+          capture_error() {
+            echo "$1" > $ERROR_FILE
+            echo "$1" >&2
+            exit 1
+          }
+          
+          echo "Installing dependencies with cache..."
+          if [ -f package-lock.json ]; then
+            npm ci --cache /workspace/.cache/npm || capture_error "Failed to install frontend dependencies with npm ci"
+          else
+            npm install --cache /workspace/.cache/npm || capture_error "Failed to install frontend dependencies with npm install"
+          fi
+          
+          echo "Running linter..."
+          npm run lint || true
+          
+          echo "Running unit tests..."
+          if [ -f package.json ] && grep -q '"test"' package.json; then
+            npm run test || capture_error "Frontend tests failed"
+            echo "Tests passed successfully!"
+          else
+            capture_error "No test script found. Tests should be written before implementation."
+          fi
+          
+          echo "Checking test coverage..."
+          npm run test:coverage || true
+          
+          echo "Frontend tests completed!"
+          echo "" > $ERROR_FILE  # Clear error file on success
+      volumeMounts:
+      - name: shared-code
+        mountPath: /workspace
+      - name: build-cache
+        mountPath: /workspace/.cache
+      resources:
+        requests:
+          memory: "512Mi"
+          cpu: "500m"
+        limits:
+          memory: "1Gi"
+          cpu: "1"
+    outputs:
+      parameters:
+      - name: error-message
+        valueFrom:
+          path: /tmp/test-error.txt
+          default: ""
+  
+
+  # Build Backend Template (Google Kaniko - official image)
+  - name: build-backend
+    inputs:
+      parameters:
+      - name: image-tag
+    container:
+      image: {{ container_registry }}/library/kaniko-executor:latest
+      args:
+      - --dockerfile=/workspace/backend/Dockerfile
+      - --context=/workspace/backend
+      - --destination={{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-backend:{% raw %}{{inputs.parameters.image-tag}}{% endraw %}
+      - --build-arg=REGISTRY={{ container_registry }}
+      - --cache-dir=/workspace/.cache/kaniko
+      volumeMounts:
+      - name: docker-config
+        mountPath: /kaniko/.docker
+      - name: shared-code
+        mountPath: /workspace
+      - name: build-cache
+        mountPath: /workspace/.cache
+      resources:
+        requests:
+          memory: "1Gi"
+          cpu: "1"
+        limits:
+          memory: "2Gi"
+          cpu: "2"
+
+  # Build Frontend Template (Google Kaniko - official image)
+  - name: build-frontend
+    inputs:
+      parameters:
+      - name: image-tag
+    container:
+      image: {{ container_registry }}/library/kaniko-executor:latest
+      args:
+      - --dockerfile=/workspace/frontend/Dockerfile
+      - --context=/workspace/frontend
+      - --destination={{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-frontend:{% raw %}{{inputs.parameters.image-tag}}{% endraw %}
+      - --build-arg=REGISTRY={{ container_registry }}
+      - --cache-dir=/workspace/.cache/kaniko
+      volumeMounts:
+      - name: docker-config
+        mountPath: /kaniko/.docker
+      - name: shared-code
+        mountPath: /workspace
+      - name: build-cache
+        mountPath: /workspace/.cache
+      resources:
+        requests:
+          memory: "1Gi"
+          cpu: "1"
+        limits:
+          memory: "2Gi"
+          cpu: "2"

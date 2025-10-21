@@ -1,0 +1,9 @@
+---
+# Defaults for Gitea webhook configuration
+gitea_hostname: "git.{{ domain_name }}"
+gitea_api_url: "https://{{ gitea_hostname }}/api/v1"
+argo_namespace: "argo"
+webhook_url: "https://argo-events.{{ domain_name }}/gitea"
+webhook_events:
+  - push
+  - pull_request

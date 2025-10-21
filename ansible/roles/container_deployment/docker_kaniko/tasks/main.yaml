@@ -1,0 +1,118 @@
+---
+# IMPORTANT: This file has a duplicate that must be kept in sync!
+# Original: /home/thinkube/thinkube/ansible/roles/container_deployment/docker_kaniko/tasks/main.yaml
+# Copy: /home/thinkube/thinkube/thinkube-control/ansible/roles/container_deployment/docker_kaniko/tasks/main.yaml
+# If you modify this file, ensure the changes are reflected in both locations.
+
+# roles/container_deployment/docker_kaniko/tasks/main.yaml - focusing on proper authentication
+
+- name: Debug harbor robot token (first 5 characters)
+  ansible.builtin.debug:
+    msg: "Harbor robot token first 5 chars: {{ harbor_robot_token[:5] }}..."
+
+- name: Verify the robot token format
+  ansible.builtin.debug:
+    msg: "Harbor robot token length: {{ harbor_robot_token | length }} characters"
+
+- name: Create temp directory for Docker config
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: ansible_docker_
+  register: docker_temp_dir
+
+- name: Create Docker config.json for Harbor registry authentication
+  ansible.builtin.copy:
+    dest: "{{ docker_temp_dir.path }}/config.json"
+    content: |
+      {
+        "auths": {
+          "{{ container_registry }}": {
+            "username": "{{ harbor_robot_user }}",
+            "password": "{{ harbor_robot_token }}",
+            "auth": "{{ (harbor_robot_user + ':' + harbor_robot_token) | b64encode }}"
+          }
+        }
+      }
+    mode: '0600'
+
+- name: Read Docker config from remote host
+  ansible.builtin.slurp:
+    src: "{{ docker_temp_dir.path }}/config.json"
+  register: docker_config_content
+
+- name: Create Docker config secret for Kaniko
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig | default(omit) }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ docker_config_secret_name }}"
+        namespace: "{{ argo_namespace }}"
+      type: Opaque
+      data:
+        config.json: "{{ docker_config_content.content }}"
+
+- name: Create Docker pull secret for app in the app namespace
+  ansible.builtin.copy:
+    dest: "{{ docker_temp_dir.path }}/config.app.json"
+    content: |
+      {
+        "auths": {
+          "{{ container_registry }}": {
+            "username": "{{ harbor_robot_user }}",
+            "password": "{{ harbor_robot_token }}",
+            "auth": "{{ (harbor_robot_user + ':' + harbor_robot_token) | b64encode }}"
+          }
+        }
+      }
+    mode: '0600'
+
+- name: Read app Docker config from remote host
+  ansible.builtin.slurp:
+    src: "{{ docker_temp_dir.path }}/config.app.json"
+  register: app_docker_config_content
+
+- name: Create pull secret in app namespace
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig | default(omit) }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: app-pull-secret
+        namespace: "{{ app_namespace }}"
+      type: kubernetes.io/dockerconfigjson
+      data:
+        .dockerconfigjson: "{{ app_docker_config_content.content }}"
+
+# For debugging purposes, let's check the content of the secret
+- name: Get content of Docker config secret
+  ansible.builtin.shell: |
+    {{ kubectl_bin }} -n {{ argo_namespace }} get secret {{ docker_config_secret_name }} -o jsonpath='{.data.config\.json}' | base64 -d || echo "Secret not found"
+  register: docker_secret_content
+  changed_when: false
+  no_log: false
+
+- name: Debug Docker config secret content
+  ansible.builtin.debug:
+    msg: "Docker config secret content: {{ docker_secret_content.stdout | replace(harbor_robot_token, '***REDACTED***') }}"
+
+- name: Remove temporary Docker config directory
+  ansible.builtin.file:
+    path: "{{ docker_temp_dir.path }}"
+    state: absent
+
+- name: Check if kaniko-setup.yaml exists
+  ansible.builtin.stat:
+    path: "{{ local_repo_path }}/k8s/kaniko-setup.yaml"
+  register: kaniko_setup_check
+
+- name: Apply Kaniko ServiceAccount and RBAC
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig | default(omit) }}"
+    state: present
+    src: "{{ local_repo_path }}/k8s/kaniko-setup.yaml"
+  when: kaniko_setup_check.stat.exists

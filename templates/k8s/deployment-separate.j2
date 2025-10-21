@@ -1,0 +1,271 @@
+#jinja2: lstrip_blocks: True, trim_blocks: True
+# Generated deployments for separate_pods mode
+# Each container gets its own deployment
+{% for container in thinkube_spec.spec.containers %}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ project_name }}-{{ container.name }}
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/component: {{ container.name }}
+    app.kubernetes.io/managed-by: argocd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ project_name }}
+      app.kubernetes.io/component: {{ container.name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ project_name }}
+        app.kubernetes.io/component: {{ container.name }}
+    spec:
+      imagePullSecrets:
+        - name: app-pull-secret
+{% if container.gpu is defined and container.gpu.memory is defined %}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: nvidia.com/gpu.memory
+                operator: Gt
+                # Convert memory string to MB for comparison (e.g., "20Gi" -> 20480)
+                {% set memory_value = container.gpu.memory.replace('Gi', '') | int * 1024 %}
+                values: ["{{ memory_value }}"]
+{% endif %}
+      containers:
+        - name: {{ container.name }}
+          image: {{ container_registry }}/thinkube/{{ project_name }}-{{ container.name }}:latest
+          imagePullPolicy: Always
+{% if container.port is defined %}
+
+          ports:
+            - containerPort: {{ container.port }}
+              protocol: TCP
+{%- endif %}
+
+          {% if deployment_env_from is defined and deployment_env_from | length > 0 %}
+          envFrom:
+            {% for env_source in deployment_env_from %}
+            - {{ env_source | to_yaml | indent(14) }}
+            {% endfor %}
+          {% endif %}
+          env:
+            # Service-based environment variables
+            {% if thinkube_spec.spec.services is defined and 'database' in thinkube_spec.spec.services %}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-db-credentials
+                  key: url
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-db-credentials
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-db-credentials
+                  key: password
+            - name: POSTGRES_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-db-credentials
+                  key: database
+            - name: POSTGRES_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-db-credentials
+                  key: host
+            - name: POSTGRES_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-db-credentials
+                  key: port
+            {% endif %}
+            {% if thinkube_spec.spec.services is defined and 'cache' in thinkube_spec.spec.services %}
+            - name: CACHE_URL
+              value: "redis://valkey-master.valkey.svc.cluster.local:6379"
+            - name: REDIS_URL
+              value: "redis://valkey-master.valkey.svc.cluster.local:6379"
+            {% endif %}
+            {% if thinkube_spec.spec.services is defined and 'queue' in thinkube_spec.spec.services %}
+            - name: QUEUE_URL
+              value: "redis://valkey-master.valkey.svc.cluster.local:6379"
+            {% endif %}
+            # Platform-wide environment variables
+            - name: KEYCLOAK_URL
+              value: "https://auth.{{ domain_name }}"
+            - name: KEYCLOAK_BASE_URL
+              value: "https://auth.{{ domain_name }}"
+            - name: KEYCLOAK_REALM
+              value: "thinkube"
+            - name: KEYCLOAK_CLIENT_ID
+              value: "{{ k8s_namespace }}"
+            - name: KEYCLOAK_CLIENT_SECRET
+              value: ""
+            - name: FRONTEND_URL
+              value: "https://{{ project_name }}.{{ domain_name }}"
+            - name: APP_URL
+              value: "https://{{ project_name }}.{{ domain_name }}"
+            - name: API_BASE_URL
+              value: "https://{{ project_name }}.{{ domain_name }}/api"
+            # Container-specific environment variables (if defined)
+            {% if container.environment is defined %}
+            {% for env in container.environment %}
+            - name: {{ env.name }}
+              {% if env.value is defined %}
+              value: "{{ env.value }}"
+              {% elif env.valueFrom is defined %}
+              valueFrom:
+                {% if env.valueFrom.secretKeyRef is defined %}
+                secretKeyRef:
+                  name: {{ env.valueFrom.secretKeyRef.name }}
+                  key: {{ env.valueFrom.secretKeyRef.key }}
+                {% elif env.valueFrom.configMapKeyRef is defined %}
+                configMapKeyRef:
+                  name: {{ env.valueFrom.configMapKeyRef.name }}
+                  key: {{ env.valueFrom.configMapKeyRef.key }}
+                {% endif %}
+              {% endif %}
+            {% endfor %}
+            {% endif %}
+{% if container.size is defined %}
+
+          resources:
+            {% if container.size == 'small' %}
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+            {% elif container.size == 'medium' %}
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
+            {% elif container.size == 'large' %}
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "2000m"
+            {% elif container.size == 'xlarge' %}
+            requests:
+              memory: "16Gi"
+              cpu: "2000m"
+            limits:
+              memory: "24Gi"
+              cpu: "4000m"
+            {% else %}
+            # Default to small if size is not recognized
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+            {% endif %}
+{%- endif %}
+{% if container.gpu is defined and container.gpu.count is defined and container.gpu.memory is defined %}
+{% if container.size is not defined %}
+
+          resources:
+            requests:
+              nvidia.com/gpu: {{ container.gpu.count }}
+            limits:
+              nvidia.com/gpu: {{ container.gpu.count }}
+{% else %}
+
+            # GPU resources added to existing resources
+              nvidia.com/gpu: {{ container.gpu.count }}
+{% endif %}
+{% elif container.gpu is defined %}
+          # ERROR: GPU configuration requires both 'count' and 'memory' fields
+{% endif %}
+{% if container.health is defined %}
+{% if container.gpu is defined %}
+          # Startup probe for initial model loading (first deployment)
+          startupProbe:
+            httpGet:
+              path: {{ container.health }}
+              port: {{ container.port | default(8080) }}
+            initialDelaySeconds: 30  # Give container time to start web server
+            periodSeconds: 10        # Check every 10 seconds
+            timeoutSeconds: 10
+            failureThreshold: 60      # 60 * 10 = 600 seconds (10 minutes) max for initial startup
+            successThreshold: 1
+
+          # Liveness probe starts after startup probe succeeds
+          livenessProbe:
+            httpGet:
+              path: {{ container.health }}
+              port: {{ container.port | default(8080) }}
+            initialDelaySeconds: 30  # After startup succeeds
+            periodSeconds: 30
+            timeoutSeconds: 10
+          
+          # Readiness probe for quick subsequent restarts (with cached models)
+          readinessProbe:
+            httpGet:
+              path: {{ container.health }}
+              port: {{ container.port | default(8080) }}
+            initialDelaySeconds: 10  # Quick check after startup succeeds
+            periodSeconds: 10
+            timeoutSeconds: 10
+{% else %}
+          # Standard probes for non-GPU containers
+
+          livenessProbe:
+            httpGet:
+              path: {{ container.health }}
+              port: {{ container.port | default(8080) }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: {{ container.health }}
+              port: {{ container.port | default(8080) }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+{% endif %}
+{% endif %}
+{% if container.volume is defined %}
+
+          volumeMounts:
+            - name: app-storage
+              mountPath: {{ container.volume }}
+{% elif container.gpu is defined and container.gpu.count is defined %}
+          # Auto-add model storage for GPU containers
+          volumeMounts:
+            - name: model-storage
+              mountPath: /models
+            - name: cache-storage
+              mountPath: /app/cache
+{%- endif %}
+      {% if container.volume is defined %}
+      volumes:
+        - name: app-storage
+          persistentVolumeClaim:
+            claimName: {{ project_name }}-{{ container.name }}-storage
+      {% elif container.gpu is defined and container.gpu.count is defined %}
+      # Auto-add model storage volumes for GPU containers
+      volumes:
+        - name: model-storage
+          persistentVolumeClaim:
+            claimName: {{ project_name }}-{{ container.name }}-models
+        - name: cache-storage
+          persistentVolumeClaim:
+            claimName: {{ project_name }}-{{ container.name }}-cache
+      {% endif %}
+{% endfor %}

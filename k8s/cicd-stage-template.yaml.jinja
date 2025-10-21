@@ -1,0 +1,283 @@
+# Template for managing CI/CD stages with the new model
+# This template provides scripts for creating and updating stages
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cicd-stage-scripts
+  namespace: argo
+  labels:
+    version: "0.1.0"
+  annotations:
+    description: "CI/CD stage management scripts"
+    {% raw %}last-updated: "{{ ansible_date_time.iso8601 }}"{% endraw %}
+data:
+  create-stage.sh: |
+    #!/bin/sh
+    set -e
+    
+    # Script version: 0.1.0
+    echo "create-stage.sh version 0.1.0"
+    
+    # Required environment variables:
+    # CICD_API_URL - URL of the CI/CD monitoring API
+    # CICD_API_TOKEN - API token for authentication
+    # PIPELINE_ID - ID of the current pipeline
+    # STAGE_NAME - Name of the stage (e.g., backend_tests, frontend_build)
+    # COMPONENT - Component name (e.g., backend, frontend, workflow)
+    
+    if [ -z "$CICD_API_URL" ] || [ -z "$PIPELINE_ID" ] || [ -z "$STAGE_NAME" ] || [ -z "$COMPONENT" ]; then
+      echo "Missing required environment variables"
+      exit 1
+    fi
+    
+    # Construct stage data for shell endpoint
+    STAGE_DATA=$(cat <<EOF
+    {
+      "stageName": "${STAGE_NAME}",
+      "component": "${COMPONENT}",
+      "scriptVersion": "0.1.0",
+      "details": ${DETAILS:-{}}
+    }
+    EOF
+    )
+    
+    # Create stage
+    echo "Creating stage: $STAGE_NAME for component: $COMPONENT"
+    
+    RESPONSE=$(curl -X POST \
+      "${CICD_API_URL}/api/v1/cicd/pipelines/${PIPELINE_ID}/stages/shell" \
+      -H "Authorization: Bearer ${CICD_API_TOKEN}" \
+      -H "Content-Type: application/json" \
+      -d "$STAGE_DATA" \
+      --fail \
+      --show-error \
+      --silent)
+    
+    # Extract stage ID from response
+    STAGE_ID=$(echo "$RESPONSE" | grep -o '"id":"[^"]*' | grep -o '[^"]*$')
+    
+    if [ -z "$STAGE_ID" ]; then
+      echo "Failed to create stage"
+      exit 1
+    fi
+    
+    echo "$STAGE_ID" > /tmp/stage-id.txt
+    echo "Created stage: $STAGE_ID"
+  
+  update-stage.sh: |
+    #!/bin/sh
+    set -e
+    
+    # Required environment variables:
+    # CICD_API_URL - URL of the CI/CD monitoring API
+    # CICD_API_TOKEN - API token for authentication
+    # PIPELINE_ID - ID of the current pipeline
+    # STAGE_ID - ID of the stage to update
+    # STATUS - New status (PENDING, RUNNING, SUCCEEDED, FAILED, SKIPPED)
+    
+    # Optional environment variables:
+    # ERROR_MESSAGE - Error message if status is FAILED
+    # DETAILS - JSON string with additional details
+    
+    if [ -z "$CICD_API_URL" ] || [ -z "$PIPELINE_ID" ] || [ -z "$STAGE_ID" ] || [ -z "$STATUS" ]; then
+      echo "Missing required environment variables"
+      exit 1
+    fi
+    
+    # Construct update data for shell-complete endpoint
+    UPDATE_DATA="{"
+    UPDATE_DATA="${UPDATE_DATA}\"status\":\"${STATUS}\""
+    
+    if [ -n "$ERROR_MESSAGE" ]; then
+      UPDATE_DATA="${UPDATE_DATA},\"errorMessage\":\"${ERROR_MESSAGE}\""
+    fi
+    
+    if [ -n "$DETAILS" ]; then
+      UPDATE_DATA="${UPDATE_DATA},\"details\":${DETAILS}"
+    fi
+    
+    if [ -n "$COMPLETION_TIMESTAMP" ]; then
+      UPDATE_DATA="${UPDATE_DATA},\"completionTimestamp\":\"${COMPLETION_TIMESTAMP}\""
+    fi
+    
+    UPDATE_DATA="${UPDATE_DATA}}"
+    
+    # Update stage
+    echo "Updating stage $STAGE_ID to status: $STATUS"
+    
+    curl -X PUT \
+      "${CICD_API_URL}/api/v1/cicd/pipelines/${PIPELINE_ID}/stages/${STAGE_ID}/shell-complete" \
+      -H "Authorization: Bearer ${CICD_API_TOKEN}" \
+      -H "Content-Type: application/json" \
+      -d "$UPDATE_DATA" \
+      --fail \
+      --show-error \
+      --silent \
+      --output /tmp/update-response.txt || {
+        echo "ERROR: Failed to update stage"
+        cat /tmp/update-response.txt
+        exit 1
+      }
+    
+    echo "Stage updated successfully"
+  
+  # Helper script to wrap stage execution
+  wrap-stage.sh: |
+    #!/bin/sh
+    # Wrapper script to automatically create and update stages around command execution
+    # Usage: wrap-stage.sh <stage_name> <component> <command...>
+    #
+    # Example: wrap-stage.sh backend_tests backend "npm test"
+    
+    if [ $# -lt 3 ]; then
+      echo "Usage: wrap-stage.sh <stage_name> <component> <command...>"
+      exit 1
+    fi
+    
+    STAGE_NAME="$1"
+    COMPONENT="$2"
+    shift 2
+    
+    # Check for required environment variables
+    if [ -z "$CICD_API_URL" ] || [ -z "$PIPELINE_ID" ] || [ -z "$CICD_API_TOKEN" ]; then
+      echo "Missing required CI/CD environment variables, running command without monitoring"
+      exec "$@"
+    fi
+    
+    # Create stage
+    export STAGE_NAME="$STAGE_NAME"
+    export COMPONENT="$COMPONENT"
+    /scripts/create-stage.sh
+    
+    # Get stage ID from file
+    if [ -f /tmp/stage-id.txt ]; then
+      STAGE_ID=$(cat /tmp/stage-id.txt)
+      export STAGE_ID="$STAGE_ID"
+    else
+      echo "Failed to get stage ID, running command without monitoring"
+      exec "$@"
+    fi
+    
+    # Update stage to RUNNING
+    export STATUS="RUNNING"
+    /scripts/update-stage.sh
+    
+    # Capture actual start time before executing command
+    ACTUAL_START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    
+    # Execute the command and capture exit code
+    set +e
+    "$@"
+    EXIT_CODE=$?
+    set -e
+    
+    # Capture actual completion time after command finishes
+    ACTUAL_END_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    echo "DEBUG: ACTUAL_END_TIME='$ACTUAL_END_TIME'"
+    
+    # Update stage based on exit code
+    if [ $EXIT_CODE -eq 0 ]; then
+      export STATUS="SUCCEEDED"
+    else
+      export STATUS="FAILED"
+      export ERROR_MESSAGE="Command exited with code $EXIT_CODE"
+    fi
+    
+    # Pass completion timestamp to update script
+    export COMPLETION_TIMESTAMP="$ACTUAL_END_TIME"
+    echo "DEBUG: COMPLETION_TIMESTAMP='$COMPLETION_TIMESTAMP'"
+    /scripts/update-stage.sh
+    
+    # Exit with the same code as the command
+    exit $EXIT_CODE
+  
+  # Helper to check CI/CD availability
+  check-cicd.sh: |
+    #!/bin/sh
+    # Check if CI/CD monitoring is available
+    
+    if [ -z "$CICD_API_URL" ] || [ -z "$CICD_API_TOKEN" ] || [ -z "$PIPELINE_ID" ]; then
+      echo "CI/CD monitoring not available"
+      exit 1
+    fi
+    
+    # Try to reach the API
+    curl -s -f -o /dev/null \
+      "${CICD_API_URL}/health" \
+      -H "Authorization: Bearer ${CICD_API_TOKEN}" \
+      --connect-timeout 5 || {
+        echo "CI/CD API not reachable"
+        exit 1
+      }
+    
+    echo "CI/CD monitoring available"
+    exit 0
+  
+  # Helper to create stage from workflow step
+  workflow-stage-start.sh: |
+    #!/bin/sh
+    # Create and start a stage from a workflow step
+    # Allows parallel stages to coexist
+    
+    # Get parameters from workflow inputs
+    STAGE_NAME="${STAGE_NAME:-$1}"
+    COMPONENT="${COMPONENT:-$2}"
+    
+    if [ -z "$STAGE_NAME" ] || [ -z "$COMPONENT" ]; then
+      echo "Error: STAGE_NAME and COMPONENT required"
+      exit 1
+    fi
+    
+    # Check if CI/CD is available
+    /scripts/check-cicd.sh || {
+      echo "CI/CD monitoring not available, skipping stage creation"
+      exit 0
+    }
+    
+    # Create the new stage without closing others
+    # This allows parallel stages like test-backend and test-frontend to run simultaneously
+    export STAGE_NAME="$STAGE_NAME"
+    export COMPONENT="$COMPONENT"
+    /scripts/create-stage.sh
+    
+    # Update to RUNNING
+    if [ -f /tmp/stage-id.txt ]; then
+      export STAGE_ID=$(cat /tmp/stage-id.txt)
+      export STATUS="RUNNING"
+      /scripts/update-stage.sh
+    fi
+  
+  # Helper to complete stage from workflow step
+  workflow-stage-complete.sh: |
+    #!/bin/sh
+    # Complete a stage from a workflow step
+    
+    # Get parameters
+    STAGE_ID="${STAGE_ID:-$1}"
+    STATUS="${STATUS:-$2}"
+    ERROR_MESSAGE="${ERROR_MESSAGE:-$3}"
+    
+    if [ -z "$STAGE_ID" ] || [ -z "$STATUS" ]; then
+      echo "Error: STAGE_ID and STATUS required"
+      exit 1
+    fi
+    
+    # Check if CI/CD is available
+    /scripts/check-cicd.sh || {
+      echo "CI/CD monitoring not available, skipping stage update"
+      exit 0
+    }
+    
+    # Capture actual completion time
+    ACTUAL_END_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    echo "Completing stage $STAGE_ID at $ACTUAL_END_TIME"
+    
+    # Update the stage
+    export STAGE_ID="$STAGE_ID"
+    export STATUS="$STATUS"
+    export COMPLETION_TIMESTAMP="$ACTUAL_END_TIME"
+    if [ -n "$ERROR_MESSAGE" ]; then
+      export ERROR_MESSAGE="$ERROR_MESSAGE"
+    fi
+    
+    /scripts/update-stage.sh

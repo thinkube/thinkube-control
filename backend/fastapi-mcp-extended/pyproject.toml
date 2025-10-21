@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fastapi-mcp-extended"
+version = "0.1.0"
+description = "Extended FastAPI-MCP server with resource and prompt support"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "Thinkube Team", email = "team@thinkube.com"},
+]
+keywords = ["fastapi", "mcp", "model-context-protocol", "resources", "prompts"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "fastapi-mcp>=0.4.0",
+    "mcp>=1.1.0",
+    "fastapi>=0.100.0",
+    "httpx>=0.24.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/thinkube/fastapi-mcp-extended"
+Documentation = "https://github.com/thinkube/fastapi-mcp-extended#readme"
+Repository = "https://github.com/thinkube/fastapi-mcp-extended"
+Issues = "https://github.com/thinkube/fastapi-mcp-extended/issues"
+
+[tool.setuptools]
+packages = ["fastapi_mcp_extended"]
+
+[tool.black]
+line-length = 100
+target-version = ['py39']
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "I", "N", "W"]

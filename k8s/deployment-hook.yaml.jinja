@@ -1,0 +1,31 @@
+# ArgoCD PostSync hook to report deployment completion
+# Note: thinkube-control doesn't report its own deployment to avoid circular dependency
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: thinkube-control-deployment-hook
+  namespace: {{ k8s_namespace }}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  ttlSecondsAfterFinished: 600  # Clean up after 10 minutes
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: report-deployment
+        image: {{ container_registry }}/library/alpine:latest
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            # For thinkube-control, we just log the deployment
+            # We cannot report to ourselves (circular dependency)
+            echo "Thinkube Control deployment completed successfully"
+            echo "Namespace: {{ k8s_namespace }}"
+            echo "Timestamp: $(date)"
+            
+            # Could add other post-deployment tasks here
+            # For example: cache warming, health checks, etc.
+            
+            exit 0

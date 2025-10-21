@@ -1,0 +1,69 @@
+# CronWorkflow to periodically warm Kaniko cache
+# Runs daily at 2 AM to ensure cache is fresh
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: kaniko-cache-warmer
+  namespace: argo
+spec:
+  # Run daily at 2 AM
+  schedule: "0 2 * * *"
+  timezone: "UTC"
+  concurrencyPolicy: "Replace"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  workflowSpec:
+    entrypoint: warm-cache
+    serviceAccountName: kaniko-builder
+    ttlStrategy:
+      secondsAfterCompletion: 86400  # Clean up after 24 hours
+    volumes:
+    - name: docker-config
+      secret:
+        secretName: docker-config
+    templates:
+    - name: warm-cache
+      dag:
+        tasks:
+        - name: warm-python-cache
+          template: warm-image-cache
+          arguments:
+            parameters:
+            - name: image
+              value: "{{ container_registry }}/library/python:3.12-slim"
+        - name: warm-python-base-cache
+          template: warm-image-cache
+          arguments:
+            parameters:
+            - name: image
+              value: "{{ container_registry }}/library/python-base:3.12-slim"
+        - name: warm-node-cache
+          template: warm-image-cache
+          arguments:
+            parameters:
+            - name: image
+              value: "{{ container_registry }}/library/node:18-alpine"
+        - name: warm-node-base-cache
+          template: warm-image-cache
+          arguments:
+            parameters:
+            - name: image
+              value: "{{ container_registry }}/library/node-base:18-alpine"
+        - name: warm-nginx-cache
+          template: warm-image-cache
+          arguments:
+            parameters:
+            - name: image
+              value: "{{ container_registry }}/library/nginx:stable-alpine"
+    - name: warm-image-cache
+      inputs:
+        parameters:
+        - name: image
+      container:
+        image: {{ container_registry }}/library/kaniko-warmer:latest
+        args:
+          - --cache-dir=/cache
+          - --image={% raw %}{{inputs.parameters.image}}{% endraw %}
+        volumeMounts:
+        - name: docker-config
+          mountPath: /kaniko/.docker

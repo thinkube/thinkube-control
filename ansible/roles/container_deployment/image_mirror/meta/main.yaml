@@ -1,0 +1,19 @@
+---
+# meta/main.yaml for image_mirror role
+dependencies: []
+
+galaxy_info:
+  role_name: image_mirror
+  description: Mirrors container images between registries using Podman
+  author: Alex Martinez Corria
+  min_ansible_version: 2.9
+  platforms:
+    - name: Ubuntu
+      versions:
+        - all
+  galaxy_tags:
+    - container
+    - image
+    - mirror
+    - podman
+    - harbor

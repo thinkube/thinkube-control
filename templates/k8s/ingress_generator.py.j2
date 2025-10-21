@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""
+Generate Kubernetes Ingress YAML from thinkube specification
+This is a template that gets rendered with Ansible variables
+"""
+
+import yaml
+import json
+
+# Configuration from Ansible
+project_name = '{{ project_name }}'
+k8s_namespace = '{{ k8s_namespace }}'
+domain_name = '{{ domain_name }}'
+thinkube_spec = json.loads('''{{ thinkube_spec | to_json }}''')
+
+# Check if we need ingress
+routes = thinkube_spec.get('spec', {}).get('routes', [])
+containers = thinkube_spec.get('spec', {}).get('containers', [])
+containers_with_ports = [c for c in containers if 'port' in c]
+
+if not routes and not containers_with_ports:
+    # No ingress needed
+    with open('{{ local_repo_path }}/k8s/ingress.yaml', 'w') as f:
+        f.write('# No ingress needed - no routes or containers with ports defined\n')
+    exit(0)
+
+# Check for large upload capability
+has_large_uploads = any(
+    'large-uploads' in c.get('capabilities', []) 
+    for c in containers
+)
+
+# Build ingress object
+ingress = {
+    'apiVersion': 'networking.k8s.io/v1',
+    'kind': 'Ingress',
+    'metadata': {
+        'name': project_name,
+        'namespace': k8s_namespace,
+        'labels': {
+            'app.kubernetes.io/name': project_name,
+            'app.kubernetes.io/managed-by': 'argocd'
+        },
+        'annotations': {
+            'cert-manager.io/cluster-issuer': 'letsencrypt-prod',
+            'nginx.ingress.kubernetes.io/ssl-redirect': 'true',
+            'nginx.ingress.kubernetes.io/default-backend': 'paused-backend',
+            'nginx.ingress.kubernetes.io/custom-http-errors': '404,503'
+        }
+    },
+    'spec': {
+        'ingressClassName': 'nginx',
+        'tls': [{
+            'hosts': [f'{project_name}.{domain_name}'],
+            'secretName': f'{k8s_namespace}-tls-secret'
+        }],
+        'rules': [{
+            'host': f'{project_name}.{domain_name}',
+            'http': {
+                'paths': []
+            }
+        }]
+    }
+}
+
+# Add large upload annotations if needed
+if has_large_uploads:
+    ingress['metadata']['annotations'].update({
+        'nginx.ingress.kubernetes.io/proxy-body-size': '1024m',
+        'nginx.ingress.kubernetes.io/proxy-request-buffering': 'off',
+        'nginx.ingress.kubernetes.io/client-body-buffer-size': '50m'
+    })
+
+# Add custom error handling for disabled services
+# This works with the error-backend service deployed in the ingress namespace
+is_disableable = project_name != 'thinkube-control' and k8s_namespace != 'thinkube-control'
+if is_disableable:
+    ingress['metadata']['annotations']['nginx.ingress.kubernetes.io/custom-http-errors'] = '503'
+
+# Build paths
+paths = []
+
+if routes:
+    # Use defined routes
+    for route in routes:
+        container_name = route['to']
+        # Find the container to get its port
+        container = next((c for c in containers if c['name'] == container_name), None)
+        if container and 'port' in container:
+            paths.append({
+                'path': route['path'],
+                'pathType': 'Prefix',
+                'backend': {
+                    'service': {
+                        'name': container_name,
+                        'port': {
+                            'number': container['port']
+                        }
+                    }
+                }
+            })
+else:
+    # Default route to first container with a port
+    if containers_with_ports:
+        default_container = containers_with_ports[0]
+        paths.append({
+            'path': '/',
+            'pathType': 'Prefix',
+            'backend': {
+                'service': {
+                    'name': default_container['name'],
+                    'port': {
+                        'number': default_container['port']
+                    }
+                }
+            }
+        })
+
+ingress['spec']['rules'][0]['http']['paths'] = paths
+
+# Write YAML
+with open('{{ local_repo_path }}/k8s/ingress.yaml', 'w') as f:
+    f.write('# Generated ingress configuration\n')
+    f.write('# Always generate ingress for applications with routes or containers with ports\n')
+    f.write('---\n')
+    yaml.dump(ingress, f, default_flow_style=False, sort_keys=False)
+
+print("Generated ingress.yaml successfully")

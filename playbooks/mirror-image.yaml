@@ -1,0 +1,173 @@
+---
+# playbooks/mirror-image.yaml
+# Description:
+#   Mirror a single container image to Harbor registry
+#   This playbook is called by thinkube-control API for on-demand mirroring
+#
+# Requirements:
+#   - Harbor registry must be installed and accessible
+#   - Podman or Docker must be installed on the control node
+#   - HARBOR_ROBOT_TOKEN environment variable must be set
+#
+# Variables passed by API:
+#   - source_image: Source image URL (required)
+#   - image_description: Description of the image (optional)
+#   - image_category: Category (user/custom) (optional, default: user)
+#
+# 🤖 [AI-assisted]
+
+- name: Mirror Container Image to Harbor
+  hosts: microk8s_control_plane
+  gather_facts: true
+  vars:
+    image_category: "{{ image_category | default('user') }}"
+    image_description: "{{ image_description | default('User-added image') }}"
+
+    # Parse source image to build destination
+    # Examples:
+    # docker.io/library/nginx:latest -> registry.thinkube.com/library/nginx:latest
+    # quay.io/prometheus/prometheus:v2.45.0 -> registry.thinkube.com/library/prometheus:v2.45.0
+    # mysql:8.0 -> registry.thinkube.com/library/mysql:8.0
+
+  pre_tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - source_image is defined
+          - source_image | length > 0
+          - harbor_registry is defined
+          - domain_name is defined
+        fail_msg: "Required variables are not defined"
+
+    - name: Parse source image components
+      ansible.builtin.set_fact:
+        # Handle different image formats
+        parsed_image: "{{ source_image | regex_replace('^docker\\.io/', '') | regex_replace('^index\\.docker\\.io/', '') }}"
+
+    - name: Extract image name and tag
+      ansible.builtin.set_fact:
+        # For images like: library/nginx:latest, nginx:latest, quay.io/prometheus/prometheus:latest
+        image_parts: "{{ parsed_image.split('/') }}"
+        has_registry: "{{ '.' in parsed_image.split('/')[0] }}"
+
+    - name: Determine final image name
+      ansible.builtin.set_fact:
+        final_image_name: |
+          {%- if has_registry -%}
+            {%- if image_parts | length == 3 -%}
+              {{ image_parts[2] }}
+            {%- elif image_parts | length == 2 -%}
+              {{ image_parts[1] }}
+            {%- else -%}
+              {{ image_parts[0] }}
+            {%- endif -%}
+          {%- else -%}
+            {%- if image_parts | length == 2 -%}
+              {{ image_parts[1] }}
+            {%- elif image_parts | length == 1 -%}
+              {{ image_parts[0] }}
+            {%- else -%}
+              {{ parsed_image.split('/')[-1] }}
+            {%- endif -%}
+          {%- endif -%}
+
+    - name: Build destination image URL
+      ansible.builtin.set_fact:
+        destination_image: "registry.{{ domain_name }}/library/{{ final_image_name }}"
+
+    - name: Display image mapping
+      ansible.builtin.debug:
+        msg:
+          - "Source: {{ source_image }}"
+          - "Destination: {{ destination_image }}"
+
+    - name: Get robot token from env file
+      ansible.builtin.shell: |
+        if [ -f {{ ansible_env.HOME }}/.env ]; then
+          grep HARBOR_ROBOT_TOKEN {{ ansible_env.HOME }}/.env | cut -d= -f2
+        else
+          echo ""
+        fi
+      register: robot_token_cmd
+      changed_when: false
+
+    - name: Set robot token fact
+      ansible.builtin.set_fact:
+        harbor_robot_token: "{{ robot_token_cmd.stdout | trim }}"
+        harbor_robot_user: "robot$thinkube"
+      when: robot_token_cmd.stdout | trim | length > 0
+
+    - name: Get admin password from environment
+      ansible.builtin.set_fact:
+        admin_password: "{{ lookup('env', 'ADMIN_PASSWORD') | default(lookup('env', 'ANSIBLE_BECOME_PASSWORD'), true) }}"
+        harbor_admin_user: "admin"
+
+    - name: Fail if no credentials available
+      ansible.builtin.fail:
+        msg: "No Harbor credentials available (neither robot token nor admin password)"
+      when:
+        - (harbor_robot_token is not defined or harbor_robot_token | length == 0)
+        - (admin_password is not defined or admin_password | length == 0)
+
+  tasks:
+    - name: Check container runtime
+      ansible.builtin.shell: which podman || which docker
+      register: container_runtime_check
+      changed_when: false
+      failed_when: false
+
+    - name: Set container runtime
+      ansible.builtin.set_fact:
+        container_runtime: "{{ 'podman' if 'podman' in container_runtime_check.stdout else 'docker' }}"
+
+    - name: Fail if no container runtime available
+      ansible.builtin.fail:
+        msg: "Neither podman nor docker is available on the system"
+      when: container_runtime_check.rc != 0
+
+    - name: Login to Harbor registry (using robot token)
+      ansible.builtin.command: >
+        {{ container_runtime }} login registry.{{ domain_name }}
+        --username {{ harbor_robot_user }}
+        --password {{ harbor_robot_token }}
+        --tls-verify=false
+      register: harbor_login
+      changed_when: "'Login Succeeded' in harbor_login.stdout"
+      no_log: true
+      when: harbor_robot_token is defined and harbor_robot_token | length > 0
+
+    - name: Login to Harbor registry (using admin password)
+      ansible.builtin.command: >
+        {{ container_runtime }} login registry.{{ domain_name }}
+        --username {{ harbor_admin_user }}
+        --password {{ admin_password }}
+        --tls-verify=false
+      register: harbor_login_admin
+      changed_when: "'Login Succeeded' in harbor_login_admin.stdout"
+      no_log: true
+      when:
+        - harbor_robot_token is not defined or harbor_robot_token | length == 0
+        - admin_password is defined and admin_password | length > 0
+
+    - name: Mirror the image
+      include_role:
+        name: container_deployment/image_mirror
+      vars:
+        source_image: "{{ source_image }}"
+        destination_image: "{{ destination_image }}"
+        harbor_api_user: "{{ harbor_admin_user }}"
+        harbor_api_password: "{{ admin_password }}"
+
+    - name: Logout from Harbor registry
+      ansible.builtin.command: >-
+        {{ container_runtime }} logout registry.{{ domain_name }}
+      changed_when: false
+      failed_when: false
+
+    - name: Display success message
+      ansible.builtin.debug:
+        msg:
+          - "✅ Image mirrored successfully:"
+          - "  Source: {{ source_image }}"
+          - "  Destination: {{ destination_image }}"
+          - "  Category: {{ image_category }}"

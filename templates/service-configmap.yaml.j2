@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: thinkube-service-config
+  namespace: {{ k8s_namespace }}
+  labels:
+    app: {{ app_name }}
+    thinkube.io/managed: "true"
+    thinkube.io/service-type: "user_app"
+    thinkube.io/service-name: "{{ app_name }}"
+data:
+  service.yaml: |
+    service:
+      name: "{{ app_name }}"
+      display_name: "{{ app_name | replace('-', ' ') | title }}"
+      description: "{{ project_description | default('User application deployed from ' + template_url) }}"
+      type: user_app
+      category: applications
+      icon: /icons/tk_dashboard.svg
+      
+      endpoints:
+        - name: web
+          type: http
+          url: "https://{{ app_host }}"
+          health_url: "https://{{ app_host }}/health"
+          description: "Main application endpoint"
+          primary: true
+          
+      dependencies: {{ app_dependencies | default([]) | to_yaml }}
+        
+      scaling:
+        resources:
+          {% for container in thinkube_config.spec.containers -%}
+          - resource_type: deployment
+            resource_name: "{{ app_name }}-{{ container.name }}"
+          {% endfor -%}
+        namespace: "{{ k8s_namespace }}"
+        min_replicas: 1
+        can_disable: true
+        
+      metadata:
+        template_url: "{{ template_url }}"
+        deployment_date: "{{ ansible_date_time.iso8601 }}"
+        deployed_by: "{{ deployment_user | default('thinkube-control') }}"

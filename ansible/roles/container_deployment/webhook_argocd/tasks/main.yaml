@@ -1,0 +1,128 @@
+---
+# IMPORTANT: This file has a duplicate that must be kept in sync!
+# Original: /home/thinkube/thinkube/ansible/roles/container_deployment/webhook_argocd/tasks/main.yaml
+# Copy: /home/thinkube/thinkube/thinkube-control/ansible/roles/container_deployment/webhook_argocd/tasks/main.yaml
+# If you modify this file, ensure the changes are reflected in both locations.
+
+- name: Get ArgoCD admin password
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ argocd_namespace }}"
+    name: argocd-initial-admin-secret
+  register: argocd_admin_secret
+
+- name: Set ArgoCD password fact
+  ansible.builtin.set_fact:
+    argocd_admin_password: "{{ argocd_admin_secret.resources[0].data.password | b64decode }}"
+  when: argocd_admin_secret.resources | length > 0
+
+- name: Get Gitea admin token from secret
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: v1
+    kind: Secret
+    namespace: gitea
+    name: gitea-admin-token
+  register: gitea_token_secret
+
+- name: Set Gitea token fact
+  ansible.builtin.set_fact:
+    gitea_admin_token: "{{ gitea_token_secret.resources[0].data.token | b64decode }}"
+  when: gitea_token_secret.resources | length > 0
+
+- name: Create ArgoCD webhook token for Gitea
+  ansible.builtin.uri:
+    url: "https://argocd.{{ domain_name }}/api/v1/projects/default/token"
+    method: POST
+    validate_certs: false
+    headers:
+      Authorization: "Bearer {{ argocd_admin_password }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      id: "gitea-webhook-{{ app_name }}"
+      description: "Webhook token for Gitea repository {{ gitea_repo_name }}"
+      project: "default"
+      role: "sync"
+  register: webhook_token_response
+  failed_when: false
+
+- name: Configure Gitea webhook for ArgoCD
+  ansible.builtin.uri:
+    url: "https://{{ gitea_hostname }}/api/v1/repos/{{ gitea_org }}/{{ gitea_repo_name }}/hooks"
+    method: POST
+    validate_certs: false
+    headers:
+      Authorization: "token {{ gitea_admin_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      type: "gitea"
+      config:
+        url: "https://argocd.{{ domain_name }}/api/webhook"
+        content_type: "json"
+        secret: "{{ argocd_admin_password }}"
+        insecure_ssl: "true"
+      events:
+        - "push"
+        - "create"
+        - "delete"
+      active: true
+  register: webhook_create_response
+  failed_when: false
+  changed_when: webhook_create_response.status == 201
+
+- name: Check if webhook already exists
+  ansible.builtin.debug:
+    msg: "Webhook already exists for {{ gitea_repo_name }}"
+  when: webhook_create_response.status == 422
+
+- name: List existing webhooks if creation failed
+  ansible.builtin.uri:
+    url: "https://{{ gitea_hostname }}/api/v1/repos/{{ gitea_org }}/{{ gitea_repo_name }}/hooks"
+    method: GET
+    validate_certs: false
+    headers:
+      Authorization: "token {{ gitea_admin_token }}"
+  register: existing_webhooks
+  when: webhook_create_response.status not in [201, 422]
+
+- name: Update existing ArgoCD webhook if found
+  ansible.builtin.uri:
+    url: "https://{{ gitea_hostname }}/api/v1/repos/{{ gitea_org }}/{{ gitea_repo_name }}/hooks/{{ item.id }}"
+    method: PATCH
+    validate_certs: false
+    headers:
+      Authorization: "token {{ gitea_admin_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      config:
+        url: "https://{{ argocd_server }}/api/webhook"
+        content_type: "json"
+        secret: "{{ argocd_admin_password }}"
+        insecure_ssl: "true"
+      events:
+        - "push"
+        - "create"
+        - "delete"
+      active: true
+  loop: "{{ existing_webhooks.json | default([]) }}"
+  when:
+    - webhook_create_response.status not in [201, 422]
+    - existing_webhooks is defined
+    - item.config.url is defined
+    - "'argocd' in item.config.url"
+
+- name: Verify webhook configuration
+  ansible.builtin.debug:
+    msg: |
+      Webhook configured for {{ gitea_repo_name }}:
+      - Gitea URL: https://{{ gitea_hostname }}/{{ gitea_org }}/{{ gitea_repo_name }}
+      - ArgoCD URL: https://argocd.{{ domain_name }}/api/webhook
+      - Events: push, create, delete
+      
+      This webhook will trigger immediate ArgoCD sync when webhook adapter
+      commits changes to the repository, reducing deployment time.

@@ -1,0 +1,43 @@
+# IMPORTANT: This file is used by template deployments!
+# Location: /home/thinkube/thinkube/ansible/40_thinkube/core/thinkube-control/tasks/create_gitea_repo.yaml
+# Used by: Template deployments in thinkube-control
+# If you modify this file, ensure it remains compatible with template deployment requirements.
+#
+# Create Gitea repository without pushing
+# This allows us to set up webhook before the first push
+
+- name: Get Gitea admin token from secret
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: v1
+    kind: Secret
+    namespace: gitea
+    name: gitea-admin-token
+  register: gitea_token_secret
+  failed_when: gitea_token_secret.resources | length == 0
+
+- name: Check if repository exists in Gitea
+  uri:
+    url: "https://{{ gitea_hostname }}/api/v1/repos/{{ gitea_org }}/{{ gitea_repo_name }}"
+    headers:
+      Authorization: "token {{ gitea_token_secret.resources[0].data.token | b64decode }}"
+    validate_certs: true
+    status_code: [200, 404]
+  register: repo_check
+
+- name: Create repository in Gitea if it doesn't exist
+  uri:
+    url: "https://{{ gitea_hostname }}/api/v1/orgs/{{ gitea_org }}/repos"
+    method: POST
+    headers:
+      Authorization: "token {{ gitea_token_secret.resources[0].data.token | b64decode }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ gitea_repo_name }}"
+      description: "{{ gitea_repo_description | default('Deployment manifests for ' + app_name) }}"
+      private: true
+      auto_init: false
+    validate_certs: true
+    status_code: 201
+  when: repo_check.status == 404

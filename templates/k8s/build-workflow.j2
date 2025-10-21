@@ -1,0 +1,471 @@
+# Generated Argo Workflow template for CI/CD with testing and monitoring
+# This follows the documented CI/CD monitoring design using ConfigMap scripts
+---
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: {{ project_name }}-build
+  namespace: argo
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/part-of: thinkube
+    app.kubernetes.io/component: ci-cd
+    thinkube.io/trigger: webhook
+    thinkube.io/build-type: container
+    # 🤖 Critical for webhook adapter to identify the app
+    thinkube.io/app-name: {{ project_name }}
+    thinkube.io/namespace: {{ k8s_namespace }}
+spec:
+  entrypoint: ci-cd-pipeline
+  onExit: exit-handler
+  
+  # Force workflows to run on control plane node where shared-code is available
+  nodeSelector:
+    kubernetes.io/hostname: {{ master_node_name }}
+    
+  # Service account for Kaniko builds
+  serviceAccountName: kaniko-builder
+  
+  # Global parameters - webhook-timestamp comes from Argo Events
+  arguments:
+    parameters:
+      - name: webhook-timestamp
+        value: ""  # Set by Argo Events sensor
+      - name: image_tag
+        value: "{{ "{{" }}workflow.uid{{ "}}" }}"
+  
+  # Volumes for ConfigMaps and shared code
+  volumes:
+    - name: docker-config
+      secret:
+        secretName: harbor-docker-config
+        items:
+          - key: config.json
+            path: config.json
+    - name: shared-code
+      hostPath:
+        path: /home/{{ system_username }}/shared-code/{{ project_name }}
+        type: Directory
+    - name: cicd-pipeline-scripts
+      configMap:
+        name: cicd-pipeline-script
+        defaultMode: 0755
+    - name: cicd-stage-scripts
+      configMap:
+        name: cicd-stage-scripts
+        defaultMode: 0755
+    - name: cicd-token
+      secret:
+        secretName: {{ project_name }}-cicd-token
+  
+  templates:
+    - name: ci-cd-pipeline
+      dag:
+        # First task: Create pipeline record
+        tasks:
+        - name: create-pipeline
+          template: create-pipeline-record
+          arguments:
+            parameters:
+              - name: webhook-timestamp
+                value: "{{ "{{" }}workflow.parameters.webhook-timestamp{{ "}}" }}"
+        
+        # Test and build tasks for each container
+{% for container in thinkube_spec.spec.containers %}
+        # {{ container.name }} test
+        - name: test-{{ container.name }}
+          dependencies: [create-pipeline]
+          template: run-container-tests
+          arguments:
+            parameters:
+              - name: container_name
+                value: "{{ container.name }}"
+              - name: build_path
+                value: "{{ container.build | replace('./', '') }}"
+              - name: test_enabled
+                value: "{{ container.test.enabled | default(true) | lower }}"
+              - name: test_command
+                value: "{{ container.test.command | default('') }}"
+              - name: test_image
+                value: "{% if container.test.image is defined %}{% if '/' in container.test.image %}{{ container.test.image }}{% else %}{{ container_registry }}/library/{{ container.test.image }}{% endif %}{% else %}{{ container_registry }}/library/test-runner:latest{% endif %}"
+              - name: pipeline_id
+                value: "{{ "{{" }}tasks.create-pipeline.outputs.parameters.pipeline_id{{ "}}" }}"
+        
+        # {{ container.name }} build (depends only on its own test)
+        - name: build-{{ container.name }}
+          dependencies: [test-{{ container.name }}]
+          template: build-container-with-monitoring
+          arguments:
+            parameters:
+              - name: container_name
+                value: "{{ container.name }}"
+              - name: dockerfile_path
+                value: "{{ container.build | replace('./', '') }}/Dockerfile"
+              - name: context_path
+                value: "{{ container.build | replace('./', '') }}"
+              - name: pipeline_id
+                value: "{{ "{{" }}tasks.create-pipeline.outputs.parameters.pipeline_id{{ "}}" }}"
+{% endfor %}
+
+    # Template to create pipeline using ConfigMap script
+    - name: create-pipeline-record
+      inputs:
+        parameters:
+          - name: webhook-timestamp
+      container:
+        image: {{ container_registry }}/library/ci-utils:latest
+        imagePullPolicy: Always
+        command: ["/bin/bash", "-c"]
+        args:
+          - |
+            # Set up environment for create-pipeline.sh
+            export CICD_API_URL="https://control.{{ domain_name }}"
+            export CICD_API_TOKEN="$(cat /var/run/secrets/cicd-token/token)"
+            export APP_NAME="{{ project_name }}"
+            export WEBHOOK_TIMESTAMP="{{ "{{" }}inputs.parameters.webhook-timestamp{{ "}}" }}"
+            export WORKFLOW_NAME="{{ "{{" }}workflow.name{{ "}}" }}"
+            export WORKFLOW_UID="{{ "{{" }}workflow.uid{{ "}}" }}"
+            export TRIGGER_TYPE="webhook"
+            
+            # Execute the script
+            /scripts/create-pipeline.sh
+            
+            # Output the pipeline ID
+            cat /tmp/pipeline-id.txt
+        volumeMounts:
+          - name: cicd-pipeline-scripts
+            mountPath: /scripts
+          - name: cicd-token
+            mountPath: /var/run/secrets/cicd-token
+          - name: shared-code
+            mountPath: /workspace
+      outputs:
+        parameters:
+          - name: pipeline_id
+            valueFrom:
+              path: /tmp/pipeline-id.txt
+            globalName: pipeline_id  # Make it globally accessible
+
+    # Template to run tests with monitoring
+    - name: run-container-tests
+      inputs:
+        parameters:
+          - name: container_name
+          - name: build_path
+          - name: test_enabled
+          - name: test_command
+          - name: test_image
+          - name: pipeline_id
+      dag:
+        tasks:
+        # Check if testing is enabled
+        - name: check-test-enabled
+          template: check-condition
+          arguments:
+            parameters:
+              - name: condition
+                value: "{{ "{{" }}inputs.parameters.test_enabled{{ "}}" }}"
+        
+        # Create test stage
+        - name: create-test-stage
+          dependencies: [check-test-enabled]
+          template: create-stage
+          when: "{{ "{{" }}tasks.check-test-enabled.outputs.result{{ "}}" }} == true"
+          arguments:
+            parameters:
+              - name: pipeline_id
+                value: "{{ "{{" }}inputs.parameters.pipeline_id{{ "}}" }}"
+              - name: stage_name
+                value: "{{ "{{" }}inputs.parameters.container_name{{ "}}" }}_tests"
+              - name: component
+                value: "{{ "{{" }}inputs.parameters.container_name{{ "}}" }}"
+        
+        # Run the actual test
+        - name: execute-test
+          dependencies: [check-test-enabled]
+          template: execute-container-test
+          when: "{{ "{{" }}tasks.check-test-enabled.outputs.result{{ "}}" }} == true"
+          arguments:
+            parameters:
+              - name: container_name
+                value: "{{ "{{" }}inputs.parameters.container_name{{ "}}" }}"
+              - name: build_path
+                value: "{{ "{{" }}inputs.parameters.build_path{{ "}}" }}"
+              - name: test_command
+                value: "{{ "{{" }}inputs.parameters.test_command{{ "}}" }}"
+              - name: test_image
+                value: "{{ "{{" }}inputs.parameters.test_image{{ "}}" }}"
+        
+        # Update stage status
+        - name: update-test-stage
+          dependencies: [create-test-stage, execute-test]
+          template: update-stage
+          when: "{{ "{{" }}tasks.check-test-enabled.outputs.result{{ "}}" }} == true"
+          arguments:
+            parameters:
+              - name: pipeline_id
+                value: "{{ "{{" }}inputs.parameters.pipeline_id{{ "}}" }}"
+              - name: stage_id
+                value: "{{ "{{" }}tasks.create-test-stage.outputs.parameters.stage_id{{ "}}" }}"
+              - name: status
+                value: "{{ "{{" }}tasks.execute-test.outputs.parameters.test_status{{ "}}" }}"
+              - name: details
+                value: "{{ "{{" }}tasks.execute-test.outputs.parameters.test_details{{ "}}" }}"
+
+    # Template to execute container tests
+    - name: execute-container-test
+      inputs:
+        parameters:
+          - name: container_name
+          - name: build_path
+          - name: test_command
+          - name: test_image
+      container:
+        image: "{{ "{{" }}inputs.parameters.test_image{{ "}}" }}"
+        imagePullPolicy: Always
+        command: ["/bin/sh", "-c"]
+        env:
+          - name: ADMIN_USERNAME
+            value: "{{ admin_username }}"
+          - name: ADMIN_PASSWORD
+            value: "{{ admin_password }}"
+        args:
+          - |
+            set -e
+            cd /workspace/{{ "{{" }}inputs.parameters.build_path{{ "}}" }}
+            
+            # Create result files
+            echo "RUNNING" > /tmp/test_status
+            echo "{}" > /tmp/test_details
+            
+            # Get test command - MUST be provided, no auto-detection
+            TEST_CMD="{{ "{{" }}inputs.parameters.test_command{{ "}}" }}"
+            
+            # If test is enabled but no command provided, FAIL
+            if [ -z "$TEST_CMD" ]; then
+              echo "FAILED" > /tmp/test_status
+              echo '{"message": "Test enabled but no test command provided in thinkube.yaml"}' > /tmp/test_details
+              echo "ERROR: Tests are enabled but no test command was specified in thinkube.yaml"
+              echo "Please add test.command to your container configuration"
+              exit 1
+            fi
+            
+            # Run the provided test command
+            echo "Running tests: $TEST_CMD"
+            if $TEST_CMD > /tmp/test_output.log 2>&1; then
+              echo "SUCCEEDED" > /tmp/test_status
+              echo '{"message": "Tests passed successfully"}' > /tmp/test_details
+            else
+              echo "FAILED" > /tmp/test_status
+              echo "{\"message\": \"Tests failed\", \"output\": \"$(tail -n 50 /tmp/test_output.log | jq -Rs .)\"}" > /tmp/test_details
+              exit 1
+            fi
+        volumeMounts:
+          - name: shared-code
+            mountPath: /workspace
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1"
+      outputs:
+        parameters:
+          - name: test_status
+            valueFrom:
+              path: /tmp/test_status
+          - name: test_details
+            valueFrom:
+              path: /tmp/test_details
+
+    # Template to build with monitoring
+    - name: build-container-with-monitoring
+      inputs:
+        parameters:
+          - name: container_name
+          - name: dockerfile_path
+          - name: context_path
+          - name: pipeline_id
+      dag:
+        tasks:
+        # Create build stage
+        - name: create-build-stage
+          template: create-stage
+          arguments:
+            parameters:
+              - name: pipeline_id
+                value: "{{ "{{" }}inputs.parameters.pipeline_id{{ "}}" }}"
+              - name: stage_name
+                value: "{{ "{{" }}inputs.parameters.container_name{{ "}}" }}_build"
+              - name: component
+                value: "{{ "{{" }}inputs.parameters.container_name{{ "}}" }}"
+        
+        # Execute build
+        - name: execute-build
+          dependencies: [create-build-stage]
+          template: kaniko-build
+          arguments:
+            parameters:
+              - name: container_name
+                value: "{{ "{{" }}inputs.parameters.container_name{{ "}}" }}"
+              - name: dockerfile_path
+                value: "{{ "{{" }}inputs.parameters.dockerfile_path{{ "}}" }}"
+              - name: context_path
+                value: "{{ "{{" }}inputs.parameters.context_path{{ "}}" }}"
+        
+        # Update build stage
+        - name: update-build-stage
+          dependencies: [execute-build]
+          template: update-stage
+          arguments:
+            parameters:
+              - name: pipeline_id
+                value: "{{ "{{" }}inputs.parameters.pipeline_id{{ "}}" }}"
+              - name: stage_id
+                value: "{{ "{{" }}tasks.create-build-stage.outputs.parameters.stage_id{{ "}}" }}"
+              - name: status
+                value: "SUCCEEDED"
+              - name: details
+                value: '{"image_tag": "{{ "{{" }}workflow.parameters.image_tag{{ "}}" }}"}'
+
+    # Template to create a stage using ConfigMap script
+    - name: create-stage
+      inputs:
+        parameters:
+          - name: pipeline_id
+          - name: stage_name
+          - name: component
+      container:
+        image: {{ container_registry }}/library/ci-utils:latest
+        imagePullPolicy: Always
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            # Set up environment for create-stage.sh
+            export CICD_API_URL="https://control.{{ domain_name }}"
+            export CICD_API_TOKEN="$(cat /var/run/secrets/cicd-token/token)"
+            export PIPELINE_ID="{{ "{{" }}inputs.parameters.pipeline_id{{ "}}" }}"
+            export STAGE_NAME="{{ "{{" }}inputs.parameters.stage_name{{ "}}" }}"
+            export COMPONENT="{{ "{{" }}inputs.parameters.component{{ "}}" }}"
+            
+            # Execute the script
+            /scripts/create-stage.sh
+            
+            # Output the stage ID
+            cat /tmp/stage-id.txt
+        volumeMounts:
+          - name: cicd-stage-scripts
+            mountPath: /scripts
+          - name: cicd-token
+            mountPath: /var/run/secrets/cicd-token
+      outputs:
+        parameters:
+          - name: stage_id
+            valueFrom:
+              path: /tmp/stage-id.txt
+
+    # Template to update a stage using ConfigMap script
+    - name: update-stage
+      inputs:
+        parameters:
+          - name: pipeline_id
+          - name: stage_id
+          - name: status
+          - name: details
+      container:
+        image: {{ container_registry }}/library/ci-utils:latest
+        imagePullPolicy: Always
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            # Set up environment for update-stage.sh
+            export CICD_API_URL="https://control.{{ domain_name }}"
+            export CICD_API_TOKEN="$(cat /var/run/secrets/cicd-token/token)"
+            export PIPELINE_ID="{{ "{{" }}inputs.parameters.pipeline_id{{ "}}" }}"
+            export STAGE_ID="{{ "{{" }}inputs.parameters.stage_id{{ "}}" }}"
+            export STATUS="{{ "{{" }}inputs.parameters.status{{ "}}" }}"
+            export DETAILS='{{ "{{" }}inputs.parameters.details{{ "}}" }}'
+            export COMPLETION_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            
+            # Execute the script
+            /scripts/update-stage.sh
+        volumeMounts:
+          - name: cicd-stage-scripts
+            mountPath: /scripts
+          - name: cicd-token
+            mountPath: /var/run/secrets/cicd-token
+
+    # Kaniko build template
+    - name: kaniko-build
+      inputs:
+        parameters:
+          - name: container_name
+          - name: dockerfile_path
+          - name: context_path
+      container:
+        image: gcr.io/kaniko-project/executor:latest
+        args:
+          - "--dockerfile=/workspace/{{ "{{" }}inputs.parameters.dockerfile_path{{ "}}" }}"
+          - "--context=/workspace/{{ "{{" }}inputs.parameters.context_path{{ "}}" }}"
+          - "--destination={{ container_registry }}/thinkube/{{ project_name }}-{{ "{{" }}inputs.parameters.container_name{{ "}}" }}:{{ "{{" }}workflow.parameters.image_tag{{ "}}" }}"
+          - "--destination={{ container_registry }}/thinkube/{{ project_name }}-{{ "{{" }}inputs.parameters.container_name{{ "}}" }}:latest"
+          - "--cache=true"
+          - "--cache-ttl=24h"
+        volumeMounts:
+          - name: docker-config
+            mountPath: /kaniko/.docker/
+          - name: shared-code
+            mountPath: /workspace
+
+    # Helper template to check conditions
+    - name: check-condition
+      inputs:
+        parameters:
+          - name: condition
+      script:
+        image: {{ container_registry }}/library/ci-utils:latest
+        imagePullPolicy: Always
+        command: [bash]
+        source: |
+          if [ "{{ "{{" }}inputs.parameters.condition{{ "}}" }}" = "true" ]; then
+            echo "true"
+          else
+            echo "false"
+          fi
+
+    # Exit handler template
+    - name: exit-handler
+      dag:
+        tasks:
+        - name: update-pipeline-status
+          template: update-pipeline-failed
+          when: "{{ "{{" }}workflow.status{{ "}}" }} != Succeeded"
+
+    # Template to update pipeline as failed
+    - name: update-pipeline-failed
+      container:
+        image: {{ container_registry }}/library/ci-utils:latest
+        imagePullPolicy: Always
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            # Get pipeline ID from global parameter
+            PIPELINE_ID="{{ "{{" }}workflow.outputs.parameters.pipeline_id{{ "}}" }}"
+            
+            if [ -n "$PIPELINE_ID" ]; then
+              curl -X PATCH https://control.{{ domain_name }}/api/v1/cicd/pipelines/${PIPELINE_ID} \
+                -H "Authorization: Bearer $(cat /var/run/secrets/cicd-token/token)" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "status": "FAILED",
+                  "completed_at": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+                  "error_message": "Pipeline failed - check stages for details"
+                }' \
+                --fail --silent --show-error || true
+            else
+              echo "Warning: No pipeline_id available to update"
+            fi
+        volumeMounts:
+          - name: cicd-token
+            mountPath: /var/run/secrets/cicd-token

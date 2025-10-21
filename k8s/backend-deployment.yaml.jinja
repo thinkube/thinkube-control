@@ -1,0 +1,185 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thinkube-control-backend
+  namespace: {{ namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: thinkube-control-backend
+  template:
+    metadata:
+      labels:
+        app: thinkube-control-backend
+    spec:
+      containers:
+      - name: control-backend
+        image: {{ backend_image_repo }}
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+        env:
+        - name: KEYCLOAK_URL
+          value: "https://{{ auth_subdomain }}.{{ domain_name }}"
+        - name: KEYCLOAK_REALM
+          value: "{{ keycloak_realm }}"
+        - name: KEYCLOAK_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: {{ namespace }}-keycloak
+              key: client_id
+        - name: KEYCLOAK_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ namespace }}-keycloak
+              key: client_secret
+        - name: KEYCLOAK_VERIFY_SSL
+          value: "true"
+        - name: FRONTEND_URL
+          value: "https://{{ control_subdomain }}.{{ domain_name }}"
+        - name: BACKEND_CORS_ORIGINS
+          value: '["https://{{ control_subdomain }}.{{ domain_name }}"]'
+        - name: DOMAIN_NAME
+          value: "{{ domain_name }}"
+        # CI/CD monitoring token for MCP internal authentication
+        - name: CICD_MONITORING_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: cicd-monitoring-token
+              key: token
+        # Domain configuration for podman registry
+        - name: DOMAIN_NAME
+          value: "{{ domain_name }}"
+        # Dashboard service URLs - only deployed services
+        - name: SEAWEEDFS_URL
+          value: "https://seaweedfs.{{ domain_name }}"
+        - name: HARBOR_URL
+          value: "https://{{ registry_subdomain }}.{{ domain_name }}"
+        - name: GITEA_URL
+          value: "https://git.{{ domain_name }}"
+        - name: ARGOCD_URL
+          value: "https://argocd.{{ domain_name }}"
+        - name: ARGO_WORKFLOWS_URL
+          value: "https://argo.{{ domain_name }}"
+        # PostgreSQL configuration
+        - name: POSTGRES_HOST
+          value: "postgresql-official.postgres.svc.cluster.local"
+        - name: POSTGRES_PORT
+          value: "5432"
+        - name: POSTGRES_USER
+          value: "{{ admin_username }}"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-official
+              key: postgres-password
+        - name: POSTGRES_DB
+          value: "thinkube_control"
+        # Services not yet deployed - uncomment when ready
+        # - name: OPENSEARCH_URL
+        #   value: "https://osd.{{ domain_name }}"
+        # - name: QDRANT_URL
+        #   value: "https://qdrantc.{{ domain_name }}"
+        # - name: AWX_URL
+        #   value: "https://awx.{{ domain_name }}"
+        # - name: PGADMIN_URL
+        #   value: "https://pgadm.{{ domain_name }}"
+        # - name: DEVPI_URL
+        #   value: "https://devpi.{{ domain_name }}"
+        # - name: JUPYTERHUB_URL
+        #   value: "https://jupyterhub.{{ domain_name }}"
+        # - name: CODE_SERVER_URL
+        #   value: "https://code-server.{{ domain_name }}"
+        # - name: MKDOCS_URL
+        #   value: "https://docs.{{ domain_name }}"
+        # Ansible configuration
+        - name: ANSIBLE_HOST_KEY_CHECKING
+          value: "False"
+        - name: ANSIBLE_SSH_ARGS
+          value: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+        - name: ANSIBLE_BECOME_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ansible-credentials
+              key: become-password
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: admin-credentials
+              key: admin-password
+        - name: SYSTEM_USERNAME
+          value: "{{ system_username }}"
+        - name: MASTER_NODE_NAME
+          value: "{{ master_node_name }}"
+        - name: MASTER_NODE_IP
+          value: "{{ master_node_ip }}"
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: github-token
+              key: token
+        - name: HOME
+          value: "/home"
+        - name: HARBOR_ROBOT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: harbor-credentials
+              key: harbor-robot-token
+        - name: ARGOCD_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: argocd-credentials
+              key: argocd-password
+        - name: ARGOCD_DEPLOYMENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: argocd-credentials
+              key: argocd-deployment-secret
+        securityContext:
+          privileged: true
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 256Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        # Mount volumes for ansible execution
+        volumeMounts:
+        - name: shared-code
+          mountPath: /home
+        - name: container-storage
+          mountPath: /var/lib/containers
+      # Add nodeSelector to ensure pod runs on control plane node
+      nodeSelector:
+        kubernetes.io/hostname: {{ master_node_name }}
+      # Add host aliases so container can resolve control plane node
+      hostAliases:
+      - ip: "{{ master_node_ip }}"
+        hostnames:
+        - "{{ master_node_name }}"
+      # Define volumes
+      volumes:
+      - name: shared-code
+        hostPath:
+          path: /home/{{ system_username }}/shared-code
+          type: Directory
+      - name: container-storage
+        hostPath:
+          path: /var/lib/containers
+          type: DirectoryOrCreate
+      imagePullSecrets:
+      - name: app-pull-secret

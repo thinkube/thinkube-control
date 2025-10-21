@@ -1,0 +1,209 @@
+---
+# IMPORTANT: This file has a duplicate that must be kept in sync!
+# Original: /home/thinkube/thinkube/ansible/roles/container_deployment/argocd/tasks/main.yaml
+# Copy: /home/thinkube/thinkube/thinkube-control/ansible/roles/container_deployment/argocd/tasks/main.yaml
+# If you modify this file, ensure the changes are reflected in both locations.
+
+- name: Read SSH private key from remote host for ArgoCD
+  ansible.builtin.slurp:
+    src: "{{ code_source_path }}/.ssh/{{ github_repo_name }}/id_ed25519"
+  register: ssh_private_key_content
+  when: use_github
+
+- name: Create SSH key secret for ArgoCD GitHub access
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: github-{{ github_repo_name }}-ssh
+        namespace: "{{ argocd_namespace }}"
+        labels:
+          argocd.argoproj.io/secret-type: repository
+      stringData:
+        url: "{{ github_repo_url }}"
+        sshPrivateKey: "{{ ssh_private_key_content.content | b64decode }}"
+        type: git
+  when: use_github
+
+# - name: Ensure ssh-keyscan is installed (openssh-client)
+#   become: yes
+#   package:
+#     name: openssh-client
+#     state: present
+#   delegate_to: localhost
+#   when: use_github
+
+- name: Retrieve GitHub SSH host keys (RSA, ECDSA, ED25519)
+  delegate_to: localhost
+  shell: ssh-keyscan -t rsa,ecdsa,ed25519 github.com
+  register: github_keyscan
+  changed_when: true
+  when: use_github
+
+- name: Update argocd-ssh-known-hosts-cm with fresh GitHub known_hosts
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: argocd-ssh-known-hosts-cm
+        namespace: "{{ argocd_namespace }}"
+        labels:
+          app.kubernetes.io/part-of: argocd
+      data:
+        ssh_known_hosts: "{{ github_keyscan.stdout }}"
+  when: use_github and github_keyscan.stdout is defined
+
+- name: Restart ArgoCD repo server to pick up new SSH configuration
+  ansible.builtin.shell: |
+    {{ kubectl_bin }} -n {{ argocd_namespace }} rollout restart deployment argocd-repo-server
+    echo "Restarted ArgoCD repo server to pick up new SSH configuration"
+  when: use_github or not use_github  # Always restart to pick up SSH config
+  register: argocd_restart
+  changed_when: true
+
+- name: Wait for ArgoCD repo server to be ready
+  ansible.builtin.shell: |
+    for i in $(seq 1 12); do
+      READY=$({{ kubectl_bin }} -n {{ argocd_namespace }} get deployment argocd-repo-server -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+      if [ "$READY" = "1" ]; then
+        echo "ArgoCD repo server is ready"
+        exit 0
+      fi
+      echo "Waiting for ArgoCD repo server to be ready... attempt $i/12"
+      sleep 10
+    done
+    echo "Timed out waiting for ArgoCD repo server to be ready"
+    exit 1
+  register: argocd_ready_wait
+  when: argocd_restart.changed
+  changed_when: false
+  args:
+    executable: /bin/bash
+
+- name: Get Gitea admin token from secret
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: v1
+    kind: Secret
+    namespace: gitea
+    name: gitea-admin-token
+  register: gitea_token_secret
+  when: not use_github
+
+- name: Set Gitea token fact
+  ansible.builtin.set_fact:
+    gitea_admin_token: "{{ gitea_token_secret.resources[0].data.token | b64decode }}"
+  when: 
+    - not use_github
+    - gitea_token_secret.resources | length > 0
+
+# Get the Gitea SSH key from argo namespace
+- name: Get Gitea SSH key from argo namespace
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: v1
+    kind: Secret
+    namespace: argo
+    name: gitea-ssh-key
+  register: gitea_ssh_key_secret
+  when: not use_github
+
+- name: Create SSH repository secret for Gitea access
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: gitea-{{ app_name }}-ssh
+        namespace: "{{ argocd_namespace }}"
+        labels:
+          argocd.argoproj.io/secret-type: repository
+      stringData:
+        url: "ssh://git@{{ gitea_hostname }}:2222/{{ gitea_org }}/{{ gitea_repo_name }}.git"
+        sshPrivateKey: "{{ gitea_ssh_key_secret.resources[0].data['ssh-privatekey'] | b64decode }}"
+        type: git
+  when: 
+    - not use_github
+    - gitea_ssh_key_secret.resources | length > 0
+
+# Also need to update SSH known hosts for Gitea
+- name: Retrieve Gitea SSH host keys
+  delegate_to: localhost
+  shell: ssh-keyscan -p 2222 -t rsa,ecdsa,ed25519 {{ gitea_hostname }}
+  register: gitea_keyscan
+  changed_when: true
+  when: not use_github
+
+- name: Update argocd-ssh-known-hosts-cm with Gitea known_hosts
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: argocd-ssh-known-hosts-cm
+        namespace: "{{ argocd_namespace }}"
+        labels:
+          app.kubernetes.io/part-of: argocd
+      data:
+        ssh_known_hosts: |
+          {{ github_keyscan.stdout if use_github else '' }}
+          {{ gitea_keyscan.stdout if not use_github else '' }}
+  when: (use_github and github_keyscan.stdout is defined) or (not use_github and gitea_keyscan.stdout is defined)
+
+- name: Login to ArgoCD
+  ansible.builtin.shell: |
+    argocd login {{ argocd_server }} \
+      --username admin \
+      --password '{{ admin_password }}' \
+      --insecure \
+      --grpc-web
+  register: argocd_login_result
+
+
+- name: Create ArgoCD Application
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: argoproj.io/v1alpha1
+      kind: Application
+      metadata:
+        name: "{{ app_name }}"
+        namespace: "{{ argocd_namespace }}"
+        # No annotations needed - webhook adapter handles image updates directly
+      spec:
+        project: default
+        source:
+          repoURL: "{% if use_github %}{{ github_repo_url }}{% else %}ssh://git@{{ gitea_hostname }}:2222/{{ gitea_org }}/{{ gitea_repo_name }}.git{% endif %}"
+          targetRevision: HEAD
+          path: "{{ argocd_repo_path | default('k8s') }}"
+        destination:
+          server: https://kubernetes.default.svc
+          namespace: "{{ app_namespace }}"
+        syncPolicy:
+          # Automated sync disabled - webhook adapter will handle Git updates after images are ready
+          syncOptions:
+          - CreateNamespace=true
+        revisionHistoryLimit: 3
+
+- name: Wait for application to be created
+  ansible.builtin.pause:
+    seconds: 5
+
+- name: Hard refresh application to detect source type
+  ansible.builtin.shell: |
+    argocd app get {{ app_name }} --grpc-web --hard-refresh || true
+  environment:
+    ARGOCD_OPTS: "--grpc-web"
+  register: app_refresh_result
+

@@ -1,0 +1,138 @@
+{
+  "app": {
+    "title": "Thinkube Control"
+  },
+  "nav": {
+    "dashboard": "Pannello",
+    "apiTokens": "Token API", 
+    "templates": "Modelli",
+    "secrets": "Segreti",
+    "optionalComponents": "Componenti Opzionali",
+    "harborImages": "Registry Images",
+    "logout": "Esci"
+  },
+  "dashboard": {
+    "title": "Centro Pannello",
+    "subtitle": "Il tuo portale unificato per i servizi della piattaforma K8s",
+    "categories": {
+      "all": "Tutto",
+      "devops": "DevOps",
+      "development": "Sviluppo", 
+      "infrastructure": "Infrastruttura",
+      "security": "Sicurezza",
+      "storage": "Archiviazione",
+      "monitoring": "Monitoraggio"
+    },
+    "noServices": "Nessun pannello disponibile per la categoria selezionata.",
+    "open": "Apri"
+  },
+  "apiTokens": {
+    "title": "Token API",
+    "createToken": {
+      "title": "Crea Nuovo Token",
+      "nameLabel": "Nome del Token",
+      "namePlaceholder": "Il mio Token API",
+      "expiresLabel": "Scade tra (giorni)",
+      "expiresPlaceholder": "Lascia vuoto per nessuna scadenza",
+      "createButton": "Crea Token"
+    },
+    "tokenCreated": {
+      "title": "Token Creato con Successo!",
+      "message": "Copia questo token ora. Non potrai più vederlo.",
+      "copyButton": "Copia negli Appunti",
+      "copied": "Token copiato negli appunti!"
+    },
+    "tokenList": {
+      "title": "I tuoi Token",
+      "noTokens": "Ancora nessun token API. Creane uno sopra!",
+      "table": {
+        "name": "Nome",
+        "created": "Creato",
+        "expires": "Scade",
+        "lastUsed": "Ultimo Utilizzo",
+        "actions": "Azioni",
+        "never": "Mai",
+        "revoke": "Revoca",
+        "revoked": "Revocato"
+      },
+      "confirmRevoke": "Sei sicuro di voler revocare questo token?"
+    },
+    "usage": {
+      "title": "Come Usare i Token API",
+      "vscode": {
+        "title": "Estensione VS Code",
+        "description": "Aggiungi alle tue impostazioni VS Code:"
+      },
+      "cli": {
+        "title": "CLI / curl",
+        "description": "Includi il token nell'intestazione di autorizzazione:"
+      },
+      "mcp": {
+        "title": "Server MCP",
+        "description": "Imposta la variabile d'ambiente:"
+      }
+    },
+    "errors": {
+      "createFailed": "Creazione del token fallita",
+      "revokeFailed": "Revoca del token fallita",
+      "nameMissing": "Per favore fornisci un nome per il token"
+    }
+  },
+  "templates": {
+    "title": "Modelli di Applicazione",
+    "subtitle": "Distribuisci applicazioni da modelli preconfigurati",
+    "ansible": {
+      "title": "Test di Esecuzione Ansible",
+      "description": "Testa l'esecuzione Ansible basata su WebSocket",
+      "greetingLabel": "Saluto",
+      "targetLabel": "Nome Obiettivo",
+      "runButton": "Esegui Test",
+      "running": "In esecuzione...",
+      "output": "Output:"
+    },
+    "comingSoon": "La funzionalità di distribuzione dei modelli arriverà presto!"
+  },
+  "profile": {
+    "roles": "Ruoli"
+  },
+  "auth": {
+    "loginTitle": "Centro Pannello K8s",
+    "loginMessage": "Per favore accedi per accedere al pannello",
+    "loginButton": "Accedi con Keycloak",
+    "loggingIn": "Completamento autenticazione...",
+    "loginSuccess": "Autenticazione riuscita. Reindirizzamento al pannello...",
+    "loginFailed": "Autenticazione fallita",
+    "noCode": "Nessun codice di autorizzazione ricevuto",
+    "redirecting": "Reindirizzamento...",
+    "configError": "Errore di configurazione dell'autenticazione. Controlla la console per i dettagli."
+  },
+  "errors": {
+    "notFound": {
+      "title": "404",
+      "heading": "Pagina Non Trovata",
+      "message": "La pagina che stai cercando non esiste o è stata spostata.",
+      "backButton": "Torna al Pannello"
+    },
+    "loadingApp": {
+      "title": "Errore nel Caricamento dell'Applicazione",
+      "message": "Impossibile caricare le informazioni dell'utente.",
+      "reload": "Ricarica"
+    },
+    "general": {
+      "loading": "Caricamento..."
+    }
+  },
+  "common": {
+    "open": "Apri",
+    "close": "Chiudi",
+    "save": "Salva",
+    "cancel": "Annulla",
+    "delete": "Elimina",
+    "edit": "Modifica",
+    "create": "Crea",
+    "back": "Indietro",
+    "next": "Avanti",
+    "yes": "Sì",
+    "no": "No"
+  }
+}

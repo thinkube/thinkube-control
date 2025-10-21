@@ -1,0 +1,387 @@
+# IMPORTANT: This file has a duplicate that must be kept in sync!
+# Original: /home/thinkube/thinkube/ansible/roles/container_deployment/git_push/tasks/main.yaml
+# Copy: /home/thinkube/thinkube/thinkube-control/ansible/roles/container_deployment/git_push/tasks/main.yaml
+# If you modify this file, ensure the changes are reflected in both locations.
+
+# roles/container_deployment/git_push/tasks/main.yaml
+# Push processed manifests to Gitea for GitOps deployment
+
+- name: Get Gitea admin token from secret
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ gitea_namespace }}"
+    name: gitea-admin-token
+  register: gitea_token_secret
+  failed_when: gitea_token_secret.resources | length == 0
+
+- name: Set Gitea token fact
+  set_fact:
+    gitea_token: "{{ gitea_token_secret.resources[0].data.token | b64decode }}"
+
+- name: Check if repository exists in Gitea
+  uri:
+    url: "https://{{ gitea_hostname }}/api/v1/repos/{{ gitea_org }}/{{ gitea_repo_name }}"
+    headers:
+      Authorization: "token {{ gitea_token }}"
+    validate_certs: true
+    status_code: [200, 404]
+  register: repo_check
+
+- name: Create repository in Gitea if it doesn't exist
+  uri:
+    url: "https://{{ gitea_hostname }}/api/v1/orgs/{{ gitea_org }}/repos"
+    method: POST
+    headers:
+      Authorization: "token {{ gitea_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      name: "{{ gitea_repo_name }}"
+      description: "{{ gitea_repo_description | default('Deployment manifests for ' + app_name) }}"
+      private: true
+      auto_init: false
+    validate_certs: true
+    status_code: 201
+  when: repo_check.status == 404
+
+- name: Configure Git user
+  shell: |
+    git config user.name "{{ admin_username }}"
+    git config user.email "{{ admin_username }}@{{ domain_name }}"
+  args:
+    chdir: "{{ local_repo_path }}"
+
+- name: Initialize Git repository if needed
+  shell: |
+    if [ ! -d .git ]; then
+      git init
+    fi
+  args:
+    chdir: "{{ local_repo_path }}"
+
+- name: Add Gitea remote
+  shell: |
+    git remote remove origin || true
+    git remote add origin https://{{ admin_username }}:{{ gitea_token }}@{{ gitea_hostname }}/{{ gitea_org }}/{{ gitea_repo_name }}.git
+  args:
+    chdir: "{{ local_repo_path }}"
+  no_log: true
+
+- name: Set execute permissions for scripts
+  ansible.builtin.shell: |
+    chmod +x *.sh 2>/dev/null || true
+    chmod +x run_* 2>/dev/null || true
+    chmod +x scripts/*.sh 2>/dev/null || true
+    chmod +x .github/scripts/*.sh 2>/dev/null || true
+  args:
+    chdir: "{{ local_repo_path }}"
+
+- name: Add and commit changes
+  shell: |
+    git add -A
+    git commit -m "Update deployment manifests for {{ domain_name }}" || echo "No changes to commit"
+  args:
+    chdir: "{{ local_repo_path }}"
+  register: git_commit
+
+- name: Push to Gitea
+  shell: |
+    git push -u origin main --force
+  args:
+    chdir: "{{ local_repo_path }}"
+  register: git_push_result
+
+- name: Create git hooks directory
+  file:
+    path: "{{ local_repo_path }}/.git-hooks"
+    state: directory
+    mode: '0755'
+  when: include_dev_scripts | default(true)
+
+- name: Add git pre-commit hook
+  copy:
+    content: |
+      #!/bin/bash
+      # Git pre-commit hook to automatically reprocess templates
+      # AUTO-GENERATED - DO NOT EDIT
+      
+      # Colors for output
+      RED='\033[0;31m'
+      GREEN='\033[0;32m'
+      YELLOW='\033[1;33m'
+      NC='\033[0m' # No Color
+      
+      echo -e "${YELLOW}Pre-commit hook: Checking for template changes...${NC}"
+      
+      # Configuration from deployment
+      DOMAIN_NAME="{{ domain_name }}"
+      NAMESPACE="{{ k8s_namespace | default(namespace) }}"
+      REGISTRY_URL="registry.${DOMAIN_NAME}"
+      
+      # Check if any .jinja files have been modified
+      CHANGED_TEMPLATES=$(git diff --cached --name-only --diff-filter=ACM | grep "\.jinja$")
+      
+      if [ -z "$CHANGED_TEMPLATES" ]; then
+          echo -e "${GREEN}No template changes detected.${NC}"
+          exit 0
+      fi
+      
+      echo -e "${YELLOW}Template changes detected. Reprocessing...${NC}"
+      
+      # Process each changed template
+      for template in $CHANGED_TEMPLATES; do
+          if [ -f "$template" ]; then
+              output="${template%.jinja}"
+              echo "  Processing: $template -> $output"
+              
+              # Determine comment style based on file extension
+              case "$output" in
+                  *.yaml|*.yml)
+                      COMMENT_START="#"
+                      ;;
+                  *.js|*.ts|*.jsx|*.tsx|*.json)
+                      COMMENT_START="//"
+                      ;;
+                  *.py)
+                      COMMENT_START="#"
+                      ;;
+                  *.html|*.xml)
+                      COMMENT_START="<!--"
+                      COMMENT_END="-->"
+                      ;;
+                  *)
+                      COMMENT_START="#"
+                      ;;
+              esac
+              
+              # Create warning header
+              if [ -n "$COMMENT_END" ]; then
+                  WARNING_HEADER="${COMMENT_START} AUTO-GENERATED FILE - DO NOT EDIT DIRECTLY ${COMMENT_END}
+      ${COMMENT_START} This file is automatically generated from ${template} ${COMMENT_END}
+      ${COMMENT_START} Any changes made directly to this file will be lost on next commit ${COMMENT_END}
+      ${COMMENT_START} To make changes, edit the template file and commit ${COMMENT_END}
+      ${COMMENT_START} Generated for domain: ${DOMAIN_NAME} ${COMMENT_END}
+      "
+              else
+                  WARNING_HEADER="${COMMENT_START} AUTO-GENERATED FILE - DO NOT EDIT DIRECTLY
+      ${COMMENT_START} This file is automatically generated from ${template}
+      ${COMMENT_START} Any changes made directly to this file will be lost on next commit
+      ${COMMENT_START} To make changes, edit the template file and commit
+      ${COMMENT_START} Generated for domain: ${DOMAIN_NAME}
+      ${COMMENT_START}
+      "
+              fi
+              
+              # Process template with warning header
+              {
+                  echo "$WARNING_HEADER"
+                  sed -e "s|{{ domain_name }}|${DOMAIN_NAME}|g" \
+                      -e "s|{{ namespace }}|${NAMESPACE}|g" \
+                      -e "s|{{ registry_subdomain }}.{{ domain_name }}|${REGISTRY_URL}|g" \
+                      -e "s|{{ gitea_hostname }}|git.${DOMAIN_NAME}|g" \
+                      -e "s|{{ admin_username }}|{{ admin_username }}|g" \
+                      -e "s|{{ k8s_namespace }}|${NAMESPACE}|g" \
+                      -e "/autogenerated_warning/d" \
+                      "$template"
+              } > "$output"
+              
+              # Add the processed file to the commit
+              git add "$output"
+          fi
+      done
+      
+      echo -e "${GREEN}Templates processed and added to commit.${NC}"
+      exit 0
+    dest: "{{ local_repo_path }}/.git-hooks/pre-commit"
+    mode: '0755'
+  when: include_dev_scripts | default(true)
+
+- name: Install git hook directly
+  copy:
+    src: "{{ local_repo_path }}/.git-hooks/pre-commit"
+    dest: "{{ local_repo_path }}/.git/hooks/pre-commit"
+    mode: '0755'
+    remote_src: yes
+  when: include_dev_scripts | default(true)
+
+- name: Add hook installation script (for reference)
+  copy:
+    content: |
+      #!/bin/bash
+      # Reinstall git hooks if needed
+      # Note: Hooks are installed automatically during deployment
+      
+      echo "Installing git hooks..."
+      
+      # Create hooks directory if it doesn't exist
+      mkdir -p .git/hooks
+      
+      # Copy pre-commit hook
+      cp .git-hooks/pre-commit .git/hooks/pre-commit
+      chmod +x .git/hooks/pre-commit
+      
+      echo "✓ Git hooks installed!"
+      echo "Templates will now be automatically processed on commit."
+    dest: "{{ local_repo_path }}/install-hooks.sh"
+    mode: '0755'
+  when: include_dev_scripts | default(true)
+
+- name: Add reprocess templates script
+  copy:
+    content: |
+      #!/bin/bash
+      # Script to manually reprocess templates
+      # AUTO-GENERATED - DO NOT EDIT
+      
+      DOMAIN_NAME="{{ domain_name }}"
+      NAMESPACE="{{ k8s_namespace | default(namespace) }}"
+      REGISTRY_URL="registry.${DOMAIN_NAME}"
+      
+      # Process all Jinja templates
+      for template in $(find . -name "*.jinja"); do
+          output="${template%.jinja}"
+          echo "Processing $template -> $output"
+          
+          # Determine comment style based on file extension
+          case "$output" in
+              *.yaml|*.yml) COMMENT_START="#" ;;
+              *.js|*.ts|*.jsx|*.tsx|*.json) COMMENT_START="//" ;;
+              *.py) COMMENT_START="#" ;;
+              *.html|*.xml) COMMENT_START="<!--"; COMMENT_END="-->" ;;
+              *) COMMENT_START="#" ;;
+          esac
+          
+          # Create warning header
+          if [ -n "$COMMENT_END" ]; then
+              WARNING_HEADER="${COMMENT_START} AUTO-GENERATED FILE - DO NOT EDIT DIRECTLY ${COMMENT_END}
+      ${COMMENT_START} This file is automatically generated from ${template} ${COMMENT_END}
+      ${COMMENT_START} Any changes made directly to this file will be lost on next commit ${COMMENT_END}
+      ${COMMENT_START} To make changes, edit the template file and commit ${COMMENT_END}
+      ${COMMENT_START} Generated for domain: ${DOMAIN_NAME} ${COMMENT_END}
+      "
+          else
+              WARNING_HEADER="${COMMENT_START} AUTO-GENERATED FILE - DO NOT EDIT DIRECTLY
+      ${COMMENT_START} This file is automatically generated from ${template}
+      ${COMMENT_START} Any changes made directly to this file will be lost on next commit
+      ${COMMENT_START} To make changes, edit the template file and commit
+      ${COMMENT_START} Generated for domain: ${DOMAIN_NAME}
+      ${COMMENT_START}
+      "
+          fi
+          
+          # Process template with warning header
+          {
+              echo "$WARNING_HEADER"
+              sed -e "s|{{ domain_name }}|${DOMAIN_NAME}|g" \
+                  -e "s|{{ namespace }}|${NAMESPACE}|g" \
+                  -e "s|{{ registry_subdomain }}.{{ domain_name }}|${REGISTRY_URL}|g" \
+                  -e "s|{{ admin_username }}|{{ admin_username }}|g" \
+                  -e "/autogenerated_warning/d" \
+                  "$template"
+          } > "$output"
+      done
+      
+      echo "Templates processed for domain: ${DOMAIN_NAME}"
+    dest: "{{ local_repo_path }}/reprocess-templates.sh"
+    mode: '0755'
+  when: include_dev_scripts | default(true)
+
+- name: Add prepare for GitHub script
+  copy:
+    content: |
+      #!/bin/bash
+      # Script to prepare repository for pushing to GitHub
+      # Removes processed files, keeping only templates
+      
+      echo "Preparing repository for GitHub contribution..."
+      
+      # Remove all processed YAML files that have corresponding .jinja templates
+      for template in $(find . -name "*.yaml.jinja"); do
+          processed="${template%.jinja}"
+          if [ -f "$processed" ]; then
+              echo "Removing processed file: $processed"
+              rm "$processed"
+          fi
+      done
+      
+      # Ensure .gitignore includes processed files
+      if ! grep -q "# Processed manifests" .gitignore 2>/dev/null; then
+          echo "" >> .gitignore
+          echo "# Processed manifests (generated from templates)" >> .gitignore
+          echo "k8s/*.yaml" >> .gitignore
+          echo "!k8s/*.yaml.jinja" >> .gitignore
+          echo "workflows/*.yaml" >> .gitignore  
+          echo "!workflows/*.yaml.jinja" >> .gitignore
+      fi
+      
+      echo "Repository is ready for GitHub contribution"
+      echo "Templates are preserved, processed files removed"
+    dest: "{{ local_repo_path }}/prepare-for-github.sh"
+    mode: '0755'
+  when: include_dev_scripts | default(true)
+
+- name: Add development workflow documentation
+  copy:
+    content: |
+      # Development Workflow
+
+      This repository is hosted on Gitea for local development with Thinkube.
+
+      ## Initial Setup
+
+      Install git hooks for automatic template processing:
+      ```bash
+      ./install-hooks.sh
+      ```
+
+      ## Making Changes
+
+      1. **Edit templates** (`.yaml.jinja` files), not processed files
+      2. **Commit your changes** - templates are automatically processed!
+         ```bash
+         git add .
+         git commit -m "Update deployment configuration"
+         ```
+      3. The pre-commit hook automatically:
+         - Detects changed `.jinja` files
+         - Processes them with domain-specific values
+         - Adds processed files to your commit
+
+      Manual processing is still available if needed:
+      ```bash
+      ./reprocess-templates.sh
+      ```
+
+      ## Contributing to GitHub
+
+      1. **Add upstream remote**:
+         ```bash
+         git remote add upstream {{ github_repo_url | default('https://github.com/original/repo') }}
+         ```
+
+      2. **Prepare for GitHub** (removes processed files):
+         ```bash
+         ./prepare-for-github.sh
+         ```
+
+      3. **Push to GitHub**:
+         ```bash
+         git push upstream feature-branch
+         ```
+
+      4. Create PR on GitHub
+
+      The templates will be up-to-date and processed files excluded!
+    dest: "{{ local_repo_path }}/DEVELOPMENT.md"
+    mode: '0644'
+  when: include_dev_scripts | default(true)
+
+# Webhook configuration has been moved to a separate role: gitea/configure_webhook
+# This ensures webhooks are only configured after deployment is complete
+
+- name: Display repository URL
+  debug:
+    msg: |
+      Repository pushed to: https://{{ gitea_hostname }}/{{ gitea_org }}/{{ gitea_repo_name }}

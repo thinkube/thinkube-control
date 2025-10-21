@@ -1,0 +1,196 @@
+---
+# IMPORTANT: This file is used by template deployments!
+# Location: /home/thinkube/thinkube/ansible/40_thinkube/core/thinkube-control/tasks/setup_git_hooks.yaml
+# Used by: Template deployments in thinkube-control
+# If you modify this file, ensure it remains compatible with template deployment requirements.
+#
+# Setup git hooks for automatic template processing
+# This task file is included after pushing to Gitea
+
+- name: Create git hooks directory
+  ansible.builtin.file:
+    path: "{{ local_repo_path }}/.git/hooks"
+    state: directory
+    mode: '0755'
+
+- name: Create pre-commit hook for Copier template processing
+  ansible.builtin.copy:
+    dest: "{{ local_repo_path }}/.git/hooks/pre-commit"
+    mode: '0755'
+    content: |
+      #!/bin/bash
+      # Pre-commit hook to automatically process Copier templates
+      
+      # Exit on error
+      set -e
+      
+      # Check if any .jinja files were modified
+      if ! git diff --cached --name-only | grep -q '\.jinja$'; then
+        # No template changes, exit successfully
+        exit 0
+      fi
+      
+      echo "Processing Copier templates..."
+      
+      # Check if .copier-answers.yml exists (it should, created by initial Copier run)
+      if [ ! -f .copier-answers.yml ]; then
+        echo "ERROR: .copier-answers.yml not found. This directory wasn't created by Copier."
+        exit 1
+      fi
+      
+      # Run Copier to reprocess templates using existing answers
+      if command -v copier >/dev/null 2>&1; then
+        copier recopy --defaults --overwrite --quiet .
+      else
+        echo "ERROR: Copier not installed. Please install with: pip install copier"
+        exit 1
+      fi
+      
+      # Add all generated YAML files to the commit
+      for jinja_file in $(git diff --cached --name-only | grep '\.jinja$'); do
+        yaml_file="${jinja_file%.jinja}"
+        if [ -f "$yaml_file" ]; then
+          git add "$yaml_file"
+          echo "Added generated file: $yaml_file"
+        fi
+      done
+      
+      echo "Template processing complete!"
+
+- name: Create commit-msg hook to add template processing note
+  ansible.builtin.copy:
+    dest: "{{ local_repo_path }}/.git/hooks/commit-msg"
+    mode: '0755'
+    content: |
+      #!/bin/bash
+      # Append note if templates were processed
+      
+      COMMIT_MSG_FILE=$1
+      
+      # Check if any .yaml files were auto-generated in this commit
+      if git diff --cached --name-only | grep -q '\.yaml$' && git diff --cached --name-only | grep -q '\.jinja$'; then
+        echo "" >> "$COMMIT_MSG_FILE"
+        echo "[Templates processed by git hook]" >> "$COMMIT_MSG_FILE"
+      fi
+
+- name: Create helper script for manual template processing
+  ansible.builtin.copy:
+    dest: "{{ local_repo_path }}/process-templates.sh"
+    mode: '0755'
+    content: |
+      #!/bin/bash
+      # Manual template processing script
+      # Usage: ./process-templates.sh
+      
+      set -e
+      
+      echo "Processing all Copier templates..."
+      
+      # Create answers file
+      cat > .copier-answers.yml << 'EOF'
+      project_name: {{ app_name }}
+      domain_name: {{ domain_name }}
+      control_subdomain: control
+      auth_subdomain: auth
+      registry_subdomain: registry
+      namespace: {{ k8s_namespace }}
+      keycloak_realm: thinkube
+      github_org: {{ github_org }}
+      enable_dev_mode: true
+      EOF
+      
+      # Run Copier
+      copier recopy --defaults --overwrite --quiet --answers-file .copier-answers.yml .
+      
+      # Clean up
+      rm -f .copier-answers.yml
+      
+      echo "Template processing complete!"
+      echo "Don't forget to commit the generated .yaml files"
+
+- name: Create README for git hooks
+  ansible.builtin.copy:
+    dest: "{{ local_repo_path }}/.git-hooks-README.md"
+    content: |
+      # Git Hooks for Template Processing
+      
+      This repository has git hooks installed to automatically process Copier templates.
+      
+      ## How it works
+      
+      1. When you edit a `.jinja` template file and commit it
+      2. The pre-commit hook automatically runs Copier
+      3. The generated `.yaml` files are added to your commit
+      4. Both the template and generated files are committed together
+      
+      ## Requirements
+      
+      - Python with Copier installed: `pip install copier`
+      
+      ## Manual processing
+      
+      If you need to manually process templates:
+      ```bash
+      ./process-templates.sh
+      ```
+      
+      ## Troubleshooting
+      
+      If templates are not processing:
+      1. Check that Copier is installed
+      2. Check that the pre-commit hook is executable
+      3. Run `./process-templates.sh` manually
+      
+      ## Important
+      
+      - Always edit `.jinja` files, never edit `.yaml` files directly
+      - The `.yaml` files will be regenerated from templates
+      - Commit both `.jinja` and `.yaml` files together
+
+# Install template-specific git hooks if they exist
+- name: Find template git hooks directories
+  ansible.builtin.find:
+    paths: "{{ local_repo_path }}"
+    patterns: ".git-hooks"
+    file_type: directory
+    recurse: true
+  register: template_git_hook_dirs
+
+- name: Install template-provided git hooks
+  when: template_git_hook_dirs.files | length > 0
+  ansible.builtin.shell: |
+    cd "{{ local_repo_path }}"
+    
+    # Process each .git-hooks directory found
+    {% for hook_dir in template_git_hook_dirs.files %}
+    echo "Processing hooks from {{ hook_dir.path }}"
+    
+    for hook_file in {{ hook_dir.path }}/*; do
+      if [ -f "$hook_file" ]; then
+        hook_name=$(basename "$hook_file")
+        target_hook=".git/hooks/$hook_name"
+        
+        # If hook already exists, merge them
+        if [ -f "$target_hook" ]; then
+          echo "" >> "$target_hook"
+          echo "# Additional hook from {{ hook_dir.path | basename | dirname | basename }}" >> "$target_hook"
+          cat "$hook_file" >> "$target_hook"
+        else
+          # Copy new hook
+          cp "$hook_file" "$target_hook"
+        fi
+        
+        chmod +x "$target_hook"
+        echo "Installed template hook: $hook_name from {{ hook_dir.path | basename | dirname | basename }}"
+      fi
+    done
+    {% endfor %}
+
+- name: Report git hooks setup completion
+  ansible.builtin.debug:
+    msg: |
+      Git hooks have been configured for this repository.
+      {% if template_git_hook_dirs.files | length > 0 %}
+      Template-specific hooks have been installed.
+      {% endif %}
+      The hooks will process templates automatically on commit.

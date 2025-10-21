@@ -1,0 +1,119 @@
+---
+# tasks/generate-network-policies.yaml
+# Generate default network policies for application security
+
+- name: Create default ingress network policy
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: "{{ app_name }}-default-ingress"
+        namespace: "{{ namespace }}"
+        labels:
+          app.kubernetes.io/name: "{{ app_name }}"
+          app.kubernetes.io/component: network-policy
+      spec:
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: "{{ app_name }}"
+        policyTypes:
+          - Ingress
+        ingress:
+          # Allow traffic from ingress controller
+          - from:
+              - namespaceSelector:
+                  matchLabels:
+                    name: ingress
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: ingress-nginx
+            ports:
+              {% for container in containers %}
+              - protocol: TCP
+                port: {{ container.port }}
+              {% endfor %}
+          
+          # Allow traffic between application pods
+          - from:
+              - podSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: "{{ app_name }}"
+            ports:
+              {% for container in containers %}
+              - protocol: TCP
+                port: {{ container.port }}
+              {% endfor %}
+          
+          # Allow traffic from monitoring
+          - from:
+              - namespaceSelector:
+                  matchLabels:
+                    name: monitoring
+            ports:
+              {% for container in containers %}
+              - protocol: TCP
+                port: {{ container.port }}
+              {% endfor %}
+
+- name: Create egress network policy
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: "{{ app_name }}-default-egress"
+        namespace: "{{ namespace }}"
+        labels:
+          app.kubernetes.io/name: "{{ app_name }}"
+          app.kubernetes.io/component: network-policy
+      spec:
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: "{{ app_name }}"
+        policyTypes:
+          - Egress
+        egress:
+          # Allow DNS
+          - to:
+              - namespaceSelector: {}
+                podSelector:
+                  matchLabels:
+                    k8s-app: kube-dns
+            ports:
+              - protocol: UDP
+                port: 53
+          
+          # Allow access to Kubernetes API
+          - to:
+              - namespaceSelector:
+                  matchLabels:
+                    name: kube-system
+            ports:
+              - protocol: TCP
+                port: 443
+          
+          # Allow HTTPS to external services
+          - to:
+              - ipBlock:
+                  cidr: 0.0.0.0/0
+                  except:
+                    - 10.0.0.0/8
+                    - 192.168.0.0/16
+                    - 172.16.0.0/12
+            ports:
+              - protocol: TCP
+                port: 443
+              - protocol: TCP
+                port: 80
+          
+          # Allow internal cluster communication
+          - to:
+              - namespaceSelector: {}
+            ports:
+              - protocol: TCP
+  when: features.networkPolicies.enabled | default(false)

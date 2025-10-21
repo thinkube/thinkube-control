@@ -1,0 +1,162 @@
+---
+# tasks/deploy-separate-pods.yaml
+# Deploy each container as a separate Deployment
+
+- name: Create Deployment for each container
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: "{{ app_name }}-{{ item.name }}"
+        namespace: "{{ namespace }}"
+        labels:
+          app.kubernetes.io/name: "{{ app_name }}"
+          app.kubernetes.io/component: "{{ item.name }}"
+          app.kubernetes.io/part-of: thinkube
+      spec:
+        replicas: "{{ item.replicas | default(app_config.spec.deployment.replicas | default(1)) }}"
+        strategy:
+          type: "{{ app_config.spec.deployment.strategy | default('RollingUpdate') }}"
+        selector:
+          matchLabels:
+            app.kubernetes.io/name: "{{ app_name }}"
+            app.kubernetes.io/component: "{{ item.name }}"
+        template:
+          metadata:
+            labels:
+              app.kubernetes.io/name: "{{ app_name }}"
+              app.kubernetes.io/component: "{{ item.name }}"
+              app.kubernetes.io/part-of: thinkube
+          spec:
+            containers:
+              - name: "{{ item.name }}"
+                image: "{{ registry }}/thinkube/{{ app_name }}-{{ item.name }}:latest"
+                ports:
+                  - containerPort: "{{ item.port }}"
+                    name: http
+                    protocol: TCP
+                  # Additional ports
+                  {% if item.additionalPorts is defined %}
+                  {% for port in item.additionalPorts %}
+                  - containerPort: "{{ port.port }}"
+                    name: "{{ port.name }}"
+                    protocol: "{{ port.protocol | default('TCP') }}"
+                  {% endfor %}
+                  {% endif %}
+                
+                # Environment variables
+                {% if item.env is defined %}
+                env:
+                  {% for env in item.env %}
+                  - name: "{{ env.name }}"
+                    value: "{{ env.value }}"
+                  {% endfor %}
+                {% endif %}
+                
+                # Environment from ConfigMaps/Secrets
+                {% if item.envFrom is defined %}
+                envFrom:
+                  {% for source in item.envFrom %}
+                  {% if source.configMapRef is defined %}
+                  - configMapRef:
+                      name: "{{ source.configMapRef.name }}"
+                  {% endif %}
+                  {% if source.secretRef is defined %}
+                  - secretRef:
+                      name: "{{ source.secretRef.name }}"
+                  {% endif %}
+                  {% endfor %}
+                {% endif %}
+                
+                # Resources
+                {% if item.resources is defined %}
+                resources:
+                  {% if item.resources.requests is defined %}
+                  requests:
+                    {% if item.resources.requests.memory is defined %}
+                    memory: "{{ item.resources.requests.memory }}"
+                    {% endif %}
+                    {% if item.resources.requests.cpu is defined %}
+                    cpu: "{{ item.resources.requests.cpu }}"
+                    {% endif %}
+                    {% if item.resources.requests.gpu is defined %}
+                    nvidia.com/gpu: "{{ item.resources.requests.gpu }}"
+                    {% endif %}
+                  {% endif %}
+                  {% if item.resources.limits is defined %}
+                  limits:
+                    {% if item.resources.limits.memory is defined %}
+                    memory: "{{ item.resources.limits.memory }}"
+                    {% endif %}
+                    {% if item.resources.limits.cpu is defined %}
+                    cpu: "{{ item.resources.limits.cpu }}"
+                    {% endif %}
+                    {% if item.resources.limits.gpu is defined %}
+                    nvidia.com/gpu: "{{ item.resources.limits.gpu }}"
+                    {% endif %}
+                  {% endif %}
+                {% endif %}
+                
+                # Health checks
+                {% if item.livenessProbe is defined %}
+                livenessProbe:
+                  httpGet:
+                    path: "{{ item.livenessProbe.httpGet.path }}"
+                    port: "{{ item.livenessProbe.httpGet.port }}"
+                  initialDelaySeconds: "{{ item.livenessProbe.initialDelaySeconds | default(30) }}"
+                  periodSeconds: "{{ item.livenessProbe.periodSeconds | default(10) }}"
+                {% endif %}
+                
+                {% if item.readinessProbe is defined %}
+                readinessProbe:
+                  httpGet:
+                    path: "{{ item.readinessProbe.httpGet.path }}"
+                    port: "{{ item.readinessProbe.httpGet.port }}"
+                  initialDelaySeconds: "{{ item.readinessProbe.initialDelaySeconds | default(5) }}"
+                  periodSeconds: "{{ item.readinessProbe.periodSeconds | default(5) }}"
+                {% endif %}
+                
+                # Volume mounts
+                {% if item.volumeMounts is defined %}
+                volumeMounts:
+                  {% for mount in item.volumeMounts %}
+                  - name: "{{ mount.name }}"
+                    mountPath: "{{ mount.mountPath }}"
+                    {% if mount.readOnly is defined %}
+                    readOnly: {{ mount.readOnly }}
+                    {% endif %}
+                  {% endfor %}
+                {% endif %}
+            
+            # Volumes (PVCs)
+            {% if volumes | length > 0 %}
+            volumes:
+              {% for volume in volumes %}
+              - name: "{{ volume.name }}"
+                persistentVolumeClaim:
+                  claimName: "{{ app_name }}-{{ volume.name }}"
+              {% endfor %}
+            {% endif %}
+            
+            # Advanced settings
+            {% if app_config.spec.advanced is defined %}
+            {% if app_config.spec.advanced.nodeSelector is defined %}
+            nodeSelector: {{ app_config.spec.advanced.nodeSelector | to_json }}
+            {% endif %}
+            {% if app_config.spec.advanced.tolerations is defined %}
+            tolerations: {{ app_config.spec.advanced.tolerations | to_json }}
+            {% endif %}
+            {% if app_config.spec.advanced.affinity is defined %}
+            affinity: {{ app_config.spec.advanced.affinity | to_json }}
+            {% endif %}
+            {% if app_config.spec.advanced.serviceAccount is defined %}
+            serviceAccountName: "{{ app_config.spec.advanced.serviceAccount }}"
+            {% endif %}
+            {% if app_config.spec.advanced.securityContext is defined %}
+            securityContext: {{ app_config.spec.advanced.securityContext | to_json }}
+            {% endif %}
+            {% endif %}
+  loop: "{{ containers }}"

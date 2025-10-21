@@ -1,0 +1,122 @@
+# Generated deployment for single_pod mode
+# All containers run in the same pod
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ project_name }}
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/managed-by: argocd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ project_name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ project_name }}
+    spec:
+      imagePullSecrets:
+        - name: app-pull-secret
+      containers:
+        {% for container in thinkube_spec.spec.containers %}
+        - name: {{ container.name }}
+          image: {{ container_registry }}/thinkube/{{ project_name }}-{{ container.name }}:latest
+          imagePullPolicy: Always
+          {% if container.port is defined %}
+          ports:
+            - containerPort: {{ container.port }}
+              name: {{ container.name }}-port
+              protocol: TCP
+          {% endif %}
+          {% if deployment_env_from is defined and deployment_env_from | length > 0 %}
+          envFrom:
+            {% for env_source in deployment_env_from %}
+            - {{ env_source | to_yaml | indent(14) }}
+            {% endfor %}
+          {% endif %}
+          {% if container.environment is defined %}
+          env:
+            {% for env in container.environment %}
+            - name: {{ env.name }}
+              {% if env.value is defined %}
+              value: "{{ env.value }}"
+              {% elif env.valueFrom is defined %}
+              valueFrom:
+                {% if env.valueFrom.secretKeyRef is defined %}
+                secretKeyRef:
+                  name: {{ env.valueFrom.secretKeyRef.name }}
+                  key: {{ env.valueFrom.secretKeyRef.key }}
+                {% elif env.valueFrom.configMapKeyRef is defined %}
+                configMapKeyRef:
+                  name: {{ env.valueFrom.configMapKeyRef.name }}
+                  key: {{ env.valueFrom.configMapKeyRef.key }}
+                {% endif %}
+              {% endif %}
+            {% endfor %}
+          {% endif %}
+          {% if container.size is defined %}
+          resources:
+            {% if container.size == 'small' %}
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+            {% elif container.size == 'medium' %}
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
+            {% elif container.size == 'large' %}
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "2000m"
+            {% else %}
+            # Default to small if size is not recognized
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+            {% endif %}
+          {% endif %}
+          {% if container.health is defined %}
+          livenessProbe:
+            httpGet:
+              path: {{ container.health }}
+              port: {{ container.port | default(8080) }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: {{ container.health }}
+              port: {{ container.port | default(8080) }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          {% endif %}
+          {% if container.volume is defined %}
+          volumeMounts:
+            - name: {{ container.name }}-storage
+              mountPath: {{ container.volume }}
+          {% endif %}
+        {% endfor %}
+      {% set containers_with_volumes = thinkube_spec.spec.containers | selectattr('volume', 'defined') | list %}
+      {% if containers_with_volumes | length > 0 %}
+      volumes:
+        {% for container in containers_with_volumes %}
+        - name: {{ container.name }}-storage
+          persistentVolumeClaim:
+            claimName: {{ project_name }}-{{ container.name }}-storage
+        {% endfor %}
+      {% endif %}

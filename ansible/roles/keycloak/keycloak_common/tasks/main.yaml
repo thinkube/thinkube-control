@@ -1,0 +1,51 @@
+# IMPORTANT: This file has a duplicate that must be kept in sync!
+# Original: /home/thinkube/thinkube/ansible/roles/keycloak/keycloak_common/tasks/main.yaml
+# Copy: /home/thinkube/thinkube/thinkube-control/ansible/roles/keycloak/keycloak_common/tasks/main.yaml
+# If you modify this file, ensure the changes are reflected in both locations.
+
+
+# roles/keycloak/keycloak_common/tasks/main.yaml
+---
+- name: Debug Keycloak connection info
+  ansible.builtin.debug:
+    msg:
+      - "Keycloak URL: {{ keycloak_url }}"
+      - "Keycloak realm: {{ keycloak_realm }}"
+      - "Keycloak admin user: {{ keycloak_admin_username }}"
+      - "Validate certs: {{ keycloak_validate_certs | default(true) }}"
+
+- name: Get Keycloak admin token
+  ansible.builtin.uri:
+    url: "{{ keycloak_url }}/realms/master/protocol/openid-connect/token"
+    method: POST
+    body_format: form-urlencoded
+    body:
+      client_id: "admin-cli"
+      username: "{{ keycloak_admin_username }}"
+      password: "{{ keycloak_admin_password }}"
+      grant_type: "password"
+    validate_certs: "{{ keycloak_validate_certs | default(true) }}"
+    status_code: [200, 401, 403]
+  register: keycloak_token
+  no_log: "{{ keycloak_no_log | default(false) }}"  # Temporarily disabled for debugging
+
+- name: Debug token response (masked)
+  ansible.builtin.debug:
+    msg:
+      - "Token response status: {{ keycloak_token.status }}"
+      - "Token expires in: {{ keycloak_token.json.expires_in | default('N/A') }} seconds"
+      - "Access token length: {{ keycloak_token.json.access_token | default('') | length }} characters"
+      - "Refresh token length: {{ keycloak_token.json.refresh_token | default('') | length }} characters"
+  when: keycloak_token.status == 200
+
+- name: Debug token failure
+  ansible.builtin.debug:
+    msg:
+      - "Failed to get admin token! Status code: {{ keycloak_token.status }}"
+      - "Response: {{ keycloak_token.json | default({}) }}"
+  when: keycloak_token.status != 200
+
+- name: Fail if token retrieval failed
+  ansible.builtin.fail:
+    msg: "Failed to get Keycloak admin token. Status code: {{ keycloak_token.status }}"
+  when: keycloak_token.status != 200

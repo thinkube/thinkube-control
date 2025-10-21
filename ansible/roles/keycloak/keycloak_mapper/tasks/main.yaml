@@ -1,0 +1,44 @@
+# IMPORTANT: This file has a duplicate that must be kept in sync!
+# Original: /home/thinkube/thinkube/ansible/roles/keycloak/keycloak_mapper/tasks/main.yaml
+# Copy: /home/thinkube/thinkube/thinkube-control/ansible/roles/keycloak/keycloak_mapper/tasks/main.yaml
+# If you modify this file, ensure the changes are reflected in both locations.
+
+
+---
+- name: Include common Keycloak tasks to get admin token
+  include_role:
+    name: keycloak/keycloak_common
+
+- name: Set target URL based on target type
+  set_fact:
+    mapper_target_url: >-
+      {% if keycloak_mapper_target_type == 'client' %}
+      {{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ keycloak_mapper_target_uuid }}/protocol-mappers/models
+      {% elif keycloak_mapper_target_type == 'scope' %}
+      {{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/client-scopes/{{ keycloak_mapper_target_uuid }}/protocol-mappers/models
+      {% elif keycloak_mapper_target_type == 'realm' %}
+      {{ keycloak_url }}/admin/realms/{{ keycloak_realm }}/protocol-mappers/models
+      {% endif %}
+
+- name: Retrieve existing protocol mappers for target
+  uri:
+    url: "{{ mapper_target_url }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+    validate_certs: "{{ keycloak_validate_certs }}"
+    status_code: 200
+  register: existing_mappers
+
+- name: Create protocol mapper "{{ keycloak_mapper_body.name }}" if missing
+  uri:
+    url: "{{ mapper_target_url }}"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ keycloak_token.json.access_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body: "{{ keycloak_mapper_body }}"
+    validate_certs: "{{ keycloak_validate_certs }}"
+    status_code: [201, 409]
+  when: (existing_mappers.json | selectattr('name', 'equalto', keycloak_mapper_body.name) | list) | length == 0

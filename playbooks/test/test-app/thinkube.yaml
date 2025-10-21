@@ -1,0 +1,80 @@
+apiVersion: thinkube.io/v1
+kind: Application
+metadata:
+  name: test-app
+  description: Test application for deployment validation
+
+spec:
+  deployment:
+    mode: separate_pods
+    replicas: 1
+    
+  containers:
+    - name: backend
+      port: 8000
+      build:
+        context: backend
+        dockerfile: Dockerfile
+      resources:
+        requests:
+          memory: "256Mi"
+          cpu: "100m"
+        limits:
+          memory: "512Mi"
+          cpu: "500m"
+      env:
+        - name: LOG_LEVEL
+          value: "info"
+        - name: API_VERSION
+          value: "v1"
+      livenessProbe:
+        httpGet:
+          path: /health
+          port: 8000
+        initialDelaySeconds: 30
+        periodSeconds: 10
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: 8000
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        
+    - name: frontend
+      port: 80
+      build:
+        context: frontend
+        dockerfile: Dockerfile
+      resources:
+        requests:
+          memory: "128Mi"
+          cpu: "50m"
+      env:
+        - name: API_URL
+          value: "http://backend:8000"
+          
+  volumes:
+    - name: data
+      size: "5Gi"
+      
+  ingress:
+    enabled: true
+    subdomains:
+      - name: api
+        container: backend
+      - name: app
+        container: frontend
+        
+  features:
+    postgresql:
+      enabled: true
+    redis:
+      enabled: true
+    keycloak:
+      enabled: true
+    monitoring:
+      enabled: true
+    apiTokens:
+      enabled: true
+    networkPolicies:
+      enabled: false

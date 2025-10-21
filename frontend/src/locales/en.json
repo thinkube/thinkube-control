@@ -1,0 +1,343 @@
+{
+  "app": {
+    "title": "Thinkube Control"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "apiTokens": "API Tokens",
+    "templates": "Templates",
+    "secrets": "Secrets",
+    "optionalComponents": "Optional Components",
+    "harborImages": "Registry Images",
+    "jupyterHubConfig": "JupyterHub Config",
+    "logout": "Logout",
+    "groups": {
+      "deployment": "Deployment & Infrastructure",
+      "config": "Configuration & Security"
+    }
+  },
+  "dashboard": {
+    "title": "Dashboard Hub",
+    "subtitle": "Your unified portal to K8s platform services",
+    "syncServices": "Sync Services",
+    "syncSuccess": "Services synchronized successfully",
+    "syncError": "Failed to sync services",
+    "compactMode": "Compact Mode",
+    "types": {
+      "all": "All",
+      "core": "Core",
+      "optional": "Optional",
+      "userApps": "User Apps"
+    },
+    "categories": {
+      "all": "All Categories",
+      "devops": "DevOps",
+      "development": "Development", 
+      "infrastructure": "Infrastructure",
+      "security": "Security",
+      "storage": "Storage",
+      "monitoring": "Monitoring",
+      "ai": "AI/ML",
+      "documentation": "Documentation",
+      "applications": "Applications"
+    },
+    "sections": {
+      "coreServices": "Core Services",
+      "optionalServices": "Optional Services",
+      "userApplications": "User Applications"
+    },
+    "noServices": "No services available for the selected filters.",
+    "open": "Open",
+    "openService": "Open Service",
+    "openInCodeEditor": "Open in Code Editor",
+    "enable": "Enable",
+    "disable": "Disable",
+    "restart": "Restart",
+    "restartService": "Restart Service",
+    "viewDetails": "View Details",
+    "checkHealth": "Check Health",
+    "serviceDisabled": "Service is disabled",
+    "confirmEnable": "Enable {name}?",
+    "confirmDisable": "Disable {name}? This will scale the deployment to 0.",
+    "confirmRestart": "Restart {name}? This will create new pods.",
+    "confirm": "Confirm",
+    "enableSuccess": "{name} enabled successfully",
+    "disableSuccess": "{name} disabled successfully",
+    "restartSuccess": "{name} restarted successfully",
+    "toggleError": "Failed to toggle service",
+    "restartError": "Failed to restart service",
+    "healthCheckComplete": "Health check completed",
+    "healthCheckError": "Failed to perform health check",
+    "lastChecked": "Last checked",
+    "health": {
+      "healthy": "Healthy",
+      "unhealthy": "Unhealthy",
+      "unknown": "Unknown",
+      "disabled": "Disabled"
+    },
+    "tabs": {
+      "favorites": "Favorites",
+      "all": "All Services"
+    },
+    "noFavorites": "No favorite services yet. Add services to favorites for quick access.",
+    "addToFavorites": "Add to Favorites",
+    "removeFromFavorites": "Remove from Favorites",
+    "favoriteSuccess": "{name} {action} favorites",
+    "favoriteError": "Failed to update favorites",
+    "details": "Details",
+    "status": {
+      "healthy": "Service is healthy",
+      "unhealthy": "Service is unhealthy",
+      "unknown": "Health status unknown",
+      "disabled": "Service is disabled"
+    }
+  },
+  "serviceDetails": {
+    "basicInfo": "Basic Information",
+    "namespace": "Namespace",
+    "category": "Category",
+    "status": "Status",
+    "url": "Service URL",
+    "health": "Health Status",
+    "uptime": "Uptime",
+    "checksPerformed": "checks performed",
+    "coverage": "Monitoring coverage",
+    "noHealthData": "No health data available",
+    "dependencies": "Dependencies",
+    "endpoints": "Service Endpoints",
+    "resourceUsage": "Resource Usage",
+    "cpuRequests": "CPU Requests",
+    "memoryRequests": "Memory Requests",
+    "pods": "Pods",
+    "podName": "Pod Name",
+    "restarts": "Restarts",
+    "node": "Node",
+    "healthHistory": "Health History (24h)",
+    "healthy": "Healthy",
+    "unhealthy": "Unhealthy",
+    "unknown": "Unknown",
+    "recentActions": "Recent Actions",
+    "actions": {
+      "enable": "Enabled",
+      "disable": "Disabled",
+      "restart": "Restarted",
+      "update": "Updated",
+      "delete": "Deleted"
+    }
+  },
+  "apiTokens": {
+    "title": "API Tokens",
+    "createToken": {
+      "title": "Create New Token",
+      "nameLabel": "Token Name",
+      "namePlaceholder": "My API Token",
+      "expiresLabel": "Expires In (days)",
+      "expiresPlaceholder": "Leave empty for no expiration",
+      "createButton": "Create Token"
+    },
+    "tokenCreated": {
+      "title": "Token Created Successfully!",
+      "message": "Copy this token now. You won't be able to see it again.",
+      "copyButton": "Copy to Clipboard",
+      "copied": "Token copied to clipboard!"
+    },
+    "tokenList": {
+      "title": "Your Tokens",
+      "noTokens": "No API tokens yet. Create one above!",
+      "table": {
+        "name": "Name",
+        "created": "Created",
+        "expires": "Expires",
+        "lastUsed": "Last Used",
+        "actions": "Actions",
+        "never": "Never",
+        "revoke": "Revoke",
+        "revoked": "Revoked",
+        "show": "Show"
+      },
+      "confirmRevoke": "Are you sure you want to revoke this token?"
+    },
+    "usage": {
+      "title": "How to Use API Tokens",
+      "vscode": {
+        "title": "VS Code Extension",
+        "description": "Add to your VS Code settings:"
+      },
+      "cli": {
+        "title": "CLI / curl",
+        "description": "Include the token in the Authorization header:"
+      },
+      "mcp": {
+        "title": "MCP Servers",
+        "description": "Set the environment variable:"
+      }
+    },
+    "errors": {
+      "createFailed": "Failed to create token",
+      "revokeFailed": "Failed to revoke token",
+      "nameMissing": "Please provide a name for the token"
+    }
+  },
+  "templates": {
+    "title": "Application Templates",
+    "subtitle": "Deploy applications from pre-configured templates",
+    "deployForm": {
+      "title": "Deploy Template",
+      "projectName": "Project Name",
+      "projectNameHint": "Lowercase letters, numbers, and hyphens only",
+      "githubOrg": "GitHub Organization/Username",
+      "optionalFeatures": "Optional Features",
+      "enablePostgres": "Enable PostgreSQL Database",
+      "enableApiTokens": "Enable API Token Management",
+      "enableCicd": "Enable CI/CD Monitoring",
+      "cancel": "Cancel",
+      "deploy": "Deploy Template",
+      "deploying": "Deploying..."
+    },
+    "deploymentProgress": {
+      "title": "Deployment Progress",
+      "success": "Deployment complete! Your application will be available at"
+    },
+    "manualDeploy": {
+      "title": "Deploy from GitHub",
+      "description": "Enter a GitHub repository URL to deploy a template",
+      "urlLabel": "Template Repository URL",
+      "loadButton": "Load Template"
+    },
+    "gallery": {
+      "title": "Available Templates",
+      "vueTemplate": {
+        "name": "Vue.js + FastAPI",
+        "description": "Full-stack web application with authentication and i18n"
+      },
+      "reactTemplate": {
+        "name": "React + Node.js",
+        "description": "Coming soon..."
+      },
+      "pythonTemplate": {
+        "name": "Python API",
+        "description": "Coming soon..."
+      },
+      "deployButton": "Deploy"
+    },
+    "errors": {
+      "invalidUrl": "Please enter a valid GitHub repository URL",
+      "deploymentFailed": "Failed to prepare deployment",
+      "websocketError": "WebSocket connection error"
+    }
+  },
+  "optionalComponents": {
+    "title": "Optional Components",
+    "subtitle": "Install and manage additional platform capabilities",
+    "categories": {
+      "ai": "AI & Machine Learning",
+      "data": "Data & Storage",
+      "monitoring": "Monitoring & Observability",
+      "infrastructure": "Infrastructure & Platform"
+    },
+    "status": {
+      "installed": "Installed",
+      "notInstalled": "Not Installed",
+      "installing": "Installing...",
+      "uninstalling": "Uninstalling...",
+      "failed": "Failed"
+    },
+    "actions": {
+      "install": "Install",
+      "uninstall": "Uninstall",
+      "configure": "Configure",
+      "viewDetails": "View Details"
+    },
+    "requirements": {
+      "title": "Requirements",
+      "missing": "Missing requirements",
+      "met": "All requirements met"
+    },
+    "installation": {
+      "title": "Installing {name}",
+      "success": "{name} installed successfully!",
+      "failed": "Installation failed",
+      "inProgress": "Installation in progress...",
+      "connecting": "Connecting to deployment service...",
+      "queued": "Installation has been queued"
+    },
+    "uninstallation": {
+      "confirm": "Are you sure you want to uninstall {name}?",
+      "success": "{name} uninstalled successfully!",
+      "failed": "Uninstallation failed",
+      "queued": "Uninstallation has been queued"
+    },
+    "errors": {
+      "loadFailed": "Failed to load optional components",
+      "installFailed": "Failed to install {name}",
+      "uninstallFailed": "Failed to uninstall {name}",
+      "connectionError": "Connection error occurred"
+    }
+  },
+  "profile": {
+    "roles": "Roles"
+  },
+  "auth": {
+    "loginTitle": "K8s Dashboard Hub",
+    "loginMessage": "Please sign in to access the dashboard",
+    "loginButton": "Sign in with Keycloak",
+    "loggingIn": "Completing authentication...",
+    "loginSuccess": "Authentication successful. Redirecting to dashboard...",
+    "loginFailed": "Authentication failed",
+    "noCode": "No authorization code received",
+    "redirecting": "Redirecting...",
+    "configError": "Authentication configuration error. Please check the console for details."
+  },
+  "errors": {
+    "notFound": {
+      "title": "404",
+      "heading": "Page Not Found",
+      "message": "The page you're looking for doesn't exist or has been moved.",
+      "backButton": "Return to Dashboard"
+    },
+    "loadingApp": {
+      "title": "Error Loading Application",
+      "message": "Unable to load user information.",
+      "reload": "Reload"
+    },
+    "general": {
+      "loading": "Loading..."
+    }
+  },
+  "common": {
+    "open": "Open",
+    "close": "Close",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "back": "Back",
+    "next": "Next",
+    "yes": "Yes",
+    "no": "No",
+    "confirm": "Confirm",
+    "enabled": "Enabled",
+    "disabled": "Disabled"
+  },
+  "jupyterHubConfig": {
+    "title": "JupyterHub Configuration",
+    "description": "Configure default resource allocations for JupyterHub notebook spawner. These defaults will be pre-selected when users spawn notebooks.",
+    "imageSelection": "Image Selection",
+    "imageSelectionDesc": "Select which Jupyter images to show users. Check to hide, uncheck to show. New images are visible by default.",
+    "noImagesFound": "No Jupyter images found. Please build images first.",
+    "default": "Default",
+    "setDefault": "Set as Default",
+    "defaultResources": "Default Resources",
+    "defaultResourcesDesc": "Select the default node and resources that will be pre-selected when users spawn notebooks.",
+    "defaultNode": "Default Node",
+    "selectNode": "Select a node...",
+    "defaultCPU": "Default CPU",
+    "defaultMemory": "Default Memory",
+    "defaultGPU": "Default GPUs",
+    "selectNodeFirst": "Please select a default node first",
+    "reset": "Reset",
+    "save": "Save Configuration",
+    "saved": "Configuration saved successfully"
+  }
+}

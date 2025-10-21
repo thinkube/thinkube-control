@@ -1,0 +1,18 @@
+# Generated PostgreSQL resources
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ project_name }}-db-credentials
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/component: database
+type: Opaque
+stringData:
+  url: "postgresql://{{ admin_username }}:{{ admin_password }}@postgresql-official.postgres.svc.cluster.local:5432/{{ project_name | replace('-', '_') }}"
+  username: "{{ admin_username }}"
+  password: "{{ admin_password }}"
+  database: "{{ project_name | replace('-', '_') }}"
+  host: "postgresql-official.postgres.svc.cluster.local"
+  port: "5432"

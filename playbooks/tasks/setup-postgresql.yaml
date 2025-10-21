@@ -1,0 +1,21 @@
+---
+# tasks/setup-postgresql.yaml
+# Setup PostgreSQL integration for the application
+
+- name: Create PostgreSQL database for application
+  ansible.builtin.debug:
+    msg: |
+      PostgreSQL integration would:
+      1. Create database: {{ app_name | replace('-', '_') }}_db
+      2. Create user with credentials
+      3. Create secret with connection details
+      4. Inject DATABASE_* environment variables
+      
+      This feature requires PostgreSQL operator or external PostgreSQL instance.
+      Implementation depends on infrastructure setup.
+
+# Placeholder for actual implementation
+# Would typically:
+# 1. Create database via PostgreSQL operator or API
+# 2. Create Kubernetes secret with credentials
+# 3. Update deployment to reference secret

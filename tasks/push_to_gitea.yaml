@@ -1,0 +1,44 @@
+# Push to Gitea repository
+# This is separated from repo creation to allow webhook setup first
+
+- name: Configure Git user
+  shell: |
+    git config user.name "{{ admin_username }}"
+    git config user.email "{{ admin_username }}@{{ domain_name }}"
+  args:
+    chdir: "{{ local_repo_path }}"
+
+- name: Initialize Git repository if needed
+  shell: |
+    if [ ! -d .git ]; then
+      git init
+    fi
+  args:
+    chdir: "{{ local_repo_path }}"
+
+- name: Add Gitea remote
+  shell: |
+    git remote remove origin || true
+    git remote add origin https://{{ admin_username }}:{{ gitea_token }}@{{ gitea_hostname }}/{{ gitea_org }}/{{ gitea_repo_name }}.git
+  args:
+    chdir: "{{ local_repo_path }}"
+  no_log: true
+
+- name: Add and commit changes
+  shell: |
+    git add -A
+    git commit -m "Initial deployment manifests for {{ domain_name }}" || echo "No changes to commit"
+  args:
+    chdir: "{{ local_repo_path }}"
+  register: git_commit
+
+- name: Push to Gitea (this will trigger webhook)
+  shell: |
+    git push -u origin main --force
+  args:
+    chdir: "{{ local_repo_path }}"
+  register: git_push_result
+
+- name: Display push result
+  debug:
+    msg: "Repository pushed to Gitea. Webhook should now trigger the build workflow."
