@@ -229,7 +229,6 @@ class ServiceValidation:
         "argocd",
         "argo-workflows",
         "postgresql",
-        "minio",
         "devpi",
         "thinkube-control",
     }
@@ -237,7 +236,6 @@ class ServiceValidation:
     # Reserved names for optional services
     OPTIONAL_SERVICE_NAMES = {
         "prometheus",
-        "grafana",
         "opensearch",
         "jupyterhub",
         "code-server",

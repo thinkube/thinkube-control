@@ -367,7 +367,7 @@ const validateProjectName = async () => {
   // Check reserved names
   const reservedNames = [
     'keycloak', 'gitlab', 'harbor', 'argocd', 'argo-workflows',
-    'prometheus', 'grafana', 'postgres', 'postgresql', 'redis',
+    'prometheus', 'postgres', 'postgresql', 'redis',
     'seaweedfs', 'gitea', 'devpi', 'awx', 'thinkube-control',
     'code-server', 'mlflow', 'zitadel'
   ]

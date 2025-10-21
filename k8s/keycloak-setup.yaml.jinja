@@ -61,7 +61,7 @@ data:
     
     # Create client roles for each service
     ./kcadm.sh create clients/$CLIENT_ID/roles -r thinkube -s name=storage-admin \
-      -s 'description=Access to storage services like MinIO'
+      -s 'description=Access to storage services'
     
     ./kcadm.sh create clients/$CLIENT_ID/roles -r thinkube -s name=logs-viewer \
       -s 'description=Access to logging and monitoring services'
