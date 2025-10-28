@@ -11,7 +11,7 @@ metadata:
   name: {{ namespace }}-reader
 rules:
 - apiGroups: [""]
-  resources: ["configmaps", "services", "pods", "namespaces"]
+  resources: ["configmaps", "services", "pods", "namespaces", "nodes"]
   verbs: ["get", "list", "watch"]
 - apiGroups: ["apps"]
   resources: ["deployments", "statefulsets", "daemonsets"]
