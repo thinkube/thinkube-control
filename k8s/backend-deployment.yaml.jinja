@@ -13,6 +13,7 @@ spec:
       labels:
         app: thinkube-control-backend
     spec:
+      serviceAccountName: {{ namespace }}
       containers:
       - name: control-backend
         image: {{ backend_image_repo }}
