@@ -189,19 +189,20 @@ class OptionalComponentService:
                 "uninstall": "19_rollback.yaml"
             }
         },
-        "cvat": {
-            "display_name": "CVAT",
-            "description": "Computer vision annotation tool for image and video labeling (MIT)",
-            "category": "ai",
-            "icon": "/icons/tk_design.svg",
-            "requirements": ["harbor", "keycloak", "postgresql", "clickhouse"],
-            "namespace": "cvat",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        },
+        # CVAT - Excluded for v0.1.0 (ARM64 release) - x86_64 only upstream images
+        # "cvat": {
+        #     "display_name": "CVAT",
+        #     "description": "Computer vision annotation tool for image and video labeling (MIT)",
+        #     "category": "ai",
+        #     "icon": "/icons/tk_design.svg",
+        #     "requirements": ["harbor", "keycloak", "postgresql", "clickhouse"],
+        #     "namespace": "cvat",
+        #     "playbooks": {
+        #         "install": "00_install.yaml",
+        #         "test": "18_test.yaml",
+        #         "uninstall": "19_rollback.yaml"
+        #     }
+        # },
         "clickhouse": {
             "display_name": "ClickHouse",
             "description": "Real-time analytics database for OLAP workloads (Apache 2.0)",
