@@ -417,20 +417,28 @@ class OptionalComponentService:
         # For truly optional components, check if they're installed
         if not self.core_v1:
             return False
-            
+
+        # Look up actual namespace from component definition
+        # (component name might differ from namespace name, e.g. prometheus -> monitoring)
+        if service_name in self.COMPONENTS:
+            namespace = self.COMPONENTS[service_name]["namespace"]
+        else:
+            # Fallback: assume service name = namespace name
+            namespace = service_name
+
         # Check if the optional component itself is installed
         # by looking for its namespace
         try:
-            ns = self.core_v1.read_namespace(service_name)
+            ns = self.core_v1.read_namespace(namespace)
             if not ns:
                 return False
-                
+
             # Check for running pods in the namespace
-            pods = self.core_v1.list_namespaced_pod(namespace=service_name)
+            pods = self.core_v1.list_namespaced_pod(namespace=namespace)
             running_pods = [p for p in pods.items if p.status.phase == "Running"]
-            
+
             return len(running_pods) > 0
-            
+
         except ApiException:
             return False
     
