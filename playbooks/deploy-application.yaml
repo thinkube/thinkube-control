@@ -437,13 +437,6 @@
         namespace: argo
       ignore_errors: true
 
-    - name: Deploy Buildah storage configuration ConfigMap
-      kubernetes.core.k8s:
-        kubeconfig: "{{ kubeconfig }}"
-        state: present
-        src: "{{ local_repo_path }}/k8s/buildah-storage-config.yaml"
-      register: buildah_config_deploy_result
-
     - name: Deploy CI/CD WorkflowTemplate for webhook triggers
       kubernetes.core.k8s:
         kubeconfig: "{{ kubeconfig }}"
