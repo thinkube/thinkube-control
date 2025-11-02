@@ -4,7 +4,7 @@
 # This playbook is executed by thinkube-control for any template
 
 - name: Deploy {{ app_name }} application
-  hosts: microk8s_control_plane
+  hosts: k8s_control_plane
   gather_facts: true
   
   vars:
@@ -339,7 +339,7 @@
         loop_var: container
       args:
         executable: /bin/bash
-      delegate_to: "{{ groups['microk8s_control_plane'][0] }}"
+      delegate_to: "{{ groups['k8s_control_plane'][0] }}"
       ignore_errors: no
 
     - name: Commit generated migrations

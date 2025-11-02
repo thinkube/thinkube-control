@@ -17,7 +17,7 @@
 # 🤖 [AI-assisted]
 
 - name: Mirror Container Image to Harbor
-  hosts: microk8s_control_plane
+  hosts: k8s_control_plane
   gather_facts: true
   vars:
     image_category: "{{ image_category | default('user') }}"

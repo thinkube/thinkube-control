@@ -11,21 +11,21 @@ data:
         ansible_become: true
         ansible_become_method: sudo
         kubeconfig: /home/{{ system_username }}/.kube/config
-        kubectl_bin: microk8s.kubectl
+        kubectl_bin: kubectl
         domain_name: {{ domain_name }}
         admin_username: {{ admin_username }}
         primary_ingress_ip: {{ primary_ingress_ip }}
         container_registry: {{ container_registry }}
       children:
-        microk8s:
+        k8s:
           children:
-            microk8s_control_plane:
+            k8s_control_plane:
               hosts:
                 {{ master_node_name }}:
                   ansible_host: {{ master_node_name }}
-            microk8s_workers:
+            k8s_workers:
               hosts:
                 # Add worker nodes here if needed
         k8s_nodes:
           children:
-            microk8s:
+            k8s:
