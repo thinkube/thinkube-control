@@ -13,6 +13,7 @@ fi
 # Configure podman registries with the actual domain
 if [ -n "$DOMAIN_NAME" ]; then
     echo "Configuring podman registries for domain: $DOMAIN_NAME"
+    mkdir -p /etc/containers
     cat > /etc/containers/registries.conf << EOF
 unqualified-search-registries = ["docker.io", "registry.${DOMAIN_NAME}"]
 
