@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/alexmc/thinkube-control/.claude/hooks/post-tool-use.sh"
+          },
+          {
+            "type": "command",
+            "command": "/home/alexmc/thinkube-control/.claude/hooks/validate-code.sh",
+            "timeout": 120000
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,149 @@
+@import "tailwindcss";
+
+@source "../node_modules/thinkube-style/dist";
+
+@variant dark (.dark &);
+
+:root {
+  --background: oklch(99% 0.005 75); /* Warm off-white instead of pure white */
+  --foreground: oklch(20% 0 0);
+  --card: oklch(100% 0 0); /* Cards stay pure white for contrast */
+  --card-foreground: oklch(20% 0 0);
+  --popover: oklch(100% 0 0);
+  --popover-foreground: oklch(20% 0 0);
+  --primary: oklch(38% 0.15 220); /* Darker, more saturated teal for light mode */
+  --primary-foreground: oklch(100% 0 0);
+  --secondary: oklch(96% 0.005 220);
+  --secondary-foreground: oklch(20% 0 0);
+  --muted: oklch(96% 0.005 220);
+  --muted-foreground: oklch(50% 0 0);
+  --accent: oklch(65% 0.10 75); /* Yellow-amber accent, not orange */
+  --accent-foreground: oklch(20% 0 0);
+  --destructive: oklch(55% 0.15 25); /* Toned down red */
+  --destructive-foreground: oklch(100% 0 0);
+  --border: oklch(90% 0.005 220);
+  --input: oklch(90% 0.005 220);
+  --ring: oklch(42% 0.12 220);
+  --radius: 0rem;
+
+  /* Professional semantic colors */
+  --success: oklch(50% 0.12 145); /* Muted green */
+  --success-foreground: oklch(98% 0 0);
+  --warning: oklch(65% 0.12 80); /* Muted amber */
+  --warning-foreground: oklch(20% 0 0);
+  --info: oklch(55% 0.10 240); /* Muted blue */
+  --info-foreground: oklch(98% 0 0);
+}
+
+.dark {
+  --background: oklch(24% 0.06 220); /* Brighter background */
+  --foreground: oklch(98% 0 0); /* Even brighter text */
+  --card: oklch(26% 0.06 220); /* Brighter card */
+  --card-foreground: oklch(98% 0 0);
+  --popover: oklch(26% 0.06 220); /* Brighter popover */
+  --popover-foreground: oklch(98% 0 0);
+  --primary: oklch(60% 0.13 220); /* Brighter teal for dark */
+  --primary-foreground: oklch(100% 0 0);
+  --secondary: oklch(38% 0.07 220); /* Much brighter secondary */
+  --secondary-foreground: oklch(98% 0 0);
+  --muted: oklch(38% 0.07 220); /* Much brighter muted */
+  --muted-foreground: oklch(88% 0 0); /* MUCH brighter muted text - was 80%, now 88% */
+  --accent: oklch(72% 0.12 70); /* Shifted to yellow-amber, brighter */
+  --accent-foreground: oklch(20% 0 0);
+  --destructive: oklch(68% 0.17 25); /* Brighter red for dark mode */
+  --destructive-foreground: oklch(100% 0 0);
+  --border: oklch(52% 0.10 220); /* Much brighter border - was 48%, now 52% */
+  --input: oklch(38% 0.07 220); /* Brighter input */
+  --ring: oklch(60% 0.13 220); /* Brighter ring */
+
+  /* Hover color using light teal */
+  --hover: oklch(50% 0.11 220); /* Light teal for hovers */
+  --hover-foreground: oklch(100% 0 0);
+
+  /* Professional semantic colors for dark mode - brighter for visibility */
+  --success: oklch(68% 0.14 145); /* Brighter green */
+  --success-foreground: oklch(100% 0 0);
+  --warning: oklch(78% 0.14 75); /* Brighter, more yellow warning */
+  --warning-foreground: oklch(15% 0 0);
+  --info: oklch(70% 0.12 240); /* Brighter blue */
+  --info-foreground: oklch(100% 0 0);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-hover: var(--hover);
+  --color-hover-foreground: var(--hover-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+
+  --default-font-family: var(--font-poppins), system-ui, -apple-system, sans-serif;
+  --default-transition-duration: 150ms;
+
+  --radius-sm: 0rem;
+  --radius-md: 0rem;
+  --radius-lg: var(--radius);
+  --radius-xl: 0rem;
+  --radius-2xl: 0rem;
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-poppins), system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+code, pre {
+  font-family: var(--font-noto-sans-mono), monospace;
+}
+
+/* Apply Poppins to UI elements for more prominence */
+button,
+[role="button"],
+label,
+.badge,
+nav,
+[role="navigation"],
+[role="menu"],
+[role="menuitem"],
+[role="tab"],
+[role="tablist"],
+th,
+thead,
+dt,
+legend,
+.alert-title,
+input[type="submit"],
+input[type="button"],
+select,
+[role="combobox"] {
+  font-family: var(--font-poppins), system-ui, -apple-system, sans-serif;
+  font-weight: 500;
+}
