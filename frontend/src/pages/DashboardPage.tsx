@@ -22,7 +22,7 @@ export default function DashboardPage() {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, navigate]);
+  }, []);
 
   return (
     <div className="min-h-screen bg-background p-8"> {/* @allowed-inline */}

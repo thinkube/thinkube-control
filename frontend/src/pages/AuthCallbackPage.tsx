@@ -41,7 +41,8 @@ export default function AuthCallbackPage() {
         console.error('Failed to handle auth callback:', err);
         setError('Failed to complete authentication. Please try again.');
       });
-  }, [searchParams, navigate]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (error) {
     return (

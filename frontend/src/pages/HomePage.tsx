@@ -17,7 +17,8 @@ export default function HomePage() {
     } else {
       navigate('/login', { replace: true });
     }
-  }, [navigate]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="flex h-screen items-center justify-center"> {/* @allowed-inline */}

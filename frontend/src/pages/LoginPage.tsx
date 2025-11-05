@@ -18,7 +18,8 @@ export default function LoginPage() {
     }
 
     redirectToLogin();
-  }, [navigate]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="flex h-screen items-center justify-center"> {/* @allowed-inline */}
