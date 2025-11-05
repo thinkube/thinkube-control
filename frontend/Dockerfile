@@ -10,7 +10,9 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci --only=production
+# Most dependencies are pre-installed in base image (see thinkube/ansible/.../base-images/node-base-22.Containerfile.j2)
+# npm ci will use cached packages for much faster installation
+RUN npm ci
 
 # Copy source code
 COPY . .

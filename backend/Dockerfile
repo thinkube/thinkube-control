@@ -4,7 +4,9 @@ FROM ${REGISTRY}/library/python-base:3.12-slim
 
 WORKDIR /app
 
-# Copy requirements and install only additional dependencies not in base
+# Copy requirements and install dependencies
+# Most dependencies pre-installed in base image (see thinkube/ansible/.../base-images/python-base.Containerfile.j2)
+# pip will skip already-installed packages, making this much faster
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
