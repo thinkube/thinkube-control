@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { handleAuthCallback } from '@/lib/auth';
 import { TkButton } from 'thinkube-style/components/buttons-badges';
@@ -8,8 +8,12 @@ export default function AuthCallbackPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [error, setError] = useState<string | null>(null);
+  const hasExecuted = useRef(false);
 
   useEffect(() => {
+    if (hasExecuted.current) return;
+    hasExecuted.current = true;
+
     const code = searchParams.get('code');
     const errorParam = searchParams.get('error');
 
@@ -31,7 +35,7 @@ export default function AuthCallbackPage() {
         sessionStorage.removeItem('intendedRoute');
 
         // Redirect to intended route or dashboard
-        navigate(intendedRoute || '/dashboard');
+        navigate(intendedRoute || '/dashboard', { replace: true });
       })
       .catch((err) => {
         console.error('Failed to handle auth callback:', err);

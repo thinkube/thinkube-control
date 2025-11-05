@@ -1,17 +1,21 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { isAuthenticated } from '@/lib/auth';
 import { TkLoader } from 'thinkube-style/components/feedback';
 
 export default function HomePage() {
   const navigate = useNavigate();
+  const hasNavigated = useRef(false);
 
   useEffect(() => {
+    if (hasNavigated.current) return;
+    hasNavigated.current = true;
+
     // Redirect to dashboard if authenticated, otherwise to login
     if (isAuthenticated()) {
-      navigate('/dashboard');
+      navigate('/dashboard', { replace: true });
     } else {
-      navigate('/login');
+      navigate('/login', { replace: true });
     }
   }, [navigate]);
 
