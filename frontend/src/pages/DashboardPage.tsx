@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useNavigate } from 'react-router-dom';
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent } from 'thinkube-style/components/cards-data';
@@ -6,9 +6,12 @@ import { TkCard, TkCardHeader, TkCardTitle, TkCardContent } from 'thinkube-style
 export default function DashboardPage() {
   const { user, fetchUser, isAuthenticated } = useAuthStore();
   const navigate = useNavigate();
-
+  const hasExecuted = useRef(false);
 
   useEffect(() => {
+    if (hasExecuted.current) return;
+    hasExecuted.current = true;
+
     if (!isAuthenticated()) {
       navigate('/login');
       return;
