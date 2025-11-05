@@ -1,21 +1,19 @@
-'use client';
-
 import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useNavigate } from 'react-router-dom';
 import { isAuthenticated } from '@/lib/auth';
 import { TkLoader } from 'thinkube-style/components/feedback';
 
 export default function HomePage() {
-  const router = useRouter();
+  const navigate = useNavigate();
 
   useEffect(() => {
     // Redirect to dashboard if authenticated, otherwise to login
     if (isAuthenticated()) {
-      router.push('/dashboard');
+      navigate('/dashboard');
     } else {
-      router.push('/login');
+      navigate('/login');
     }
-  }, [router]);
+  }, [navigate]);
 
   return (
     <div className="flex h-screen items-center justify-center"> {/* @allowed-inline */}

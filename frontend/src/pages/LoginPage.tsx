@@ -1,5 +1,3 @@
-'use client';
-
 import { useEffect } from 'react';
 import { redirectToLogin } from '@/lib/auth';
 import { TkLoader } from 'thinkube-style/components/feedback';

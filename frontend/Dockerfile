@@ -1,5 +1,5 @@
-# Multi-stage Dockerfile for Next.js 16
-# Uses standalone output for minimal production image
+# Multi-stage Dockerfile for Vite + React
+# Builds static files and serves with nginx
 
 # Build stage
 FROM registry.cmxela.com/library/node-base:22-alpine AS builder
@@ -17,33 +17,21 @@ RUN npm ci
 # Copy source code
 COPY . .
 
-# Build Next.js application
+# Build Vite application (outputs to /app/dist)
 RUN npm run build
 
-# Production stage
-FROM registry.cmxela.com/library/node-base:22-alpine AS runner
+# Production stage - serve static files with nginx
+FROM nginx:alpine
 
-WORKDIR /app
+# Copy built files to nginx html directory
+COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Create non-root user
-RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 nextjs
-
-# Copy standalone build output
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-COPY --from=builder --chown=nextjs:nodejs /app/public ./public
-
-# Switch to non-root user
-USER nextjs
+# Copy nginx configuration
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Expose port
-EXPOSE 3000
+EXPOSE 80
 
-# Set environment
-ENV NODE_ENV=production
-ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
-
-# Start Next.js server
-CMD ["node", "server.js"]
+# nginx runs as root by default and handles its own user switching
+# Start nginx
+CMD ["nginx", "-g", "daemon off;"]

@@ -1,27 +1,25 @@
-'use client';
-
 import { useEffect } from 'react';
 import { useAuthStore } from '@/stores/useAuthStore';
-import { useRouter } from 'next/navigation';
+import { useNavigate } from 'react-router-dom';
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent } from 'thinkube-style/components/cards-data';
 
 export default function DashboardPage() {
   const { user, fetchUser, isAuthenticated } = useAuthStore();
-  const router = useRouter();
+  const navigate = useNavigate();
 
 
   useEffect(() => {
     if (!isAuthenticated()) {
-      router.push('/login');
+      navigate('/login');
       return;
     }
 
     if (!user) {
       fetchUser().catch(() => {
-        router.push('/login');
+        navigate('/login');
       });
     }
-  }, [user, fetchUser, isAuthenticated, router]);
+  }, [user, fetchUser, isAuthenticated, navigate]);
 
   return (
     <div className="min-h-screen bg-background p-8"> {/* @allowed-inline */}

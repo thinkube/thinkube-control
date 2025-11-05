@@ -1,14 +1,12 @@
-'use client';
-
-import { Suspense, useEffect, useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { handleAuthCallback } from '@/lib/auth';
 import { TkButton } from 'thinkube-style/components/buttons-badges';
 import { TkLoader } from 'thinkube-style/components/feedback';
 
-function AuthCallbackContent() {
-  const router = useRouter();
-  const searchParams = useSearchParams();
+export default function AuthCallbackPage() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -33,13 +31,13 @@ function AuthCallbackContent() {
         sessionStorage.removeItem('intendedRoute');
 
         // Redirect to intended route or dashboard
-        router.push(intendedRoute || '/dashboard');
+        navigate(intendedRoute || '/dashboard');
       })
       .catch((err) => {
         console.error('Failed to handle auth callback:', err);
         setError('Failed to complete authentication. Please try again.');
       });
-  }, [searchParams, router]);
+  }, [searchParams, navigate]);
 
   if (error) {
     return (
@@ -47,7 +45,7 @@ function AuthCallbackContent() {
         <div className="text-center">
           <h1 className="text-2xl font-semibold mb-4 text-destructive">Authentication Failed</h1>
           <p className="text-muted-foreground mb-4">{error}</p>
-          <TkButton onClick={() => router.push('/login')}>
+          <TkButton onClick={() => navigate('/login')}>
             Try Again
           </TkButton>
         </div>
@@ -63,21 +61,5 @@ function AuthCallbackContent() {
         <p className="text-muted-foreground mt-4">Please wait...</p>
       </div>
     </div>
-  );
-}
-
-export default function AuthCallbackPage() {
-  return (
-    <Suspense fallback={
-      <div className="flex h-screen items-center justify-center"> {/* @allowed-inline */}
-        <div className="text-center">
-          <h1 className="text-2xl font-semibold mb-4">Loading...</h1>
-          <TkLoader />
-          <p className="text-muted-foreground mt-4">Please wait...</p>
-        </div>
-      </div>
-    }>
-      <AuthCallbackContent />
-    </Suspense>
   );
 }
