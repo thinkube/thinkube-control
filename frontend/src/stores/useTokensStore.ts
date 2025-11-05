@@ -5,8 +5,16 @@ export interface APIToken {
   id: string;
   name: string;
   token?: string;
+  scopes?: string[];
+  expires_at?: string;
   created_at: string;
   [key: string]: any;
+}
+
+interface TokenData {
+  name: string;
+  scopes?: string[];
+  expires_at?: string;
 }
 
 interface TokensState {
@@ -16,50 +24,64 @@ interface TokensState {
 
   // Actions
   fetchTokens: () => Promise<void>;
-  createToken: (name: string) => Promise<APIToken>;
-  deleteToken: (id: string) => Promise<void>;
+  createToken: (tokenData: TokenData) => Promise<APIToken>;
+  revokeToken: (tokenId: string) => Promise<void>;
+  revealToken: (tokenId: string) => Promise<any>;
 }
 
-export const useTokensStore = create<TokensState>((set) => ({
+export const useTokensStore = create<TokensState>((set, get) => ({
   tokens: [],
   loading: false,
   error: null,
 
   fetchTokens: async () => {
     set({ loading: true, error: null });
+
     try {
       const response = await api.get('/tokens');
       set({ tokens: response.data, loading: false });
-    } catch (error) {
+    } catch (err: any) {
+      console.error('Failed to fetch tokens:', err);
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch tokens',
+        error: err.message,
         loading: false
       });
     }
   },
 
-  createToken: async (name) => {
+  createToken: async (tokenData: TokenData) => {
     try {
-      const response = await api.post('/tokens', { name });
-      set(state => ({
-        tokens: [...state.tokens, response.data]
-      }));
+      const response = await api.post('/tokens', tokenData);
+
+      // Refresh the token list
+      await get().fetchTokens();
+
       return response.data;
-    } catch (error) {
-      set({ error: error instanceof Error ? error.message : 'Failed to create token' });
-      throw error;
+    } catch (err: any) {
+      console.error('Failed to create token:', err);
+      throw err;
     }
   },
 
-  deleteToken: async (id) => {
+  revokeToken: async (tokenId: string) => {
     try {
-      await api.delete(`/tokens/${id}`);
-      set(state => ({
-        tokens: state.tokens.filter(t => t.id !== id)
-      }));
-    } catch (error) {
-      set({ error: error instanceof Error ? error.message : 'Failed to delete token' });
-      throw error;
+      await api.delete(`/tokens/${tokenId}`);
+
+      // Refresh the token list
+      await get().fetchTokens();
+    } catch (err: any) {
+      console.error('Failed to revoke token:', err);
+      throw err;
     }
   },
+
+  revealToken: async (tokenId: string) => {
+    try {
+      const response = await api.get(`/tokens/${tokenId}/reveal`);
+      return response.data;
+    } catch (err: any) {
+      console.error('Failed to reveal token:', err);
+      throw err;
+    }
+  }
 }));

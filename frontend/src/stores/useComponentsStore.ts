@@ -3,7 +3,8 @@ import api from '@/lib/axios';
 
 export interface OptionalComponent {
   name: string;
-  enabled: boolean;
+  category: string;
+  installed: boolean;
   [key: string]: any;
 }
 
@@ -12,40 +13,116 @@ interface ComponentsState {
   loading: boolean;
   error: string | null;
 
+  // Computed getters
+  getInstalledComponents: () => OptionalComponent[];
+  getAvailableComponents: () => OptionalComponent[];
+  getComponentsByCategory: () => Record<string, OptionalComponent[]>;
+
   // Actions
-  fetchComponents: () => Promise<void>;
-  toggleComponent: (name: string, enabled: boolean) => Promise<void>;
+  listComponents: () => Promise<any>;
+  getComponentInfo: (componentName: string) => Promise<any>;
+  installComponent: (componentName: string, parameters?: Record<string, any>) => Promise<any>;
+  uninstallComponent: (componentName: string) => Promise<any>;
+  getComponentStatus: (componentName: string) => Promise<any>;
 }
 
-export const useComponentsStore = create<ComponentsState>((set) => ({
+export const useComponentsStore = create<ComponentsState>((set, get) => ({
   components: [],
   loading: false,
   error: null,
 
-  fetchComponents: async () => {
+  // Computed getters
+  getInstalledComponents: () => {
+    const { components } = get();
+    return components.filter(c => c.installed);
+  },
+
+  getAvailableComponents: () => {
+    const { components } = get();
+    return components.filter(c => !c.installed);
+  },
+
+  getComponentsByCategory: () => {
+    const { components } = get();
+    const grouped: Record<string, OptionalComponent[]> = {};
+    components.forEach(component => {
+      if (!grouped[component.category]) {
+        grouped[component.category] = [];
+      }
+      grouped[component.category].push(component);
+    });
+    return grouped;
+  },
+
+  // Actions
+  listComponents: async () => {
     set({ loading: true, error: null });
+
     try {
-      const response = await api.get('/optional-components');
-      set({ components: response.data, loading: false });
-    } catch (error) {
+      const response = await api.get('/optional-components/list');
+      set({ components: response.data.components, loading: false });
+      return response.data;
+    } catch (err: any) {
+      console.error('Failed to list optional components:', err);
       set({
-        error: error instanceof Error ? error.message : 'Failed to fetch components',
+        error: err.message,
         loading: false
       });
+      throw err;
     }
   },
 
-  toggleComponent: async (name, enabled) => {
+  getComponentInfo: async (componentName: string) => {
     try {
-      await api.patch(`/optional-components/${name}`, { enabled });
-      set(state => ({
-        components: state.components.map(c =>
-          c.name === name ? { ...c, enabled } : c
-        )
-      }));
-    } catch (error) {
-      set({ error: error instanceof Error ? error.message : 'Failed to toggle component' });
-      throw error;
+      const response = await api.get(`/optional-components/${componentName}/info`);
+      return response.data;
+    } catch (err) {
+      console.error(`Failed to get info for component ${componentName}:`, err);
+      throw err;
     }
   },
+
+  installComponent: async (componentName: string, parameters: Record<string, any> = {}) => {
+    try {
+      const response = await api.post(
+        `/optional-components/${componentName}/install`,
+        {
+          parameters,
+          force: false
+        }
+      );
+
+      // Refresh component list after installation starts
+      setTimeout(() => get().listComponents(), 2000);
+
+      return response.data;
+    } catch (err) {
+      console.error(`Failed to install component ${componentName}:`, err);
+      throw err;
+    }
+  },
+
+  uninstallComponent: async (componentName: string) => {
+    try {
+      const response = await api.delete(`/optional-components/${componentName}`);
+
+      // Refresh component list after uninstallation starts
+      setTimeout(() => get().listComponents(), 2000);
+
+      return response.data;
+    } catch (err) {
+      console.error(`Failed to uninstall component ${componentName}:`, err);
+      throw err;
+    }
+  },
+
+  getComponentStatus: async (componentName: string) => {
+    try {
+      const response = await api.get(`/optional-components/${componentName}/status`);
+      return response.data;
+    } catch (err) {
+      console.error(`Failed to get status for component ${componentName}:`, err);
+      throw err;
+    }
+  }
 }));
