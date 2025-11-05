@@ -1,31 +1,19 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { useAuthStore } from '@/stores/useAuthStore';
-import { useNavigate } from 'react-router-dom';
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent } from 'thinkube-style/components/cards-data';
 
 export default function DashboardPage() {
-  const { user, fetchUser, isAuthenticated } = useAuthStore();
-  const navigate = useNavigate();
-  const hasExecuted = useRef(false);
+  const { user, fetchUser } = useAuthStore();
 
   useEffect(() => {
-    if (hasExecuted.current) return;
-    hasExecuted.current = true;
-
-    if (!isAuthenticated()) {
-      navigate('/login');
-      return;
-    }
-
+    // Fetch user info if not already loaded
     if (!user) {
       fetchUser().catch((error) => {
         console.error('Failed to fetch user info:', error);
-        // Don't redirect on fetch error - user is authenticated
-        // The error will be shown in the UI
       });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    // Only fetch when user changes from null to populated
+  }, [user, fetchUser]);
 
   return (
     <div className="min-h-screen bg-background p-8"> {/* @allowed-inline */}

@@ -30,7 +30,7 @@ export default function AuthCallbackPage() {
     // Exchange code for token
     handleAuthCallback(code)
       .then(() => {
-        // Check for intended route
+        // Check for intended route from sessionStorage
         const intendedRoute = sessionStorage.getItem('intendedRoute');
         sessionStorage.removeItem('intendedRoute');
 
@@ -41,8 +41,7 @@ export default function AuthCallbackPage() {
         console.error('Failed to handle auth callback:', err);
         setError('Failed to complete authentication. Please try again.');
       });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [searchParams, navigate]);
 
   if (error) {
     return (

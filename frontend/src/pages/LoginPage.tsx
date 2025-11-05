@@ -1,25 +1,26 @@
 import { useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 import { redirectToLogin, isAuthenticated } from '@/lib/auth';
 import { TkLoader } from 'thinkube-style/components/feedback';
 
 export default function LoginPage() {
-  const navigate = useNavigate();
-  const hasExecuted = useRef(false);
+  const location = useLocation();
+  const hasRedirected = useRef(false);
+
+  // If already authenticated, redirect to intended route or dashboard
+  if (isAuthenticated()) {
+    const from = (location.state as { from?: string })?.from || '/dashboard';
+    return <Navigate to={from} replace />;
+  }
 
   useEffect(() => {
-    if (hasExecuted.current) return;
-    hasExecuted.current = true;
+    // Redirect to Keycloak only once
+    if (hasRedirected.current) return;
+    hasRedirected.current = true;
 
-    // If already authenticated, go to dashboard instead
-    if (isAuthenticated()) {
-      navigate('/dashboard', { replace: true });
-      return;
-    }
-
-    redirectToLogin();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const from = (location.state as { from?: string })?.from;
+    redirectToLogin(from);
+  }, [location]);
 
   return (
     <div className="flex h-screen items-center justify-center"> {/* @allowed-inline */}
