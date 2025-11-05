@@ -2,9 +2,24 @@
 
 @source "../node_modules/thinkube-style/dist";
 
+/* Import Google Fonts via @fontsource for self-hosting */
+@import "@fontsource/poppins/300.css";
+@import "@fontsource/poppins/400.css";
+@import "@fontsource/poppins/500.css";
+@import "@fontsource/poppins/600.css";
+@import "@fontsource/poppins/700.css";
+@import "@fontsource/noto-sans-mono/400.css";
+@import "@fontsource/noto-sans-mono/500.css";
+@import "@fontsource/noto-sans-mono/600.css";
+@import "@fontsource/noto-sans-mono/700.css";
+
 @variant dark (.dark &);
 
 :root {
+  /* Font families from @fontsource */
+  --font-poppins: "Poppins", system-ui, -apple-system, sans-serif;
+  --font-noto-sans-mono: "Noto Sans Mono", "Courier New", monospace;
+
   --background: oklch(99% 0.005 75); /* Warm off-white instead of pure white */
   --foreground: oklch(20% 0 0);
   --card: oklch(100% 0 0); /* Cards stay pure white for contrast */
