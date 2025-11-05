@@ -15,8 +15,10 @@ export default function DashboardPage() {
     }
 
     if (!user) {
-      fetchUser().catch(() => {
-        navigate('/login');
+      fetchUser().catch((error) => {
+        console.error('Failed to fetch user info:', error);
+        // Don't redirect on fetch error - user is authenticated
+        // The error will be shown in the UI
       });
     }
   }, [user, fetchUser, isAuthenticated, navigate]);
