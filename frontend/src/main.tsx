@@ -1,7 +1,8 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
-import { TkAppLayout } from 'thinkube-style';
+import { TkAppLayout, type TkNavItem } from 'thinkube-style';
+import { LayoutDashboard, Boxes, Layers, Container, Puzzle, Shield, Sliders, Lock, Key } from 'lucide-react';
 import './globals.css';
 
 // Components
@@ -14,27 +15,75 @@ import LoginPage from './pages/LoginPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
 import DashboardPage from './pages/DashboardPage';
 
+const navigationItems: TkNavItem[] = [
+  {
+    id: "dashboard",
+    label: "Dashboard",
+    lucideIcon: LayoutDashboard,
+    href: "/",
+  },
+  {
+    id: "deployment",
+    label: "Deployment & Infrastructure",
+    lucideIcon: Boxes,
+    isGroup: true,
+    children: [
+      { id: "templates", label: "Templates", lucideIcon: Layers, href: "/templates" },
+      { id: "harbor-images", label: "Harbor Images", lucideIcon: Container, href: "/harbor-images" },
+      { id: "optional-components", label: "Optional Components", lucideIcon: Puzzle, href: "/optional-components" },
+    ],
+  },
+  {
+    id: "config",
+    label: "Configuration & Security",
+    lucideIcon: Shield,
+    isGroup: true,
+    children: [
+      { id: "jupyterhub-config", label: "JupyterHub Config", lucideIcon: Sliders, href: "/jupyterhub-config" },
+      { id: "secrets", label: "Secrets", lucideIcon: Lock, href: "/secrets" },
+      { id: "api-tokens", label: "API Tokens", lucideIcon: Key, href: "/tokens" },
+    ],
+  },
+];
+
 function AppContent() {
   const location = useLocation();
   const navigate = useNavigate();
 
   const handleNavClick = (id: string) => {
     const routes: Record<string, string> = {
-      dashboard: '/dashboard',
-      services: '/services',
-      harbor: '/harbor',
-      tokens: '/tokens',
-      components: '/components',
-      settings: '/settings',
+      dashboard: '/',
+      templates: '/templates',
+      'harbor-images': '/harbor-images',
+      'optional-components': '/optional-components',
+      'jupyterhub-config': '/jupyterhub-config',
+      secrets: '/secrets',
+      'api-tokens': '/tokens',
     };
-    const path = routes[id] || '/';
-    navigate(path);
+    const path = routes[id];
+    if (path) navigate(path);
+  };
+
+  // Determine active item from current path
+  const getActiveItem = () => {
+    const path = location.pathname;
+    if (path === '/') return 'dashboard';
+    if (path.startsWith('/templates')) return 'templates';
+    if (path.startsWith('/harbor-images')) return 'harbor-images';
+    if (path.startsWith('/optional-components')) return 'optional-components';
+    if (path.startsWith('/jupyterhub-config')) return 'jupyterhub-config';
+    if (path.startsWith('/secrets')) return 'secrets';
+    if (path.startsWith('/tokens')) return 'api-tokens';
+    return 'dashboard';
   };
 
   return (
     <TkAppLayout
-      activeItem={location.pathname.split('/')[1] || 'dashboard'}
+      navigationItems={navigationItems}
+      activeItem={getActiveItem()}
       onItemClick={handleNavClick}
+      logoText="Thinkube Control"
+      topBarTitle="Thinkube Control"
       topBarContent={<UserMenu />}
     >
       <Routes>
