@@ -4,14 +4,11 @@ FROM ${REGISTRY}/library/python-base:3.12-slim
 
 WORKDIR /app
 
-# Copy requirements and install dependencies
-# Most dependencies pre-installed in base image (see thinkube/ansible/.../base-images/python-base.Containerfile.j2)
-# pip will skip already-installed packages, making this much faster
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# All Python dependencies pre-installed in base image (python-base:3.12-slim)
+# Including: fastapi, uvicorn, sqlalchemy, pydantic, ansible, copier, etc.
+# See: thinkube/ansible/.../base-images/python-base.Containerfile.j2
 
-# Install ansible and required system packages for template deployment
-# Also include networking tools for debugging connectivity issues
+# Install system packages for template deployment and debugging
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     openssh-client \
@@ -31,9 +28,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fuse-overlayfs \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-
-# Install ansible and copier via pip to get latest versions
-RUN pip install --no-cache-dir ansible copier
 
 # Configure podman for rootless operation in container
 # Using mounted /var/lib/containers from host with fuse-overlayfs
