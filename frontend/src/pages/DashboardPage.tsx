@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useLocation, useParams } from 'react-router-dom';
+import { useLocation, useParams, useNavigate } from 'react-router-dom';
 import { useServicesStore } from '@/stores/useServicesStore';
 import { AlertCircle, Loader2, RefreshCw, Star } from 'lucide-react';
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent } from 'thinkube-style/components/cards-data';
@@ -28,6 +28,7 @@ import { SortableServiceCard } from '@/components/SortableServiceCard';
 
 export default function DashboardPage() {
   const location = useLocation();
+  const navigate = useNavigate();
   const { category } = useParams<{ category?: string }>();
   const {
     services,
