@@ -7,6 +7,8 @@ import './globals.css';
 
 // Components
 import RequireAuth from './components/RequireAuth';
+import { ThemeProvider } from './components/ThemeProvider';
+import { ThemeToggle } from './components/ThemeToggle';
 import { UserMenu } from './components/UserMenu';
 
 // Pages
@@ -84,6 +86,7 @@ function AppContent() {
       onItemClick={handleNavClick}
       logoText="Thinkube Control"
       topBarTitle="Thinkube Control"
+      topBarLeftContent={<ThemeToggle />}
       topBarContent={<UserMenu />}
     >
       <Routes>
@@ -96,19 +99,21 @@ function AppContent() {
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/auth/callback" element={<AuthCallbackPage />} />
-        <Route
-          path="/*"
-          element={
-            <RequireAuth>
-              <AppContent />
-            </RequireAuth>
-          }
-        />
-      </Routes>
-    </BrowserRouter>
+    <ThemeProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/auth/callback" element={<AuthCallbackPage />} />
+          <Route
+            path="/*"
+            element={
+              <RequireAuth>
+                <AppContent />
+              </RequireAuth>
+            }
+          />
+        </Routes>
+      </BrowserRouter>
+    </ThemeProvider>
   </React.StrictMode>
 );
