@@ -7,6 +7,23 @@ import { TkButton } from 'thinkube-style/components/buttons-badges';
 import { TkSwitch } from 'thinkube-style/components/forms-inputs';
 import { ServiceCard } from '@/components/ServiceCard';
 import type { Service } from '@/stores/useServicesStore';
+import { toast } from 'sonner';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  rectSortingStrategy,
+} from '@dnd-kit/sortable';
+import { SortableServiceCard } from '@/components/SortableServiceCard';
 
 export default function DashboardPage() {
   const location = useLocation();
@@ -25,9 +42,18 @@ export default function DashboardPage() {
     toggleService,
     restartService,
     triggerHealthCheck,
+    reorderFavorites,
   } = useServicesStore();
   const [compactMode, setCompactMode] = useState(false);
   const [syncing, setSyncing] = useState(false);
+
+  // Drag-and-drop sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
 
   // Determine view based on route
   const isAllServicesView = location.pathname === '/dashboard/all';
@@ -56,8 +82,9 @@ export default function DashboardPage() {
   const handleToggleFavorite = async (service: Service) => {
     try {
       await toggleFavorite(service);
-      console.log('Favorite toggled'); // Will be replaced with toast in Task 10
+      toast.success(service.favorite ? 'Removed from favorites' : 'Added to favorites');
     } catch (error) {
+      toast.error('Failed to toggle favorite');
       console.error('Failed to toggle favorite:', error);
     }
   };
@@ -70,8 +97,9 @@ export default function DashboardPage() {
   const handleRestart = async (service: Service) => {
     try {
       await restartService(service.id);
-      console.log('Service restarted'); // Will be replaced with toast in Task 10
+      toast.success(`${service.name} restarted successfully`);
     } catch (error) {
+      toast.error(`Failed to restart ${service.name}`);
       console.error('Failed to restart service:', error);
     }
   };
@@ -79,8 +107,9 @@ export default function DashboardPage() {
   const handleToggleService = async (service: Service, enabled: boolean) => {
     try {
       await toggleService(service.id, enabled);
-      console.log('Service toggled'); // Will be replaced with toast in Task 10
+      toast.success(`${service.name} ${enabled ? 'enabled' : 'disabled'}`);
     } catch (error) {
+      toast.error(`Failed to ${enabled ? 'enable' : 'disable'} ${service.name}`);
       console.error('Failed to toggle service:', error);
     }
   };
@@ -88,8 +117,9 @@ export default function DashboardPage() {
   const handleHealthCheck = async (service: Service) => {
     try {
       await triggerHealthCheck(service.id);
-      console.log('Health check triggered'); // Will be replaced with toast in Task 10
+      toast.success(`Health check triggered for ${service.name}`);
     } catch (error) {
+      toast.error(`Failed to check health for ${service.name}`);
       console.error('Failed to check health:', error);
     }
   };
@@ -113,11 +143,35 @@ export default function DashboardPage() {
     setSyncing(true);
     try {
       await syncServices();
-      console.log('Services synced successfully'); // Will be replaced with toast in Task 10
+      toast.success('Services synced successfully');
     } catch (error) {
-      console.error('Failed to sync services:', error); // Will be replaced with toast in Task 10
+      toast.error('Failed to sync services');
+      console.error('Failed to sync services:', error);
     } finally {
       setSyncing(false);
+    }
+  };
+
+  // Handle drag end for favorites reordering
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (over && active.id !== over.id) {
+      const oldIndex = favoriteServices.findIndex((s) => s.id === active.id);
+      const newIndex = favoriteServices.findIndex((s) => s.id === over.id);
+
+      if (oldIndex !== -1 && newIndex !== -1) {
+        const newOrder = arrayMove(favoriteServices, oldIndex, newIndex);
+        const serviceIds = newOrder.map((s) => s.id);
+
+        try {
+          await reorderFavorites(serviceIds);
+          toast.success('Favorites reordered');
+        } catch (error) {
+          toast.error('Failed to reorder favorites');
+          console.error('Failed to reorder favorites:', error);
+        }
+      }
     }
   };
 
@@ -196,21 +250,29 @@ export default function DashboardPage() {
               </TkCardContent>
             </TkCard>
           ) : (
-            <div>
-              {/* Favorites grid - drag-drop will be added in Task 9 */}
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-                {favoriteServices.map((service) => (
-                  <ServiceCard
-                    key={service.id}
-                    service={service}
-                    variant="favorite"
-                    compact={compactMode}
-                    onToggleFavorite={handleToggleFavorite}
-                    onShowDetails={handleShowDetails}
-                  />
-                ))}
-              </div>
-            </div>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext
+                items={favoriteServices.map((s) => s.id)}
+                strategy={rectSortingStrategy}
+              >
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                  {favoriteServices.map((service) => (
+                    <SortableServiceCard
+                      key={service.id}
+                      service={service}
+                      variant="favorite"
+                      compact={compactMode}
+                      onToggleFavorite={handleToggleFavorite}
+                      onShowDetails={handleShowDetails}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
           )}
         </>
       ) : (

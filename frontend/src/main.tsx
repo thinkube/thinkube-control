@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { TkAppLayout, type TkNavItem } from 'thinkube-style';
 import { LayoutDashboard, Boxes, Layers, Container, Puzzle, Shield, Sliders, Lock, Key, Star, Grid2X2, Server, Code, BarChart3, Database, Cpu, FileText, Box } from 'lucide-react';
+import { Toaster } from 'sonner';
 import './globals.css';
 
 // Components
@@ -191,6 +192,7 @@ function AppContent() {
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ThemeProvider>
+      <Toaster richColors position="top-right" />
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
