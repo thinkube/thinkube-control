@@ -295,7 +295,7 @@ export default function ServiceDetailsPage() {
   const recentActions = serviceDetails?.recent_actions || [];
 
   return (
-    <TkPageWrapper title={service.display_name || service.name} description={service.description || undefined}>
+    <TkPageWrapper>
       {/* Back button */}
       <div className="mb-6">
         <TkButton

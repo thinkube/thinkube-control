@@ -175,7 +175,7 @@ export default function PodDetailsPage() {
   }
 
   return (
-    <TkPageWrapper title={`Pod: ${podName}`}>
+    <TkPageWrapper>
       {/* Back button */}
       <div className="mb-6">
         <TkButton
