@@ -4,7 +4,7 @@ import { useServicesStore } from '@/stores/useServicesStore';
 import { ArrowLeft, Loader2, Download, RefreshCw, Copy } from 'lucide-react';
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent } from 'thinkube-style/components/cards-data';
 import { TkButton, TkBadge } from 'thinkube-style/components/buttons-badges';
-import { TkSeparator } from 'thinkube-style/components/utilities';
+import { TkSeparator, TkPageWrapper } from 'thinkube-style/components/utilities';
 import { TkTabsRoot, TkTabsList, TkTabsTrigger, TkTabsContent } from 'thinkube-style/components/navigation';
 import { TkInput, TkSelect, TkSelectTrigger, TkSelectValue, TkSelectContent, TkSelectItem } from 'thinkube-style/components/forms-inputs';
 import { toast } from 'sonner';
@@ -20,7 +20,7 @@ interface ContainerLog {
 export default function PodDetailsPage() {
   const { id, podName } = useParams<{ id: string; podName: string }>();
   const navigate = useNavigate();
-  const { describePod, getContainerLogs } = useServicesStore();
+  const { describePod, getContainerLogs, fetchServiceDetails } = useServicesStore();
 
   const [loading, setLoading] = useState(true);
   const [podDescription, setPodDescription] = useState<string>('');
@@ -39,25 +39,22 @@ export default function PodDetailsPage() {
     const loadPodDescription = async () => {
       setLoading(true);
       try {
-        const response = await describePod(id, podName);
-        const formatted = response.formatted || JSON.stringify(response, null, 2);
-        setPodDescription(formatted);
+        // Fetch service details to get pod info with containers
+        const serviceDetails = await fetchServiceDetails(id);
+        const pod = serviceDetails.pods?.find((p: any) => p.name === podName);
 
-        // Extract container names from description
-        // This is a simple parser - adjust based on actual API response format
-        const containerMatches = formatted.match(/Container ID:\s+\S+/g);
-        if (containerMatches) {
-          const containerNames = containerMatches.map(m => {
-            const lines = formatted.split('\n');
-            const containerLine = lines.find(l => l.includes(m));
-            const nameMatch = containerLine?.match(/Name:\s+(\S+)/);
-            return nameMatch ? nameMatch[1] : '';
-          }).filter(Boolean);
+        if (pod && pod.containers) {
+          const containerNames = pod.containers.map((c: any) => c.name);
           setContainers(containerNames);
           if (containerNames.length > 0) {
             setActiveContainer(containerNames[0]);
           }
         }
+
+        // Still fetch pod description for the Description tab
+        const response = await describePod(id, podName);
+        const formatted = response.formatted || JSON.stringify(response, null, 2);
+        setPodDescription(formatted);
       } catch (error) {
         toast.error('Failed to load pod details');
         setPodDescription('Error: Failed to get pod description');
@@ -67,7 +64,7 @@ export default function PodDetailsPage() {
     };
 
     loadPodDescription();
-  }, [id, podName, describePod]);
+  }, [id, podName, describePod, fetchServiceDetails]);
 
   // Load logs for active container
   useEffect(() => {
@@ -178,9 +175,9 @@ export default function PodDetailsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <TkPageWrapper title={`Pod: ${podName}`}>
       {/* Back button */}
-      <div>
+      <div className="mb-6">
         <TkButton
           variant="ghost"
           size="sm"
@@ -191,12 +188,7 @@ export default function PodDetailsPage() {
         </TkButton>
       </div>
 
-      {/* Pod Header */}
-      <TkCard>
-        <TkCardHeader>
-          <TkCardTitle className="text-2xl">Pod: {podName}</TkCardTitle>
-        </TkCardHeader>
-      </TkCard>
+      <div className="space-y-6">
 
       {/* Tabs for Description and Logs */}
       <TkTabsRoot defaultValue="logs">
@@ -325,6 +317,7 @@ export default function PodDetailsPage() {
           </TkCard>
         </TkTabsContent>
       </TkTabsRoot>
-    </div>
+      </div>
+    </TkPageWrapper>
   );
 }

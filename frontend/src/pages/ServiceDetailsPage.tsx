@@ -23,7 +23,7 @@ import { TkButton, TkBadge, TkGpuBadge } from 'thinkube-style/components/buttons
 import { TkSwitch } from 'thinkube-style/components/forms-inputs';
 import { TkTooltip, TkControlledConfirmDialog } from 'thinkube-style/components/modals-overlays';
 import { TkBrandIcon } from 'thinkube-style/components/brand-icons';
-import { TkSeparator } from 'thinkube-style/components/utilities';
+import { TkSeparator, TkPageWrapper } from 'thinkube-style/components/utilities';
 import { toast } from 'sonner';
 
 // Type interfaces
@@ -295,9 +295,9 @@ export default function ServiceDetailsPage() {
   const recentActions = serviceDetails?.recent_actions || [];
 
   return (
-    <div className="space-y-6">
+    <TkPageWrapper title={service.display_name || service.name} description={service.description || undefined}>
       {/* Back button */}
-      <div>
+      <div className="mb-6">
         <TkButton
           variant="ghost"
           size="sm"
@@ -307,6 +307,8 @@ export default function ServiceDetailsPage() {
           Back to Dashboard
         </TkButton>
       </div>
+
+      <div className="space-y-6">
 
       {/* Service Header */}
       <TkCard>
@@ -733,6 +735,7 @@ export default function ServiceDetailsPage() {
         onConfirm={handleRestart}
         variant="destructive"
       />
-    </div>
+      </div>
+    </TkPageWrapper>
   );
 }
