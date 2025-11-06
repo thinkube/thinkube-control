@@ -201,7 +201,7 @@ export function ServiceCard({
 
   // Full variant - elegant design with footer
   return (
-    <TkCard className={`h-full ${borderClass}`}>
+    <TkCard className={`h-full ${borderClass} flex flex-col`}>
       <TkCardHeader className="pb-3">
         <div className="flex items-start justify-between">
           <div className="flex-1">
@@ -261,7 +261,7 @@ export function ServiceCard({
         </div>
       </TkCardHeader>
 
-      <TkCardContent className="pb-3">
+      <TkCardContent className="pb-3 flex-grow">
         {/* Badges */}
         <div className="flex flex-wrap gap-2 mb-4">
           <TkBadge variant={typeVariant}>

@@ -348,11 +348,28 @@ export const useServicesStore = create<ServicesState>((set, get) => ({
   },
 
   reorderFavorites: async (serviceIds: string[]) => {
+    const { services } = get();
+
+    // Create a map of new positions
+    const positionMap = new Map(serviceIds.map((id, index) => [id, index]));
+
+    // Update services array with new favorite_order
+    const updatedServices = services.map(service => {
+      if (positionMap.has(service.id)) {
+        return { ...service, favorite_order: positionMap.get(service.id)! };
+      }
+      return service;
+    });
+
+    // Optimistically update state
+    set({ services: updatedServices });
+
     try {
       await api.put('/services/favorites/reorder', serviceIds);
-      // No need to refresh as the order is already updated in the UI
     } catch (err) {
       console.error('Failed to reorder favorites:', err);
+      // Revert on error by refetching
+      get().fetchServices();
       throw err;
     }
   },
