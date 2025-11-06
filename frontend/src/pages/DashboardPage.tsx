@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router-dom';
 import { useServicesStore } from '@/stores/useServicesStore';
 import { AlertCircle, Loader2, RefreshCw, Star } from 'lucide-react';
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent } from 'thinkube-style/components/cards-data';
@@ -10,6 +10,7 @@ import type { Service } from '@/stores/useServicesStore';
 
 export default function DashboardPage() {
   const location = useLocation();
+  const { category } = useParams<{ category?: string }>();
   const {
     services,
     loading,
@@ -18,8 +19,6 @@ export default function DashboardPage() {
     syncServices,
     getFavoriteServicesComputed,
     getFilteredServices,
-    getCategories,
-    categoryFilter,
     setCategoryFilter,
     toggleFavorite,
     toggleService,
@@ -31,11 +30,25 @@ export default function DashboardPage() {
 
   // Determine view based on route
   const isAllServicesView = location.pathname === '/dashboard/all';
+  const isCategoryView = location.pathname.startsWith('/dashboard/category/');
+  const isFavoritesView = !isAllServicesView && !isCategoryView;
 
-  // Get categories and filtered services
-  const categories = getCategories();
+  // Get filtered services
   const filteredServices = getFilteredServices();
   const favoriteServices = getFavoriteServicesComputed();
+
+  // Set category filter based on route
+  useEffect(() => {
+    if (isCategoryView && category) {
+      // Capitalize category for filter (Development, DevOps, etc.)
+      const formatted = category.split('-').map(word =>
+        word.charAt(0).toUpperCase() + word.slice(1)
+      ).join(' ');
+      setCategoryFilter(formatted);
+    } else {
+      setCategoryFilter(null);
+    }
+  }, [category, isCategoryView, setCategoryFilter]);
 
   // Service card handlers
   const handleToggleFavorite = async (service: Service) => {
@@ -170,56 +183,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Dashboard content based on route */}
-      {isAllServicesView ? (
-        // All Services View
-        <div>
-          {/* Category filters */}
-          <div className="mb-4 flex gap-2 flex-wrap">
-            <TkButton
-              variant={categoryFilter === null ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setCategoryFilter(null)}
-            >
-              All
-            </TkButton>
-            {categories.map((category) => (
-              <TkButton
-                key={category}
-                variant={categoryFilter === category ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setCategoryFilter(category)}
-              >
-                {category}
-              </TkButton>
-            ))}
-          </div>
-
-          {/* Service cards grid */}
-          {filteredServices.length === 0 ? (
-            <TkCard>
-              <TkCardContent className="py-8 text-center text-muted-foreground">
-                No services found {categoryFilter && `in category "${categoryFilter}"`}
-              </TkCardContent>
-            </TkCard>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {filteredServices.map((service) => (
-                <ServiceCard
-                  key={service.id}
-                  service={service}
-                  variant="full"
-                  compact={compactMode}
-                  onToggleFavorite={handleToggleFavorite}
-                  onShowDetails={handleShowDetails}
-                  onRestart={handleRestart}
-                  onToggleService={handleToggleService}
-                  onHealthCheck={handleHealthCheck}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      ) : (
+      {isFavoritesView ? (
         // Favorites View
         <>
           {favoriteServices.length === 0 ? (
@@ -247,6 +211,34 @@ export default function DashboardPage() {
             </div>
           )}
         </>
+      ) : (
+        // All Services or Category View
+        <div>
+          {/* Service cards grid */}
+          {filteredServices.length === 0 ? (
+            <TkCard>
+              <TkCardContent className="py-8 text-center text-muted-foreground">
+                No services found
+              </TkCardContent>
+            </TkCard>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {filteredServices.map((service) => (
+                <ServiceCard
+                  key={service.id}
+                  service={service}
+                  variant="full"
+                  compact={compactMode}
+                  onToggleFavorite={handleToggleFavorite}
+                  onShowDetails={handleShowDetails}
+                  onRestart={handleRestart}
+                  onToggleService={handleToggleService}
+                  onHealthCheck={handleHealthCheck}
+                />
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

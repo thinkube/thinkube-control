@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { TkAppLayout, type TkNavItem } from 'thinkube-style';
-import { LayoutDashboard, Boxes, Layers, Container, Puzzle, Shield, Sliders, Lock, Key, Star, Grid2X2 } from 'lucide-react';
+import { LayoutDashboard, Boxes, Layers, Container, Puzzle, Shield, Sliders, Lock, Key, Star, Grid2X2, Server, Code, BarChart3, Database, Cpu, FileText, Box } from 'lucide-react';
 import './globals.css';
 
 // Components
@@ -17,7 +17,22 @@ import LoginPage from './pages/LoginPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
 import DashboardPage from './pages/DashboardPage';
 
-const navigationItems: TkNavItem[] = [
+// Store
+import { useServicesStore } from './stores/useServicesStore';
+
+// Category icon mapping
+const categoryIconMap: Record<string, any> = {
+  infrastructure: Server,
+  development: Code,
+  monitoring: BarChart3,
+  security: Shield,
+  storage: Database,
+  ai: Cpu,
+  documentation: FileText,
+  application: Box,
+};
+
+const baseNavigationItems: TkNavItem[] = [
   {
     id: "dashboard",
     label: "Dashboard",
@@ -55,6 +70,35 @@ const navigationItems: TkNavItem[] = [
 function AppContent() {
   const location = useLocation();
   const navigate = useNavigate();
+  const getCategories = useServicesStore((state) => state.getCategories);
+  const [navigationItems, setNavigationItems] = useState<TkNavItem[]>(baseNavigationItems);
+
+  // Dynamically build navigation items with categories
+  useEffect(() => {
+    const categories = getCategories();
+    const dashboardItem = baseNavigationItems[0];
+
+    // Add category sub-items dynamically
+    const categoryItems = categories.map((category) => ({
+      id: `category-${category.toLowerCase()}`,
+      label: category,
+      lucideIcon: categoryIconMap[category.toLowerCase()] || Server,
+      href: `/dashboard/category/${category.toLowerCase()}`,
+    }));
+
+    const updatedDashboard: TkNavItem = {
+      ...dashboardItem,
+      children: [
+        ...(dashboardItem.children || []),
+        ...categoryItems,
+      ],
+    };
+
+    setNavigationItems([
+      updatedDashboard,
+      ...baseNavigationItems.slice(1),
+    ]);
+  }, [getCategories]);
 
   const handleNavClick = (id: string) => {
     const routes: Record<string, string> = {
@@ -67,6 +111,14 @@ function AppContent() {
       secrets: '/secrets',
       'api-tokens': '/tokens',
     };
+
+    // Handle category routes
+    if (id.startsWith('category-')) {
+      const category = id.replace('category-', '');
+      navigate(`/dashboard/category/${category}`);
+      return;
+    }
+
     const path = routes[id];
     if (path) navigate(path);
   };
@@ -76,6 +128,10 @@ function AppContent() {
     const path = location.pathname;
     if (path === '/' || path === '/dashboard/favorites') return 'favorites';
     if (path === '/dashboard/all') return 'all-services';
+    if (path.startsWith('/dashboard/category/')) {
+      const category = path.split('/').pop();
+      return `category-${category}`;
+    }
     if (path.startsWith('/templates')) return 'templates';
     if (path.startsWith('/harbor-images')) return 'harbor-images';
     if (path.startsWith('/optional-components')) return 'optional-components';
@@ -88,15 +144,23 @@ function AppContent() {
   // Determine page title from current path
   const getPageTitle = () => {
     const path = location.pathname;
-    if (path === '/' || path === '/dashboard/favorites') return 'Favorites';
-    if (path === '/dashboard/all') return 'All Services';
+    if (path === '/' || path === '/dashboard/favorites') return 'Dashboard - Favorites';
+    if (path === '/dashboard/all') return 'Dashboard - All Services';
+    if (path.startsWith('/dashboard/category/')) {
+      const category = path.split('/').pop();
+      // Capitalize first letter of each word
+      const formatted = category!.split('-').map(word =>
+        word.charAt(0).toUpperCase() + word.slice(1)
+      ).join(' ');
+      return `Dashboard - ${formatted}`;
+    }
     if (path.startsWith('/templates')) return 'Templates';
     if (path.startsWith('/harbor-images')) return 'Harbor Images';
     if (path.startsWith('/optional-components')) return 'Optional Components';
     if (path.startsWith('/jupyterhub-config')) return 'JupyterHub Config';
     if (path.startsWith('/secrets')) return 'Secrets';
     if (path.startsWith('/tokens')) return 'API Tokens';
-    return 'Favorites';
+    return 'Dashboard - Favorites';
   };
 
   return (
@@ -113,6 +177,7 @@ function AppContent() {
         <Route path="/" element={<DashboardPage />} />
         <Route path="/dashboard/favorites" element={<DashboardPage />} />
         <Route path="/dashboard/all" element={<DashboardPage />} />
+        <Route path="/dashboard/category/:category" element={<DashboardPage />} />
       </Routes>
     </TkAppLayout>
   );
