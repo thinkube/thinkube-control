@@ -70,10 +70,15 @@ const baseNavigationItems: TkNavItem[] = [
 function AppContent() {
   const location = useLocation();
   const navigate = useNavigate();
-  const getCategories = useServicesStore((state) => state.getCategories);
+  const { getCategories, fetchServices, services } = useServicesStore();
   const [navigationItems, setNavigationItems] = useState<TkNavItem[]>(baseNavigationItems);
 
-  // Dynamically build navigation items with categories
+  // Fetch services on mount
+  useEffect(() => {
+    fetchServices();
+  }, [fetchServices]);
+
+  // Dynamically build navigation items with categories when services change
   useEffect(() => {
     const categories = getCategories();
     const dashboardItem = baseNavigationItems[0];
@@ -98,7 +103,7 @@ function AppContent() {
       updatedDashboard,
       ...baseNavigationItems.slice(1),
     ]);
-  }, [getCategories]);
+  }, [services, getCategories]);
 
   const handleNavClick = (id: string) => {
     const routes: Record<string, string> = {
