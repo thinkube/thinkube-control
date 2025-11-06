@@ -85,7 +85,7 @@ function AppContent() {
       activeItem={getActiveItem()}
       onItemClick={handleNavClick}
       logoText="Thinkube Control"
-      topBarTitle="Thinkube Control"
+      topBarTitle=""
       topBarLeftContent={<ThemeToggle />}
       topBarContent={<UserMenu />}
     >
