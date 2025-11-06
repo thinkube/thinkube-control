@@ -254,7 +254,7 @@ export default function DashboardPage() {
         <>
           {favoriteServices.length === 0 ? (
             <TkCard>
-              <TkCardContent className="flex items-center gap-3 py-8">
+              <TkCardContent standalone className="flex items-center gap-3">
                 <Star className="h-6 w-6 text-muted-foreground" />
                 <p className="text-muted-foreground">No favorite services yet. Click the star icon on any service to add it to favorites.</p>
               </TkCardContent>
@@ -291,7 +291,7 @@ export default function DashboardPage() {
           {/* Service cards grid */}
           {filteredServices.length === 0 ? (
             <TkCard>
-              <TkCardContent className="py-8 text-center text-muted-foreground">
+              <TkCardContent standalone className="text-center text-muted-foreground">
                 No services found
               </TkCardContent>
             </TkCard>

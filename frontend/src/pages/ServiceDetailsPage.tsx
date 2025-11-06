@@ -539,7 +539,7 @@ export default function ServiceDetailsPage() {
                 <div key={endpoint.id}>
                   {index > 0 && <TkSeparator />}
                   <TkCard variant={endpoint.is_primary ? 'default' : 'outline'}>
-                    <TkCardContent>
+                    <TkCardContent standalone>
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
                           <span className="font-medium">{endpoint.name}</span>
@@ -639,7 +639,7 @@ export default function ServiceDetailsPage() {
                 <div key={pod.name}>
                   {index > 0 && <TkSeparator />}
                   <TkCard>
-                    <TkCardContent>
+                    <TkCardContent standalone>
                       {/* Pod Header */}
                       <div
                         className="cursor-pointer"
@@ -679,7 +679,7 @@ export default function ServiceDetailsPage() {
                           <h5 className="font-medium">Containers ({pod.containers.length})</h5>
                           {pod.containers.map((container) => (
                             <TkCard key={container.name} variant="outline">
-                              <TkCardContent>
+                              <TkCardContent standalone>
                                 <div className="flex items-center justify-between mb-2">
                                   <div>
                                     <span className="font-medium">{container.name}</span>
@@ -698,7 +698,7 @@ export default function ServiceDetailsPage() {
                                   </div>
                                   <TkButton
                                     size="sm"
-                                    variant="default"
+                                    variant="outline"
                                     onClick={() => handleViewContainerLogs(pod.name, container.name)}
                                   >
                                     View Logs
@@ -747,7 +747,7 @@ export default function ServiceDetailsPage() {
             <div className="space-y-2">
               {recentActions.map((action) => (
                 <TkCard key={action.id} variant="outline">
-                  <TkCardContent>
+                  <TkCardContent standalone>
                     <div className="flex items-center justify-between text-sm">
                       <div className="flex items-center gap-2">
                         <TkBadge variant="outline" className="text-xs">{action.action}</TkBadge>
