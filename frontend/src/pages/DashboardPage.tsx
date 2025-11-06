@@ -92,8 +92,7 @@ export default function DashboardPage() {
   };
 
   const handleShowDetails = (service: Service) => {
-    // Will navigate to service details route in Task 12
-    console.log('Show details for:', service.name);
+    navigate(`/services/${service.id}`);
   };
 
   const handleRestart = (service: Service) => {
