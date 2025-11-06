@@ -2,7 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { TkAppLayout, type TkNavItem } from 'thinkube-style';
-import { LayoutDashboard, Boxes, Layers, Container, Puzzle, Shield, Sliders, Lock, Key } from 'lucide-react';
+import { LayoutDashboard, Boxes, Layers, Container, Puzzle, Shield, Sliders, Lock, Key, Star, Grid2X2 } from 'lucide-react';
 import './globals.css';
 
 // Components
@@ -22,7 +22,11 @@ const navigationItems: TkNavItem[] = [
     id: "dashboard",
     label: "Dashboard",
     lucideIcon: LayoutDashboard,
-    href: "/",
+    isGroup: true,
+    children: [
+      { id: "favorites", label: "Favorites", lucideIcon: Star, href: "/dashboard/favorites" },
+      { id: "all-services", label: "All Services", lucideIcon: Grid2X2, href: "/dashboard/all" },
+    ],
   },
   {
     id: "deployment",
@@ -54,7 +58,8 @@ function AppContent() {
 
   const handleNavClick = (id: string) => {
     const routes: Record<string, string> = {
-      dashboard: '/',
+      favorites: '/dashboard/favorites',
+      'all-services': '/dashboard/all',
       templates: '/templates',
       'harbor-images': '/harbor-images',
       'optional-components': '/optional-components',
@@ -69,27 +74,29 @@ function AppContent() {
   // Determine active item from current path
   const getActiveItem = () => {
     const path = location.pathname;
-    if (path === '/') return 'dashboard';
+    if (path === '/' || path === '/dashboard/favorites') return 'favorites';
+    if (path === '/dashboard/all') return 'all-services';
     if (path.startsWith('/templates')) return 'templates';
     if (path.startsWith('/harbor-images')) return 'harbor-images';
     if (path.startsWith('/optional-components')) return 'optional-components';
     if (path.startsWith('/jupyterhub-config')) return 'jupyterhub-config';
     if (path.startsWith('/secrets')) return 'secrets';
     if (path.startsWith('/tokens')) return 'api-tokens';
-    return 'dashboard';
+    return 'favorites';
   };
 
   // Determine page title from current path
   const getPageTitle = () => {
     const path = location.pathname;
-    if (path === '/') return 'Dashboard';
+    if (path === '/' || path === '/dashboard/favorites') return 'Favorites';
+    if (path === '/dashboard/all') return 'All Services';
     if (path.startsWith('/templates')) return 'Templates';
     if (path.startsWith('/harbor-images')) return 'Harbor Images';
     if (path.startsWith('/optional-components')) return 'Optional Components';
     if (path.startsWith('/jupyterhub-config')) return 'JupyterHub Config';
     if (path.startsWith('/secrets')) return 'Secrets';
     if (path.startsWith('/tokens')) return 'API Tokens';
-    return 'Dashboard';
+    return 'Favorites';
   };
 
   return (
@@ -103,8 +110,9 @@ function AppContent() {
       topBarContent={<UserMenu />}
     >
       <Routes>
-        <Route path="/" element={<HomePage />} />
-        <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/" element={<DashboardPage />} />
+        <Route path="/dashboard/favorites" element={<DashboardPage />} />
+        <Route path="/dashboard/all" element={<DashboardPage />} />
       </Routes>
     </TkAppLayout>
   );

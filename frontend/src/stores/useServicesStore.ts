@@ -4,10 +4,17 @@ import api from '@/lib/axios';
 export interface Service {
   id: string;
   name: string;
+  display_name?: string;
+  description?: string;
   type: 'core' | 'optional' | 'user_app';
   category?: string;
   is_enabled: boolean;
   is_favorite: boolean;
+  can_be_disabled?: boolean;
+  url?: string;
+  icon?: string;
+  gpu_count?: number;
+  gpu_nodes?: string[];
   latest_health?: {
     status: string;
     checked_at: string;

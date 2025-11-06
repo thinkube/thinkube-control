@@ -1,7 +1,5 @@
 @import "tailwindcss";
 
-@source "../node_modules/thinkube-style/dist";
-
 /* Import Google Fonts via @fontsource for self-hosting */
 @import "@fontsource/poppins/300.css";
 @import "@fontsource/poppins/400.css";
@@ -12,6 +10,8 @@
 @import "@fontsource/noto-sans-mono/500.css";
 @import "@fontsource/noto-sans-mono/600.css";
 @import "@fontsource/noto-sans-mono/700.css";
+
+@source "../node_modules/thinkube-style/dist";
 
 @variant dark (.dark &);
 
