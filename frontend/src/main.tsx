@@ -79,13 +79,26 @@ function AppContent() {
     return 'dashboard';
   };
 
+  // Determine page title from current path
+  const getPageTitle = () => {
+    const path = location.pathname;
+    if (path === '/') return 'Dashboard';
+    if (path.startsWith('/templates')) return 'Templates';
+    if (path.startsWith('/harbor-images')) return 'Harbor Images';
+    if (path.startsWith('/optional-components')) return 'Optional Components';
+    if (path.startsWith('/jupyterhub-config')) return 'JupyterHub Config';
+    if (path.startsWith('/secrets')) return 'Secrets';
+    if (path.startsWith('/tokens')) return 'API Tokens';
+    return 'Dashboard';
+  };
+
   return (
     <TkAppLayout
       navigationItems={navigationItems}
       activeItem={getActiveItem()}
       onItemClick={handleNavClick}
       logoText="Thinkube Control"
-      topBarTitle=""
+      topBarTitle={getPageTitle()}
       topBarLeftContent={<ThemeToggle />}
       topBarContent={<UserMenu />}
     >
