@@ -5,6 +5,7 @@ import { AlertCircle, Loader2, RefreshCw, Star } from 'lucide-react';
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent } from 'thinkube-style/components/cards-data';
 import { TkButton } from 'thinkube-style/components/buttons-badges';
 import { TkSwitch } from 'thinkube-style/components/forms-inputs';
+import { TkControlledConfirmDialog } from 'thinkube-style/components/modals-overlays';
 import { ServiceCard } from '@/components/ServiceCard';
 import type { Service } from '@/stores/useServicesStore';
 import { toast } from 'sonner';
@@ -46,6 +47,7 @@ export default function DashboardPage() {
   } = useServicesStore();
   const [compactMode, setCompactMode] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [serviceToRestart, setServiceToRestart] = useState<Service | null>(null);
 
   // Drag-and-drop sensors
   const sensors = useSensors(
@@ -94,13 +96,21 @@ export default function DashboardPage() {
     console.log('Show details for:', service.name);
   };
 
-  const handleRestart = async (service: Service) => {
+  const handleRestart = (service: Service) => {
+    setServiceToRestart(service);
+  };
+
+  const confirmRestart = async () => {
+    if (!serviceToRestart) return;
+
     try {
-      await restartService(service.id);
-      toast.success(`${service.name} restarted successfully`);
+      await restartService(serviceToRestart.id);
+      toast.success(`${serviceToRestart.name} restarted successfully`);
     } catch (error) {
-      toast.error(`Failed to restart ${service.name}`);
+      toast.error(`Failed to restart ${serviceToRestart.name}`);
       console.error('Failed to restart service:', error);
+    } finally {
+      setServiceToRestart(null);
     }
   };
 
@@ -304,6 +314,17 @@ export default function DashboardPage() {
           )}
         </div>
       )}
+
+      {/* Restart Confirmation Dialog */}
+      <TkControlledConfirmDialog
+        open={serviceToRestart !== null}
+        onOpenChange={(open) => !open && setServiceToRestart(null)}
+        title="Restart Service"
+        description={serviceToRestart ? `Are you sure you want to restart ${serviceToRestart.name}? This will temporarily interrupt the service.` : ''}
+        variant="destructive"
+        confirmText="Restart"
+        onConfirm={confirmRestart}
+      />
     </div>
   );
 }

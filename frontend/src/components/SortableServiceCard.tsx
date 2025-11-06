@@ -1,5 +1,6 @@
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { GripVertical } from 'lucide-react';
 import { ServiceCard } from './ServiceCard';
 import type { Service } from '@/stores/useServicesStore';
 
@@ -24,14 +25,26 @@ export function SortableServiceCard(props: SortableServiceCardProps) {
     isDragging,
   } = useSortable({ id: props.service.id });
 
-  const style = {
+  const style = { /* @allowed-inline - required by @dnd-kit/sortable for drag-and-drop positioning */
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.5 : 1,
   };
 
   return (
-    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
+    <div
+      ref={setNodeRef}
+      style={style} /* @allowed-inline - @dnd-kit requires inline styles for transforms */
+      className={`relative ${isDragging ? 'opacity-50' : ''}`}
+    >
+      {/* Drag Handle */}
+      <div
+        {...attributes}
+        {...listeners}
+        className="absolute top-2 left-2 z-10 cursor-grab active:cursor-grabbing p-1 rounded hover:bg-accent/20 transition-colors" /* @allowed-inline - drag handle styling required for UX */
+        style={{ touchAction: 'none' }} /* @allowed-inline - required by @dnd-kit to prevent scrolling during drag */
+      >
+        <GripVertical className="h-4 w-4 text-muted-foreground" />
+      </div>
       <ServiceCard {...props} />
     </div>
   );
