@@ -19,6 +19,7 @@ export default function DashboardPage() {
     syncServices,
     getFavoriteServicesComputed,
     getFilteredServices,
+    getCategories,
     setCategoryFilter,
     toggleFavorite,
     toggleService,
@@ -40,15 +41,16 @@ export default function DashboardPage() {
   // Set category filter based on route
   useEffect(() => {
     if (isCategoryView && category) {
-      // Capitalize category for filter (Development, DevOps, etc.)
-      const formatted = category.split('-').map(word =>
-        word.charAt(0).toUpperCase() + word.slice(1)
-      ).join(' ');
-      setCategoryFilter(formatted);
+      // Find the actual category value from backend (case-sensitive match)
+      const categories = getCategories();
+      const actualCategory = categories.find(
+        cat => cat.toLowerCase() === category.toLowerCase()
+      );
+      setCategoryFilter(actualCategory || null);
     } else {
       setCategoryFilter(null);
     }
-  }, [category, isCategoryView, setCategoryFilter]);
+  }, [category, isCategoryView, setCategoryFilter, getCategories]);
 
   // Service card handlers
   const handleToggleFavorite = async (service: Service) => {
