@@ -102,6 +102,7 @@ export default function ServiceDetailsPage() {
     triggerHealthCheck,
     toggleFavorite,
     getContainerLogs,
+    describePod,
   } = useServicesStore();
 
   const [loading, setLoading] = useState(true);
@@ -116,6 +117,9 @@ export default function ServiceDetailsPage() {
   const [containerLogs, setContainerLogs] = useState<string>('');
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [logLines, setLogLines] = useState(100);
+  const [selectedPod, setSelectedPod] = useState<string | null>(null);
+  const [podDescription, setPodDescription] = useState<string>('');
+  const [loadingDescription, setLoadingDescription] = useState(false);
 
   // Get basic service info from store
   const service = services.find(s => s.id === id);
@@ -224,6 +228,24 @@ export default function ServiceDetailsPage() {
       setContainerLogs('Error: Failed to get container logs');
     } finally {
       setLoadingLogs(false);
+    }
+  };
+
+  const handleDescribePod = async (podName: string) => {
+    if (!id) return;
+
+    setSelectedPod(podName);
+    setLoadingDescription(true);
+
+    try {
+      const response = await describePod(id, podName);
+      const description = response.formatted || JSON.stringify(response, null, 2);
+      setPodDescription(description);
+    } catch (error) {
+      toast.error(`Failed to load description for ${podName}`);
+      setPodDescription('Error: Failed to get pod description');
+    } finally {
+      setLoadingDescription(false);
     }
   };
 
@@ -636,6 +658,16 @@ export default function ServiceDetailsPage() {
                           <div className="flex items-center gap-4 text-sm text-muted-foreground">
                             <span>Node: {pod.node}</span>
                             <span>Restarts: {pod.restart_count}</span>
+                            <TkButton
+                              size="sm"
+                              variant="outline"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDescribePod(pod.name);
+                              }}
+                            >
+                              Describe Pod
+                            </TkButton>
                           </div>
                         </div>
                       </div>
@@ -660,7 +692,7 @@ export default function ServiceDetailsPage() {
                                         }
                                         className="ml-2 text-xs"
                                       >
-                                        {container.state}
+                                        {container.state.charAt(0).toUpperCase() + container.state.slice(1)}
                                       </TkBadge>
                                     )}
                                   </div>
@@ -730,6 +762,37 @@ export default function ServiceDetailsPage() {
                 </TkCard>
               ))}
             </div>
+          </TkCardContent>
+        </TkCard>
+      )}
+
+      {/* Pod Description Viewer */}
+      {selectedPod && (
+        <TkCard>
+          <TkCardHeader>
+            <div className="flex items-center justify-between">
+              <TkCardTitle>
+                Pod Description: {selectedPod}
+              </TkCardTitle>
+              <TkButton
+                size="sm"
+                variant="ghost"
+                onClick={() => setSelectedPod(null)}
+              >
+                Close
+              </TkButton>
+            </div>
+          </TkCardHeader>
+          <TkCardContent>
+            {loadingDescription ? (
+              <div className="flex items-center justify-center h-64">
+                <Loader2 className="animate-spin h-6 w-6" />
+              </div>
+            ) : (
+              <TkCodeBlock>
+                {podDescription || 'No description available'}
+              </TkCodeBlock>
+            )}
           </TkCardContent>
         </TkCard>
       )}
