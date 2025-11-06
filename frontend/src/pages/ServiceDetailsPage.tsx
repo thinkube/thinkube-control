@@ -24,6 +24,7 @@ import { TkSwitch } from 'thinkube-style/components/forms-inputs';
 import { TkTooltip, TkControlledConfirmDialog } from 'thinkube-style/components/modals-overlays';
 import { TkBrandIcon } from 'thinkube-style/components/brand-icons';
 import { TkSeparator, TkPageWrapper } from 'thinkube-style/components/utilities';
+import { TkCodeBlock } from 'thinkube-style/components/feedback';
 import { toast } from 'sonner';
 
 // Type interfaces
@@ -100,6 +101,7 @@ export default function ServiceDetailsPage() {
     restartService,
     triggerHealthCheck,
     toggleFavorite,
+    getContainerLogs,
   } = useServicesStore();
 
   const [loading, setLoading] = useState(true);
@@ -110,6 +112,10 @@ export default function ServiceDetailsPage() {
   const [checkingHealth, setCheckingHealth] = useState(false);
   const [showRestartConfirm, setShowRestartConfirm] = useState(false);
   const [expandedPods, setExpandedPods] = useState<Record<string, boolean>>({});
+  const [selectedContainer, setSelectedContainer] = useState<{ podName: string; containerName: string } | null>(null);
+  const [containerLogs, setContainerLogs] = useState<string>('');
+  const [loadingLogs, setLoadingLogs] = useState(false);
+  const [logLines, setLogLines] = useState(100);
 
   // Get basic service info from store
   const service = services.find(s => s.id === id);
@@ -203,8 +209,22 @@ export default function ServiceDetailsPage() {
     setExpandedPods(prev => ({ ...prev, [podName]: !prev[podName] }));
   };
 
-  const handleViewPodDetails = (podName: string) => {
-    navigate(`/services/${id}/pods/${podName}`);
+  const handleViewContainerLogs = async (podName: string, containerName: string) => {
+    if (!id) return;
+
+    setSelectedContainer({ podName, containerName });
+    setLoadingLogs(true);
+
+    try {
+      const response = await getContainerLogs(id, podName, containerName, logLines);
+      const logData = typeof response === 'string' ? response : response.logs;
+      setContainerLogs(logData);
+    } catch (error) {
+      toast.error(`Failed to load logs for ${containerName}`);
+      setContainerLogs('Error: Failed to get container logs');
+    } finally {
+      setLoadingLogs(false);
+    }
   };
 
   const formatServiceType = (type: string) => {
@@ -616,16 +636,6 @@ export default function ServiceDetailsPage() {
                           <div className="flex items-center gap-4 text-sm text-muted-foreground">
                             <span>Node: {pod.node}</span>
                             <span>Restarts: {pod.restart_count}</span>
-                            <TkButton
-                              size="sm"
-                              variant="outline"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleViewPodDetails(pod.name);
-                              }}
-                            >
-                              View Details
-                            </TkButton>
                           </div>
                         </div>
                       </div>
@@ -657,7 +667,7 @@ export default function ServiceDetailsPage() {
                                   <TkButton
                                     size="sm"
                                     variant="default"
-                                    onClick={() => handleViewPodDetails(pod.name)}
+                                    onClick={() => handleViewContainerLogs(pod.name, container.name)}
                                   >
                                     View Logs
                                   </TkButton>
@@ -720,6 +730,40 @@ export default function ServiceDetailsPage() {
                 </TkCard>
               ))}
             </div>
+          </TkCardContent>
+        </TkCard>
+      )}
+
+      {/* Container Logs Viewer */}
+      {selectedContainer && (
+        <TkCard>
+          <TkCardHeader>
+            <div className="flex items-center justify-between">
+              <TkCardTitle>
+                Container Logs: {selectedContainer.containerName}
+              </TkCardTitle>
+              <TkButton
+                size="sm"
+                variant="ghost"
+                onClick={() => setSelectedContainer(null)}
+              >
+                Close
+              </TkButton>
+            </div>
+            <p className="text-sm text-muted-foreground mt-1">
+              Pod: {selectedContainer.podName}
+            </p>
+          </TkCardHeader>
+          <TkCardContent>
+            {loadingLogs ? (
+              <div className="flex items-center justify-center h-64">
+                <Loader2 className="animate-spin h-6 w-6" />
+              </div>
+            ) : (
+              <TkCodeBlock>
+                {containerLogs || 'No logs available'}
+              </TkCodeBlock>
+            )}
           </TkCardContent>
         </TkCard>
       )}
