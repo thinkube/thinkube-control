@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useLocation, useParams, useNavigate } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router-dom';
 import { useServicesStore } from '@/stores/useServicesStore';
 import { AlertCircle, Loader2, RefreshCw, Star } from 'lucide-react';
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent } from 'thinkube-style/components/cards-data';
@@ -28,7 +28,6 @@ import { SortableServiceCard } from '@/components/SortableServiceCard';
 
 export default function DashboardPage() {
   const location = useLocation();
-  const navigate = useNavigate();
   const { category } = useParams<{ category?: string }>();
   const {
     services,
@@ -93,7 +92,8 @@ export default function DashboardPage() {
   };
 
   const handleShowDetails = (service: Service) => {
-    navigate(`/services/${service.id}`);
+    // Will navigate to service details route in Task 12
+    console.log('Show details for:', service.name);
   };
 
   const handleRestart = (service: Service) => {

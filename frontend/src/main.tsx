@@ -17,8 +17,6 @@ import HomePage from './pages/HomePage';
 import LoginPage from './pages/LoginPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
 import DashboardPage from './pages/DashboardPage';
-import ServiceDetailsPage from './pages/ServiceDetailsPage';
-import PodDetailsPage from './pages/PodDetailsPage';
 
 // Store
 import { useServicesStore } from './stores/useServicesStore';
@@ -186,8 +184,6 @@ function AppContent() {
         <Route path="/dashboard/favorites" element={<DashboardPage />} />
         <Route path="/dashboard/all" element={<DashboardPage />} />
         <Route path="/dashboard/category/:category" element={<DashboardPage />} />
-        <Route path="/services/:id" element={<ServiceDetailsPage />} />
-        <Route path="/services/:id/pods/:podName" element={<PodDetailsPage />} />
       </Routes>
     </TkAppLayout>
   );
