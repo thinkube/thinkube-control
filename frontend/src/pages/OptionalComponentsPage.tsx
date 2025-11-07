@@ -65,16 +65,22 @@ export default function OptionalComponentsPage() {
   const handleInstall = async (component: OptionalComponent) => {
     console.log('🔍 DEBUG: handleInstall called for:', component.name, component)
     try {
+      console.log('🔍 DEBUG: Setting installing state')
       setInstallingComponent(component)
       setInstallingTitle(`Installing ${component.display_name}`)
       setInstallingSuccessMessage(`${component.display_name} has been installed successfully!`)
 
+      console.log('🔍 DEBUG: Calling store.installComponent')
       const response = await store.installComponent(component.name, {})
+      console.log('🔍 DEBUG: Got response from installComponent:', response)
 
       const wsPath = `/api/v1/ws/optional/${component.name}/install/${response.deployment_id}`
+      console.log('🔍 DEBUG: WebSocket path:', wsPath)
+      console.log('🔍 DEBUG: playbookExecutorRef.current:', playbookExecutorRef.current)
       playbookExecutorRef.current?.startExecution(wsPath)
+      console.log('🔍 DEBUG: Called startExecution')
     } catch (err: any) {
-      console.error('Failed to install component:', err)
+      console.error('🔍 DEBUG: Error in handleInstall:', err)
       alert(`Failed to install ${component.display_name}: ${err.message}`)
     }
   }
