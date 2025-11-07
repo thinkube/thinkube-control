@@ -181,7 +181,7 @@ export function TemplateParameterForm({
     try {
       const { data } = await api.post('/services/check-name', {
         name: name,
-        type: 'user', // User applications
+        type: 'user_app', // User applications
       })
 
       if (data.available) {
