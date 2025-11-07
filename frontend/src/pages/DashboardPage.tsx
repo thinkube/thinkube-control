@@ -126,8 +126,20 @@ export default function DashboardPage() {
 
   const handleHealthCheck = async (service: Service) => {
     try {
-      await triggerHealthCheck(service.id);
-      toast.success(`Health check triggered for ${service.name}`);
+      const result = await triggerHealthCheck(service.id);
+
+      // Show result based on health status
+      if (result.status === 'disabled') {
+        toast.info(`${service.name} is currently disabled`);
+      } else if (result.status === 'healthy') {
+        const responseTime = result.response_time ? ` (${result.response_time}ms)` : '';
+        toast.success(`${service.name} is healthy${responseTime}`);
+      } else if (result.status === 'unhealthy') {
+        const errorMsg = result.error_message ? `: ${result.error_message}` : '';
+        toast.error(`${service.name} is unhealthy${errorMsg}`);
+      } else {
+        toast.warning(`${service.name} health status is unknown`);
+      }
     } catch (error) {
       toast.error(`Failed to check health for ${service.name}`);
       console.error('Failed to check health:', error);

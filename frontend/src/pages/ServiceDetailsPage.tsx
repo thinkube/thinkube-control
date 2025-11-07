@@ -187,11 +187,24 @@ export default function ServiceDetailsPage() {
     if (!id) return;
     setCheckingHealth(true);
     try {
-      await triggerHealthCheck(id);
-      toast.success('Health check triggered');
+      const result = await triggerHealthCheck(id);
+
       // Reload details
       const details = await fetchServiceDetails(id);
       setServiceDetails(details);
+
+      // Show result based on health status
+      if (result.status === 'disabled') {
+        toast.info('Service is currently disabled');
+      } else if (result.status === 'healthy') {
+        const responseTime = result.response_time ? ` (${result.response_time}ms)` : '';
+        toast.success(`Service is healthy${responseTime}`);
+      } else if (result.status === 'unhealthy') {
+        const errorMsg = result.error_message ? `: ${result.error_message}` : '';
+        toast.error(`Service is unhealthy${errorMsg}`);
+      } else {
+        toast.warning('Health status is unknown');
+      }
     } catch (error) {
       toast.error('Failed to trigger health check');
     } finally {
