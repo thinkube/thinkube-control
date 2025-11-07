@@ -6,7 +6,7 @@ import { TkBadge } from 'thinkube-style/components/buttons-badges'
 import { TkCard, TkCardContent } from 'thinkube-style/components/cards-data'
 import { TkInput, TkSelect, TkSelectTrigger, TkSelectContent, TkSelectItem, TkSelectValue, TkCheckbox, TkLabel } from 'thinkube-style/components/forms-inputs'
 import { TkTable, TkTableHeader, TkTableBody, TkTableRow, TkTableHead, TkTableCell } from 'thinkube-style/components/tables'
-import { TkTabs } from 'thinkube-style/components/navigation'
+import { TkTabsRoot, TkTabsList, TkTabsTrigger, TkTabsContent } from 'thinkube-style/components/navigation'
 import { TkStatCard } from 'thinkube-style/components/cards-data'
 import { TkLoader } from 'thinkube-style/components/feedback'
 import { TkErrorAlert } from 'thinkube-style/components/feedback'
@@ -425,13 +425,13 @@ export function HarborImages() {
         </TkCardContent>
       </TkCard>
 
-      <TkTabs value={activeTab} onValueChange={(value) => setActiveTab(value as 'mirrored' | 'custom')}>
-        <TkTabs.List className="mb-6">
-          <TkTabs.Trigger value="mirrored">Mirrored Images</TkTabs.Trigger>
-          <TkTabs.Trigger value="custom">Custom Images</TkTabs.Trigger>
-        </TkTabs.List>
+      <TkTabsRoot value={activeTab} onValueChange={(value) => setActiveTab(value as 'mirrored' | 'custom')}>
+        <TkTabsList className="mb-6">
+          <TkTabsTrigger value="mirrored">Mirrored Images</TkTabsTrigger>
+          <TkTabsTrigger value="custom">Custom Images</TkTabsTrigger>
+        </TkTabsList>
 
-        <TkTabs.Content value="mirrored">
+        <TkTabsContent value="mirrored">
           <div className="grid md:grid-cols-4 gap-4 mb-6" /* @allowed-inline */>
             <TkStatCard
               title="Total Images"
@@ -688,9 +688,9 @@ export function HarborImages() {
               </TkCardContent>
             </TkCard>
           )}
-        </TkTabs.Content>
+        </TkTabsContent>
 
-        <TkTabs.Content value="custom">
+        <TkTabsContent value="custom">
           <TkCard className="mb-4">
             <TkCardContent>
               <div className="flex gap-2 flex-wrap" /* @allowed-inline */>
@@ -970,8 +970,8 @@ export function HarborImages() {
               </TkCardContent>
             </TkCard>
           )}
-        </TkTabs.Content>
-      </TkTabs>
+        </TkTabsContent>
+      </TkTabsRoot>
 
       <AddImageModal
         open={showAddImageModal}
