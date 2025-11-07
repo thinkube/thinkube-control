@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react'
 import { Loader2, Copy, Check } from 'lucide-react'
 import {
   TkDialogRoot,
@@ -56,7 +56,7 @@ export interface PlaybookExecutorHandle {
   cancelExecution: () => void
 }
 
-export function PlaybookExecutor({
+export const PlaybookExecutor = forwardRef<PlaybookExecutorHandle, PlaybookExecutorProps>(function PlaybookExecutor({
   title,
   websocketPath,
   deploymentId,
@@ -64,7 +64,7 @@ export function PlaybookExecutor({
   onRetry,
   onComplete,
   onContinue,
-}: PlaybookExecutorProps) {
+}, ref) {
   // State
   const [isExecuting, setIsExecuting] = useState(false)
   const [showResult, setShowResult] = useState(false)
@@ -450,8 +450,11 @@ Timestamp: ${new Date().toISOString()}
   }
 
   // Expose methods via ref (for parent components)
-  // Note: In React, this would typically be done with useImperativeHandle and forwardRef
-  // For now, we'll keep the state management internal
+  useImperativeHandle(ref, () => ({
+    startExecution,
+    completeExecution,
+    cancelExecution,
+  }), [startExecution, completeExecution, cancelExecution])
 
   return (
     <>
@@ -668,4 +671,4 @@ Timestamp: ${new Date().toISOString()}
       </TkDialogRoot>
     </>
   )
-}
+})
