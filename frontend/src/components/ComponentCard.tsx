@@ -20,10 +20,11 @@ interface Component {
   display_name: string
   description: string
   icon: string
-  installed: boolean
+  is_installed?: boolean
+  installed?: boolean  // Legacy support
   requirements?: string[]
-  requirements_met: boolean
-  missing_requirements: string[]
+  requirements_met?: boolean
+  missing_requirements?: string[]
 }
 
 interface ComponentCardProps {
@@ -39,8 +40,13 @@ export function ComponentCard({
   onInstall,
   onUninstall,
 }: ComponentCardProps) {
+  // Support both installed and is_installed field names
+  const isInstalled = component.is_installed ?? component.installed ?? false
+  const requirementsMet = component.requirements_met ?? true  // Default to true if not specified
+  const missingRequirements = component.missing_requirements ?? []
+
   const isMissingRequirement = (req: string) => {
-    return component.missing_requirements?.includes(req)
+    return missingRequirements?.includes(req)
   }
 
   return (
@@ -58,7 +64,7 @@ export function ComponentCard({
             <h3 className="text-lg font-semibold mb-2">{component.display_name}</h3>
             <div className="flex items-center gap-2">
               {/* Installation status badge */}
-              {component.installed ? (
+              {isInstalled ? (
                 <TkBadge variant="success" className="gap-1">
                   <Check className="w-3 h-3" />
                   Installed
@@ -100,12 +106,12 @@ export function ComponentCard({
         )}
 
         {/* Missing requirements alert */}
-        {!component.requirements_met &&
-          component.missing_requirements.length > 0 && (
+        {!requirementsMet &&
+          missingRequirements.length > 0 && (
             <div className="mt-3">
               <TkWarningAlert>
                 <span className="text-xs">
-                  Missing: {component.missing_requirements.join(", ")}
+                  Missing: {missingRequirements.join(", ")}
                 </span>
               </TkWarningAlert>
             </div>
@@ -113,10 +119,10 @@ export function ComponentCard({
 
         {/* Actions */}
         <div className="flex justify-end mt-auto pt-4">
-          {!component.installed ? (
+          {!isInstalled ? (
             <TkButton
               onClick={() => onInstall(component)}
-              disabled={!component.requirements_met && !allowForceInstall}
+              disabled={!requirementsMet && !allowForceInstall}
               size="sm"
               className="gap-2"
             >
