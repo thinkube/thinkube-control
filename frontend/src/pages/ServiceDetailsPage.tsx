@@ -25,7 +25,7 @@ import { TkTooltip, TkControlledConfirmDialog } from 'thinkube-style/components/
 import { TkBrandIcon } from 'thinkube-style/components/brand-icons';
 import { TkSeparator, TkPageWrapper } from 'thinkube-style/components/utilities';
 import { TkCodeBlock } from 'thinkube-style/components/feedback';
-import { TkTabs, TkTabsList, TkTabsTrigger } from 'thinkube-style/components/navigation';
+import { TkTabsRoot, TkTabsList, TkTabsTrigger } from 'thinkube-style/components/navigation';
 import { toast } from 'sonner';
 import { HealthHistoryChart } from '@/components/HealthHistoryChart';
 
@@ -572,13 +572,13 @@ export default function ServiceDetailsPage() {
           <TkCardHeader>
             <div className="flex items-center justify-between">
               <TkCardTitle>Health History</TkCardTitle>
-              <TkTabs value={healthTimeRange} onValueChange={(value) => setHealthTimeRange(value as 'hour' | 'day' | 'week')}>
+              <TkTabsRoot value={healthTimeRange} onValueChange={(value) => setHealthTimeRange(value as 'hour' | 'day' | 'week')}>
                 <TkTabsList>
                   <TkTabsTrigger value="hour">Last Hour</TkTabsTrigger>
                   <TkTabsTrigger value="day">Last Day</TkTabsTrigger>
                   <TkTabsTrigger value="week">Last Week</TkTabsTrigger>
                 </TkTabsList>
-              </TkTabs>
+              </TkTabsRoot>
             </div>
           </TkCardHeader>
           <TkCardContent>
