@@ -26,6 +26,7 @@ import { TkBrandIcon } from 'thinkube-style/components/brand-icons';
 import { TkSeparator, TkPageWrapper } from 'thinkube-style/components/utilities';
 import { TkCodeBlock } from 'thinkube-style/components/feedback';
 import { toast } from 'sonner';
+import { HealthHistoryChart } from '@/components/HealthHistoryChart';
 
 // Type interfaces
 interface HealthData {
@@ -539,6 +540,18 @@ export default function ServiceDetailsPage() {
           </TkCardContent>
         </TkCard>
       </div>
+
+      {/* Health History Chart */}
+      {healthData && healthData.health_history && healthData.health_history.length > 0 && (
+        <TkCard>
+          <TkCardHeader>
+            <TkCardTitle>Health History</TkCardTitle>
+          </TkCardHeader>
+          <TkCardContent>
+            <HealthHistoryChart data={healthData.health_history} />
+          </TkCardContent>
+        </TkCard>
+      )}
 
       {/* Endpoints */}
       {endpoints.length > 0 && (
