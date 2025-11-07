@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { Loader2, AlertCircle } from 'lucide-react'
-import { Alert, AlertDescription } from 'thinkube-style/components/ui/alert'
-import ComponentCard from '../components/ComponentCard'
-import PlaybookExecutor, { PlaybookExecutorHandle } from '../components/PlaybookExecutor'
+import { Loader2 } from 'lucide-react'
+import { TkErrorAlert } from 'thinkube-style/components/feedback'
+import { ComponentCard } from '../components/ComponentCard'
+import { PlaybookExecutor, PlaybookExecutorHandle } from '../components/PlaybookExecutor'
 import { useComponentsStore } from '../stores/useComponentsStore'
 
 interface OptionalComponent {
@@ -134,10 +134,7 @@ export default function OptionalComponentsPage() {
 
       {/* Error State */}
       {!loading && error && (
-        <Alert variant="destructive">
-          <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
+        <TkErrorAlert>{error}</TkErrorAlert>
       )}
 
       {/* Component Categories */}

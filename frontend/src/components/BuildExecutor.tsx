@@ -9,7 +9,7 @@ import { TkButton } from 'thinkube-style/components/buttons-badges'
 import { TkSwitch } from 'thinkube-style/components/forms-inputs'
 import { useCopyToClipboard } from 'thinkube-style/lib/use-copy-to-clipboard'
 import { Copy, Check, CheckCircle2, XCircle } from 'lucide-react'
-import { Label } from 'thinkube-style/components/ui/label'
+import { TkLabel } from 'thinkube-style/components/forms-inputs'
 
 interface BuildExecutorProps {
   title?: string
@@ -247,9 +247,9 @@ const BuildExecutor = forwardRef<BuildExecutorRef, BuildExecutorProps>(
                     )}
                   </TkButton>
                   <div className="flex items-center gap-2">
-                    <Label htmlFor="auto-scroll" className="text-xs cursor-pointer">
+                    <TkLabel htmlFor="auto-scroll" className="text-xs cursor-pointer">
                       Auto-scroll
-                    </Label>
+                    </TkLabel>
                     <TkSwitch
                       id="auto-scroll"
                       checked={autoScroll}
@@ -261,7 +261,7 @@ const BuildExecutor = forwardRef<BuildExecutorRef, BuildExecutorProps>(
 
               <div
                 ref={logContainerRef}
-                className="h-96 overflow-y-auto p-4 bg-[#1a1a1a] rounded-lg font-mono text-xs text-[#e0e0e0] whitespace-pre-wrap break-words" {/* @allowed-inline */}
+                className="h-96 overflow-y-auto p-4 bg-[#1a1a1a] rounded-lg font-mono text-xs text-[#e0e0e0] whitespace-pre-wrap break-words" /* @allowed-inline */
               >
                 {logOutput.length === 0 ? (
                   <div className="text-muted-foreground/50">

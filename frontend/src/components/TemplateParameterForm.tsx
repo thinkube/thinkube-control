@@ -12,7 +12,7 @@ import { TkButton } from 'thinkube-style/components/buttons-badges'
 import { TkWarningAlert } from 'thinkube-style/components/feedback'
 import { TkLoader } from 'thinkube-style/components/feedback'
 import { TkSeparator } from 'thinkube-style/components/utilities'
-import { api } from '@/services/api'
+import api from '../lib/axios'
 import { AlertTriangle } from 'lucide-react'
 
 interface TemplateParameter {

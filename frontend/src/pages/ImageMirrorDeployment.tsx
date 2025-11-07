@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Loader2, CheckCircle2, XCircle } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { TkButton } from 'thinkube-style/components/buttons-badges'
 import { TkBadge } from 'thinkube-style/components/buttons-badges'
 import {
@@ -13,7 +13,7 @@ import {
   TkCardFooter,
 } from 'thinkube-style/components/cards-data'
 import { TkPageWrapper } from 'thinkube-style/components/utilities'
-import { Alert, AlertDescription } from 'thinkube-style/components/ui/alert'
+import { TkSuccessAlert, TkErrorAlert } from 'thinkube-style/components/feedback'
 import { PlaybookExecutor } from '../components/PlaybookExecutor'
 import api from '../lib/axios'
 
@@ -158,10 +158,7 @@ export function ImageMirrorDeployment() {
   if (error) {
     return (
       <TkPageWrapper title="Image Mirror Deployment">
-        <Alert variant="destructive">
-          <XCircle className="h-5 w-5" />
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
+        <TkErrorAlert>{error}</TkErrorAlert>
       </TkPageWrapper>
     )
   }
@@ -204,15 +201,9 @@ export function ImageMirrorDeployment() {
           {deploymentComplete && (
             <>
               {deploymentSuccess ? (
-                <Alert className="bg-success/10 text-success border-success/20"> {/* @allowed-inline */}
-                  <CheckCircle2 className="h-5 w-5" />
-                  <AlertDescription>{deploymentMessage}</AlertDescription>
-                </Alert>
+                <TkSuccessAlert>{deploymentMessage}</TkSuccessAlert>
               ) : (
-                <Alert variant="destructive">
-                  <XCircle className="h-5 w-5" />
-                  <AlertDescription>{deploymentMessage}</AlertDescription>
-                </Alert>
+                <TkErrorAlert>{deploymentMessage}</TkErrorAlert>
               )}
             </>
           )}

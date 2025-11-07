@@ -1,15 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Loader2, AlertCircle, Info, XCircle } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { TkButton } from 'thinkube-style/components/buttons-badges'
 import { TkBadge } from 'thinkube-style/components/buttons-badges'
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent, TkCardFooter } from 'thinkube-style/components/cards-data'
 import { TkInput } from 'thinkube-style/components/forms-inputs'
-import { Alert, AlertDescription, AlertTitle } from 'thinkube-style/components/ui'
+import { TkInfoAlert, TkErrorAlert } from 'thinkube-style/components/feedback'
 import { TkPageWrapper } from 'thinkube-style/components/utilities'
-import TemplateParameterForm from '@/components/TemplateParameterForm'
-import PlaybookExecutor from '@/components/PlaybookExecutor'
-import { deployTemplateAsync, api } from '@/services/api'
+import { TemplateParameterForm } from '../components/TemplateParameterForm'
+import { PlaybookExecutor } from '../components/PlaybookExecutor'
+import api from '../lib/axios'
 
 interface TemplateInfo {
   name: string
@@ -201,7 +201,7 @@ export default function Templates() {
 
     try {
       // Deploy template asynchronously
-      const response = await deployTemplateAsync({
+      const response = await api.post('/templates/deploy', {
         template_url: templateUrl,
         template_name: deployConfig.project_name,
         variables: {
@@ -224,7 +224,7 @@ export default function Templates() {
         if (confirmed) {
           // Retry with overwrite flag
           setIsDeploying(true)
-          const retryResponse = await deployTemplateAsync({
+          const retryResponse = await api.post('/templates/deploy', {
             template_url: templateUrl,
             template_name: deployConfig.project_name,
             variables: {
@@ -285,21 +285,17 @@ export default function Templates() {
           <TkCardContent className="space-y-6">
             {/* Template Info */}
             {templateInfo && (
-              <Alert>
-                <Info className="h-4 w-4" />
-                <AlertTitle className="font-bold">{templateInfo.name}</AlertTitle>
-                <AlertDescription>
-                  <p>{templateInfo.description}</p>
-                  <a
-                    href={templateUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary text-sm hover:underline"
-                  >
-                    {templateUrl}
-                  </a>
-                </AlertDescription>
-              </Alert>
+              <TkInfoAlert title={templateInfo.name}>
+                <p>{templateInfo.description}</p>
+                <a
+                  href={templateUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary text-sm hover:underline"
+                >
+                  {templateUrl}
+                </a>
+              </TkInfoAlert>
             )}
 
             {/* Loading template metadata */}
@@ -323,14 +319,10 @@ export default function Templates() {
 
             {/* No template.yaml found */}
             {!loadingMetadata && !templateMetadata && (
-              <Alert variant="destructive">
-                <XCircle className="h-4 w-4" />
-                <AlertTitle className="font-bold">Invalid Template</AlertTitle>
-                <AlertDescription>
-                  <p>This template does not have a template.yaml file.</p>
-                  <p>All Thinkube templates must include a template.yaml manifest file.</p>
-                </AlertDescription>
-              </Alert>
+              <TkErrorAlert title="Invalid Template">
+                <p>This template does not have a template.yaml file.</p>
+                <p>All Thinkube templates must include a template.yaml manifest file.</p>
+              </TkErrorAlert>
             )}
           </TkCardContent>
 

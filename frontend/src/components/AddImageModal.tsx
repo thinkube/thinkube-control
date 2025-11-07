@@ -14,7 +14,7 @@ import { TkCheckbox } from 'thinkube-style/components/forms-inputs'
 import { TkLabel } from 'thinkube-style/components/forms-inputs'
 import { Loader2 } from 'lucide-react'
 import { useHarborStore } from '@/stores/useHarborStore'
-import { useToast } from '@/hooks/use-toast'
+import { toast } from 'sonner'
 
 interface AddImageModalProps {
   open: boolean
@@ -38,7 +38,6 @@ export function AddImageModal({
   onImageAdded,
 }: AddImageModalProps) {
   const router = useRouter()
-  const { toast } = useToast()
   const { addImage, loading } = useHarborStore()
 
   const [form, setForm] = useState<FormData>({

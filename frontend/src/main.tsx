@@ -20,6 +20,12 @@ import DashboardPage from './pages/DashboardPage';
 import ServiceDetailsPage from './pages/ServiceDetailsPage';
 import PodDetailsPage from './pages/PodDetailsPage';
 import ApiTokensPage from './pages/ApiTokensPage';
+import SecretsPage from './pages/SecretsPage';
+import OptionalComponentsPage from './pages/OptionalComponentsPage';
+import JupyterHubConfigPage from './pages/JupyterHubConfigPage';
+import Templates from './pages/Templates';
+import { HarborImages } from './pages/HarborImages';
+import { ImageMirrorDeployment } from './pages/ImageMirrorDeployment';
 
 // Store
 import { useServicesStore } from './stores/useServicesStore';
@@ -190,6 +196,12 @@ function AppContent() {
         <Route path="/services/:id" element={<ServiceDetailsPage />} />
         <Route path="/services/:id/pods/:podName" element={<PodDetailsPage />} />
         <Route path="/tokens" element={<ApiTokensPage />} />
+        <Route path="/secrets" element={<SecretsPage />} />
+        <Route path="/optional-components" element={<OptionalComponentsPage />} />
+        <Route path="/jupyterhub-config" element={<JupyterHubConfigPage />} />
+        <Route path="/templates" element={<Templates />} />
+        <Route path="/harbor-images" element={<HarborImages />} />
+        <Route path="/image-mirror/:source" element={<ImageMirrorDeployment />} />
       </Routes>
     </TkAppLayout>
   );

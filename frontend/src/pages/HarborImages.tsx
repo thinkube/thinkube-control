@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { useHarborImagesStore } from '@/stores/harborImages'
+import { useHarborStore } from '../stores/useHarborStore'
 import axios from 'axios'
 import { TkButton } from 'thinkube-style/components/buttons-badges'
 import { TkBadge } from 'thinkube-style/components/buttons-badges'
@@ -10,7 +10,7 @@ import { TkTabs } from 'thinkube-style/components/navigation'
 import { TkStatCard } from 'thinkube-style/components/cards-data'
 import { TkLoader } from 'thinkube-style/components/feedback'
 import { TkErrorAlert } from 'thinkube-style/components/feedback'
-import { TkDialogRoot, TkDialogContent, TkDialogHeader, TkDialogTitle, TkDialogFooter } from 'thinkube-style/components/modals-overlays/TkDialog'
+import { TkDialogRoot, TkDialogContent, TkDialogHeader, TkDialogTitle, TkDialogFooter } from 'thinkube-style/components/modals-overlays'
 import { TkCodeBlock } from 'thinkube-style/components/feedback'
 import {
   RefreshCw,
@@ -25,10 +25,10 @@ import {
   Star,
   AlertCircle
 } from 'lucide-react'
-import AddImageModal from '@/components/harbor/AddImageModal'
-import ViewImageModal from '@/components/harbor/ViewImageModal'
-import CreateCustomImageModal from '@/components/harbor/CreateCustomImageModal'
-import BuildExecutor from '@/components/harbor/BuildExecutor'
+import { AddImageModal } from '../components/AddImageModal'
+import { ViewImageModal } from '../components/harbor/ViewImageModal'
+import { CreateCustomImageModal } from '../components/CreateCustomImageModal'
+import BuildExecutor from '../components/BuildExecutor'
 
 interface HarborImage {
   id: string
@@ -65,7 +65,7 @@ interface CustomImage {
 }
 
 export function HarborImages() {
-  const store = useHarborImagesStore()
+  const store = useHarborStore()
 
   // Tab state
   const [activeTab, setActiveTab] = useState<'mirrored' | 'custom'>('mirrored')

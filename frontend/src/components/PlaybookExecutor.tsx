@@ -3,18 +3,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { Loader2, Copy, Check } from 'lucide-react'
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from 'thinkube-style/components/ui/dialog'
+  TkDialogRoot,
+  TkDialogContent,
+  TkDialogHeader,
+  TkDialogTitle,
+  TkDialogFooter,
+} from 'thinkube-style/components/modals-overlays'
 import { TkButton } from 'thinkube-style/components/buttons-badges'
 import { TkSwitch, TkLabel } from 'thinkube-style/components/forms-inputs'
-import { Alert, AlertDescription } from 'thinkube-style/components/ui/alert'
+import { TkSuccessAlert, TkErrorAlert, TkInfoAlert } from 'thinkube-style/components/feedback'
 import { TkCard, TkCardContent } from 'thinkube-style/components/cards-data'
 import { getAnsibleLogClassName, getAnsibleLogPrefix, AnsibleLogType } from 'thinkube-style/lib/ansible-log-utils'
-import { CheckCircle2, XCircle, Info } from 'lucide-react'
 
 interface PlaybookExecutorProps {
   title: string
@@ -457,11 +456,11 @@ Timestamp: ${new Date().toISOString()}
   return (
     <>
       {/* Progress Modal */}
-      <Dialog open={isExecuting} onOpenChange={(open) => !open && closeExecutor()}>
-        <DialogContent className="max-w-3xl max-h-[90vh]">
-          <DialogHeader>
-            <DialogTitle>{title}</DialogTitle>
-          </DialogHeader>
+      <TkDialogRoot open={isExecuting} onOpenChange={(open) => !open && closeExecutor()}>
+        <TkDialogContent className="max-w-3xl max-h-[90vh]">
+          <TkDialogHeader>
+            <TkDialogTitle>{title}</TkDialogTitle>
+          </TkDialogHeader>
 
           <div className="flex flex-col gap-4"> {/* @allowed-inline */}
             {/* Task Progress */}
@@ -513,7 +512,7 @@ Timestamp: ${new Date().toISOString()}
               </div>
               <div
                 ref={logContainerRef}
-                className="h-96 overflow-y-auto p-4 bg-muted/30 rounded-lg font-mono text-sm" {/* @allowed-inline */}
+                className="h-96 overflow-y-auto p-4 bg-muted/30 rounded-lg font-mono text-sm" /* @allowed-inline */
               >
                 {logOutput.length === 0 ? (
                   <div className="text-muted-foreground">
@@ -567,7 +566,7 @@ Timestamp: ${new Date().toISOString()}
           </div>
 
           {/* Action Buttons */}
-          <DialogFooter>
+          <TkDialogFooter>
             {status === 'running' && (
               <TkButton variant="outline" size="sm" onClick={cancelExecution} disabled={isCancelling}>
                 {isCancelling && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
@@ -579,48 +578,38 @@ Timestamp: ${new Date().toISOString()}
                 Close
               </TkButton>
             )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </TkDialogFooter>
+        </TkDialogContent>
+      </TkDialogRoot>
 
       {/* Result Modal */}
-      <Dialog open={showResult} onOpenChange={(open) => !open && closeResult()}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{title} - Complete</DialogTitle>
-          </DialogHeader>
+      <TkDialogRoot open={showResult} onOpenChange={(open) => !open && closeResult()}>
+        <TkDialogContent className="max-w-2xl">
+          <TkDialogHeader>
+            <TkDialogTitle>{title} - Complete</TkDialogTitle>
+          </TkDialogHeader>
 
           <div className="flex flex-col gap-4"> {/* @allowed-inline */}
             {/* Success Result */}
             {status === 'success' && (
-              <Alert className="bg-success/10 text-success border-success/20"> {/* @allowed-inline */}
-                <CheckCircle2 className="h-5 w-5" />
-                <AlertDescription>
-                  {message || successMessage || 'Playbook completed successfully'}
-                </AlertDescription>
-              </Alert>
+              <TkSuccessAlert>
+                {message || successMessage || 'Playbook completed successfully'}
+              </TkSuccessAlert>
             )}
 
             {/* Error Result */}
             {status === 'error' && (
               <>
-                <Alert variant="destructive">
-                  <XCircle className="h-5 w-5" />
-                  <AlertDescription>
-                    {message || 'Playbook execution failed'}
-                  </AlertDescription>
-                </Alert>
+                <TkErrorAlert>
+                  {message || 'Playbook execution failed'}
+                </TkErrorAlert>
 
                 {/* GitHub Issue Helper */}
-                <Alert className="bg-info/10 text-info border-info/20"> {/* @allowed-inline */}
-                  <Info className="h-5 w-5" />
-                  <AlertDescription>
-                    <p className="font-semibold">Need help?</p>
-                    <p className="text-sm">
-                      Copy the log output and create an issue on GitHub for assistance.
-                    </p>
-                  </AlertDescription>
-                </Alert>
+                <TkInfoAlert title="Need help?">
+                  <p className="text-sm">
+                    Copy the log output and create an issue on GitHub for assistance.
+                  </p>
+                </TkInfoAlert>
               </>
             )}
 
@@ -647,7 +636,7 @@ Timestamp: ${new Date().toISOString()}
           </div>
 
           {/* Actions */}
-          <DialogFooter>
+          <TkDialogFooter>
             <TkButton
               variant="ghost"
               size="sm"
@@ -674,9 +663,9 @@ Timestamp: ${new Date().toISOString()}
                 Retry
               </TkButton>
             )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          </TkDialogFooter>
+        </TkDialogContent>
+      </TkDialogRoot>
     </>
   )
 }

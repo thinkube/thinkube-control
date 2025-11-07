@@ -13,13 +13,13 @@ import { TkTextarea } from 'thinkube-style/components/forms-inputs'
 import { TkLabel } from 'thinkube-style/components/forms-inputs'
 import { TkBadge } from 'thinkube-style/components/buttons-badges'
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from 'thinkube-style/components/ui/table'
+  TkTkTable,
+  TkTkTableBody,
+  TkTkTableCell,
+  TkTkTableHead,
+  TkTkTableHeader,
+  TkTkTableRow,
+} from 'thinkube-style/components/tables'
 import { Loader2, Plus, Download, Pencil, Trash2, Eye, EyeOff } from 'lucide-react'
 import axios from '../lib/axios'
 
@@ -188,7 +188,7 @@ export default function SecretsPage() {
         </TkButton>
       </div>
 
-      {/* Secrets Table */}
+      {/* Secrets TkTable */}
       <TkCard>
         <TkCardContent>
           {loading && (
@@ -207,23 +207,23 @@ export default function SecretsPage() {
 
           {!loading && secrets.length > 0 && (
             <div className="overflow-x-auto"> {/* @allowed-inline */}
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead>Created</TableHead>
-                    <TableHead>Used By</TableHead>
-                    <TableHead>Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
+              <TkTable>
+                <TkTableHeader>
+                  <TkTableRow>
+                    <TkTableHead>Name</TkTableHead>
+                    <TkTableHead>Description</TkTableHead>
+                    <TkTableHead>Created</TkTableHead>
+                    <TkTableHead>Used By</TkTableHead>
+                    <TkTableHead>Actions</TkTableHead>
+                  </TkTableRow>
+                </TkTableHeader>
+                <TkTableBody>
                   {secrets.map((secret) => (
-                    <TableRow key={secret.id}>
-                      <TableCell className="font-mono">{secret.name}</TableCell>
-                      <TableCell>{secret.description || '-'}</TableCell>
-                      <TableCell>{formatDate(secret.created_at)}</TableCell>
-                      <TableCell>
+                    <TkTableRow key={secret.id}>
+                      <TkTableCell className="font-mono">{secret.name}</TkTableCell>
+                      <TkTableCell>{secret.description || '-'}</TkTableCell>
+                      <TkTableCell>{formatDate(secret.created_at)}</TkTableCell>
+                      <TkTableCell>
                         {secret.used_by_apps.length > 0 ? (
                           <div className="flex flex-wrap gap-1"> {/* @allowed-inline */}
                             {secret.used_by_apps.map((app) => (
@@ -235,8 +235,8 @@ export default function SecretsPage() {
                         ) : (
                           <span className="text-muted-foreground">Not in use</span>
                         )}
-                      </TableCell>
-                      <TableCell>
+                      </TkTableCell>
+                      <TkTableCell>
                         <div className="flex gap-2"> {/* @allowed-inline */}
                           <TkButton
                             variant="ghost"
@@ -256,11 +256,11 @@ export default function SecretsPage() {
                             <Trash2 className="h-4 w-4" />
                           </TkButton>
                         </div>
-                      </TableCell>
-                    </TableRow>
+                      </TkTableCell>
+                    </TkTableRow>
                   ))}
-                </TableBody>
-              </Table>
+                </TkTableBody>
+              </TkTable>
             </div>
           )}
         </TkCardContent>
