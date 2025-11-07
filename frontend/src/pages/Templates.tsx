@@ -58,6 +58,7 @@ export default function Templates() {
   })
 
   const playbookExecutorRef = useRef<PlaybookExecutorHandle>(null)
+  const isLoadingRef = useRef(false) // Prevent concurrent loads
 
   // Compute domain name
   const domainName = typeof window !== 'undefined'
@@ -86,6 +87,13 @@ export default function Templates() {
       return
     }
 
+    // Prevent concurrent calls
+    if (isLoadingRef.current) {
+      console.log('Already loading template, skipping duplicate call')
+      return
+    }
+
+    isLoadingRef.current = true
     setTemplateUrl(url)
     setShowDeployForm(true)
     setLoadingMetadata(true)
@@ -141,6 +149,7 @@ export default function Templates() {
       setTemplateMetadata(null)
     } finally {
       setLoadingMetadata(false)
+      isLoadingRef.current = false
     }
   }, []) // No dependencies - function never changes
 
