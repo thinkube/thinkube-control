@@ -134,6 +134,7 @@ export function ComponentCard({
                 onInstall(component)
               }}
               disabled={!requirementsMet && !allowForceInstall}
+              variant="outline"
               size="sm"
               className="gap-2"
             >
@@ -143,9 +144,9 @@ export function ComponentCard({
           ) : (
             <TkButton
               onClick={() => onUninstall(component)}
-              variant="destructive"
+              variant="outline"
               size="sm"
-              className="gap-2"
+              className="gap-2 text-destructive hover:bg-destructive hover:text-destructive-foreground"
             >
               <Trash2 className="w-4 h-4" />
               Uninstall

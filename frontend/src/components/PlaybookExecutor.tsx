@@ -515,7 +515,7 @@ Timestamp: ${new Date().toISOString()}
               </div>
               <div
                 ref={logContainerRef}
-                className="h-96 overflow-y-auto p-4 bg-muted/30 rounded-lg font-mono text-sm" /* @allowed-inline */
+                className="h-96 overflow-y-auto overflow-x-auto p-4 bg-muted/30 rounded-lg font-mono text-sm" /* @allowed-inline */
               >
                 {logOutput.length === 0 ? (
                   <div className="text-muted-foreground">
@@ -524,7 +524,7 @@ Timestamp: ${new Date().toISOString()}
                   </div>
                 ) : (
                   logOutput.map((log, idx) => (
-                    <div key={idx} className={getAnsibleLogClassName(log.type as AnsibleLogType)}>
+                    <div key={idx} className={`${getAnsibleLogClassName(log.type as AnsibleLogType)} whitespace-pre-wrap break-words`}>
                       <span className="text-muted-foreground">
                         {getAnsibleLogPrefix(log.type as AnsibleLogType)}{' '}
                       </span>
