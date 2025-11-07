@@ -566,8 +566,8 @@ export default function ServiceDetailsPage() {
         </TkCard>
       </div>
 
-      {/* Health History Chart - TEMPORARILY DISABLED FOR DEBUGGING */}
-      {/* {filteredHealthHistory.length > 0 && (
+      {/* Health History Chart */}
+      {filteredHealthHistory.length > 0 && (
         <TkCard>
           <TkCardHeader>
             <div className="flex items-center justify-between">
@@ -585,7 +585,7 @@ export default function ServiceDetailsPage() {
             <HealthHistoryChart data={filteredHealthHistory} />
           </TkCardContent>
         </TkCard>
-      )} */}
+      )}
 
       {/* Endpoints */}
       {endpoints.length > 0 && (
@@ -645,8 +645,8 @@ export default function ServiceDetailsPage() {
         </TkCard>
       )}
 
-      {/* Dependencies */}
-      {dependencies.length > 0 && (
+      {/* Dependencies - TEMPORARILY DISABLED FOR DEBUGGING */}
+      {/* {dependencies.length > 0 && (
         <TkCard>
           <TkCardHeader>
             <TkCardTitle>Dependencies</TkCardTitle>
@@ -690,7 +690,7 @@ export default function ServiceDetailsPage() {
             </div>
           </TkCardContent>
         </TkCard>
-      )}
+      )} */}
 
       {/* Resource Usage */}
       {resourceUsage && (
