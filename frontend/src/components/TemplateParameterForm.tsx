@@ -126,16 +126,12 @@ export function TemplateParameterForm({
     }
   }
 
-  // Watch for external changes to modelValue (but prevent infinite loops)
+  // Initialize formData only once on mount with modelValue
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    // Check if modelValue actually changed from the previous value (not just a new object reference)
-    const prevModelValue = prevModelValueRef.current
-
-    const hasChanged = !prevModelValue ||
-      Object.keys(modelValue).some(key => modelValue[key] !== prevModelValue[key]) ||
-      Object.keys(prevModelValue).some(key => !(key in modelValue))
-
-    if (hasChanged) {
+    // Only run on mount when prevModelValueRef is null
+    // We intentionally don't include modelValue in deps to prevent sync loops
+    if (prevModelValueRef.current === null) {
       setFormData({
         project_name: '',
         project_description: '',
@@ -143,7 +139,7 @@ export function TemplateParameterForm({
       })
       prevModelValueRef.current = { ...modelValue }
     }
-  }, [modelValue])
+  }, [])
 
   // Validate project name against existing services
   const validateProjectName = async () => {
