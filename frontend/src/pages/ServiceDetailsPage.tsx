@@ -569,7 +569,7 @@ export default function ServiceDetailsPage() {
       </div>
 
       {/* Health History Chart */}
-      {healthData && healthData.health_history && healthData.health_history.length > 0 && filteredHealthHistory && filteredHealthHistory.length > 0 && (
+      {filteredHealthHistory.length > 0 && (
         <TkCard>
           <TkCardHeader>
             <div className="flex items-center justify-between">
