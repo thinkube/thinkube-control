@@ -347,18 +347,7 @@ export default function ServiceDetailsPage() {
     return true;
   };
 
-  // Extract data from service details
-  const pods = serviceDetails?.pods_info || [];
-  const endpoints = (service as any).endpoints || [];
-  const dependencies = serviceDetails?.dependencies || [];
-  const resourceUsage = serviceDetails?.resource_usage;
-  const recentActions = serviceDetails?.recent_actions || [];
-
-  // Debug logging for dependencies
-  console.log('Service Details - Dependencies:', dependencies);
-  console.log('Service Details - Full serviceDetails:', serviceDetails);
-
-  // Filter health history based on selected time range
+  // Filter health history based on selected time range - MUST be before extracting other data to maintain hook order
   const filteredHealthHistory = useMemo(() => {
     if (!healthData?.health_history) return [];
 
@@ -376,6 +365,17 @@ export default function ServiceDetailsPage() {
       return itemTime >= cutoffTime;
     });
   }, [healthData?.health_history, healthTimeRange]);
+
+  // Extract data from service details
+  const pods = serviceDetails?.pods_info || [];
+  const endpoints = (service as any).endpoints || [];
+  const dependencies = serviceDetails?.dependencies || [];
+  const resourceUsage = serviceDetails?.resource_usage;
+  const recentActions = serviceDetails?.recent_actions || [];
+
+  // Debug logging for dependencies
+  console.log('Service Details - Dependencies:', dependencies);
+  console.log('Service Details - Full serviceDetails:', serviceDetails);
 
   return (
     <TkPageWrapper>
