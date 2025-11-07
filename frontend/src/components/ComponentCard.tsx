@@ -6,6 +6,7 @@
 import { Check, Download, Trash2 } from "lucide-react"
 import {
   TkCard,
+  TkCardHeader,
   TkCardContent,
 } from "thinkube-style/components/cards-data"
 import {
@@ -13,6 +14,7 @@ import {
   TkButton,
 } from "thinkube-style/components/buttons-badges"
 import { TkWarningAlert } from "thinkube-style/components/feedback"
+import { TkBrandIcon } from "thinkube-style/components/brand-icons"
 
 interface Component {
   display_name: string
@@ -42,18 +44,19 @@ export function ComponentCard({
   }
 
   return (
-    <TkCard className="h-full">
-      <TkCardContent className="flex flex-col h-full">
-        {/* Header with icon and title */}
-        <div className="flex items-start space-x-3">
-          <img
-            src={component.icon}
-            alt={component.display_name}
-            className="w-12 h-12"
-          />
-          <div className="flex-1">
-            <h3 className="text-lg font-semibold">{component.display_name}</h3>
-            <div className="flex items-center space-x-2 mt-1">
+    <TkCard className="h-full flex flex-col">
+      <TkCardHeader className="pb-3">
+        <div className="flex items-start gap-3">
+          <div className="flex-shrink-0">
+            <TkBrandIcon
+              icon={component.icon.replace('/icons/', '').replace('.svg', '')}
+              alt={component.display_name}
+              size={20}
+            />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h3 className="text-lg font-semibold mb-2">{component.display_name}</h3>
+            <div className="flex items-center gap-2">
               {/* Installation status badge */}
               {component.installed ? (
                 <TkBadge variant="success" className="gap-1">
@@ -66,9 +69,11 @@ export function ComponentCard({
             </div>
           </div>
         </div>
+      </TkCardHeader>
 
+      <TkCardContent className="flex flex-col flex-1">
         {/* Description */}
-        <p className="text-sm text-muted-foreground mt-3">
+        <p className="text-sm text-muted-foreground mb-3">
           {component.description}
         </p>
 
