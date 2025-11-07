@@ -171,20 +171,7 @@ export default function ServiceDetailsPage() {
     });
   }, [healthData?.health_history, healthTimeRange]);
 
-  // Debug: Log component state at start of every render
-  console.log('🔍 RENDER START:', {
-    renderTimestamp: new Date().toISOString(),
-    loading,
-    hasService: !!service,
-    serviceName: service?.name,
-    hasServiceDetails: !!serviceDetails,
-    hasHealthData: !!healthData,
-    healthDataType: typeof healthData,
-    healthHistoryExists: !!healthData?.health_history,
-    healthHistoryType: typeof healthData?.health_history,
-    healthHistoryIsArray: Array.isArray(healthData?.health_history),
-    filteredHealthHistoryLength: filteredHealthHistory?.length
-  });
+  // Debug logging removed to reduce noise
 
   // Handlers
   const handleToggle = async (checked: boolean) => {
@@ -388,18 +375,6 @@ export default function ServiceDetailsPage() {
   const resourceUsage = serviceDetails?.resource_usage;
   const recentActions = Array.isArray(serviceDetails?.recent_actions) ? serviceDetails.recent_actions : [];
 
-  // Debug logging
-  console.log('🔍 ServiceDetailsPage Data:', {
-    service,
-    serviceDetails,
-    healthData,
-    pods: { type: typeof pods, isArray: Array.isArray(pods), length: pods?.length, podsData: pods.map(p => ({ name: p.name, containersType: typeof p.containers, containersIsArray: Array.isArray(p.containers), containersLength: p.containers?.length })) },
-    endpoints: { type: typeof endpoints, isArray: Array.isArray(endpoints), length: endpoints?.length },
-    dependencies: { type: typeof dependencies, isArray: Array.isArray(dependencies), length: dependencies?.length },
-    recentActions: { type: typeof recentActions, isArray: Array.isArray(recentActions), length: recentActions?.length },
-    filteredHealthHistory: { type: typeof filteredHealthHistory, isArray: Array.isArray(filteredHealthHistory), length: filteredHealthHistory?.length }
-  });
-
   return (
     <TkPageWrapper>
       {/* Back button */}
@@ -591,8 +566,8 @@ export default function ServiceDetailsPage() {
         </TkCard>
       </div>
 
-      {/* Health History Chart */}
-      {filteredHealthHistory.length > 0 && (
+      {/* Health History Chart - TEMPORARILY DISABLED FOR DEBUGGING */}
+      {/* {filteredHealthHistory.length > 0 && (
         <TkCard>
           <TkCardHeader>
             <div className="flex items-center justify-between">
@@ -610,7 +585,7 @@ export default function ServiceDetailsPage() {
             <HealthHistoryChart data={filteredHealthHistory} />
           </TkCardContent>
         </TkCard>
-      )}
+      )} */}
 
       {/* Endpoints */}
       {endpoints.length > 0 && (
