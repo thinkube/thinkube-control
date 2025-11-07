@@ -510,7 +510,7 @@ export function HarborImages() {
           )}
 
           {!store.loading && store.error && (
-            <TkErrorAlert message={store.error} className="mb-4" />
+            <TkErrorAlert className="mb-4">{store.error}</TkErrorAlert>
           )}
 
           {!store.loading && !store.error && store.images && store.images.length > 0 && (
@@ -741,7 +741,7 @@ export function HarborImages() {
           )}
 
           {customImagesError && (
-            <TkErrorAlert message={customImagesError} className="mb-4" />
+            <TkErrorAlert className="mb-4">{customImagesError}</TkErrorAlert>
           )}
 
           {!customImagesLoading && !customImagesError && showTreeView && filteredCustomImages.length > 0 && (
