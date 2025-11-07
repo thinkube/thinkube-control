@@ -210,7 +210,7 @@ export default function Templates() {
 
     try {
       // Deploy template asynchronously
-      const response = await api.post('/templates/deploy', {
+      const response = await api.post('/templates/deploy-async', {
         template_url: templateUrl,
         template_name: deployConfig.project_name,
         variables: {
@@ -233,7 +233,7 @@ export default function Templates() {
         if (confirmed) {
           // Retry with overwrite flag
           setIsDeploying(true)
-          const retryResponse = await api.post('/templates/deploy', {
+          const retryResponse = await api.post('/templates/deploy-async', {
             template_url: templateUrl,
             template_name: deployConfig.project_name,
             variables: {
