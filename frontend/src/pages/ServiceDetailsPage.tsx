@@ -378,7 +378,7 @@ export default function ServiceDetailsPage() {
     service,
     serviceDetails,
     healthData,
-    pods: { type: typeof pods, isArray: Array.isArray(pods), length: pods?.length },
+    pods: { type: typeof pods, isArray: Array.isArray(pods), length: pods?.length, podsData: pods.map(p => ({ name: p.name, containersType: typeof p.containers, containersIsArray: Array.isArray(p.containers), containersLength: p.containers?.length })) },
     endpoints: { type: typeof endpoints, isArray: Array.isArray(endpoints), length: endpoints?.length },
     dependencies: { type: typeof dependencies, isArray: Array.isArray(dependencies), length: dependencies?.length },
     recentActions: { type: typeof recentActions, isArray: Array.isArray(recentActions), length: recentActions?.length },
