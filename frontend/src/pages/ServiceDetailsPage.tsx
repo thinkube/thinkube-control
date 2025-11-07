@@ -51,6 +51,8 @@ interface Endpoint {
 interface Dependency {
   name: string;
   enabled: boolean;
+  health_status?: 'healthy' | 'unhealthy' | 'unknown' | 'disabled';
+  service_id?: string;
 }
 
 interface ResourceUsage {
@@ -352,6 +354,10 @@ export default function ServiceDetailsPage() {
   const resourceUsage = serviceDetails?.resource_usage;
   const recentActions = serviceDetails?.recent_actions || [];
 
+  // Debug logging for dependencies
+  console.log('Service Details - Dependencies:', dependencies);
+  console.log('Service Details - Full serviceDetails:', serviceDetails);
+
   // Filter health history based on selected time range
   const filteredHealthHistory = useMemo(() => {
     if (!healthData?.health_history) return [];
@@ -649,14 +655,40 @@ export default function ServiceDetailsPage() {
           </TkCardHeader>
           <TkCardContent>
             <div className="flex flex-wrap gap-2">
-              {dependencies.map((dep) => (
-                <TkBadge
-                  key={dep.name}
-                  variant={dep.enabled ? 'success' : 'destructive'}
-                >
-                  {dep.name}
-                </TkBadge>
-              ))}
+              {dependencies.map((dep) => {
+                // Determine badge variant based on health status and enabled state
+                let variant: 'default' | 'success' | 'destructive' | 'secondary' = 'default';
+                if (!dep.enabled) {
+                  variant = 'destructive';
+                } else if (dep.health_status === 'healthy') {
+                  variant = 'success';
+                } else if (dep.health_status === 'unhealthy' || dep.health_status === 'disabled') {
+                  variant = 'destructive';
+                } else if (dep.health_status === 'unknown') {
+                  variant = 'secondary';
+                }
+
+                const label = `${dep.name}${!dep.enabled ? ' (disabled)' : ''}${dep.enabled && dep.health_status ? ` (${dep.health_status})` : ''}`;
+
+                // If service_id is available, make it clickable with TkButton
+                return dep.service_id ? (
+                  <TkButton
+                    key={dep.name}
+                    variant={variant}
+                    size="sm"
+                    onClick={() => navigate(`/services/${dep.service_id}`)}
+                  >
+                    {label}
+                  </TkButton>
+                ) : (
+                  <TkBadge
+                    key={dep.name}
+                    variant={variant}
+                  >
+                    {label}
+                  </TkBadge>
+                );
+              })}
             </div>
           </TkCardContent>
         </TkCard>
