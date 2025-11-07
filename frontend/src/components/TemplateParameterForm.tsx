@@ -308,7 +308,6 @@ export function TemplateParameterForm({
             type="text"
             placeholder="my-awesome-app"
             className={nameValidation.class}
-            pattern="[a-z][a-z0-9-]*"
             required
             onChange={(e) => handleProjectNameChange(e.target.value)}
             onBlur={() => validateProjectName()}
