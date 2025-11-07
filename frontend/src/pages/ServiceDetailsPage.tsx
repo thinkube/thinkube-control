@@ -152,6 +152,25 @@ export default function ServiceDetailsPage() {
     loadDetails();
   }, [id, fetchServiceDetails]);
 
+  // Filter health history based on selected time range - MUST be called on every render (before early returns)
+  const filteredHealthHistory = useMemo(() => {
+    if (!healthData?.health_history) return [];
+
+    const now = new Date();
+    const timeRanges = {
+      hour: 60 * 60 * 1000,      // 1 hour in milliseconds
+      day: 24 * 60 * 60 * 1000,  // 24 hours
+      week: 7 * 24 * 60 * 60 * 1000  // 7 days
+    };
+
+    const cutoffTime = new Date(now.getTime() - timeRanges[healthTimeRange]);
+
+    return healthData.health_history.filter(item => {
+      const itemTime = new Date(item.checked_at);
+      return itemTime >= cutoffTime;
+    });
+  }, [healthData?.health_history, healthTimeRange]);
+
   // Handlers
   const handleToggle = async (checked: boolean) => {
     if (!id) return;
@@ -346,25 +365,6 @@ export default function ServiceDetailsPage() {
     if (url.includes('.svc.cluster.local') || url.includes('internal')) return false;
     return true;
   };
-
-  // Filter health history based on selected time range - MUST be before extracting other data to maintain hook order
-  const filteredHealthHistory = useMemo(() => {
-    if (!healthData?.health_history) return [];
-
-    const now = new Date();
-    const timeRanges = {
-      hour: 60 * 60 * 1000,      // 1 hour in milliseconds
-      day: 24 * 60 * 60 * 1000,  // 24 hours
-      week: 7 * 24 * 60 * 60 * 1000  // 7 days
-    };
-
-    const cutoffTime = new Date(now.getTime() - timeRanges[healthTimeRange]);
-
-    return healthData.health_history.filter(item => {
-      const itemTime = new Date(item.checked_at);
-      return itemTime >= cutoffTime;
-    });
-  }, [healthData?.health_history, healthTimeRange]);
 
   // Extract data from service details
   const pods = serviceDetails?.pods_info || [];
