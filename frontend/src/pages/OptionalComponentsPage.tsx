@@ -63,6 +63,7 @@ export default function OptionalComponentsPage() {
   }
 
   const handleInstall = async (component: OptionalComponent) => {
+    console.log('🔍 DEBUG: handleInstall called for:', component.name, component)
     try {
       setInstallingComponent(component)
       setInstallingTitle(`Installing ${component.display_name}`)

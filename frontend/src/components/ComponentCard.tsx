@@ -45,6 +45,14 @@ export function ComponentCard({
   const requirementsMet = component.requirements_met ?? true  // Default to true if not specified
   const missingRequirements = component.missing_requirements ?? []
 
+  console.log('🔍 DEBUG ComponentCard render:', {
+    name: component.display_name,
+    isInstalled,
+    requirementsMet,
+    missingRequirements,
+    buttonDisabled: !requirementsMet && !allowForceInstall
+  })
+
   const isMissingRequirement = (req: string) => {
     return missingRequirements?.includes(req)
   }
@@ -121,7 +129,10 @@ export function ComponentCard({
         <div className="flex justify-end mt-auto pt-4">
           {!isInstalled ? (
             <TkButton
-              onClick={() => onInstall(component)}
+              onClick={() => {
+                console.log('🔍 DEBUG: Install button clicked for:', component.display_name)
+                onInstall(component)
+              }}
               disabled={!requirementsMet && !allowForceInstall}
               size="sm"
               className="gap-2"
