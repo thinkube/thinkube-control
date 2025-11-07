@@ -366,12 +366,12 @@ export default function ServiceDetailsPage() {
     return true;
   };
 
-  // Extract data from service details
-  const pods = serviceDetails?.pods_info || [];
-  const endpoints = (service as any).endpoints || [];
-  const dependencies = serviceDetails?.dependencies || [];
+  // Extract data from service details with proper array validation
+  const pods = Array.isArray(serviceDetails?.pods_info) ? serviceDetails.pods_info : [];
+  const endpoints = Array.isArray((service as any)?.endpoints) ? (service as any).endpoints : [];
+  const dependencies = Array.isArray(serviceDetails?.dependencies) ? serviceDetails.dependencies : [];
   const resourceUsage = serviceDetails?.resource_usage;
-  const recentActions = serviceDetails?.recent_actions || [];
+  const recentActions = Array.isArray(serviceDetails?.recent_actions) ? serviceDetails.recent_actions : [];
 
   // Debug logging for dependencies
   console.log('Service Details - Dependencies:', dependencies);
