@@ -171,6 +171,21 @@ export default function ServiceDetailsPage() {
     });
   }, [healthData?.health_history, healthTimeRange]);
 
+  // Debug: Log component state at start of every render
+  console.log('🔍 RENDER START:', {
+    renderTimestamp: new Date().toISOString(),
+    loading,
+    hasService: !!service,
+    serviceName: service?.name,
+    hasServiceDetails: !!serviceDetails,
+    hasHealthData: !!healthData,
+    healthDataType: typeof healthData,
+    healthHistoryExists: !!healthData?.health_history,
+    healthHistoryType: typeof healthData?.health_history,
+    healthHistoryIsArray: Array.isArray(healthData?.health_history),
+    filteredHealthHistoryLength: filteredHealthHistory?.length
+  });
+
   // Handlers
   const handleToggle = async (checked: boolean) => {
     if (!id) return;
