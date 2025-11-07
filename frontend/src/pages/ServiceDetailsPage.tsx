@@ -761,7 +761,7 @@ export default function ServiceDetailsPage() {
                       </div>
 
                       {/* Pod Details (expandable) */}
-                      {expandedPods[pod.name] && pod.containers && pod.containers.length > 0 && (
+                      {expandedPods[pod.name] && Array.isArray(pod.containers) && pod.containers.length > 0 && (
                         <div className="mt-3 space-y-2">
                           <TkSeparator />
                           <h5 className="font-medium">Containers ({pod.containers.length})</h5>
