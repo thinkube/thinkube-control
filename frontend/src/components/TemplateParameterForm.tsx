@@ -142,8 +142,8 @@ export function TemplateParameterForm({
   }, [])
 
   // Validate project name against existing services
-  const validateProjectName = async () => {
-    const name = formData.project_name as string
+  const validateProjectName = async (nameToValidate?: string) => {
+    const name = nameToValidate ?? (formData.project_name as string)
     if (!name) return
 
     // Check reserved names
@@ -248,10 +248,10 @@ export function TemplateParameterForm({
       return
     }
 
-    // Debounce the API check
+    // Debounce the API check - pass value directly to avoid stale closure
     if (value) {
       nameCheckTimeout.current = setTimeout(() => {
-        validateProjectName()
+        validateProjectName(value)
       }, 500)
     }
   }
