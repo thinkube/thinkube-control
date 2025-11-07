@@ -222,12 +222,12 @@ export default function Templates() {
       })
 
       // Check if there's a conflict that requires confirmation
-      if (response.status === 'conflict' && response.requires_confirmation) {
+      if (response.data.status === 'conflict' && response.data.requires_confirmation) {
         setIsDeploying(false)
 
         // Show confirmation dialog
         const confirmed = confirm(
-          `${response.message}\n\nDo you want to overwrite the existing application?`
+          `${response.data.message}\n\nDo you want to overwrite the existing application?`
         )
 
         if (confirmed) {
@@ -245,13 +245,13 @@ export default function Templates() {
             }
           })
 
-          setDeploymentId(retryResponse.deployment_id)
+          setDeploymentId(retryResponse.data.deployment_id)
 
           // Start PlaybookExecutor with WebSocket URL
-          if (retryResponse.websocket_url) {
-            playbookExecutorRef.current?.startExecution(`/api/v1${retryResponse.websocket_url}`)
+          if (retryResponse.data.websocket_url) {
+            playbookExecutorRef.current?.startExecution(`/api/v1${retryResponse.data.websocket_url}`)
           } else {
-            playbookExecutorRef.current?.startExecution(`/api/v1/ws/deployment/${retryResponse.deployment_id}`)
+            playbookExecutorRef.current?.startExecution(`/api/v1/ws/deployment/${retryResponse.data.deployment_id}`)
           }
         } else {
           // User cancelled
@@ -260,13 +260,13 @@ export default function Templates() {
         return
       }
 
-      setDeploymentId(response.deployment_id)
+      setDeploymentId(response.data.deployment_id)
 
       // Start PlaybookExecutor with WebSocket URL
-      if (response.websocket_url) {
-        playbookExecutorRef.current?.startExecution(`/api/v1${response.websocket_url}`)
+      if (response.data.websocket_url) {
+        playbookExecutorRef.current?.startExecution(`/api/v1${response.data.websocket_url}`)
       } else {
-        playbookExecutorRef.current?.startExecution(`/api/v1/ws/deployment/${response.deployment_id}`)
+        playbookExecutorRef.current?.startExecution(`/api/v1/ws/deployment/${response.data.deployment_id}`)
       }
 
     } catch (error: any) {
