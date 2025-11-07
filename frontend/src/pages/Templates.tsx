@@ -79,11 +79,11 @@ export default function Templates() {
     }
   }
 
-  // Load template information
-  const loadTemplate = useCallback(async () => {
-    const url = templateUrl || manualTemplateUrl
+  // Load template information - accepts URL as parameter to avoid state timing issues
+  const loadTemplate = useCallback(async (urlOverride?: string) => {
+    const url = urlOverride || templateUrl || manualTemplateUrl
     if (!isValidUrl(url)) {
-      alert('Please enter a valid GitHub repository URL')
+      console.error('Invalid URL provided to loadTemplate:', url)
       return
     }
 
@@ -126,12 +126,11 @@ export default function Templates() {
           }
         })
 
-        setDeployConfig(prev => ({
+        setDeployConfig({
           project_name: '',
           project_description: '',
-          ...defaultValues,
-          ...prev
-        }))
+          ...defaultValues
+        })
       }
     } catch (e) {
       console.error('Failed to fetch template metadata:', e)
@@ -149,85 +148,23 @@ export default function Templates() {
   // Check for deploy parameter on mount
   useEffect(() => {
     const deployUrl = searchParams.get('deploy')
-    if (deployUrl) {
-      setTemplateUrl(deployUrl)
-      // Clear query parameter immediately to prevent loops
-      setSearchParams({})
-      // Load template after a brief delay to allow state to settle
-      setTimeout(() => {
-        const url = deployUrl
-        if (!isValidUrl(url)) {
-          alert('Please enter a valid GitHub repository URL')
-          return
-        }
-
-        setShowDeployForm(true)
-        setLoadingMetadata(true)
-        setTemplateMetadata(null)
-
-        // Extract repo info from URL
-        const parts = url.split('/')
-        const owner = parts[3]
-        const repo = parts[4]
-
-        setTemplateInfo({
-          name: repo,
-          description: 'Loading template information...',
-          owner: owner
-        })
-
-        // Fetch template metadata
-        const fetchMetadata = async () => {
-          try {
-            const token = localStorage.getItem('access_token')
-            const response = await api.get('/templates/metadata', {
-              params: { template_url: url },
-              headers: { Authorization: `Bearer ${token}` }
-            })
-
-            if (response.data) {
-              setTemplateMetadata(response.data)
-              setTemplateInfo(prev => prev ? {
-                ...prev,
-                description: response.data.metadata.description || 'Template ready'
-              } : null)
-
-              // Initialize deployConfig with any defaults from parameters
-              const defaultValues: Record<string, any> = {}
-              response.data.parameters.forEach((param: any) => {
-                if (param.default !== undefined && param.default !== null) {
-                  defaultValues[param.name] = param.default
-                }
-              })
-
-              setDeployConfig(prev => ({
-                project_name: '',
-                project_description: '',
-                ...defaultValues,
-                ...prev
-              }))
-            }
-          } catch (e) {
-            console.error('Failed to fetch template metadata:', e)
-            setTemplateInfo(prev => prev ? {
-              ...prev,
-              description: 'Invalid template - missing template.yaml'
-            } : null)
-            setTemplateMetadata(null)
-          } finally {
-            setLoadingMetadata(false)
-          }
-        }
-
-        fetchMetadata()
-      }, 100)
+    if (deployUrl && isValidUrl(deployUrl)) {
+      // Clear query parameter to prevent re-triggering
+      setSearchParams({}, { replace: true })
+      // Load template with URL from query param
+      loadTemplate(deployUrl)
     }
-  }, []) // Only run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // Only run once on mount, loadTemplate is stable
 
   // Select a template from the gallery
   const selectTemplate = (url: string) => {
-    setTemplateUrl(url)
-    setTimeout(() => loadTemplate(), 0)
+    if (!isValidUrl(url)) {
+      console.error('Invalid template URL:', url)
+      return
+    }
+    // Pass URL directly to avoid state timing issues
+    loadTemplate(url)
   }
 
   // Cancel deployment
