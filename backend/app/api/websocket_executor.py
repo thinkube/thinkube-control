@@ -199,17 +199,7 @@ async def stream_optional_component_installation(
             )
             return
 
-        # Check if already running or completed
-        if deployment.status != "pending":
-            await websocket.send_json(
-                {
-                    "type": "error",
-                    "message": f"Deployment is already {deployment.status}. Cannot restart.",
-                }
-            )
-            return
-
-        # Update status to running
+        # Set status to running (allows retry of failed deployments)
         deployment.status = "running"
         deployment.started_at = datetime.utcnow()
         db.commit()
@@ -295,17 +285,7 @@ async def stream_optional_component_uninstallation(
             )
             return
 
-        # Check if already running or completed
-        if deployment.status != "pending":
-            await websocket.send_json(
-                {
-                    "type": "error",
-                    "message": f"Deployment is already {deployment.status}. Cannot restart.",
-                }
-            )
-            return
-
-        # Update status to running
+        # Set status to running (allows retry of failed deployments)
         deployment.status = "running"
         deployment.started_at = datetime.utcnow()
         db.commit()
@@ -389,17 +369,7 @@ async def stream_template_deployment(websocket: WebSocket, deployment_id: str):
             )
             return
 
-        # Check if already running or completed
-        if deployment.status != "pending":
-            await websocket.send_json(
-                {
-                    "type": "error",
-                    "message": f"Deployment is already {deployment.status}. Cannot restart.",
-                }
-            )
-            return
-
-        # Update status to running
+        # Set status to running (allows retry of failed deployments)
         deployment.status = "running"
         deployment.started_at = datetime.utcnow()
         db.commit()

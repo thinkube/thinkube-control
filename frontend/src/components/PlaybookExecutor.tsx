@@ -459,7 +459,11 @@ Timestamp: ${new Date().toISOString()}
   return (
     <>
       {/* Progress Modal */}
-      <TkDialogRoot open={isExecuting} onOpenChange={(open) => !open && closeExecutor()}>
+      <TkDialogRoot open={isExecuting} onOpenChange={(open) => {
+        // Prevent closing during running deployment - force use of Cancel button
+        if (!open && status === 'running') return
+        if (!open) closeExecutor()
+      }}>
         <TkDialogContent className="max-w-3xl max-h-[90vh]">
           <TkDialogHeader>
             <TkDialogTitle>{title}</TkDialogTitle>
