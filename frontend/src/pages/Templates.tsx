@@ -144,19 +144,83 @@ export default function Templates() {
     } finally {
       setLoadingMetadata(false)
     }
-
-    // Clear query parameter
-    if (searchParams.get('deploy')) {
-      setSearchParams({})
-    }
-  }, [templateUrl, manualTemplateUrl, searchParams, setSearchParams])
+  }, [templateUrl, manualTemplateUrl])
 
   // Check for deploy parameter on mount
   useEffect(() => {
     const deployUrl = searchParams.get('deploy')
     if (deployUrl) {
       setTemplateUrl(deployUrl)
-      loadTemplate()
+      // Clear query parameter immediately to prevent loops
+      setSearchParams({})
+      // Load template after a brief delay to allow state to settle
+      setTimeout(() => {
+        const url = deployUrl
+        if (!isValidUrl(url)) {
+          alert('Please enter a valid GitHub repository URL')
+          return
+        }
+
+        setShowDeployForm(true)
+        setLoadingMetadata(true)
+        setTemplateMetadata(null)
+
+        // Extract repo info from URL
+        const parts = url.split('/')
+        const owner = parts[3]
+        const repo = parts[4]
+
+        setTemplateInfo({
+          name: repo,
+          description: 'Loading template information...',
+          owner: owner
+        })
+
+        // Fetch template metadata
+        const fetchMetadata = async () => {
+          try {
+            const token = localStorage.getItem('access_token')
+            const response = await api.get('/templates/metadata', {
+              params: { template_url: url },
+              headers: { Authorization: `Bearer ${token}` }
+            })
+
+            if (response.data) {
+              setTemplateMetadata(response.data)
+              setTemplateInfo(prev => prev ? {
+                ...prev,
+                description: response.data.metadata.description || 'Template ready'
+              } : null)
+
+              // Initialize deployConfig with any defaults from parameters
+              const defaultValues: Record<string, any> = {}
+              response.data.parameters.forEach((param: any) => {
+                if (param.default !== undefined && param.default !== null) {
+                  defaultValues[param.name] = param.default
+                }
+              })
+
+              setDeployConfig(prev => ({
+                project_name: '',
+                project_description: '',
+                ...defaultValues,
+                ...prev
+              }))
+            }
+          } catch (e) {
+            console.error('Failed to fetch template metadata:', e)
+            setTemplateInfo(prev => prev ? {
+              ...prev,
+              description: 'Invalid template - missing template.yaml'
+            } : null)
+            setTemplateMetadata(null)
+          } finally {
+            setLoadingMetadata(false)
+          }
+        }
+
+        fetchMetadata()
+      }, 100)
     }
   }, []) // Only run once on mount
 
