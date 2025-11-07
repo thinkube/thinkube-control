@@ -165,10 +165,25 @@ export default function ServiceDetailsPage() {
 
     const cutoffTime = new Date(now.getTime() - timeRanges[healthTimeRange]);
 
-    return healthData.health_history.filter(item => {
+    console.log('🔍 Health History Filter Debug:', {
+      timeRange: healthTimeRange,
+      totalItems: healthData.health_history.length,
+      now: now.toISOString(),
+      cutoffTime: cutoffTime.toISOString(),
+      sampleTimestamps: healthData.health_history.slice(0, 3).map(item => ({
+        checked_at: item.checked_at,
+        parsed: new Date(item.checked_at).toISOString()
+      }))
+    });
+
+    const filtered = healthData.health_history.filter(item => {
       const itemTime = new Date(item.checked_at);
       return itemTime >= cutoffTime;
     });
+
+    console.log('🔍 Filtered result count:', filtered.length);
+
+    return filtered;
   }, [healthData?.health_history, healthTimeRange]);
 
   // Debug logging removed to reduce noise
