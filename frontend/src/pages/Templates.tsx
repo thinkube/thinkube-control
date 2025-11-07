@@ -79,9 +79,8 @@ export default function Templates() {
     }
   }
 
-  // Load template information - accepts URL as parameter to avoid state timing issues
-  const loadTemplate = useCallback(async (urlOverride?: string) => {
-    const url = urlOverride || templateUrl || manualTemplateUrl
+  // Load template information - must be called with explicit URL parameter
+  const loadTemplate = useCallback(async (url: string) => {
     if (!isValidUrl(url)) {
       console.error('Invalid URL provided to loadTemplate:', url)
       return
@@ -143,7 +142,7 @@ export default function Templates() {
     } finally {
       setLoadingMetadata(false)
     }
-  }, [templateUrl, manualTemplateUrl])
+  }, []) // No dependencies - function never changes
 
   // Check for deploy parameter on mount
   useEffect(() => {
@@ -386,7 +385,7 @@ export default function Templates() {
             <TkButton
               variant="default"
               disabled={!isValidUrl(manualTemplateUrl)}
-              onClick={loadTemplate}
+              onClick={() => loadTemplate(manualTemplateUrl)}
             >
               Load Template
             </TkButton>
