@@ -90,25 +90,25 @@ export function HarborImages() {
   const [customImages, setCustomImages] = useState<CustomImage[]>([])
   const [customImagesLoading, setCustomImagesLoading] = useState(false)
   const [customImagesError, setCustomImagesError] = useState<string | null>(null)
-  const [customImageScope, setCustomImageScope] = useState('')
+  const [customImageScope, setCustomImageScope] = useState('all')
   const [showOnlyBaseImages, setShowOnlyBaseImages] = useState(false)
   const [showTreeView, setShowTreeView] = useState(false)
 
   // Filter states
-  const [selectedCategory, setSelectedCategory] = useState('')
-  const [selectedProtected, setSelectedProtected] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState('all')
+  const [selectedProtected, setSelectedProtected] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
 
   // Computed
   const hasActiveFilters = useMemo(() => {
-    return !!selectedCategory || !!selectedProtected || !!searchQuery
+    return (selectedCategory !== 'all') || (selectedProtected !== 'all') || !!searchQuery
   }, [selectedCategory, selectedProtected, searchQuery])
 
   // Filtered custom images based on scope and base image filter
   const filteredCustomImages = useMemo(() => {
     let filtered = customImages
 
-    if (customImageScope) {
+    if (customImageScope && customImageScope !== 'all') {
       filtered = filtered.filter(img => img.scope === customImageScope)
     }
 
@@ -166,12 +166,12 @@ export function HarborImages() {
 
   const filterByCategory = (value: string) => {
     setSelectedCategory(value)
-    store.setFilter('category', value || null)
+    store.setFilter('category', (value === 'all' || !value) ? null : value)
   }
 
   const filterByProtected = (value: string) => {
     setSelectedProtected(value)
-    const protectedValue = value === 'true' ? true : value === 'false' ? false : null
+    const protectedValue = (value === 'all' || !value) ? null : (value === 'true' ? true : false)
     store.setFilter('protected', protectedValue)
   }
 
@@ -184,8 +184,8 @@ export function HarborImages() {
   }
 
   const clearAllFilters = () => {
-    setSelectedCategory('')
-    setSelectedProtected('')
+    setSelectedCategory('all')
+    setSelectedProtected('all')
     setSearchQuery('')
     store.clearFilters()
   }
@@ -466,7 +466,7 @@ export function HarborImages() {
                     <TkSelectValue placeholder="All Categories" />
                   </TkSelectTrigger>
                   <TkSelectContent>
-                    <TkSelectItem value="">All Categories</TkSelectItem>
+                    <TkSelectItem value="all">All Categories</TkSelectItem>
                     <TkSelectItem value="system">System</TkSelectItem>
                     <TkSelectItem value="user">User</TkSelectItem>
                   </TkSelectContent>
@@ -477,7 +477,7 @@ export function HarborImages() {
                     <TkSelectValue placeholder="All Images" />
                   </TkSelectTrigger>
                   <TkSelectContent>
-                    <TkSelectItem value="">All Images</TkSelectItem>
+                    <TkSelectItem value="all">All Images</TkSelectItem>
                     <TkSelectItem value="true">Protected Only</TkSelectItem>
                     <TkSelectItem value="false">Unprotected Only</TkSelectItem>
                   </TkSelectContent>
@@ -699,7 +699,7 @@ export function HarborImages() {
                     <TkSelectValue placeholder="All Scopes" />
                   </TkSelectTrigger>
                   <TkSelectContent>
-                    <TkSelectItem value="">All Scopes</TkSelectItem>
+                    <TkSelectItem value="all">All Scopes</TkSelectItem>
                     <TkSelectItem value="general">General Purpose</TkSelectItem>
                     <TkSelectItem value="jupyter">Jupyter/Notebook</TkSelectItem>
                     <TkSelectItem value="ml">Machine Learning</TkSelectItem>
