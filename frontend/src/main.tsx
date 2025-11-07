@@ -11,6 +11,7 @@ import RequireAuth from './components/RequireAuth';
 import { ThemeProvider } from './components/ThemeProvider';
 import { ThemeToggle } from './components/ThemeToggle';
 import { UserMenu } from './components/UserMenu';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Pages
 import HomePage from './pages/HomePage';
@@ -193,7 +194,7 @@ function AppContent() {
         <Route path="/dashboard/favorites" element={<DashboardPage />} />
         <Route path="/dashboard/all" element={<DashboardPage />} />
         <Route path="/dashboard/category/:category" element={<DashboardPage />} />
-        <Route path="/services/:id" element={<ServiceDetailsPage />} />
+        <Route path="/services/:id" element={<ErrorBoundary><ServiceDetailsPage /></ErrorBoundary>} />
         <Route path="/services/:id/pods/:podName" element={<PodDetailsPage />} />
         <Route path="/tokens" element={<ApiTokensPage />} />
         <Route path="/secrets" element={<SecretsPage />} />

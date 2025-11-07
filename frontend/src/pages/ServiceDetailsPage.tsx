@@ -645,8 +645,8 @@ export default function ServiceDetailsPage() {
         </TkCard>
       )}
 
-      {/* Dependencies - TEMPORARILY DISABLED FOR DEBUGGING */}
-      {/* {dependencies.length > 0 && (
+      {/* Dependencies */}
+      {dependencies.length > 0 && (
         <TkCard>
           <TkCardHeader>
             <TkCardTitle>Dependencies</TkCardTitle>
@@ -690,7 +690,7 @@ export default function ServiceDetailsPage() {
             </div>
           </TkCardContent>
         </TkCard>
-      )} */}
+      )}
 
       {/* Resource Usage */}
       {resourceUsage && (
