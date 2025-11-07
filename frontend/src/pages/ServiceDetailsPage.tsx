@@ -124,7 +124,7 @@ export default function ServiceDetailsPage() {
   const [selectedPod, setSelectedPod] = useState<string | null>(null);
   const [podDescription, setPodDescription] = useState<string>('');
   const [loadingDescription, setLoadingDescription] = useState(false);
-  const [healthTimeRange, setHealthTimeRange] = useState<'hour' | 'day' | 'week'>('day');
+  const [healthTimeRange, setHealthTimeRange] = useState<'day' | 'week'>('day');
 
   // Get basic service info from store
   const service = services.find(s => s.id === id);
@@ -587,9 +587,8 @@ export default function ServiceDetailsPage() {
           <TkCardHeader>
             <div className="flex items-center justify-between">
               <TkCardTitle>Health History</TkCardTitle>
-              <TkFolderTabs value={healthTimeRange} onValueChange={(value) => setHealthTimeRange(value as 'hour' | 'day' | 'week')}>
+              <TkFolderTabs value={healthTimeRange} onValueChange={(value) => setHealthTimeRange(value as 'day' | 'week')}>
                 <TkFolderTabsList>
-                  <TkFolderTabsTrigger value="hour">Last Hour</TkFolderTabsTrigger>
                   <TkFolderTabsTrigger value="day">Last Day</TkFolderTabsTrigger>
                   <TkFolderTabsTrigger value="week">Last Week</TkFolderTabsTrigger>
                 </TkFolderTabsList>

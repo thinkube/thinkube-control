@@ -5,6 +5,7 @@ import { TkAppLayout, type TkNavItem } from 'thinkube-style';
 import { LayoutDashboard, Boxes, Layers, Container, Puzzle, Shield, Sliders, Lock, Key, Star, Grid2X2, Server, Code, BarChart3, Database, Cpu, FileText, Box } from 'lucide-react';
 import { Toaster } from 'sonner';
 import './globals.css';
+import 'thinkube-style/styles.css';
 
 // Components
 import RequireAuth from './components/RequireAuth';
