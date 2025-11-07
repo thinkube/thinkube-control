@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useServicesStore } from '@/stores/useServicesStore';
 import {
@@ -25,6 +25,7 @@ import { TkTooltip, TkControlledConfirmDialog } from 'thinkube-style/components/
 import { TkBrandIcon } from 'thinkube-style/components/brand-icons';
 import { TkSeparator, TkPageWrapper } from 'thinkube-style/components/utilities';
 import { TkCodeBlock } from 'thinkube-style/components/feedback';
+import { TkTabs, TkTabsList, TkTabsTrigger } from 'thinkube-style/components/navigation';
 import { toast } from 'sonner';
 import { HealthHistoryChart } from '@/components/HealthHistoryChart';
 
@@ -121,6 +122,7 @@ export default function ServiceDetailsPage() {
   const [selectedPod, setSelectedPod] = useState<string | null>(null);
   const [podDescription, setPodDescription] = useState<string>('');
   const [loadingDescription, setLoadingDescription] = useState(false);
+  const [healthTimeRange, setHealthTimeRange] = useState<'hour' | 'day' | 'week'>('day');
 
   // Get basic service info from store
   const service = services.find(s => s.id === id);
@@ -350,6 +352,25 @@ export default function ServiceDetailsPage() {
   const resourceUsage = serviceDetails?.resource_usage;
   const recentActions = serviceDetails?.recent_actions || [];
 
+  // Filter health history based on selected time range
+  const filteredHealthHistory = useMemo(() => {
+    if (!healthData?.health_history) return [];
+
+    const now = new Date();
+    const timeRanges = {
+      hour: 60 * 60 * 1000,      // 1 hour in milliseconds
+      day: 24 * 60 * 60 * 1000,  // 24 hours
+      week: 7 * 24 * 60 * 60 * 1000  // 7 days
+    };
+
+    const cutoffTime = new Date(now.getTime() - timeRanges[healthTimeRange]);
+
+    return healthData.health_history.filter(item => {
+      const itemTime = new Date(item.checked_at);
+      return itemTime >= cutoffTime;
+    });
+  }, [healthData?.health_history, healthTimeRange]);
+
   return (
     <TkPageWrapper>
       {/* Back button */}
@@ -545,10 +566,19 @@ export default function ServiceDetailsPage() {
       {healthData && healthData.health_history && healthData.health_history.length > 0 && (
         <TkCard>
           <TkCardHeader>
-            <TkCardTitle>Health History</TkCardTitle>
+            <div className="flex items-center justify-between">
+              <TkCardTitle>Health History</TkCardTitle>
+              <TkTabs value={healthTimeRange} onValueChange={(value) => setHealthTimeRange(value as 'hour' | 'day' | 'week')}>
+                <TkTabsList>
+                  <TkTabsTrigger value="hour">Last Hour</TkTabsTrigger>
+                  <TkTabsTrigger value="day">Last Day</TkTabsTrigger>
+                  <TkTabsTrigger value="week">Last Week</TkTabsTrigger>
+                </TkTabsList>
+              </TkTabs>
+            </div>
           </TkCardHeader>
           <TkCardContent>
-            <HealthHistoryChart data={healthData.health_history} />
+            <HealthHistoryChart data={filteredHealthHistory} />
           </TkCardContent>
         </TkCard>
       )}
