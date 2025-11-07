@@ -25,7 +25,7 @@ import { TkTooltip, TkControlledConfirmDialog } from 'thinkube-style/components/
 import { TkBrandIcon } from 'thinkube-style/components/brand-icons';
 import { TkSeparator, TkPageWrapper } from 'thinkube-style/components/utilities';
 import { TkCodeBlock } from 'thinkube-style/components/feedback';
-import { TkTabsRoot, TkTabsList, TkTabsTrigger } from 'thinkube-style/components/navigation';
+import { TkFolderTabs, TkFolderTabsList, TkFolderTabsTrigger } from 'thinkube-style/components/navigation';
 import { toast } from 'sonner';
 import { HealthHistoryChart } from '@/components/HealthHistoryChart';
 
@@ -587,13 +587,13 @@ export default function ServiceDetailsPage() {
           <TkCardHeader>
             <div className="flex items-center justify-between">
               <TkCardTitle>Health History</TkCardTitle>
-              <TkTabsRoot value={healthTimeRange} onValueChange={(value) => setHealthTimeRange(value as 'hour' | 'day' | 'week')}>
-                <TkTabsList>
-                  <TkTabsTrigger value="hour">Last Hour</TkTabsTrigger>
-                  <TkTabsTrigger value="day">Last Day</TkTabsTrigger>
-                  <TkTabsTrigger value="week">Last Week</TkTabsTrigger>
-                </TkTabsList>
-              </TkTabsRoot>
+              <TkFolderTabs value={healthTimeRange} onValueChange={(value) => setHealthTimeRange(value as 'hour' | 'day' | 'week')}>
+                <TkFolderTabsList>
+                  <TkFolderTabsTrigger value="hour">Last Hour</TkFolderTabsTrigger>
+                  <TkFolderTabsTrigger value="day">Last Day</TkFolderTabsTrigger>
+                  <TkFolderTabsTrigger value="week">Last Week</TkFolderTabsTrigger>
+                </TkFolderTabsList>
+              </TkFolderTabs>
             </div>
           </TkCardHeader>
           <TkCardContent>
