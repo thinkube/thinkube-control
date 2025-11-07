@@ -373,9 +373,17 @@ export default function ServiceDetailsPage() {
   const resourceUsage = serviceDetails?.resource_usage;
   const recentActions = Array.isArray(serviceDetails?.recent_actions) ? serviceDetails.recent_actions : [];
 
-  // Debug logging for dependencies
-  console.log('Service Details - Dependencies:', dependencies);
-  console.log('Service Details - Full serviceDetails:', serviceDetails);
+  // Debug logging
+  console.log('🔍 ServiceDetailsPage Data:', {
+    service,
+    serviceDetails,
+    healthData,
+    pods: { type: typeof pods, isArray: Array.isArray(pods), length: pods?.length },
+    endpoints: { type: typeof endpoints, isArray: Array.isArray(endpoints), length: endpoints?.length },
+    dependencies: { type: typeof dependencies, isArray: Array.isArray(dependencies), length: dependencies?.length },
+    recentActions: { type: typeof recentActions, isArray: Array.isArray(recentActions), length: recentActions?.length },
+    filteredHealthHistory: { type: typeof filteredHealthHistory, isArray: Array.isArray(filteredHealthHistory), length: filteredHealthHistory?.length }
+  });
 
   return (
     <TkPageWrapper>
