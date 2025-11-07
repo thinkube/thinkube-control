@@ -154,7 +154,7 @@ export default function ServiceDetailsPage() {
 
   // Filter health history based on selected time range - MUST be called on every render (before early returns)
   const filteredHealthHistory = useMemo(() => {
-    if (!healthData?.health_history) return [];
+    if (!healthData?.health_history || !Array.isArray(healthData.health_history)) return [];
 
     const now = new Date();
     const timeRanges = {
