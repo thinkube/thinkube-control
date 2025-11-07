@@ -321,8 +321,8 @@ export default function Templates() {
             {!loadingMetadata && templateMetadata && (
               <TemplateParameterForm
                 parameters={templateMetadata.parameters}
-                value={deployConfig}
-                onChange={setDeployConfig}
+                modelValue={deployConfig}
+                onUpdate={setDeployConfig}
               />
             )}
 

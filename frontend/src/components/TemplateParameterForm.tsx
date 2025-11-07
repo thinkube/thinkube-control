@@ -80,6 +80,7 @@ export function TemplateParameterForm({
   const [showOverwriteConfirm, setShowOverwriteConfirm] = useState(false)
   const [existingServiceInfo, setExistingServiceInfo] = useState<ExistingService | null>(null)
   const nameCheckTimeout = useRef<NodeJS.Timeout | null>(null)
+  const prevModelValueRef = useRef<Record<string, string | number | boolean> | null>(null)
 
   // Group parameters by their group field
   const parameterGroups = useMemo<ParameterGroup[]>(() => {
@@ -125,13 +126,23 @@ export function TemplateParameterForm({
     }
   }
 
-  // Watch for external changes to modelValue
+  // Watch for external changes to modelValue (but prevent infinite loops)
   useEffect(() => {
-    setFormData({
-      project_name: '',
-      project_description: '',
-      ...modelValue,
-    })
+    // Check if modelValue actually changed from the previous value (not just a new object reference)
+    const prevModelValue = prevModelValueRef.current
+
+    const hasChanged = !prevModelValue ||
+      Object.keys(modelValue).some(key => modelValue[key] !== prevModelValue[key]) ||
+      Object.keys(prevModelValue).some(key => !(key in modelValue))
+
+    if (hasChanged) {
+      setFormData({
+        project_name: '',
+        project_description: '',
+        ...modelValue,
+      })
+      prevModelValueRef.current = { ...modelValue }
+    }
   }, [modelValue])
 
   // Validate project name against existing services

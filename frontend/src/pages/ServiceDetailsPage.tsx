@@ -152,39 +152,25 @@ export default function ServiceDetailsPage() {
     loadDetails();
   }, [id, fetchServiceDetails]);
 
-  // Filter health history based on selected time range - MUST be called on every render (before early returns)
+  // Filter health history based on selected time range
   const filteredHealthHistory = useMemo(() => {
     if (!healthData?.health_history || !Array.isArray(healthData.health_history)) return [];
 
     const now = new Date();
     const timeRanges = {
-      hour: 60 * 60 * 1000,      // 1 hour in milliseconds
       day: 24 * 60 * 60 * 1000,  // 24 hours
       week: 7 * 24 * 60 * 60 * 1000  // 7 days
     };
 
     const cutoffTime = new Date(now.getTime() - timeRanges[healthTimeRange]);
 
-    console.log('🔍 Health History Filter Debug:', {
-      timeRange: healthTimeRange,
-      totalItems: healthData.health_history.length,
-      now: now.toISOString(),
-      cutoffTime: cutoffTime.toISOString(),
-      sampleTimestamps: healthData.health_history.slice(0, 3).map(item => ({
-        checked_at: item.checked_at,
-        parsed: new Date(item.checked_at).toISOString()
-      }))
-    });
-
     const filtered = healthData.health_history.filter(item => {
       const itemTime = new Date(item.checked_at);
       return itemTime >= cutoffTime;
     });
 
-    console.log('🔍 Filtered result count:', filtered.length);
-
     return filtered;
-  }, [healthData?.health_history, healthTimeRange]);
+  }, [healthData, healthTimeRange]);
 
   // Debug logging removed to reduce noise
 
