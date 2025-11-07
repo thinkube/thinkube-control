@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useNavigate } from 'react-router-dom'
 import {
   TkDialogRoot,
   TkDialogContent,
@@ -37,7 +37,7 @@ export function AddImageModal({
   onOpenChange,
   onImageAdded,
 }: AddImageModalProps) {
-  const router = useRouter()
+  const navigate = useNavigate()
   const { addImage, loading } = useHarborStore()
 
   const [form, setForm] = useState<FormData>({
@@ -99,7 +99,7 @@ export function AddImageModal({
 
       if (result.deployment_id) {
         handleClose()
-        router.push(`/harbor-images/mirror/${result.deployment_id}`)
+        navigate(`/harbor-images/mirror/${result.deployment_id}`)
       } else if (result.job) {
         toast({
           title: 'Success',
