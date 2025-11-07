@@ -436,25 +436,25 @@ export function HarborImages() {
             <TkStatCard
               title="Total Images"
               value={store.stats?.total?.toString() || '0'}
-              valueClassName="text-primary"
+              variant="primary"
             />
             <TkStatCard
               title="System Images"
               value={store.stats?.by_category?.system?.toString() || '0'}
               description="Protected from deletion"
-              valueClassName="text-info"
+              variant="default"
             />
             <TkStatCard
               title="Built Images"
               value={store.stats?.by_category?.custom?.toString() || '0'}
               description="Custom built images"
-              valueClassName="text-success"
+              variant="success"
             />
             <TkStatCard
               title="User Images"
               value={store.stats?.by_category?.user?.toString() || '0'}
               description="Manually added"
-              valueClassName="text-warning"
+              variant="warning"
             />
           </div>
 
