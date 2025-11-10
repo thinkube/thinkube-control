@@ -81,7 +81,7 @@ class HarborWebhookStage(BaseModel):
     tag: str
     backend: str
     frontend: str
-    adapterVersion: str = "0.1.1"
+    adapterVersion: str = "0.1.0"
 
 
 class GitOpsUpdateStage(BaseModel):
@@ -92,7 +92,7 @@ class GitOpsUpdateStage(BaseModel):
     appName: str
     tag: str
     status: str = "RUNNING"
-    adapterVersion: str = "0.1.1"
+    adapterVersion: str = "0.1.0"
 
 
 class ArgoCDPipeline(BaseModel):
@@ -208,7 +208,7 @@ async def create_stage_from_gitea(
     # Add source info to details
     details = data.details.copy()
     details["source"] = "gitea-webhook"
-    details["scriptVersion"] = "0.1.1"
+    details["scriptVersion"] = "0.1.0"
 
     stage = PipelineStage(
         pipeline_id=pipeline_id,

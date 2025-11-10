@@ -15,6 +15,7 @@ export interface Service {
   icon?: string;
   gpu_count?: number;
   gpu_nodes?: string[];
+  component_version?: string;
   latest_health?: {
     status: string;
     checked_at: string;

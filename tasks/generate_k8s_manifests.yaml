@@ -221,7 +221,7 @@
                     "component": "argocd",
                     "appName": "{{ project_name }}",
                     "namespace": "{{ k8s_namespace }}",
-                    "adapterVersion": "1.0.0"
+                    "adapterVersion": "0.1.0"
                   }'
                   
                   echo "Creating deployment_completed stage..."
@@ -344,7 +344,7 @@
                     "component": "argocd",
                     "appName": "{{ project_name }}",
                     "namespace": "{{ k8s_namespace }}",
-                    "adapterVersion": "1.0.0",
+                    "adapterVersion": "0.1.0",
                     "status": "FAILED"
                   }'
                   

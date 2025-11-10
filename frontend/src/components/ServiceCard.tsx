@@ -270,6 +270,9 @@ export function ServiceCard({
           {service.category && (
             <TkBadge variant="outline">{service.category}</TkBadge>
           )}
+          {service.component_version && (
+            <TkBadge variant="outline">v{service.component_version}</TkBadge>
+          )}
           {service.gpu_count && service.gpu_count > 0 && (
             <TkGpuBadge gpuCount={service.gpu_count} />
           )}
