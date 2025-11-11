@@ -52,9 +52,12 @@
     if [ -d "{{ gitea_repo_name }}" ]; then
       rm -rf "{{ gitea_repo_name }}"
     fi
-    
+
     # Clear any existing Copier cache to force fresh clone
-    rm -rf /tmp/copier*
+    # If cache exists, it means previous copier run got stuck
+    if ls /tmp/copier* 1> /dev/null 2>&1; then
+      rm -rf /tmp/copier*
+    fi
     
     # Configure SSH for private repositories if key path is provided
     {% if ssh_private_key_path is defined and ssh_private_key_path %}
