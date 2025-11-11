@@ -17,7 +17,7 @@ spec:
   resources:
     requests:
       storage: 1Gi
-  storageClassName: microk8s-hostpath
+  storageClassName: k8s-hostpath
 {% elif container.gpu is defined and container.gpu.count is defined %}
 # Auto-generated PVCs for GPU containers (AI/ML model storage)
 ---
@@ -38,7 +38,7 @@ spec:
     requests:
       # Large storage for AI models (adjust based on model size requirements)
       storage: 100Gi
-  storageClassName: microk8s-hostpath
+  storageClassName: k8s-hostpath
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -57,6 +57,6 @@ spec:
     requests:
       # Cache storage for HuggingFace and other model caches
       storage: 50Gi
-  storageClassName: microk8s-hostpath
+  storageClassName: k8s-hostpath
 {% endif %}
 {% endfor %}
