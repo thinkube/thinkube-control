@@ -13,12 +13,12 @@ import { TkTextarea } from 'thinkube-style/components/forms-inputs'
 import { TkLabel } from 'thinkube-style/components/forms-inputs'
 import { TkBadge } from 'thinkube-style/components/buttons-badges'
 import {
-  TkTkTable,
-  TkTkTableBody,
-  TkTkTableCell,
-  TkTkTableHead,
-  TkTkTableHeader,
-  TkTkTableRow,
+  TkTable,
+  TkTableBody,
+  TkTableCell,
+  TkTableHead,
+  TkTableHeader,
+  TkTableRow,
 } from 'thinkube-style/components/tables'
 import { Loader2, Plus, Download, Pencil, Trash2, Eye, EyeOff } from 'lucide-react'
 import axios from '../lib/axios'
