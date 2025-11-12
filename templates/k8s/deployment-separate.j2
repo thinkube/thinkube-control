@@ -18,6 +18,10 @@ spec:
     matchLabels:
       app.kubernetes.io/name: {{ project_name }}
       app.kubernetes.io/component: {{ container.name }}
+  {% if container.gpu is defined and container.gpu.count is defined %}
+  # Longer progress deadline for GPU workloads that may need to download large models
+  progressDeadlineSeconds: 3600  # 1 hour for model downloads
+  {% endif %}
   template:
     metadata:
       labels:
