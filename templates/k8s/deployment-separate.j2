@@ -29,9 +29,11 @@ spec:
 {% if container.gpu is defined and container.gpu.memory is defined %}
       affinity:
         nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-            - matchExpressions:
+          # Use preferred instead of required to support both discrete GPUs and unified memory systems
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
               - key: nvidia.com/gpu.memory
                 operator: Gt
                 # Convert memory string to MB for comparison (e.g., "20Gi" -> 20480)
