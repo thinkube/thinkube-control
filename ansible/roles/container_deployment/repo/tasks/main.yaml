@@ -130,6 +130,17 @@
     manifest_content: "{{ manifest_file.content | b64decode | from_yaml }}"
   when: manifest_file is not failed
 
+- name: Ensure application namespace exists
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ deployment_namespace }}"
+  when: manifest_file is not failed
+
 - name: Process application secrets
   ansible.builtin.include_tasks: "/home/thinkube-control/tasks/inject_secrets.yaml"
   vars:
