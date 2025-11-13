@@ -41,6 +41,13 @@ interface PlaybookExecutorHandle {
   startExecution: (wsPath: string) => void
 }
 
+interface AvailableTemplate {
+  name: string
+  description: string
+  url: string
+  org: string
+}
+
 export default function Templates() {
   const [searchParams, setSearchParams] = useSearchParams()
   const [showDeployForm, setShowDeployForm] = useState(false)
@@ -52,6 +59,8 @@ export default function Templates() {
   const [isDeploying, setIsDeploying] = useState(false)
   const [deploymentId, setDeploymentId] = useState<string | null>(null)
   const [deploymentFailed, setDeploymentFailed] = useState(false)
+  const [availableTemplates, setAvailableTemplates] = useState<AvailableTemplate[]>([])
+  const [loadingTemplates, setLoadingTemplates] = useState(false)
   const [deployConfig, setDeployConfig] = useState<DeployConfig>({
     project_name: '',
     project_description: ''
@@ -152,6 +161,29 @@ export default function Templates() {
       isLoadingRef.current = false
     }
   }, []) // No dependencies - function never changes
+
+  // Fetch available templates from metadata
+  useEffect(() => {
+    const fetchTemplates = async () => {
+      setLoadingTemplates(true)
+      try {
+        const token = localStorage.getItem('access_token')
+        const response = await api.get('/templates/list', {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+
+        if (response.data && response.data.templates) {
+          setAvailableTemplates(response.data.templates)
+        }
+      } catch (error) {
+        console.error('Failed to fetch available templates:', error)
+      } finally {
+        setLoadingTemplates(false)
+      }
+    }
+
+    fetchTemplates()
+  }, [])
 
   // Check for deploy parameter on mount
   useEffect(() => {
@@ -408,82 +440,44 @@ export default function Templates() {
           Available Templates
         </h2>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {/* Vue + FastAPI Template */}
-          <TkCard className="flex flex-col h-full">
-            <TkCardHeader>
-              <TkCardTitle>Vue.js + FastAPI</TkCardTitle>
-            </TkCardHeader>
-            <TkCardContent className="flex-1 space-y-4">
-              <p className="text-sm opacity-80">Full-stack web application with authentication and i18n</p>
-              <div className="flex flex-wrap gap-2">
-                <TkBadge variant="default" size="sm">Vue.js 3</TkBadge>
-                <TkBadge variant="default" size="sm">FastAPI</TkBadge>
-                <TkBadge variant="warning" size="sm">Keycloak</TkBadge>
-                <TkBadge variant="default" size="sm">PostgreSQL</TkBadge>
-              </div>
-            </TkCardContent>
-            <TkCardFooter className="flex justify-end">
-              <TkButton
-                variant="default"
-                size="sm"
-                onClick={() => selectTemplate('https://github.com/thinkube/tkt-webapp-vue-fastapi')}
-              >
-                Deploy
-              </TkButton>
-            </TkCardFooter>
-          </TkCard>
+        {loadingTemplates && (
+          <div className="flex items-center justify-center py-12">
+            <div className="text-center">
+              <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-4" />
+              <p>Loading templates...</p>
+            </div>
+          </div>
+        )}
 
-          {/* AI Model Inference Server */}
-          <TkCard className="flex flex-col h-full">
-            <TkCardHeader>
-              <TkCardTitle>vLLM Server</TkCardTitle>
-            </TkCardHeader>
-            <TkCardContent className="flex-1 space-y-4">
-              <p className="text-sm opacity-80">High-performance LLM inference (requires RTX 3090+)</p>
-              <div className="flex flex-wrap gap-2">
-                <TkBadge variant="default" size="sm">Gradio</TkBadge>
-                <TkBadge variant="default" size="sm">FastAPI</TkBadge>
-                <TkBadge variant="success" size="sm">GPU</TkBadge>
-                <TkBadge variant="default" size="sm">HuggingFace</TkBadge>
-              </div>
-            </TkCardContent>
-            <TkCardFooter className="flex justify-end">
-              <TkButton
-                variant="default"
-                size="sm"
-                onClick={() => selectTemplate('https://github.com/thinkube/tkt-vllm-gradio')}
-              >
-                Deploy
-              </TkButton>
-            </TkCardFooter>
-          </TkCard>
+        {!loadingTemplates && availableTemplates.length === 0 && (
+          <TkInfoAlert title="No Templates Available">
+            <p>No application templates found in the metadata repository.</p>
+          </TkInfoAlert>
+        )}
 
-          {/* Stable Diffusion Template */}
-          <TkCard className="flex flex-col h-full">
-            <TkCardHeader>
-              <TkCardTitle>Stable Diffusion</TkCardTitle>
-            </TkCardHeader>
-            <TkCardContent className="flex-1 space-y-4">
-              <p className="text-sm opacity-80">AI image generation with SDXL and SD 1.5 models</p>
-              <div className="flex flex-wrap gap-2">
-                <TkBadge variant="default" size="sm">Diffusers</TkBadge>
-                <TkBadge variant="default" size="sm">Gradio</TkBadge>
-                <TkBadge variant="success" size="sm">GPU</TkBadge>
-                <TkBadge variant="default" size="sm">HuggingFace</TkBadge>
-              </div>
-            </TkCardContent>
-            <TkCardFooter className="flex justify-end">
-              <TkButton
-                variant="default"
-                size="sm"
-                onClick={() => selectTemplate('https://github.com/thinkube/tkt-stable-diffusion')}
-              >
-                Deploy
-              </TkButton>
-            </TkCardFooter>
-          </TkCard>
-        </div>
+        {!loadingTemplates && availableTemplates.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {availableTemplates.map((template) => (
+              <TkCard key={template.name} className="flex flex-col h-full">
+                <TkCardHeader>
+                  <TkCardTitle>{template.name.replace('tkt-', '').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</TkCardTitle>
+                </TkCardHeader>
+                <TkCardContent className="flex-1">
+                  <p className="text-sm opacity-80">{template.description}</p>
+                </TkCardContent>
+                <TkCardFooter className="flex justify-end">
+                  <TkButton
+                    variant="default"
+                    size="sm"
+                    onClick={() => selectTemplate(template.url)}
+                  >
+                    Deploy
+                  </TkButton>
+                </TkCardFooter>
+              </TkCard>
+            ))}
+          </div>
+        )}
       </div>
     </TkPageWrapper>
   )
