@@ -124,7 +124,8 @@ async def list_available_templates(
                         detail="Failed to fetch template metadata from thinkube-metadata repository"
                     )
 
-                metadata = await response.json()
+                # GitHub raw files return text/plain, so we need to explicitly allow JSON parsing
+                metadata = await response.json(content_type=None)
 
         # Filter for application_template type
         templates = []
