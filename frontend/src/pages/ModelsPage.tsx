@@ -90,7 +90,7 @@ export default function ModelsPage() {
 
     // No workflow and not downloaded
     return {
-      label: 'Available',
+      label: 'Not Mirrored',
       icon: null,
       variant: 'outline',
     };

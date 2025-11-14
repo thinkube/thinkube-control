@@ -197,7 +197,7 @@ class ModelDownloaderService:
         # Configuration
         self.argo_namespace = "argo"
         self.models_pvc_name = "thinkube-models"
-        self.models_namespace = "thinkube-ai"
+        self.models_namespace = "thinkube-control"
         self.parallelism = 3  # Max concurrent downloads
 
     def get_available_models(self) -> List[Dict]:
