@@ -164,6 +164,8 @@ spec:
           mountPath: /home
         - name: container-storage
           mountPath: /var/lib/containers
+        - name: models-pvc
+          mountPath: /models
       # Add nodeSelector to ensure pod runs on control plane node
       nodeSelector:
         kubernetes.io/hostname: {{ master_node_name }}
@@ -182,5 +184,8 @@ spec:
         hostPath:
           path: /var/lib/containers
           type: DirectoryOrCreate
+      - name: models-pvc
+        persistentVolumeClaim:
+          claimName: thinkube-models
       imagePullSecrets:
       - name: app-pull-secret
