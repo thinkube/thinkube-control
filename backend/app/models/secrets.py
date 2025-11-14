@@ -24,7 +24,7 @@ class Secret(Base):
     __tablename__ = "secrets"
 
     id = Column(Integer, primary_key=True)
-    name = Column(String(255), nullable=False, unique=True)  # e.g., HUGGINGFACE_TOKEN
+    name = Column(String(255), nullable=False, unique=True)  # e.g., HF_TOKEN
     description = Column(Text, nullable=True)
     encrypted_value = Column(Text, nullable=False)
 

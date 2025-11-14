@@ -282,7 +282,7 @@ export default function SecretsPage() {
                 id="name"
                 value={secretForm.name}
                 onChange={(e) => setSecretForm({ ...secretForm, name: e.target.value })}
-                placeholder="e.g., HUGGINGFACE_TOKEN"
+                placeholder="e.g., HF_TOKEN"
                 disabled={!!editingSecret}
                 required
                 pattern="^[A-Z][A-Z0-9_]*$"

@@ -20,7 +20,7 @@ router = APIRouter(tags=["secrets"])
 
 
 class SecretCreate(BaseModel):
-    name: str = Field(..., description="Secret name (e.g., HUGGINGFACE_TOKEN)")
+    name: str = Field(..., description="Secret name (e.g., HF_TOKEN)")
     description: Optional[str] = Field(None, description="Secret description")
     value: str = Field(..., description="Secret value (will be encrypted)")
 

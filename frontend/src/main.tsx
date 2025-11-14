@@ -13,6 +13,7 @@ import { ThemeProvider } from './components/ThemeProvider';
 import { ThemeToggle } from './components/ThemeToggle';
 import { UserMenu } from './components/UserMenu';
 import ErrorBoundary from './components/ErrorBoundary';
+import { DownloadIndicator } from './components/DownloadIndicator';
 
 // Pages
 import HomePage from './pages/HomePage';
@@ -26,6 +27,7 @@ import SecretsPage from './pages/SecretsPage';
 import OptionalComponentsPage from './pages/OptionalComponentsPage';
 import JupyterHubConfigPage from './pages/JupyterHubConfigPage';
 import Templates from './pages/Templates';
+import ModelsPage from './pages/ModelsPage';
 import { HarborImages } from './pages/HarborImages';
 import { ImageMirrorDeployment } from './pages/ImageMirrorDeployment';
 
@@ -61,6 +63,7 @@ const baseNavigationItems: TkNavItem[] = [
     lucideIcon: Boxes,
     isGroup: true,
     children: [
+      { id: "models", label: "AI Models", lucideIcon: Database, href: "/models" },
       { id: "templates", label: "Templates", lucideIcon: Layers, href: "/templates" },
       { id: "harbor-images", label: "Harbor Images", lucideIcon: Container, href: "/harbor-images" },
       { id: "optional-components", label: "Optional Components", lucideIcon: Puzzle, href: "/optional-components" },
@@ -121,6 +124,7 @@ function AppContent() {
     const routes: Record<string, string> = {
       favorites: '/dashboard/favorites',
       'all-services': '/dashboard/all',
+      models: '/models',
       templates: '/templates',
       'harbor-images': '/harbor-images',
       'optional-components': '/optional-components',
@@ -149,6 +153,7 @@ function AppContent() {
       const category = path.split('/').pop();
       return `category-${category}`;
     }
+    if (path.startsWith('/models')) return 'models';
     if (path.startsWith('/templates')) return 'templates';
     if (path.startsWith('/harbor-images')) return 'harbor-images';
     if (path.startsWith('/optional-components')) return 'optional-components';
@@ -171,6 +176,7 @@ function AppContent() {
       ).join(' ');
       return `Dashboard - ${formatted}`;
     }
+    if (path.startsWith('/models')) return 'AI Models';
     if (path.startsWith('/templates')) return 'Templates';
     if (path.startsWith('/harbor-images')) return 'Harbor Images';
     if (path.startsWith('/optional-components')) return 'Optional Components';
@@ -188,7 +194,12 @@ function AppContent() {
       logoText="Thinkube Control"
       topBarTitle={getPageTitle()}
       topBarLeftContent={<ThemeToggle />}
-      topBarContent={<UserMenu />}
+      topBarContent={
+        <div className="flex items-center gap-3">
+          <DownloadIndicator />
+          <UserMenu />
+        </div>
+      }
     >
       <Routes>
         <Route path="/" element={<DashboardPage />} />
@@ -197,6 +208,7 @@ function AppContent() {
         <Route path="/dashboard/category/:category" element={<DashboardPage />} />
         <Route path="/services/:id" element={<ErrorBoundary><ServiceDetailsPage /></ErrorBoundary>} />
         <Route path="/services/:id/pods/:podName" element={<PodDetailsPage />} />
+        <Route path="/models" element={<ModelsPage />} />
         <Route path="/tokens" element={<ApiTokensPage />} />
         <Route path="/secrets" element={<SecretsPage />} />
         <Route path="/optional-components" element={<OptionalComponentsPage />} />

@@ -20,19 +20,6 @@ class OptionalComponentService:
     
     # Hardcoded component definitions for simplicity and maintainability
     COMPONENTS = {
-        "jupyterhub": {
-            "display_name": "JupyterHub",
-            "description": "Multi-user Jupyter notebook environment for data science and AI development",
-            "category": "ai",
-            "icon": "/icons/tk_ai.svg",
-            "requirements": ["keycloak", "harbor"],
-            "namespace": "jupyterhub",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        },
         "prometheus": {
             "display_name": "Prometheus",
             "description": "Metrics collection and storage for cluster monitoring",
@@ -403,11 +390,15 @@ class OptionalComponentService:
         # These are part of the base Thinkube platform
         CORE_COMPONENTS = [
             "keycloak",
-            "harbor", 
+            "harbor",
             "postgresql",
             "gitea",
             "argocd",
-            "argo-workflows"
+            "argo-workflows",
+            "jupyterhub",
+            "mlflow",
+            "seaweedfs",
+            "juicefs"
         ]
         
         # If it's a core component, assume it's running
