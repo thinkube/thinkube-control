@@ -72,7 +72,7 @@ export const useModelDownloadsStore = create<ModelDownloadsState>((set, get) => 
   fetchModels: async () => {
     try {
       set({ loading: true, error: null });
-      const response = await api.get('/api/models/catalog');
+      const response = await api.get('/models/catalog');
       set({ models: response.data.models, loading: false });
     } catch (error: any) {
       const errorMsg = error.response?.data?.detail || 'Failed to fetch models';
@@ -90,7 +90,7 @@ export const useModelDownloadsStore = create<ModelDownloadsState>((set, get) => 
         payload.hf_token = hfToken;
       }
 
-      const response = await api.post('/api/models/download', payload);
+      const response = await api.post('/models/download', payload);
 
       const model = get().models.find(m => m.id === modelId);
       const modelName = model?.name || modelId;
@@ -115,7 +115,7 @@ export const useModelDownloadsStore = create<ModelDownloadsState>((set, get) => 
 
   fetchDownloads: async () => {
     try {
-      const response = await api.get('/api/models/downloads');
+      const response = await api.get('/models/downloads');
       const previousDownloads = get().downloads;
       const newDownloads: DownloadStatus[] = response.data.downloads;
 
@@ -153,7 +153,7 @@ export const useModelDownloadsStore = create<ModelDownloadsState>((set, get) => 
 
   cancelDownload: async (workflowId: string) => {
     try {
-      await api.delete(`/api/models/downloads/${workflowId}`);
+      await api.delete(`/models/downloads/${workflowId}`);
       toast.success('Download cancelled');
       await get().fetchDownloads();
     } catch (error: any) {
