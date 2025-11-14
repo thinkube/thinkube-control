@@ -95,7 +95,7 @@ export const useModelDownloadsStore = create<ModelDownloadsState>((set, get) => 
       const model = get().models.find(m => m.id === modelId);
       const modelName = model?.name || modelId;
 
-      toast.success(`Download started: ${modelName}`);
+      toast.success(`Mirror started: ${modelName}`);
 
       // Immediately fetch downloads to update UI
       await get().fetchDownloads();
@@ -107,7 +107,7 @@ export const useModelDownloadsStore = create<ModelDownloadsState>((set, get) => 
 
       set({ loading: false });
     } catch (error: any) {
-      const errorMsg = error.response?.data?.detail || 'Failed to start download';
+      const errorMsg = error.response?.data?.detail || 'Failed to start mirror';
       set({ error: errorMsg, loading: false });
       toast.error(errorMsg);
     }
@@ -127,14 +127,14 @@ export const useModelDownloadsStore = create<ModelDownloadsState>((set, get) => 
         if (prevDl.is_running && newDl && newDl.is_complete) {
           const model = get().models.find(m => m.id === newDl.model_id);
           const modelName = model?.name || newDl.model_id || 'Model';
-          toast.success(`✓ ${modelName} downloaded successfully!`);
+          toast.success(`✓ ${modelName} mirrored successfully!`);
         }
 
         // If download just failed
         if (prevDl.is_running && newDl && newDl.is_failed) {
           const model = get().models.find(m => m.id === newDl.model_id);
           const modelName = model?.name || newDl.model_id || 'Model';
-          toast.error(`✗ ${modelName} download failed`);
+          toast.error(`✗ ${modelName} mirror failed`);
         }
       });
 
@@ -154,10 +154,10 @@ export const useModelDownloadsStore = create<ModelDownloadsState>((set, get) => 
   cancelDownload: async (workflowId: string) => {
     try {
       await api.delete(`/models/downloads/${workflowId}`);
-      toast.success('Download cancelled');
+      toast.success('Mirror cancelled');
       await get().fetchDownloads();
     } catch (error: any) {
-      const errorMsg = error.response?.data?.detail || 'Failed to cancel download';
+      const errorMsg = error.response?.data?.detail || 'Failed to cancel mirror';
       toast.error(errorMsg);
     }
   },
