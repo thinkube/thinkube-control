@@ -442,7 +442,7 @@ print(f'Model path: {{path}}')
                 kind="Job",
                 metadata=client.V1ObjectMeta(
                     name=job_name,
-                    namespace=self.models_pvc_namespace
+                    namespace=self.models_namespace
                 ),
                 spec=client.V1JobSpec(
                     ttl_seconds_after_finished=60,  # Auto-cleanup after 60s
@@ -478,7 +478,7 @@ print(f'Model path: {{path}}')
             )
 
             # Submit the Job
-            batch_v1.create_namespaced_job(namespace=self.models_pvc_namespace, body=job)
+            batch_v1.create_namespaced_job(namespace=self.models_namespace, body=job)
 
             # Wait for Job to complete (with timeout)
             import time
@@ -488,14 +488,14 @@ print(f'Model path: {{path}}')
             while time.time() - start_time < timeout:
                 job_status = batch_v1.read_namespaced_job_status(
                     name=job_name,
-                    namespace=self.models_pvc_namespace
+                    namespace=self.models_namespace
                 )
 
                 if job_status.status.succeeded:
                     # Get pod logs
                     core_v1 = client.CoreV1Api()
                     pods = core_v1.list_namespaced_pod(
-                        namespace=self.models_pvc_namespace,
+                        namespace=self.models_namespace,
                         label_selector=f"job={job_name}"
                     )
 
@@ -503,7 +503,7 @@ print(f'Model path: {{path}}')
                         pod_name = pods.items[0].metadata.name
                         logs = core_v1.read_namespaced_pod_log(
                             name=pod_name,
-                            namespace=self.models_pvc_namespace
+                            namespace=self.models_namespace
                         )
 
                         # Parse results
