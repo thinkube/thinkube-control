@@ -8,6 +8,9 @@ WORKDIR /app
 # Including: Python packages, system tools (git, podman, ssh, debugging tools), podman config
 # See: thinkube/ansible/.../base-images/python-base.Containerfile.j2
 
+# Install hera for Argo Workflows integration
+RUN pip install --no-cache-dir hera-workflows
+
 # Copy and install fastapi-mcp-extended package
 COPY fastapi-mcp-extended /app/fastapi-mcp-extended
 RUN pip install --no-cache-dir /app/fastapi-mcp-extended
