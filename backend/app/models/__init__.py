@@ -7,6 +7,7 @@ from app.models.secrets import Secret, AppSecret
 from app.models.container_images import ContainerImage, ImageMirrorJob
 from app.models.custom_images import CustomImageBuild
 from app.models.jupyterhub_config import JupyterHubConfig
+from app.models.model_mirrors import ModelMirrorJob
 
 __all__ = [
     "Pipeline",
@@ -23,4 +24,5 @@ __all__ = [
     "ImageMirrorJob",
     "CustomImageBuild",
     "JupyterHubConfig",
+    "ModelMirrorJob",
 ]

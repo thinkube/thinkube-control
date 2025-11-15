@@ -363,6 +363,19 @@ except Exception as e:
                 hera_models.EnvVar(
                     name="MLFLOW_TRACKING_URI",
                     value=self.mlflow_uri
+                ),
+                # XET Configuration for optimal performance
+                hera_models.EnvVar(
+                    name="HF_HUB_DISABLE_XET",
+                    value="0"  # Keep XET enabled
+                ),
+                hera_models.EnvVar(
+                    name="HF_XET_HIGH_PERFORMANCE",
+                    value="1"  # Max network/disk usage
+                ),
+                hera_models.EnvVar(
+                    name="HF_XET_CHUNK_CACHE_SIZE_BYTES",
+                    value="10000000000"  # 10GB cache for better resume capability
                 )
             ]
 
