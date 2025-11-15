@@ -273,9 +273,9 @@ class ModelDownloaderService:
                 limit=3,
                 retry_policy="OnFailure",
                 backoff=hera_models.Backoff(
-                    duration="5m",
+                    duration="1m",
                     factor=2,
-                    max_duration="30m"
+                    max_duration="10m"
                 )
             ),
             volumes=[
