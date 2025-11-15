@@ -192,6 +192,6 @@
 
 - name: Hard refresh application to detect source type
   ansible.builtin.shell: |
-    argocd app get {{ app_name }} --hard-refresh || true
+    ~/.local/bin/argocd app get {{ app_name }} --hard-refresh || true
   register: app_refresh_result
 
