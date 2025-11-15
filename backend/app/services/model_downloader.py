@@ -270,7 +270,7 @@ class ModelDownloaderService:
                 "workflow-type": "model-download"
             },
             retry_strategy=hera_models.RetryStrategy(
-                limit=3,
+                limit=10,
                 retry_policy="OnFailure",
                 backoff=hera_models.Backoff(
                     duration="1m",
