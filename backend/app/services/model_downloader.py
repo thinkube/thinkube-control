@@ -372,11 +372,9 @@ except Exception as e:
                 hera_models.EnvVar(
                     name="HF_XET_HIGH_PERFORMANCE",
                     value="1"  # Max network/disk usage
-                ),
-                hera_models.EnvVar(
-                    name="HF_XET_CHUNK_CACHE_SIZE_BYTES",
-                    value="10000000000"  # 10GB cache for better resume capability
                 )
+                # Note: Chunk cache disabled by default (0 bytes) which is optimal
+                # for large models (3GB-120GB) to avoid consuming RAM unnecessarily
             ]
 
             # Get Harbor registry from environment
