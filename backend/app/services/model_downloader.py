@@ -198,10 +198,12 @@ class ModelDownloaderService:
         self.custom_api = client.CustomObjectsApi()
 
         # Configuration
-        self.argo_namespace = "argo"
+        self.workflow_namespace = "thinkube-control"  # Run workflows in same namespace as backend
         self.models_pvc_name = "thinkube-models"
-        self.models_namespace = "thinkube-control"
         self.parallelism = 3  # Max concurrent downloads
+
+        # Get MLflow URI from environment
+        self.mlflow_uri = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000")
 
         # Configure Hera workflows service for in-cluster Argo Workflows access
         # Read service account token for authentication
@@ -217,7 +219,7 @@ class ModelDownloaderService:
             host="http://argo-workflows-server.argo.svc.cluster.local:2746",
             verify_ssl=False,
             token=token,
-            namespace=self.argo_namespace
+            namespace=self.workflow_namespace
         )
 
     def get_available_models(self) -> List[Dict]:
@@ -252,17 +254,30 @@ class ModelDownloaderService:
 
         logger.info(f"Creating download workflow for model: {model_id}")
 
+        # Escape model_id for safe use in Python script
+        safe_model_id = model_id.replace("'", "\\'")
+
         # Create Hera workflow
         with Workflow(
             generate_name="model-dl-",
-            namespace=self.argo_namespace,
+            namespace=self.workflow_namespace,
             workflows_service=self.workflows_service,
+            service_account_name="thinkube-control",
             entrypoint="download",
             parallelism=self.parallelism,
+            retry_strategy=hera_models.RetryStrategy(
+                limit=3,
+                retry_policy="OnFailure",
+                backoff=hera_models.Backoff(
+                    duration="5m",
+                    factor=2,
+                    max_duration="30m"
+                )
+            ),
             volumes=[
                 hera_models.Volume(
                     name="models-pvc",
-                    persistent_volume_claim={"claim_name": self.models_pvc_name}
+                    persistent_volume_claim={"claimName": self.models_pvc_name}  # Fixed: claimName not claim_name
                 )
             ]
         ) as w:
@@ -273,35 +288,34 @@ import shutil
 from huggingface_hub import snapshot_download
 import mlflow
 
-# Set HuggingFace cache to temp location on PVC
-temp_cache = '/models/temp-downloads'
-os.makedirs(temp_cache, exist_ok=True)
-os.environ['HF_HOME'] = temp_cache
+# Get MLflow URI from environment
+mlflow_uri = os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow.mlflow.svc.cluster.local:5000')
+mlflow.set_tracking_uri(mlflow_uri)
 
-# Configure MLflow tracking URI
-mlflow.set_tracking_uri('http://mlflow.mlflow.svc.cluster.local:5000')
+model_id = '{safe_model_id}'
+print(f'Starting download of {{model_id}}...')
 
-print(f'Starting download of {model_id}...')
-print(f'Temporary cache directory: {{temp_cache}}')
-
-# Download model files to temp location
-path = snapshot_download(
-    repo_id='{model_id}',
-    cache_dir=temp_cache,
-    resume_download=True
-)
-
-print(f'✓ Download complete!')
-print(f'Model path: {{path}}')
-
-# Register model in MLflow by logging the files
-print(f'Registering model in MLflow...')
-model_name = '{model_id}'.replace('/', '-')
+# Download model files directly to clean directory (not cache)
+download_dir = '/models/downloads'
+os.makedirs(download_dir, exist_ok=True)
 
 try:
+    # Use local_dir for clean model files instead of cache_dir
+    model_path = snapshot_download(
+        repo_id=model_id,
+        local_dir=os.path.join(download_dir, model_id.replace('/', '-')),
+        resume_download=True
+    )
+
+    print(f'✓ Download complete! Model at: {{model_path}}')
+
+    # Register model in MLflow
+    print(f'Registering model in MLflow...')
+    model_name = model_id.replace('/', '-')
+
     with mlflow.start_run(run_name=f"mirror-{{model_name}}"):
-        # Log the model directory as an artifact (copies to MLflow artifact store)
-        mlflow.log_artifact(path, artifact_path="model")
+        # Log the model directory as an artifact
+        mlflow.log_artifact(model_path, artifact_path="model")
 
         # Register the model
         mlflow.register_model(
@@ -311,16 +325,20 @@ try:
 
     print(f'✓ Model registered in MLflow as: {{model_name}}')
 
-    # Delete temporary files after successful MLflow registration
-    print(f'Cleaning up temporary download cache...')
-    shutil.rmtree(temp_cache)
-    print(f'✓ Temporary files deleted')
+    # Clean up downloaded files after MLflow has copied them
+    print(f'Cleaning up downloaded files...')
+    shutil.rmtree(model_path)
+    print(f'✓ Cleanup complete')
+
 except Exception as e:
-    print(f'Error: Could not register model in MLflow: {{e}}')
+    print(f'Error during download/registration: {{e}}')
+    # Clean up on failure
+    if os.path.exists(download_dir):
+        shutil.rmtree(download_dir)
     raise
 """
 
-            # Container environment variables - HF_TOKEN from secret
+            # Container environment variables
             env_vars = [
                 hera_models.EnvVar(
                     name="HF_TOKEN",
@@ -330,6 +348,10 @@ except Exception as e:
                             key="token"
                         )
                     )
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_TRACKING_URI",
+                    value=self.mlflow_uri
                 )
             ]
 
@@ -342,6 +364,7 @@ except Exception as e:
             Container(
                 name="download",
                 image=model_mirror_image,
+                image_pull_secrets=[hera_models.LocalObjectReference(name="app-pull-secret")],
                 command=["python", "-c"],
                 args=[download_script],
                 volume_mounts=[
@@ -351,7 +374,8 @@ except Exception as e:
                 resources=hera_models.ResourceRequirements(
                     requests={"memory": "2Gi", "cpu": "1"},
                     limits={"memory": "4Gi", "cpu": "2"}
-                )
+                ),
+                active_deadline_seconds=3600  # 1 hour timeout
             )
 
         # Submit workflow to Argo
@@ -375,7 +399,7 @@ except Exception as e:
             workflow = self.custom_api.get_namespaced_custom_object(
                 group="argoproj.io",
                 version="v1alpha1",
-                namespace=self.argo_namespace,
+                namespace=self.workflow_namespace,
                 plural="workflows",
                 name=workflow_name
             )
@@ -438,7 +462,7 @@ except Exception as e:
             workflows = self.custom_api.list_namespaced_custom_object(
                 group="argoproj.io",
                 version="v1alpha1",
-                namespace=self.argo_namespace,
+                namespace=self.workflow_namespace,
                 plural="workflows",
                 label_selector="workflows.argoproj.io/phase in (Pending,Running)"
             )
@@ -523,7 +547,7 @@ except Exception as e:
             workflow = self.custom_api.get_namespaced_custom_object(
                 group="argoproj.io",
                 version="v1alpha1",
-                namespace=self.argo_namespace,
+                namespace=self.workflow_namespace,
                 plural="workflows",
                 name=workflow_name
             )
@@ -534,7 +558,7 @@ except Exception as e:
             self.custom_api.patch_namespaced_custom_object(
                 group="argoproj.io",
                 version="v1alpha1",
-                namespace=self.argo_namespace,
+                namespace=self.workflow_namespace,
                 plural="workflows",
                 name=workflow_name,
                 body=workflow
