@@ -426,7 +426,9 @@ except Exception as e:
 
             active = []
             for wf in workflows.get("items", []):
-                wf_name = wf["metadata"]["name"]
+                wf_name = wf.get("metadata", {}).get("name")
+                if not wf_name:
+                    continue
                 # Filter for model download workflows (generated with "model-dl-" prefix)
                 if wf_name.startswith("model-dl-"):
                     status = self.get_download_status(wf_name)
