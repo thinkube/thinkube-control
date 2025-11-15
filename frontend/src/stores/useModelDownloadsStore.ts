@@ -156,7 +156,7 @@ export const useModelDownloadsStore = create<ModelDownloadsState>((set, get) => 
   },
 
   cancelDownload: async (workflowId: string) => {
-    try:
+    try {
       await api.delete(`/models/mirrors/${workflowId}`);
       toast.success('Mirror cancelled');
       await get().fetchDownloads();
