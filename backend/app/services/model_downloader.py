@@ -288,16 +288,21 @@ class ModelDownloaderService:
             # Download script with MLflow registration
             download_script = f"""
 import os
+import sys
 import shutil
 from huggingface_hub import snapshot_download
 import mlflow
+
+# Force progress bars to show even without TTY
+os.environ['TQDM_DISABLE'] = '0'
+os.environ['TQDM_MININTERVAL'] = '10'
 
 # Get MLflow URI from environment
 mlflow_uri = os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow.mlflow.svc.cluster.local:5000')
 mlflow.set_tracking_uri(mlflow_uri)
 
 model_id = '{safe_model_id}'
-print(f'Starting download of {{model_id}}...')
+print(f'Starting download of {{model_id}}...', flush=True)
 
 # Download model files directly to clean directory (not cache)
 download_dir = '/models/downloads'
@@ -305,16 +310,18 @@ os.makedirs(download_dir, exist_ok=True)
 
 try:
     # Use local_dir for clean model files instead of cache_dir
+    print('Downloading model files...', flush=True)
     model_path = snapshot_download(
         repo_id=model_id,
         local_dir=os.path.join(download_dir, model_id.replace('/', '-')),
-        resume_download=True
+        resume_download=True,
+        tqdm_class=None  # Use default tqdm which will show in logs
     )
 
-    print(f'✓ Download complete! Model at: {{model_path}}')
+    print(f'✓ Download complete! Model at: {{model_path}}', flush=True)
 
     # Register model in MLflow
-    print(f'Registering model in MLflow...')
+    print(f'Registering model in MLflow...', flush=True)
     model_name = model_id.replace('/', '-')
 
     with mlflow.start_run(run_name=f"mirror-{{model_name}}"):
@@ -327,15 +334,15 @@ try:
             model_name
         )
 
-    print(f'✓ Model registered in MLflow as: {{model_name}}')
+    print(f'✓ Model registered in MLflow as: {{model_name}}', flush=True)
 
     # Clean up downloaded files after MLflow has copied them
-    print(f'Cleaning up downloaded files...')
+    print(f'Cleaning up downloaded files...', flush=True)
     shutil.rmtree(model_path)
-    print(f'✓ Cleanup complete')
+    print(f'✓ Cleanup complete', flush=True)
 
 except Exception as e:
-    print(f'Error during download/registration: {{e}}')
+    print(f'Error during download/registration: {{e}}', flush=True)
     # Clean up on failure
     if os.path.exists(download_dir):
         shutil.rmtree(download_dir)
