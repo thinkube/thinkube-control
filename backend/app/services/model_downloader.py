@@ -204,9 +204,19 @@ class ModelDownloaderService:
         self.parallelism = 3  # Max concurrent downloads
 
         # Configure Hera workflows service for in-cluster Argo Workflows access
+        # Read service account token for authentication
+        token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+        try:
+            with open(token_path, "r") as f:
+                token = f.read().strip()
+        except Exception as e:
+            logger.warning(f"Could not read service account token: {e}")
+            token = None
+
         self.workflows_service = WorkflowsService(
-            host="https://argo-workflows-server.argo.svc.cluster.local:2746",
-            verify_ssl=False,  # Internal cluster communication
+            host="http://argo-workflows-server.argo.svc.cluster.local:2746",
+            verify_ssl=False,
+            token=token,
             namespace=self.argo_namespace
         )
 
