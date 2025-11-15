@@ -9,7 +9,7 @@ import logging
 from typing import List, Dict, Optional
 from datetime import datetime
 
-from hera.workflows import Workflow, Container, models as hera_models
+from hera.workflows import Workflow, Container, models as hera_models, WorkflowsService
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 from mlflow.tracking import MlflowClient
@@ -203,6 +203,13 @@ class ModelDownloaderService:
         self.models_namespace = "thinkube-control"
         self.parallelism = 3  # Max concurrent downloads
 
+        # Configure Hera workflows service for in-cluster Argo Workflows access
+        self.workflows_service = WorkflowsService(
+            host="https://argo-workflows-server.argo.svc.cluster.local:2746",
+            verify_ssl=False,  # Internal cluster communication
+            namespace=self.argo_namespace
+        )
+
     def get_available_models(self) -> List[Dict]:
         """
         Get list of available models for download
@@ -239,6 +246,7 @@ class ModelDownloaderService:
         with Workflow(
             generate_name="model-dl-",
             namespace=self.argo_namespace,
+            workflows_service=self.workflows_service,
             parallelism=self.parallelism,
             volumes=[
                 hera_models.Volume(
