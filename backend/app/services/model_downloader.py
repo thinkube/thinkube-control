@@ -198,7 +198,7 @@ class ModelDownloaderService:
         self.custom_api = client.CustomObjectsApi()
 
         # Configuration
-        self.workflow_namespace = "thinkube-control"  # Run workflows in same namespace as backend
+        self.workflow_namespace = "argo"  # Run workflows in argo namespace
         self.models_pvc_name = "thinkube-models"
         self.parallelism = 3  # Max concurrent downloads
 
