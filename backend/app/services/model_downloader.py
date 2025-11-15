@@ -265,6 +265,10 @@ class ModelDownloaderService:
             service_account_name="thinkube-control",
             entrypoint="download",
             parallelism=self.parallelism,
+            labels={
+                "model-id": model_id.replace("/", "-"),  # Label for tracking which model
+                "workflow-type": "model-download"
+            },
             retry_strategy=hera_models.RetryStrategy(
                 limit=3,
                 retry_policy="OnFailure",
@@ -410,22 +414,12 @@ except Exception as e:
             finished_at = status.get("finishedAt")
             message = status.get("message", "")
 
-            # Extract model_id from workflow parameters if available
-            model_id = None
-            spec = workflow.get("spec", {})
-            templates = spec.get("templates", [])
-            if templates:
-                # Try to extract from container args
-                for template in templates:
-                    if "container" in template:
-                        args = template["container"].get("args", [])
-                        for arg in args:
-                            if "repo_id=" in arg:
-                                # Extract model_id from download script
-                                try:
-                                    model_id = arg.split("repo_id='")[1].split("'")[0]
-                                except:
-                                    pass
+            # Extract model_id from workflow labels
+            metadata = workflow.get("metadata", {})
+            labels = metadata.get("labels", {})
+            model_label = labels.get("model-id", "")
+            # Convert label back to model_id format (replace - with /)
+            model_id = model_label.replace("-", "/", 1) if model_label else None
 
             return {
                 "workflow_name": workflow_name,
