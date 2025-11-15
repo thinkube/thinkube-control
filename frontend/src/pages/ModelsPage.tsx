@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Copy, Loader2, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import { Copy, Loader2, CheckCircle2, XCircle, Clock, ExternalLink } from 'lucide-react';
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent } from 'thinkube-style/components/cards-data';
 import { TkTable, TkTableHeader, TkTableBody, TkTableRow, TkTableHead, TkTableCell } from 'thinkube-style/components/tables';
 import { TkButton, TkLoadingButton, TkBadge } from 'thinkube-style/components/buttons-badges';
@@ -190,10 +190,20 @@ export default function ModelsPage() {
                           <CheckCircle2 className="w-3 h-3 mr-1" />
                           Ready
                         </TkBadge>
-                      ) : isDownloading ? (
-                        <TkButton variant="outline" size="sm" disabled>
-                          <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                          Mirroring...
+                      ) : isDownloading && download?.workflow_name ? (
+                        <TkButton
+                          variant="outline"
+                          size="sm"
+                          asChild
+                        >
+                          <a
+                            href={`https://argo.${window.location.hostname.split('.').slice(-2).join('.')}/workflows/argo/${download.workflow_name}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <ExternalLink className="w-4 h-4 mr-2" />
+                            Monitor
+                          </a>
                         </TkButton>
                       ) : download?.is_failed ? (
                         <TkButton
