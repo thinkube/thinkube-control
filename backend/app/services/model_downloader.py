@@ -257,6 +257,7 @@ class ModelDownloaderService:
             generate_name="model-dl-",
             namespace=self.argo_namespace,
             workflows_service=self.workflows_service,
+            entrypoint="download",
             parallelism=self.parallelism,
             volumes=[
                 hera_models.Volume(
