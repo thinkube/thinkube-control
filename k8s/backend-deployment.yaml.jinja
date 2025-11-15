@@ -77,6 +77,9 @@ spec:
               key: postgres-password
         - name: POSTGRES_DB
           value: "thinkube_control"
+        # MLflow configuration
+        - name: MLFLOW_TRACKING_URI
+          value: "http://mlflow.mlflow.svc.cluster.local:5000"
         # Services not yet deployed - uncomment when ready
         # - name: OPENSEARCH_URL
         #   value: "https://osd.{{ domain_name }}"

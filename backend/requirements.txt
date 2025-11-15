@@ -16,6 +16,7 @@ pyyaml==6.0.2
 jinja2==3.1.2
 boto3==1.35.76
 hera-workflows>=5.19.0
+mlflow==3.6.0
 
 # MCP (Model Context Protocol) support
 fastapi-mcp==0.4.0  # FastAPI-specific MCP implementation

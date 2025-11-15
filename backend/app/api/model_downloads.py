@@ -36,7 +36,6 @@ class ModelCatalogResponse(BaseModel):
 class DownloadRequest(BaseModel):
     """Request to download a model"""
     model_id: str
-    hf_token: Optional[str] = None
 
 
 class DownloadResponse(BaseModel):
@@ -116,11 +115,8 @@ async def submit_model_download(
     try:
         service = ModelDownloaderService()
 
-        # Submit workflow
-        workflow_id = service.submit_download(
-            model_id=request.model_id,
-            hf_token=request.hf_token
-        )
+        # Submit workflow (HF_TOKEN read from k8s secret)
+        workflow_id = service.submit_download(model_id=request.model_id)
 
         logger.info(f"Model download submitted: {request.model_id} -> {workflow_id}")
 

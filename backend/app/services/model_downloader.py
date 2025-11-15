@@ -4,6 +4,7 @@ Model Downloader Service
 Manages HuggingFace model downloads to thinkube-models PVC using Argo Workflows via Hera.
 """
 
+import os
 import logging
 from typing import List, Dict, Optional
 from datetime import datetime
@@ -11,6 +12,8 @@ from datetime import datetime
 from hera.workflows import Workflow, Container, models as hera_models
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
+from mlflow.tracking import MlflowClient
+from mlflow.exceptions import RestException
 
 logger = logging.getLogger(__name__)
 
@@ -209,13 +212,12 @@ class ModelDownloaderService:
         """
         return AVAILABLE_MODELS.copy()
 
-    def submit_download(self, model_id: str, hf_token: Optional[str] = None) -> str:
+    def submit_download(self, model_id: str) -> str:
         """
         Submit a model download workflow to Argo
 
         Args:
             model_id: HuggingFace model ID (e.g., "nvidia/Phi-4-multimodal-instruct-FP8")
-            hf_token: Optional HuggingFace API token for gated models
 
         Returns:
             Workflow name/ID
@@ -223,6 +225,9 @@ class ModelDownloaderService:
         Raises:
             ValueError: If model_id not in catalog
             ApiException: If workflow submission fails
+
+        Note:
+            HuggingFace token is read from the 'huggingface-token' k8s secret in argo namespace
         """
         # Validate model exists in catalog
         if not any(m["id"] == model_id for m in AVAILABLE_MODELS):
@@ -242,48 +247,84 @@ class ModelDownloaderService:
                 )
             ]
         ) as w:
-            # Download script
+            # Download script with MLflow registration
             download_script = f"""
 import os
+import shutil
 from huggingface_hub import snapshot_download
+import mlflow
 
-# Set HuggingFace cache to mounted PVC
-os.environ['HF_HOME'] = '/models/huggingface'
+# Set HuggingFace cache to temp location on PVC
+temp_cache = '/models/temp-downloads'
+os.makedirs(temp_cache, exist_ok=True)
+os.environ['HF_HOME'] = temp_cache
+
+# Configure MLflow tracking URI
+mlflow.set_tracking_uri('http://mlflow.mlflow.svc.cluster.local:5000')
 
 print(f'Starting download of {model_id}...')
-print(f'Cache directory: /models/huggingface')
+print(f'Temporary cache directory: {{temp_cache}}')
 
-# Download model
+# Download model files to temp location
 path = snapshot_download(
     repo_id='{model_id}',
-    cache_dir='/models/huggingface',
+    cache_dir=temp_cache,
     resume_download=True
 )
 
 print(f'✓ Download complete!')
 print(f'Model path: {{path}}')
+
+# Register model in MLflow by logging the files
+print(f'Registering model in MLflow...')
+model_name = '{model_id}'.replace('/', '-')
+
+try:
+    with mlflow.start_run(run_name=f"mirror-{{model_name}}"):
+        # Log the model directory as an artifact (copies to MLflow artifact store)
+        mlflow.log_artifact(path, artifact_path="model")
+
+        # Register the model
+        mlflow.register_model(
+            f"runs:/{{mlflow.active_run().info.run_id}}/model",
+            model_name
+        )
+
+    print(f'✓ Model registered in MLflow as: {{model_name}}')
+
+    # Delete temporary files after successful MLflow registration
+    print(f'Cleaning up temporary download cache...')
+    shutil.rmtree(temp_cache)
+    print(f'✓ Temporary files deleted')
+except Exception as e:
+    print(f'Error: Could not register model in MLflow: {{e}}')
+    raise
 """
 
-            # Container environment variables
+            # Container environment variables - HF_TOKEN from secret
             env_vars = [
-                hera_models.EnvVar(name="HF_HOME", value="/models/huggingface")
+                hera_models.EnvVar(
+                    name="HF_TOKEN",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="huggingface-token",
+                            key="token"
+                        )
+                    )
+                )
             ]
 
-            # Add HF token if provided
-            if hf_token:
-                env_vars.append(
-                    hera_models.EnvVar(name="HF_TOKEN", value=hf_token)
-                )
+            # Get Harbor registry from environment
+            domain_name = os.getenv("DOMAIN_NAME", "thinkube.com")
+            harbor_registry = f"registry.{domain_name}"
+            model_mirror_image = f"{harbor_registry}/library/model-mirror:latest"
 
             # Download container
             Container(
                 name="download",
-                image="python:3.11-slim",
-                command=["sh", "-c"],
-                args=[
-                    # Install huggingface_hub and run download
-                    f"pip install -q huggingface_hub && python -c '{download_script}'"
-                ],
+                image=model_mirror_image,
+                command=["python", "-c"],
+                args=[download_script],
                 volume_mounts=[
                     hera_models.VolumeMount(name="models-pvc", mount_path="/models")
                 ],
@@ -397,147 +438,51 @@ print(f'Model path: {{path}}')
             logger.error(f"Failed to list workflows: {e}")
             return []
 
-    def _convert_model_id_to_path(self, model_id: str) -> str:
-        """
-        Convert HuggingFace model ID to cache directory path.
-
-        Example: "nvidia/Phi-4-multimodal-instruct-FP8" -> "models--nvidia--Phi-4-multimodal-instruct-FP8"
-
-        Args:
-            model_id: HuggingFace model ID (e.g., "nvidia/Phi-4")
-
-        Returns:
-            Directory name in HuggingFace cache
-        """
-        return f"models--{model_id.replace('/', '--')}"
-
     def check_all_models_exist(self) -> Dict[str, bool]:
         """
-        Check which models are already downloaded to the PVC.
-        Uses a Kubernetes Job to efficiently check all models at once.
+        Check which models are already registered in MLflow model registry.
 
         Returns:
             Dictionary mapping model_id to existence status
         """
         try:
-            # Convert all model IDs to expected directory names
-            model_paths = {
-                model["id"]: self._convert_model_id_to_path(model["id"])
-                for model in AVAILABLE_MODELS
-            }
+            # Get MLflow tracking URI from environment or use default
+            mlflow_uri = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000")
+            mlflow_client = MlflowClient(tracking_uri=mlflow_uri)
 
-            # Create a check script that tests all models
-            check_commands = []
-            for model_id, path in model_paths.items():
-                check_commands.append(f'[ -d "/models/huggingface/{path}" ] && echo "{model_id}:true" || echo "{model_id}:false"')
+            results = {}
+            for model in AVAILABLE_MODELS:
+                model_id = model["id"]
+                # Convert model_id to MLflow model name format
+                model_name = model_id.replace('/', '-')
 
-            check_script = " && ".join(check_commands)
+                try:
+                    # Check if model exists in MLflow registry
+                    mlflow_client.get_registered_model(model_name)
+                    # Model exists if we get here without exception
+                    results[model_id] = True
+                    logger.debug(f"Model {model_id} exists in MLflow registry")
+                except RestException:
+                    # Model doesn't exist in registry
+                    results[model_id] = False
+                    logger.debug(f"Model {model_id} not found in MLflow registry")
 
-            # Create a Job to check model existence
-            batch_v1 = client.BatchV1Api()
-            job_name = f"model-check-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-
-            job = client.V1Job(
-                api_version="batch/v1",
-                kind="Job",
-                metadata=client.V1ObjectMeta(
-                    name=job_name,
-                    namespace=self.models_namespace
-                ),
-                spec=client.V1JobSpec(
-                    ttl_seconds_after_finished=60,  # Auto-cleanup after 60s
-                    backoff_limit=0,
-                    template=client.V1PodTemplateSpec(
-                        metadata=client.V1ObjectMeta(labels={"job": job_name}),
-                        spec=client.V1PodSpec(
-                            restart_policy="Never",
-                            containers=[
-                                client.V1Container(
-                                    name="check",
-                                    image="busybox:latest",
-                                    command=["sh", "-c", check_script],
-                                    volume_mounts=[
-                                        client.V1VolumeMount(
-                                            name="models-pvc",
-                                            mount_path="/models"
-                                        )
-                                    ]
-                                )
-                            ],
-                            volumes=[
-                                client.V1Volume(
-                                    name="models-pvc",
-                                    persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
-                                        claim_name=self.models_pvc_name
-                                    )
-                                )
-                            ]
-                        )
-                    )
-                )
-            )
-
-            # Submit the Job
-            batch_v1.create_namespaced_job(namespace=self.models_namespace, body=job)
-
-            # Wait for Job to complete (with timeout)
-            import time
-            timeout = 30  # 30 seconds
-            start_time = time.time()
-
-            while time.time() - start_time < timeout:
-                job_status = batch_v1.read_namespaced_job_status(
-                    name=job_name,
-                    namespace=self.models_namespace
-                )
-
-                if job_status.status.succeeded:
-                    # Get pod logs
-                    core_v1 = client.CoreV1Api()
-                    pods = core_v1.list_namespaced_pod(
-                        namespace=self.models_namespace,
-                        label_selector=f"job={job_name}"
-                    )
-
-                    if pods.items:
-                        pod_name = pods.items[0].metadata.name
-                        logs = core_v1.read_namespaced_pod_log(
-                            name=pod_name,
-                            namespace=self.models_namespace
-                        )
-
-                        # Parse results
-                        results = {}
-                        for line in logs.strip().split('\n'):
-                            if ':' in line:
-                                model_id, exists = line.split(':', 1)
-                                results[model_id] = exists.strip().lower() == 'true'
-
-                        return results
-
-                if job_status.status.failed:
-                    logger.error(f"Model check job failed: {job_name}")
-                    break
-
-                time.sleep(1)
-
-            logger.warning("Model check job timed out")
-            return {}
+            return results
 
         except Exception as e:
-            logger.error(f"Failed to check model existence: {e}")
+            logger.error(f"Failed to check MLflow model registry: {e}")
             # Return empty dict on error (all models will show as not downloaded)
             return {}
 
     def check_model_exists(self, model_id: str) -> bool:
         """
-        Check if a model is already downloaded to the PVC
+        Check if a model is already registered in MLflow model registry
 
         Args:
             model_id: HuggingFace model ID
 
         Returns:
-            True if model exists in PVC, False otherwise
+            True if model exists in MLflow registry, False otherwise
         """
         results = self.check_all_models_exist()
         return results.get(model_id, False)
