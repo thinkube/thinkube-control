@@ -12,17 +12,21 @@ export interface Model {
   is_downloaded: boolean;
 }
 
-export interface DownloadStatus {
-  workflow_name: string;
-  model_id: string | null;
+export interface MirrorJob {
+  id: string;
+  model_id: string;
   status: string;
-  started_at: string | null;
-  finished_at: string | null;
-  message: string;
+  workflow_name: string | null;
+  error_message: string | null;
+  created_at: string | null;
+  updated_at: string | null;
   is_running: boolean;
   is_complete: boolean;
   is_failed: boolean;
 }
+
+// Keep DownloadStatus as alias for backwards compatibility
+export type DownloadStatus = MirrorJob;
 
 interface ModelDownloadsState {
   // State
@@ -90,7 +94,7 @@ export const useModelDownloadsStore = create<ModelDownloadsState>((set, get) => 
         payload.hf_token = hfToken;
       }
 
-      const response = await api.post('/models/download', payload);
+      const response = await api.post('/models/mirrors', payload);
 
       const model = get().models.find(m => m.id === modelId);
       const modelName = model?.name || modelId;
@@ -115,9 +119,9 @@ export const useModelDownloadsStore = create<ModelDownloadsState>((set, get) => 
 
   fetchDownloads: async () => {
     try {
-      const response = await api.get('/models/downloads');
+      const response = await api.get('/models/mirrors');
       const previousDownloads = get().downloads;
-      const newDownloads: DownloadStatus[] = response.data.downloads;
+      const newDownloads: DownloadStatus[] = response.data.jobs;
 
       // Check for completed downloads to show notifications
       previousDownloads.forEach(prevDl => {
@@ -152,8 +156,8 @@ export const useModelDownloadsStore = create<ModelDownloadsState>((set, get) => 
   },
 
   cancelDownload: async (workflowId: string) => {
-    try {
-      await api.delete(`/models/downloads/${workflowId}`);
+    try:
+      await api.delete(`/models/mirrors/${workflowId}`);
       toast.success('Mirror cancelled');
       await get().fetchDownloads();
     } catch (error: any) {
