@@ -422,8 +422,8 @@ except Exception as e:
                 ],
                 env=env_vars,
                 resources=hera_models.ResourceRequirements(
-                    requests={"memory": "2Gi", "cpu": "1"},
-                    limits={"memory": "4Gi", "cpu": "2"}
+                    requests={"memory": "4Gi", "cpu": "1"},
+                    limits={"memory": "12Gi", "cpu": "2"}
                 )
             )
 
