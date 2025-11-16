@@ -395,6 +395,10 @@ except Exception as e:
                 hera_models.EnvVar(
                     name="HF_XET_HIGH_PERFORMANCE",
                     value="1"  # Max network/disk usage
+                ),
+                hera_models.EnvVar(
+                    name="HF_XET_SHARD_CACHE_SIZE",
+                    value="0"  # Disable shard cache to avoid OOM (defaults to 4GB)
                 )
                 # Note: Chunk cache disabled by default (0 bytes) which is optimal
                 # for large models (3GB-120GB) to avoid consuming RAM unnecessarily
