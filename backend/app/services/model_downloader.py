@@ -301,6 +301,30 @@ import mlflow
 os.environ['TQDM_DISABLE'] = '0'
 os.environ['TQDM_MININTERVAL'] = '10'
 
+# Get MLflow authentication token from Keycloak
+print('Authenticating with MLflow...', flush=True)
+import requests
+token_url = os.environ['MLFLOW_KEYCLOAK_TOKEN_URL']
+client_id = os.environ['MLFLOW_KEYCLOAK_CLIENT_ID']
+client_secret = os.environ['MLFLOW_CLIENT_SECRET']
+username = os.environ['MLFLOW_AUTH_USERNAME']
+password = os.environ['MLFLOW_AUTH_PASSWORD']
+
+token_response = requests.post(
+    token_url,
+    data={{
+        'grant_type': 'password',
+        'client_id': client_id,
+        'client_secret': client_secret,
+        'username': username,
+        'password': password
+    }},
+    verify=False  # Skip SSL verification for internal cluster communication
+)
+token_response.raise_for_status()
+os.environ['MLFLOW_TRACKING_TOKEN'] = token_response.json()['access_token']
+print('✓ MLflow authentication successful', flush=True)
+
 # Get MLflow URI from environment
 mlflow_uri = os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow.mlflow.svc.cluster.local:5000')
 mlflow.set_tracking_uri(mlflow_uri)
@@ -386,6 +410,52 @@ except Exception as e:
                 hera_models.EnvVar(
                     name="MLFLOW_TRACKING_URI",
                     value=self.mlflow_uri
+                ),
+                # MLflow Authentication via Keycloak
+                hera_models.EnvVar(
+                    name="MLFLOW_KEYCLOAK_TOKEN_URL",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="mlflow-auth-config",
+                            key="keycloak-token-url"
+                        )
+                    )
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_KEYCLOAK_CLIENT_ID",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="mlflow-auth-config",
+                            key="client-id"
+                        )
+                    )
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_CLIENT_SECRET",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="mlflow-auth-config",
+                            key="client-secret"
+                        )
+                    )
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_AUTH_USERNAME",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="mlflow-auth-config",
+                            key="username"
+                        )
+                    )
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_AUTH_PASSWORD",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="mlflow-auth-config",
+                            key="password"
+                        )
+                    )
                 ),
                 # XET Configuration for optimal performance
                 hera_models.EnvVar(
