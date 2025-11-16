@@ -363,8 +363,8 @@ try:
 except Exception as e:
     print(f'Error during download/registration: {{e}}', flush=True)
     # Clean up on failure
-    if os.path.exists(download_dir):
-        shutil.rmtree(download_dir)
+    if os.path.exists(final_model_path):
+        shutil.rmtree(final_model_path)
     raise
 """
 
