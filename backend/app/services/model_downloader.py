@@ -280,8 +280,12 @@ class ModelDownloaderService:
             ),
             volumes=[
                 hera_models.Volume(
+                    name="download-cache",
+                    empty_dir={"sizeLimit": "200Gi"}  # Local host disk for fast downloads
+                ),
+                hera_models.Volume(
                     name="models-pvc",
-                    persistent_volume_claim={"claimName": self.models_pvc_name}  # Fixed: claimName not claim_name
+                    persistent_volume_claim={"claimName": self.models_pvc_name}
                 )
             ]
         ) as w:
@@ -304,29 +308,44 @@ mlflow.set_tracking_uri(mlflow_uri)
 model_id = '{safe_model_id}'
 print(f'Starting download of {{model_id}}...', flush=True)
 
-# Download model files directly to clean directory (not cache)
-download_dir = '/models/downloads'
-os.makedirs(download_dir, exist_ok=True)
+# Download to fast local storage first
+temp_download_dir = '/tmp/downloads'
+os.makedirs(temp_download_dir, exist_ok=True)
 
 try:
-    # Use local_dir for clean model files instead of cache_dir
-    print('Downloading model files...', flush=True)
+    # Download to local emptyDir (fast host disk)
+    print('Downloading model files to local storage...', flush=True)
+    model_name = model_id.replace('/', '-')
+    local_model_path = os.path.join(temp_download_dir, model_name)
+
     model_path = snapshot_download(
         repo_id=model_id,
-        local_dir=os.path.join(download_dir, model_id.replace('/', '-')),
+        local_dir=local_model_path,
         resume_download=True,
         tqdm_class=None  # Use default tqdm which will show in logs
     )
 
     print(f'✓ Download complete! Model at: {{model_path}}', flush=True)
 
+    # Move to persistent storage for MLflow
+    print(f'Moving model to persistent storage...', flush=True)
+    final_dir = '/models/downloads'
+    os.makedirs(final_dir, exist_ok=True)
+    final_model_path = os.path.join(final_dir, model_name)
+
+    # Remove destination if it exists
+    if os.path.exists(final_model_path):
+        shutil.rmtree(final_model_path)
+
+    shutil.move(model_path, final_model_path)
+    print(f'✓ Model moved to: {{final_model_path}}', flush=True)
+
     # Register model in MLflow
     print(f'Registering model in MLflow...', flush=True)
-    model_name = model_id.replace('/', '-')
 
     with mlflow.start_run(run_name=f"mirror-{{model_name}}"):
         # Log the model directory as an artifact
-        mlflow.log_artifact(model_path, artifact_path="model")
+        mlflow.log_artifact(final_model_path, artifact_path="model")
 
         # Register the model
         mlflow.register_model(
@@ -338,7 +357,7 @@ try:
 
     # Clean up downloaded files after MLflow has copied them
     print(f'Cleaning up downloaded files...', flush=True)
-    shutil.rmtree(model_path)
+    shutil.rmtree(final_model_path)
     print(f'✓ Cleanup complete', flush=True)
 
 except Exception as e:
@@ -351,6 +370,10 @@ except Exception as e:
 
             # Container environment variables
             env_vars = [
+                hera_models.EnvVar(
+                    name="PYTHONUNBUFFERED",
+                    value="1"  # Force Python to flush output immediately
+                ),
                 hera_models.EnvVar(
                     name="HF_TOKEN",
                     value_from=hera_models.EnvVarSource(
@@ -390,14 +413,14 @@ except Exception as e:
                 command=["python", "-c"],
                 args=[download_script],
                 volume_mounts=[
+                    hera_models.VolumeMount(name="download-cache", mount_path="/tmp/downloads"),
                     hera_models.VolumeMount(name="models-pvc", mount_path="/models")
                 ],
                 env=env_vars,
                 resources=hera_models.ResourceRequirements(
                     requests={"memory": "2Gi", "cpu": "1"},
                     limits={"memory": "4Gi", "cpu": "2"}
-                ),
-                active_deadline_seconds=3600  # 1 hour timeout
+                )
             )
 
         # Submit workflow to Argo
