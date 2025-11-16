@@ -22,7 +22,19 @@ export default function ModelsPage() {
     stopPolling,
   } = useModelDownloadsStore();
 
+  const [mlflowStatus, setMlflowStatus] = useState<{
+    initialized: boolean;
+    needs_browser_login: boolean;
+    mlflow_url: string;
+    error?: string;
+    message?: string;
+  } | null>(null);
+  const [checkingMlflow, setCheckingMlflow] = useState(true);
+
   useEffect(() => {
+    // Check MLflow status on mount
+    checkMlflowStatus();
+
     // Fetch models on mount
     fetchModels();
     fetchDownloads();
@@ -35,6 +47,36 @@ export default function ModelsPage() {
       stopPolling();
     };
   }, []);
+
+  const checkMlflowStatus = async () => {
+    try {
+      const response = await fetch('/api/models/mlflow/status', {
+        credentials: 'include',
+      });
+      const data = await response.json();
+      setMlflowStatus(data);
+    } catch (err) {
+      console.error('Failed to check MLflow status:', err);
+      setMlflowStatus({
+        initialized: false,
+        needs_browser_login: true,
+        mlflow_url: '',
+        error: 'Failed to check MLflow status',
+      });
+    } finally {
+      setCheckingMlflow(false);
+    }
+  };
+
+  const handleOpenMlflow = () => {
+    if (mlflowStatus?.mlflow_url) {
+      window.open(mlflowStatus.mlflow_url, '_blank');
+      // After user logs in via browser, recheck status
+      setTimeout(() => {
+        checkMlflowStatus();
+      }, 3000);
+    }
+  };
 
   const handleDownload = async (modelId: string) => {
     await startDownload(modelId);
@@ -120,6 +162,43 @@ export default function ModelsPage() {
 
       {/* Error Alert */}
       {error && <TkErrorAlert title="Error" message={error} className="mb-6" />}
+
+      {/* MLflow Initialization Banner */}
+      {checkingMlflow ? (
+        <TkInfoAlert
+          title="Checking MLflow status..."
+          message="Please wait while we verify MLflow initialization"
+          className="mb-6"
+        />
+      ) : mlflowStatus?.needs_browser_login && (
+        <TkCard className="mb-6 border-blue-500 bg-blue-50 dark:bg-blue-950">
+          <TkCardContent className="pt-6">
+            <div className="flex items-start gap-4">
+              <ExternalLink className="w-6 h-6 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-1" />
+              <div className="flex-1">
+                <h3 className="font-semibold text-lg mb-2">MLflow Initialization Required</h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Before you can mirror AI models, you need to initialize MLflow by logging in through your browser.
+                  This creates your user account in MLflow and enables seamless authentication.
+                </p>
+                {mlflowStatus.error && (
+                  <p className="text-sm text-destructive mb-4">
+                    Error: {mlflowStatus.error}
+                  </p>
+                )}
+                <TkButton
+                  variant="default"
+                  size="sm"
+                  onClick={handleOpenMlflow}
+                >
+                  <ExternalLink className="w-4 h-4 mr-2" />
+                  Initialize MLflow
+                </TkButton>
+              </div>
+            </div>
+          </TkCardContent>
+        </TkCard>
+      )}
 
       {/* Active Mirrors Summary */}
       {activeDownloads.length > 0 && (

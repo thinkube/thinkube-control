@@ -321,3 +321,125 @@ async def cancel_model_mirror(
             status_code=500,
             detail=f"Failed to cancel mirror: {str(e)}"
         )
+
+
+@router.get("/mlflow/status", operation_id="check_mlflow_status")
+async def check_mlflow_status(
+    current_user: dict = Depends(get_current_user_dual_auth)
+):
+    """
+    Check if MLflow is initialized for the current user
+
+    Tests MLflow authentication by attempting to connect and list experiments.
+    Returns initialization status and MLflow URL for browser login if needed.
+    """
+    import os
+    import requests
+    import mlflow
+
+    try:
+        # Get MLflow configuration
+        mlflow_uri = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000")
+        mlflow_public_url = f"https://mlflow.{os.getenv('DOMAIN_NAME', 'thinkube.com')}"
+
+        # Get Keycloak credentials from environment
+        keycloak_token_url = f"{os.getenv('KEYCLOAK_URL')}/realms/{os.getenv('AUTH_REALM_USERNAME')}/protocol/openid-connect/token"
+        client_id = "mlflow"
+
+        # For single-user environment, use admin credentials from environment
+        username = os.getenv("ADMIN_USERNAME", "admin")
+        password = os.getenv("ADMIN_PASSWORD")
+
+        if not password:
+            return {
+                "initialized": False,
+                "needs_browser_login": True,
+                "mlflow_url": mlflow_public_url,
+                "error": "Admin password not configured"
+            }
+
+        # Get MLflow client secret from the secret (would need to be loaded at startup)
+        # For now, try to read from k8s secret
+        try:
+            from kubernetes import client as k8s_client, config as k8s_config
+            try:
+                k8s_config.load_incluster_config()
+            except:
+                k8s_config.load_kube_config()
+
+            v1 = k8s_client.CoreV1Api()
+            secret = v1.read_namespaced_secret("mlflow-auth-config", "argo")
+            import base64
+            client_secret = base64.b64decode(secret.data['client-secret']).decode('utf-8')
+        except Exception as e:
+            logger.error(f"Could not read MLflow client secret: {e}")
+            return {
+                "initialized": False,
+                "needs_browser_login": True,
+                "mlflow_url": mlflow_public_url,
+                "error": "MLflow not configured yet"
+            }
+
+        # Try to get OAuth2 token from Keycloak
+        token_response = requests.post(
+            keycloak_token_url,
+            data={
+                'grant_type': 'password',
+                'client_id': client_id,
+                'client_secret': client_secret,
+                'username': username,
+                'password': password
+            },
+            verify=False,
+            timeout=5
+        )
+
+        if token_response.status_code != 200:
+            return {
+                "initialized": False,
+                "needs_browser_login": True,
+                "mlflow_url": mlflow_public_url,
+                "error": "Could not authenticate with Keycloak"
+            }
+
+        # Set MLflow token
+        access_token = token_response.json().get('access_token')
+        if not access_token:
+            return {
+                "initialized": False,
+                "needs_browser_login": True,
+                "mlflow_url": mlflow_public_url,
+                "error": "No access token received"
+            }
+
+        # Try to connect to MLflow
+        os.environ['MLFLOW_TRACKING_TOKEN'] = access_token
+        mlflow.set_tracking_uri(mlflow_uri)
+
+        # Test connection by listing experiments
+        experiments = mlflow.search_experiments()
+
+        return {
+            "initialized": True,
+            "needs_browser_login": False,
+            "mlflow_url": mlflow_public_url,
+            "message": f"MLflow is ready ({len(experiments)} experiments found)"
+        }
+
+    except requests.exceptions.Timeout:
+        # Timeout usually means user needs to initialize via browser
+        return {
+            "initialized": False,
+            "needs_browser_login": True,
+            "mlflow_url": mlflow_public_url,
+            "error": "MLflow user not initialized - please log in via browser first"
+        }
+
+    except Exception as e:
+        logger.error(f"MLflow status check failed: {e}")
+        return {
+            "initialized": False,
+            "needs_browser_login": True,
+            "mlflow_url": mlflow_public_url,
+            "error": str(e)
+        }
