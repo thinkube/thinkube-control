@@ -98,19 +98,6 @@ class OptionalComponentService:
                 "uninstall": "19_rollback.yaml"
             }
         },
-        "mlflow": {
-            "display_name": "MLflow",
-            "description": "ML experiment tracking and model registry with PostgreSQL backend and SeaweedFS storage (Apache 2.0)",
-            "category": "ai",
-            "icon": "/icons/tk_ai.svg",
-            "requirements": ["postgresql", "seaweedfs", "keycloak", "harbor"],
-            "namespace": "mlflow",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        },
         "weaviate": {
             "display_name": "Weaviate",
             "description": "Open-source vector database with GraphQL interface for AI applications (BSD-3)",
