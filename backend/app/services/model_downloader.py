@@ -367,13 +367,45 @@ try:
     # Register model in MLflow
     print(f'Registering model in MLflow...', flush=True)
 
-    with mlflow.start_run(run_name=f"mirror-{{model_name}}"):
-        # Log the model directory as an artifact
-        mlflow.log_artifact(final_model_path, artifact_path="model")
+    with mlflow.start_run(run_name=f"mirror-{{model_name}}") as run:
+        # Log model metadata
+        mlflow.log_params({{
+            "source": "huggingface",
+            "model_id": model_id,
+            "download_method": "xet"
+        }})
+
+        # Log all model files as artifacts under "model" path
+        mlflow.log_artifacts(final_model_path, artifact_path="model")
+
+        # Create MLmodel file to make it a valid logged model
+        import yaml
+        mlmodel_content = {{
+            "artifact_path": "model",
+            "flavors": {{
+                "python_function": {{
+                    "model_path": "model",
+                    "loader_module": "mlflow.pyfunc.loaders",
+                    "python_version": "3.12"
+                }}
+            }},
+            "model_uuid": run.info.run_id,
+            "run_id": run.info.run_id,
+            "utc_time_created": run.info.start_time
+        }}
+
+        # Write MLmodel file
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.dump(mlmodel_content, f)
+            mlmodel_path = f.name
+
+        mlflow.log_artifact(mlmodel_path, artifact_path="model")
+        os.unlink(mlmodel_path)
 
         # Register the model
         mlflow.register_model(
-            f"runs:/{{mlflow.active_run().info.run_id}}/model",
+            f"runs:/{{run.info.run_id}}/model",
             model_name
         )
 
