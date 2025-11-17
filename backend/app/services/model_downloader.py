@@ -423,8 +423,12 @@ try:
 
 except Exception as e:
     print(f'Error during download/registration: {{e}}', flush=True)
-    # Clean up on failure
-    if os.path.exists(final_model_path):
+    import traceback
+    traceback.print_exc()
+    # Clean up on failure (check both locations)
+    if 'local_model_path' in locals() and os.path.exists(local_model_path):
+        shutil.rmtree(local_model_path)
+    if 'final_model_path' in locals() and os.path.exists(final_model_path):
         shutil.rmtree(final_model_path)
     raise
 """
