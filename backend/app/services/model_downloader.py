@@ -436,6 +436,14 @@ except Exception as e:
                     value="1"  # Force Python to flush output immediately
                 ),
                 hera_models.EnvVar(
+                    name="HF_HUB_VERBOSITY",
+                    value="info"  # Enable huggingface_hub progress bars
+                ),
+                hera_models.EnvVar(
+                    name="TQDM_POSITION",
+                    value="-1"  # Force tqdm to stay enabled even in non-TTY
+                ),
+                hera_models.EnvVar(
                     name="HF_TOKEN",
                     value_from=hera_models.EnvVarSource(
                         secret_key_ref=hera_models.SecretKeySelector(
