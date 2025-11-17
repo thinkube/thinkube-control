@@ -506,18 +506,15 @@ except Exception as e:
                         )
                     )
                 ),
-                # XET Configuration for optimal performance
-                # Based on benchmarks: HF_XET_HIGH_PERFORMANCE=1 alone gives 37% speed improvement
+                # XET Configuration - Disable XET due to stability issues
+                # XET HIGH_PERFORMANCE mode causes "CAS service error: Request failed after 5 retries"
+                # Network diagnostics show high latency variance (22-71ms) which combined with
+                # HIGH_PERFORMANCE's 16-128 concurrent connections causes connection timeouts
+                # Disabling XET entirely to use standard HTTP downloads for stability
                 hera_models.EnvVar(
                     name="HF_HUB_DISABLE_XET",
-                    value="0"  # Keep XET enabled (automatic with huggingface_hub 1.x)
-                ),
-                hera_models.EnvVar(
-                    name="HF_XET_HIGH_PERFORMANCE",
-                    value="1"  # Enable high performance mode - maximizes parallelism and bandwidth
+                    value="1"  # Disable XET to avoid CAS service stability issues
                 )
-                # Note: Shard cache enabled by default (improves performance)
-                # Benchmarks showed disabling shard cache reduces speed by 14%
             ]
 
             # Get Harbor registry from environment
