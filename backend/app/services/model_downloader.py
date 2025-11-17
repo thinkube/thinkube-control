@@ -25,7 +25,8 @@ AVAILABLE_MODELS = [
         "size": "~20GB",
         "quantization": "FP8",
         "description": "OpenAI GPT-OSS 20B model optimized for TensorRT-LLM",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "openai/gpt-oss-120b",
@@ -33,7 +34,8 @@ AVAILABLE_MODELS = [
         "size": "~70GB",
         "quantization": "FP4",
         "description": "OpenAI GPT-OSS 120B model optimized for TensorRT-LLM",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "nvidia/Llama-3.1-8B-Instruct-FP8",
@@ -41,7 +43,8 @@ AVAILABLE_MODELS = [
         "size": "~8GB",
         "quantization": "FP8",
         "description": "Meta Llama 3.1 8B instruction-tuned model",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "nvidia/Llama-3.1-8B-Instruct-FP4",
@@ -49,7 +52,8 @@ AVAILABLE_MODELS = [
         "size": "~4GB",
         "quantization": "FP4",
         "description": "Meta Llama 3.1 8B instruction-tuned model",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "nvidia/Llama-3.3-70B-Instruct-FP4",
@@ -57,7 +61,8 @@ AVAILABLE_MODELS = [
         "size": "~35GB",
         "quantization": "FP4",
         "description": "Meta Llama 3.3 70B instruction-tuned model",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "nvidia/Qwen3-8B-FP8",
@@ -65,7 +70,8 @@ AVAILABLE_MODELS = [
         "size": "~8GB",
         "quantization": "FP8",
         "description": "Alibaba Qwen3 8B model",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "nvidia/Qwen3-8B-FP4",
@@ -73,7 +79,8 @@ AVAILABLE_MODELS = [
         "size": "~4GB",
         "quantization": "FP4",
         "description": "Alibaba Qwen3 8B model",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "nvidia/Qwen3-14B-FP8",
@@ -81,7 +88,8 @@ AVAILABLE_MODELS = [
         "size": "~14GB",
         "quantization": "FP8",
         "description": "Alibaba Qwen3 14B model",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "nvidia/Qwen3-14B-FP4",
@@ -89,7 +97,8 @@ AVAILABLE_MODELS = [
         "size": "~7GB",
         "quantization": "FP4",
         "description": "Alibaba Qwen3 14B model",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "nvidia/Qwen3-32B-FP4",
@@ -97,7 +106,8 @@ AVAILABLE_MODELS = [
         "size": "~16GB",
         "quantization": "FP4",
         "description": "Alibaba Qwen3 32B model",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "nvidia/Phi-4-multimodal-instruct-FP8",
@@ -105,7 +115,8 @@ AVAILABLE_MODELS = [
         "size": "~6GB",
         "quantization": "FP8",
         "description": "Microsoft Phi-4 multimodal instruction-tuned model",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "nvidia/Phi-4-multimodal-instruct-FP4",
@@ -113,7 +124,8 @@ AVAILABLE_MODELS = [
         "size": "~3GB",
         "quantization": "FP4",
         "description": "Microsoft Phi-4 multimodal instruction-tuned model",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "nvidia/Phi-4-reasoning-plus-FP8",
@@ -121,7 +133,8 @@ AVAILABLE_MODELS = [
         "size": "~6GB",
         "quantization": "FP8",
         "description": "Microsoft Phi-4 reasoning-focused model",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "nvidia/Phi-4-reasoning-plus-FP4",
@@ -129,7 +142,8 @@ AVAILABLE_MODELS = [
         "size": "~3GB",
         "quantization": "FP4",
         "description": "Microsoft Phi-4 reasoning-focused model",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "nvidia/Llama-3_3-Nemotron-Super-49B-v1_5-FP8",
@@ -137,7 +151,8 @@ AVAILABLE_MODELS = [
         "size": "~49GB",
         "quantization": "FP8",
         "description": "NVIDIA Nemotron variant of Llama 3.3",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "nvidia/Qwen3-30B-A3B-FP4",
@@ -145,7 +160,8 @@ AVAILABLE_MODELS = [
         "size": "~15GB",
         "quantization": "FP4",
         "description": "Alibaba Qwen3 30B-A3B model",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "nvidia/Qwen2.5-VL-7B-Instruct-FP8",
@@ -153,7 +169,8 @@ AVAILABLE_MODELS = [
         "size": "~7GB",
         "quantization": "FP8",
         "description": "Alibaba Qwen2.5 Vision-Language model",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "nvidia/Qwen2.5-VL-7B-Instruct-FP4",
@@ -161,7 +178,8 @@ AVAILABLE_MODELS = [
         "size": "~4GB",
         "quantization": "FP4",
         "description": "Alibaba Qwen2.5 Vision-Language model",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "nvidia/Llama-4-Scout-17B-16E-Instruct-FP4",
@@ -169,7 +187,8 @@ AVAILABLE_MODELS = [
         "size": "~9GB",
         "quantization": "FP4",
         "description": "Meta Llama 4 Scout model",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
     },
     {
         "id": "nvidia/Qwen3-235B-A22B-FP4",
@@ -248,14 +267,17 @@ class ModelDownloaderService:
         Note:
             HuggingFace token is read from the 'huggingface-token' k8s secret in argo namespace
         """
-        # Validate model exists in catalog
-        if not any(m["id"] == model_id for m in AVAILABLE_MODELS):
+        # Validate model exists in catalog and get task
+        model_info = next((m for m in AVAILABLE_MODELS if m["id"] == model_id), None)
+        if not model_info:
             raise ValueError(f"Model '{model_id}' not found in catalog")
 
-        logger.info(f"Creating download workflow for model: {model_id}")
+        model_task = model_info.get("task", "text-generation")  # Default to text-generation
+        logger.info(f"Creating download workflow for model: {model_id} (task: {model_task})")
 
-        # Escape model_id for safe use in Python script
+        # Escape for safe use in Python script
         safe_model_id = model_id.replace("'", "\\'")
+        safe_model_task = model_task.replace("'", "\\'")
 
         # Create Hera workflow
         with Workflow(
@@ -330,6 +352,7 @@ mlflow_uri = os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow.mlflow.svc.cluster.
 mlflow.set_tracking_uri(mlflow_uri)
 
 model_id = '{safe_model_id}'
+model_task = '{safe_model_task}'
 print(f'Starting download of {{model_id}}...', flush=True)
 
 # Download to fast local storage first
@@ -372,41 +395,20 @@ try:
         mlflow.log_params({{
             "source": "huggingface",
             "model_id": model_id,
-            "download_method": "xet"
+            "download_method": "xet",
+            "task": model_task
         }})
 
-        # Log all model files as artifacts under "model" path
-        mlflow.log_artifacts(final_model_path, artifact_path="model")
+        # Use transformers flavor to log the model properly
+        # Passes local directory path - MLflow reads config.json for metadata
+        # and uploads model files directly without loading into memory
+        import mlflow.transformers
 
-        # Create MLmodel file to make it a valid logged model
-        import yaml
-        mlmodel_content = {{
-            "artifact_path": "model",
-            "flavors": {{
-                "python_function": {{
-                    "model_path": "model",
-                    "loader_module": "mlflow.pyfunc.loaders",
-                    "python_version": "3.12"
-                }}
-            }},
-            "model_uuid": run.info.run_id,
-            "run_id": run.info.run_id,
-            "utc_time_created": run.info.start_time
-        }}
-
-        # Write MLmodel file
-        import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
-            yaml.dump(mlmodel_content, f)
-            mlmodel_path = f.name
-
-        mlflow.log_artifact(mlmodel_path, artifact_path="model")
-        os.unlink(mlmodel_path)
-
-        # Register the model
-        mlflow.register_model(
-            f"runs:/{{run.info.run_id}}/model",
-            model_name
+        mlflow.transformers.log_model(
+            transformers_model=final_model_path,  # Path to local checkpoint directory
+            task=model_task,  # Task from model catalog (e.g., "text-generation")
+            artifact_path="model",
+            registered_model_name=model_name
         )
 
     print(f'✓ Model registered in MLflow as: {{model_name}}', flush=True)
