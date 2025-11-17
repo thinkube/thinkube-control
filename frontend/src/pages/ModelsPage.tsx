@@ -50,7 +50,7 @@ export default function ModelsPage() {
 
   const checkMlflowStatus = async () => {
     try {
-      const response = await fetch('/api/models/mlflow/status', {
+      const response = await fetch('/api/v1/models/mlflow/status', {
         credentials: 'include',
       });
       const data = await response.json();
