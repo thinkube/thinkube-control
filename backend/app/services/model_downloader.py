@@ -362,33 +362,38 @@ temp_download_dir = '/tmp/downloads'
 os.makedirs(temp_download_dir, exist_ok=True)
 
 try:
-    # Download to local emptyDir (fast host disk)
-    print('Downloading model files to local storage...', flush=True)
     model_name = model_id.replace('/', '-')
-    local_model_path = os.path.join(temp_download_dir, model_name)
-
-    # Use default tqdm progress bars (tracks actual download progress from CloudFront headers)
-    model_path = snapshot_download(
-        repo_id=model_id,
-        local_dir=local_model_path,
-        resume_download=True
-        # tqdm is enabled by default and shows accurate progress with percentages
-    )
-
-    print(f'✓ Download complete! Model at: {{model_path}}', flush=True)
-
-    # Move to persistent storage for MLflow
-    print(f'Moving model to persistent storage...', flush=True)
     final_dir = '/models/downloads'
     os.makedirs(final_dir, exist_ok=True)
     final_model_path = os.path.join(final_dir, model_name)
 
-    # Remove destination if it exists
-    if os.path.exists(final_model_path):
-        shutil.rmtree(final_model_path)
+    # Check if model already exists on persistent storage
+    if os.path.exists(final_model_path) and os.listdir(final_model_path):
+        print(f'✓ Model already exists at: {{final_model_path}}, skipping download', flush=True)
+    else:
+        # Download to local emptyDir (fast host disk)
+        print('Downloading model files to local storage...', flush=True)
+        local_model_path = os.path.join(temp_download_dir, model_name)
 
-    shutil.move(model_path, final_model_path)
-    print(f'✓ Model moved to: {{final_model_path}}', flush=True)
+        # Use default tqdm progress bars (tracks actual download progress from CloudFront headers)
+        model_path = snapshot_download(
+            repo_id=model_id,
+            local_dir=local_model_path,
+            resume_download=True
+            # tqdm is enabled by default and shows accurate progress with percentages
+        )
+
+        print(f'✓ Download complete! Model at: {{model_path}}', flush=True)
+
+        # Move to persistent storage for MLflow
+        print(f'Moving model to persistent storage...', flush=True)
+
+        # Remove destination if it exists
+        if os.path.exists(final_model_path):
+            shutil.rmtree(final_model_path)
+
+        shutil.move(model_path, final_model_path)
+        print(f'✓ Model moved to: {{final_model_path}}', flush=True)
 
     # Re-authenticate with MLflow before registration (token may have expired during long download)
     print(f'Re-authenticating with MLflow before registration...', flush=True)
