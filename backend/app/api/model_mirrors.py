@@ -342,24 +342,7 @@ async def check_mlflow_status(
         mlflow_uri = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000")
         mlflow_public_url = f"https://mlflow.{os.getenv('DOMAIN_NAME', 'thinkube.com')}"
 
-        # Get Keycloak credentials from environment
-        keycloak_token_url = f"{os.getenv('KEYCLOAK_URL')}/realms/{os.getenv('AUTH_REALM_USERNAME')}/protocol/openid-connect/token"
-        client_id = "mlflow"
-
-        # For single-user environment, use admin credentials from environment
-        username = os.getenv("ADMIN_USERNAME", "admin")
-        password = os.getenv("ADMIN_PASSWORD")
-
-        if not password:
-            return {
-                "initialized": False,
-                "needs_browser_login": True,
-                "mlflow_url": mlflow_public_url,
-                "error": "Admin password not configured"
-            }
-
-        # Get MLflow client secret from the secret (would need to be loaded at startup)
-        # For now, try to read from k8s secret
+        # Get credentials from secret
         try:
             from kubernetes import client as k8s_client, config as k8s_config
             try:
@@ -370,14 +353,18 @@ async def check_mlflow_status(
             v1 = k8s_client.CoreV1Api()
             secret = v1.read_namespaced_secret("mlflow-auth-config", "thinkube-control")
             import base64
+            keycloak_token_url = base64.b64decode(secret.data['keycloak-token-url']).decode('utf-8')
+            client_id = base64.b64decode(secret.data['client-id']).decode('utf-8')
             client_secret = base64.b64decode(secret.data['client-secret']).decode('utf-8')
+            username = base64.b64decode(secret.data['username']).decode('utf-8')
+            password = base64.b64decode(secret.data['password']).decode('utf-8')
         except Exception as e:
-            logger.error(f"Could not read MLflow client secret: {e}")
+            logger.error(f"Could not read MLflow auth config secret: {e}")
             return {
                 "initialized": False,
                 "needs_browser_login": True,
                 "mlflow_url": mlflow_public_url,
-                "error": "MLflow not configured yet"
+                "error": "MLflow authentication not configured"
             }
 
         # Try to get OAuth2 token from Keycloak
