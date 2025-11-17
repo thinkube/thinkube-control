@@ -368,7 +368,7 @@ async def check_mlflow_status(
                 k8s_config.load_kube_config()
 
             v1 = k8s_client.CoreV1Api()
-            secret = v1.read_namespaced_secret("mlflow-auth-config", "argo")
+            secret = v1.read_namespaced_secret("mlflow-auth-config", "thinkube-control")
             import base64
             client_secret = base64.b64decode(secret.data['client-secret']).decode('utf-8')
         except Exception as e:
