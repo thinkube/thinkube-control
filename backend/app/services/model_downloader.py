@@ -390,6 +390,23 @@ try:
     shutil.move(model_path, final_model_path)
     print(f'✓ Model moved to: {{final_model_path}}', flush=True)
 
+    # Re-authenticate with MLflow before registration (token may have expired during long download)
+    print(f'Re-authenticating with MLflow before registration...', flush=True)
+    token_response = requests.post(
+        token_url,
+        data={{
+            'grant_type': 'password',
+            'client_id': client_id,
+            'client_secret': client_secret,
+            'username': username,
+            'password': password
+        }},
+        verify=False
+    )
+    token_response.raise_for_status()
+    os.environ['MLFLOW_TRACKING_TOKEN'] = token_response.json()['access_token']
+    print('✓ MLflow re-authentication successful', flush=True)
+
     # Register model in MLflow
     print(f'Registering model in MLflow...', flush=True)
 
