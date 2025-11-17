@@ -420,12 +420,14 @@ async def check_mlflow_status(
         # Test connection by listing experiments
         experiments = mlflow.search_experiments()
 
-        return {
+        result = {
             "initialized": True,
             "needs_browser_login": False,
             "mlflow_url": mlflow_public_url,
             "message": f"MLflow is ready ({len(experiments)} experiments found)"
         }
+        logger.info(f"MLflow status check succeeded: {result}")
+        return result
 
     except requests.exceptions.Timeout:
         # Timeout usually means user needs to initialize via browser
@@ -437,10 +439,12 @@ async def check_mlflow_status(
         }
 
     except Exception as e:
-        logger.error(f"MLflow status check failed: {e}")
-        return {
+        logger.error(f"MLflow status check failed: {e}", exc_info=True)
+        result = {
             "initialized": False,
             "needs_browser_login": True,
             "mlflow_url": mlflow_public_url,
             "error": str(e)
         }
+        logger.info(f"Returning error response: {result}")
+        return result
