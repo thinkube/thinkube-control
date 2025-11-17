@@ -395,6 +395,7 @@ async def check_mlflow_status(
         )
 
         if token_response.status_code != 200:
+            logger.error(f"Keycloak token request failed: status={token_response.status_code}, response={token_response.text[:500]}")
             return {
                 "initialized": False,
                 "needs_browser_login": True,
