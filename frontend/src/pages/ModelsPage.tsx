@@ -6,6 +6,7 @@ import { TkButton, TkLoadingButton, TkBadge } from 'thinkube-style/components/bu
 import { TkErrorAlert, TkInfoAlert } from 'thinkube-style/components/feedback';
 import { TkPageWrapper } from 'thinkube-style/components/utilities';
 import { useModelDownloadsStore, Model, DownloadStatus } from '../stores/useModelDownloadsStore';
+import api from '../lib/axios';
 
 export default function ModelsPage() {
   const {
@@ -50,18 +51,15 @@ export default function ModelsPage() {
 
   const checkMlflowStatus = async () => {
     try {
-      const response = await fetch('/api/v1/models/mlflow/status', {
-        credentials: 'include',
-      });
-      const data = await response.json();
-      setMlflowStatus(data);
-    } catch (err) {
+      const response = await api.get('/models/mlflow/status');
+      setMlflowStatus(response.data);
+    } catch (err: any) {
       console.error('Failed to check MLflow status:', err);
       setMlflowStatus({
         initialized: false,
         needs_browser_login: true,
         mlflow_url: '',
-        error: 'Failed to check MLflow status',
+        error: err.response?.data?.detail || 'Failed to check MLflow status',
       });
     } finally {
       setCheckingMlflow(false);
