@@ -447,11 +447,12 @@ except Exception as e:
     print(f'Error during download/registration: {{e}}', flush=True)
     import traceback
     traceback.print_exc()
-    # Clean up on failure (check both locations)
+    # Only clean up temporary download location (local emptyDir)
+    # Keep final_model_path on persistent storage to allow retry without re-downloading
     if 'local_model_path' in locals() and os.path.exists(local_model_path):
         shutil.rmtree(local_model_path)
-    if 'final_model_path' in locals() and os.path.exists(final_model_path):
-        shutil.rmtree(final_model_path)
+        print(f'Cleaned up temporary download cache', flush=True)
+    # Do NOT delete final_model_path - preserve for retry on MLflow failures
     raise
 """
 
