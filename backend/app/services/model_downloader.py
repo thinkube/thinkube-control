@@ -433,7 +433,15 @@ try:
             transformers_model=final_model_path,  # Path to local checkpoint directory
             task=model_task,  # Task from model catalog (e.g., "text-generation")
             artifact_path="model",
-            registered_model_name=model_name
+            registered_model_name=model_name,
+            # Explicitly specify requirements to bypass auto-detection
+            # Auto-detection tries to import tensorflow/jax even if model only uses PyTorch
+            extra_pip_requirements=[
+                "transformers",
+                "torch",
+                "accelerate",
+                "safetensors"
+            ]
         )
 
     print(f'✓ Model registered in MLflow as: {{model_name}}', flush=True)
