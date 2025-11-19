@@ -262,7 +262,7 @@ export default function ModelsPage() {
                       </TkBadge>
                     </TkTableCell>
                     <TkTableCell className="text-right">
-                      {model.is_downloaded ? (
+                      {model.is_downloaded && !download?.is_failed ? (
                         <TkBadge variant="success">
                           <CheckCircle2 className="w-3 h-3 mr-1" />
                           Ready
@@ -282,7 +282,7 @@ export default function ModelsPage() {
                             Monitor
                           </a>
                         </TkButton>
-                      ) : download?.is_failed ? (
+                      ) : download?.is_failed || (model.is_downloaded && download?.is_failed) ? (
                         <TkButton
                           variant="outline"
                           size="sm"
