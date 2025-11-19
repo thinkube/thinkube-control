@@ -424,9 +424,10 @@ try:
             task=model_task,  # Task from model catalog (e.g., "text-generation")
             artifact_path="model",
             registered_model_name=model_name,
-            # Explicitly specify requirements to bypass auto-detection
+            # Use pip_requirements to override auto-detection completely
             # Auto-detection tries to import tensorflow/jax even if model only uses PyTorch
-            extra_pip_requirements=[
+            pip_requirements=[
+                "mlflow",
                 "transformers",
                 "torch",
                 "accelerate",
