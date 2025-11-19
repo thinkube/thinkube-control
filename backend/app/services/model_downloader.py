@@ -303,21 +303,19 @@ class ModelDownloaderService:
             volumes=[
                 hera_models.Volume(
                     name="download-cache",
-                    empty_dir={"sizeLimit": "200Gi"}  # Local host disk for fast downloads
-                ),
-                hera_models.Volume(
-                    name="models-pvc",
-                    persistent_volume_claim={"claimName": self.models_pvc_name}
+                    empty_dir={"sizeLimit": "200Gi"}  # Local host disk for temporary downloads
                 )
             ]
         ) as w:
-            # Download script with MLflow registration
+            # Download script with S3 upload and MLflow registration
             download_script = f"""
 import os
 import sys
-import shutil
+from pathlib import Path
 from huggingface_hub import snapshot_download
 import mlflow
+import boto3
+from botocore.config import Config
 
 # Force progress bars to show even without TTY
 os.environ['TQDM_DISABLE'] = '0'
@@ -355,35 +353,72 @@ model_id = '{safe_model_id}'
 model_task = '{safe_model_task}'
 print(f'Starting download of {{model_id}}...', flush=True)
 
-# Download to fast local storage first
-# Note: Progress tracking is handled by huggingface_hub's built-in tqdm progress bars
-# which get file sizes from CloudFront Content-Length headers during download
-temp_download_dir = '/tmp/downloads'
-os.makedirs(temp_download_dir, exist_ok=True)
+# Configure S3 client for SeaweedFS
+s3_endpoint = os.environ['AWS_S3_ENDPOINT']
+s3_access_key = os.environ['AWS_ACCESS_KEY_ID']
+s3_secret_key = os.environ['AWS_SECRET_ACCESS_KEY']
+
+s3_client = boto3.client(
+    's3',
+    endpoint_url=s3_endpoint,
+    aws_access_key_id=s3_access_key,
+    aws_secret_access_key=s3_secret_key,
+    config=Config(signature_version='s3v4'),
+    verify=False  # Skip SSL for internal cluster communication
+)
 
 try:
     model_name = model_id.replace('/', '-')
-    final_dir = '/models/downloads'
-    os.makedirs(final_dir, exist_ok=True)
-    final_model_path = os.path.join(final_dir, model_name)
+    s3_bucket = 'mlflow'
+    s3_prefix = f'models/{{model_name}}'
 
-    # Check if model already exists on persistent storage
-    if os.path.exists(final_model_path) and os.listdir(final_model_path):
-        print(f'✓ Model already exists at: {{final_model_path}}, skipping download', flush=True)
-    else:
-        # Download directly to persistent storage (PVC) to ensure retry can reuse downloads
-        # Previously downloaded to emptyDir then moved, but emptyDir is wiped on pod exit
-        print('Downloading model files to persistent storage...', flush=True)
+    # Check if model already exists in S3
+    print(f'Checking if model exists in S3: s3://{{s3_bucket}}/{{s3_prefix}}/', flush=True)
+    try:
+        response = s3_client.list_objects_v2(Bucket=s3_bucket, Prefix=s3_prefix, MaxKeys=1)
+        if response.get('KeyCount', 0) > 0:
+            print(f'✓ Model already exists in S3, skipping download', flush=True)
+            model_already_exists = True
+        else:
+            model_already_exists = False
+    except Exception as list_err:
+        print(f'Could not check S3 (assuming model does not exist): {{list_err}}', flush=True)
+        model_already_exists = False
 
-        # Use default tqdm progress bars (tracks actual download progress from CloudFront headers)
+    if not model_already_exists:
+        # Download to temporary local storage
+        temp_download_dir = '/tmp/downloads'
+        os.makedirs(temp_download_dir, exist_ok=True)
+        temp_model_path = os.path.join(temp_download_dir, model_name)
+
+        print('Downloading model files from HuggingFace...', flush=True)
+
+        # Download to temporary storage (emptyDir)
         model_path = snapshot_download(
             repo_id=model_id,
-            local_dir=final_model_path,  # Download directly to PVC
-            resume_download=True  # Resume if partial download exists
-            # tqdm is enabled by default and shows accurate progress with percentages
+            local_dir=temp_model_path,
+            resume_download=True
         )
 
         print(f'✓ Download complete! Model at: {{model_path}}', flush=True)
+
+        # Upload all files to S3
+        print(f'Uploading model to S3: s3://{{s3_bucket}}/{{s3_prefix}}/', flush=True)
+        uploaded_count = 0
+
+        for local_file in Path(temp_model_path).rglob('*'):
+            if local_file.is_file():
+                # Calculate relative path for S3 key
+                relative_path = local_file.relative_to(temp_model_path)
+                s3_key = f'{{s3_prefix}}/{{relative_path}}'
+
+                # Upload file
+                s3_client.upload_file(str(local_file), s3_bucket, s3_key)
+                uploaded_count += 1
+                if uploaded_count % 10 == 0:
+                    print(f'  Uploaded {{uploaded_count}} files...', flush=True)
+
+        print(f'✓ Uploaded {{uploaded_count}} files to S3', flush=True)
 
     # Re-authenticate with MLflow before registration (token may have expired during long download)
     print(f'Re-authenticating with MLflow before registration...', flush=True)
@@ -402,7 +437,7 @@ try:
     os.environ['MLFLOW_TRACKING_TOKEN'] = token_response.json()['access_token']
     print('✓ MLflow re-authentication successful', flush=True)
 
-    # Register model in MLflow
+    # Register model in MLflow with S3 URI
     print(f'Registering model in MLflow...', flush=True)
 
     with mlflow.start_run(run_name=f"mirror-{{model_name}}") as run:
@@ -410,44 +445,46 @@ try:
         mlflow.log_params({{
             "source": "huggingface",
             "model_id": model_id,
-            "download_method": "xet",
-            "task": model_task
+            "download_method": "huggingface_hub",
+            "storage": "s3",
+            "task": model_task,
+            "s3_location": f"s3://{{s3_bucket}}/{{s3_prefix}}/"
         }})
 
-        # Use transformers flavor to log the model properly
-        # Passes local directory path - MLflow reads config.json for metadata
-        # and uploads model files directly without loading into memory
-        import mlflow.transformers
+        # For S3 storage, we use mlflow.log_artifact to upload model metadata
+        # MLflow will store artifacts in S3 using the --default-artifact-root setting
+        # Since models are already in S3, we just need to log a reference
 
-        mlflow.transformers.log_model(
-            transformers_model=final_model_path,  # Path to local checkpoint directory
-            task=model_task,  # Task from model catalog (e.g., "text-generation")
-            artifact_path="model",
-            registered_model_name=model_name,
-            # Use pip_requirements to override auto-detection completely
-            # Auto-detection tries to import tensorflow/jax even if model only uses PyTorch
-            pip_requirements=[
-                "mlflow",
-                "transformers",
-                "torch",
-                "accelerate",
-                "safetensors"
-            ]
-        )
+        # Download config.json to log basic metadata
+        if not model_already_exists:
+            config_path = Path(temp_model_path) / 'config.json'
+        else:
+            # Download config.json from S3 for metadata
+            temp_config_dir = '/tmp/config'
+            os.makedirs(temp_config_dir, exist_ok=True)
+            config_path = Path(temp_config_dir) / 'config.json'
+            s3_client.download_file(s3_bucket, f'{{s3_prefix}}/config.json', str(config_path))
+
+        if config_path.exists():
+            mlflow.log_artifact(str(config_path), artifact_path='model')
+
+        # Log S3 location as a text artifact
+        s3_uri_file = '/tmp/s3_model_uri.txt'
+        with open(s3_uri_file, 'w') as f:
+            f.write(f's3://{{s3_bucket}}/{{s3_prefix}}/')
+        mlflow.log_artifact(s3_uri_file, artifact_path='model')
+
+    # Register in MLflow model registry
+    model_uri = f"runs:/{{run.info.run_id}}/model"
+    mlflow.register_model(model_uri, model_name)
 
     print(f'✓ Model registered in MLflow as: {{model_name}}', flush=True)
-
-    # Do NOT delete model files - MLflow stores references to them, not copies
-    # The files in /models/downloads/ are the actual model artifacts
-    print(f'✓ Model files retained at: {{final_model_path}}', flush=True)
+    print(f'✓ Model stored in S3: s3://{{s3_bucket}}/{{s3_prefix}}/', flush=True)
 
 except Exception as e:
     print(f'Error during download/registration: {{e}}', flush=True)
     import traceback
     traceback.print_exc()
-    # Do NOT delete final_model_path - preserve downloads on persistent storage
-    # This allows retries to skip re-downloading and resume from existing files
-    print(f'Preserving downloaded files at {{final_model_path}} for retry', flush=True)
     raise
 """
 
@@ -532,6 +569,29 @@ except Exception as e:
                 hera_models.EnvVar(
                     name="HF_HUB_DISABLE_XET",
                     value="1"  # Disable XET to avoid CAS service stability issues
+                ),
+                # S3 Configuration for SeaweedFS
+                hera_models.EnvVar(
+                    name="AWS_ACCESS_KEY_ID",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="seaweedfs-s3-secret",
+                            key="access_key"
+                        )
+                    )
+                ),
+                hera_models.EnvVar(
+                    name="AWS_SECRET_ACCESS_KEY",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="seaweedfs-s3-secret",
+                            key="secret_key"
+                        )
+                    )
+                ),
+                hera_models.EnvVar(
+                    name="AWS_S3_ENDPOINT",
+                    value="http://seaweedfs-filer.seaweedfs.svc.cluster.local:8333"
                 )
             ]
 
@@ -548,8 +608,7 @@ except Exception as e:
                 command=["python", "-c"],
                 args=[download_script],
                 volume_mounts=[
-                    hera_models.VolumeMount(name="download-cache", mount_path="/tmp/downloads"),
-                    hera_models.VolumeMount(name="models-pvc", mount_path="/models")
+                    hera_models.VolumeMount(name="download-cache", mount_path="/tmp/downloads")
                 ],
                 env=env_vars,
                 resources=hera_models.ResourceRequirements(
