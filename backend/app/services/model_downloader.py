@@ -437,10 +437,9 @@ try:
 
     print(f'✓ Model registered in MLflow as: {{model_name}}', flush=True)
 
-    # Clean up downloaded files after MLflow has copied them
-    print(f'Cleaning up downloaded files...', flush=True)
-    shutil.rmtree(final_model_path)
-    print(f'✓ Cleanup complete', flush=True)
+    # Do NOT delete model files - MLflow stores references to them, not copies
+    # The files in /models/downloads/ are the actual model artifacts
+    print(f'✓ Model files retained at: {{final_model_path}}', flush=True)
 
 except Exception as e:
     print(f'Error during download/registration: {{e}}', flush=True)
