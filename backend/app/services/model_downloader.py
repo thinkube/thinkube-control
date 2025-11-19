@@ -371,29 +371,19 @@ try:
     if os.path.exists(final_model_path) and os.listdir(final_model_path):
         print(f'✓ Model already exists at: {{final_model_path}}, skipping download', flush=True)
     else:
-        # Download to local emptyDir (fast host disk)
-        print('Downloading model files to local storage...', flush=True)
-        local_model_path = os.path.join(temp_download_dir, model_name)
+        # Download directly to persistent storage (PVC) to ensure retry can reuse downloads
+        # Previously downloaded to emptyDir then moved, but emptyDir is wiped on pod exit
+        print('Downloading model files to persistent storage...', flush=True)
 
         # Use default tqdm progress bars (tracks actual download progress from CloudFront headers)
         model_path = snapshot_download(
             repo_id=model_id,
-            local_dir=local_model_path,
-            resume_download=True
+            local_dir=final_model_path,  # Download directly to PVC
+            resume_download=True  # Resume if partial download exists
             # tqdm is enabled by default and shows accurate progress with percentages
         )
 
         print(f'✓ Download complete! Model at: {{model_path}}', flush=True)
-
-        # Move to persistent storage for MLflow
-        print(f'Moving model to persistent storage...', flush=True)
-
-        # Remove destination if it exists
-        if os.path.exists(final_model_path):
-            shutil.rmtree(final_model_path)
-
-        shutil.move(model_path, final_model_path)
-        print(f'✓ Model moved to: {{final_model_path}}', flush=True)
 
     # Re-authenticate with MLflow before registration (token may have expired during long download)
     print(f'Re-authenticating with MLflow before registration...', flush=True)
@@ -455,12 +445,9 @@ except Exception as e:
     print(f'Error during download/registration: {{e}}', flush=True)
     import traceback
     traceback.print_exc()
-    # Only clean up temporary download location (local emptyDir)
-    # Keep final_model_path on persistent storage to allow retry without re-downloading
-    if 'local_model_path' in locals() and os.path.exists(local_model_path):
-        shutil.rmtree(local_model_path)
-        print(f'Cleaned up temporary download cache', flush=True)
-    # Do NOT delete final_model_path - preserve for retry on MLflow failures
+    # Do NOT delete final_model_path - preserve downloads on persistent storage
+    # This allows retries to skip re-downloading and resume from existing files
+    print(f'Preserving downloaded files at {{final_model_path}} for retry', flush=True)
     raise
 """
 
@@ -545,12 +532,6 @@ except Exception as e:
                 hera_models.EnvVar(
                     name="HF_HUB_DISABLE_XET",
                     value="1"  # Disable XET to avoid CAS service stability issues
-                ),
-                # Set HuggingFace cache to persistent storage so retries can reuse downloads
-                # Without this, cache defaults to /root/.cache/huggingface which is lost when container exits
-                hera_models.EnvVar(
-                    name="HF_HOME",
-                    value="/models/huggingface"  # Persistent cache on JuiceFS PVC
                 )
             ]
 
