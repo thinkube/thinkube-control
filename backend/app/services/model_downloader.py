@@ -545,6 +545,12 @@ except Exception as e:
                 hera_models.EnvVar(
                     name="HF_HUB_DISABLE_XET",
                     value="1"  # Disable XET to avoid CAS service stability issues
+                ),
+                # Set HuggingFace cache to persistent storage so retries can reuse downloads
+                # Without this, cache defaults to /root/.cache/huggingface which is lost when container exits
+                hera_models.EnvVar(
+                    name="HF_HOME",
+                    value="/models/huggingface"  # Persistent cache on JuiceFS PVC
                 )
             ]
 
