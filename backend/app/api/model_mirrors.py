@@ -404,8 +404,28 @@ async def check_mlflow_status(
         os.environ['MLFLOW_TRACKING_TOKEN'] = access_token
         mlflow.set_tracking_uri(mlflow_uri)
 
-        # Test connection by listing experiments
-        experiments = mlflow.search_experiments()
+        # Test connection by listing experiments with timeout
+        import asyncio
+        import concurrent.futures
+
+        def check_mlflow_connection():
+            return mlflow.search_experiments()
+
+        try:
+            # Run MLflow API call with timeout in thread pool
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                experiments = await asyncio.wait_for(
+                    loop.run_in_executor(pool, check_mlflow_connection),
+                    timeout=10.0
+                )
+        except asyncio.TimeoutError:
+            return {
+                "initialized": False,
+                "needs_browser_login": True,
+                "mlflow_url": mlflow_public_url,
+                "error": "MLflow connection timeout - service may be unavailable"
+            }
 
         result = {
             "initialized": True,
