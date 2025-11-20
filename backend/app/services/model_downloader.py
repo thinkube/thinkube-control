@@ -619,6 +619,10 @@ except Exception as e:
                 hera_models.EnvVar(
                     name="MLFLOW_S3_IGNORE_TLS",
                     value="true"
+                ),
+                hera_models.EnvVar(
+                    name="AWS_DEFAULT_REGION",
+                    value="us-east-1"
                 )
             ]
 
