@@ -370,7 +370,8 @@ s3_client = boto3.client(
 try:
     model_name = model_id.replace('/', '-')
     s3_bucket = 'mlflow'
-    s3_prefix = f'models/{{model_name}}'
+    # Store in MLflow's artifact root path so artifacts are visible in UI
+    s3_prefix = f'artifacts/models/{{model_name}}'
 
     # Check if model already exists in S3
     print(f'Checking if model exists in S3: s3://{{s3_bucket}}/{{s3_prefix}}/', flush=True)
