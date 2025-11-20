@@ -271,7 +271,7 @@ export default function ModelsPage() {
                     </TkTableCell>
                     <TkTableCell className="text-right">
                       <div className="flex gap-2 justify-end">
-                        {model.is_downloaded && !download?.is_failed ? (
+                        {model.is_downloaded && download && !download.is_failed ? (
                           <>
                             <TkBadge variant="success">
                               <CheckCircle2 className="w-3 h-3 mr-1" />
