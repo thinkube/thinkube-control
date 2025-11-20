@@ -277,6 +277,15 @@ export default function ModelsPage() {
                               <CheckCircle2 className="w-3 h-3 mr-1" />
                               Ready
                             </TkBadge>
+                            {download && (
+                              <TkButton
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => resetMirrorJob(model.id)}
+                              >
+                                Reset
+                              </TkButton>
+                            )}
                             <TkButton
                               variant="outline"
                               size="sm"
