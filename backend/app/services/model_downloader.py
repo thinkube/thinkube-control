@@ -449,8 +449,10 @@ try:
     os.environ['MLFLOW_TRACKING_TOKEN'] = token_response.json()['access_token']
     print('✓ MLflow re-authentication successful', flush=True)
 
-    # Register model in MLflow - MLflow will upload artifacts to S3
+    # Register model in MLflow using transformers flavor
     print(f'Registering model in MLflow...', flush=True)
+
+    import mlflow.transformers
 
     with mlflow.start_run(run_name=f"mirror-{{model_name}}") as run:
         # Log model metadata
@@ -458,18 +460,18 @@ try:
             "source": "huggingface",
             "model_id": model_id,
             "download_method": "huggingface_hub",
-            "storage": "s3",
             "task": model_task
         }})
 
-        # Log all model files as artifacts - MLflow will upload to S3 at correct path
-        print(f'Uploading model artifacts to MLflow (S3)...', flush=True)
-        mlflow.log_artifacts(temp_model_path, artifact_path="model")
-        print(f'✓ Model artifacts uploaded to MLflow', flush=True)
-
-    # Register in MLflow model registry
-    model_uri = f"runs:/{{run.info.run_id}}/model"
-    mlflow.register_model(model_uri, model_name)
+        # Log model using transformers flavor - pass directory path
+        print(f'Uploading model to MLflow (S3) using transformers flavor...', flush=True)
+        mlflow.transformers.log_model(
+            transformers_model=temp_model_path,
+            artifact_path="model",
+            task=model_task,
+            registered_model_name=model_name
+        )
+        print(f'✓ Model uploaded and registered in MLflow', flush=True)
 
     print(f'✓ Model registered in MLflow as: {{model_name}}', flush=True)
     print(f'✓ Model stored in S3: s3://{{s3_bucket}}/{{s3_prefix}}/', flush=True)
