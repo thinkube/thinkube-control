@@ -440,6 +440,16 @@ try:
     # Register model in MLflow with S3 URI
     print(f'Registering model in MLflow...', flush=True)
 
+    # Create a simple wrapper model that references S3
+    import mlflow.pyfunc
+
+    class S3ModelWrapper(mlflow.pyfunc.PythonModel):
+        def load_context(self, context):
+            pass
+
+        def predict(self, context, model_input):
+            return f"Model located at: s3://{{s3_bucket}}/{{s3_prefix}}/"
+
     with mlflow.start_run(run_name=f"mirror-{{model_name}}") as run:
         # Log model metadata
         mlflow.log_params({{
@@ -451,11 +461,7 @@ try:
             "s3_location": f"s3://{{s3_bucket}}/{{s3_prefix}}/"
         }})
 
-        # For S3 storage, we use mlflow.log_artifact to upload model metadata
-        # MLflow will store artifacts in S3 using the --default-artifact-root setting
-        # Since models are already in S3, we just need to log a reference
-
-        # Download config.json to log basic metadata
+        # Download config.json to log as artifact
         if not model_already_exists:
             config_path = Path(temp_model_path) / 'config.json'
         else:
@@ -466,13 +472,14 @@ try:
             s3_client.download_file(s3_bucket, f'{{s3_prefix}}/config.json', str(config_path))
 
         if config_path.exists():
-            mlflow.log_artifact(str(config_path), artifact_path='model')
+            mlflow.log_artifact(str(config_path))
 
-        # Log S3 location as a text artifact
-        s3_uri_file = '/tmp/s3_model_uri.txt'
-        with open(s3_uri_file, 'w') as f:
-            f.write(f's3://{{s3_bucket}}/{{s3_prefix}}/')
-        mlflow.log_artifact(s3_uri_file, artifact_path='model')
+        # Log the model wrapper - this creates the required model artifact
+        mlflow.pyfunc.log_model(
+            artifact_path="model",
+            python_model=S3ModelWrapper(),
+            artifacts={{"s3_uri": str(config_path)}}  # Reference to config
+        )
 
     # Register in MLflow model registry
     model_uri = f"runs:/{{run.info.run_id}}/model"
