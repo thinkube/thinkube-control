@@ -455,3 +455,51 @@ async def check_mlflow_status(
         }
         logger.info(f"Returning error response: {result}")
         return result
+
+
+@router.delete("/models/{model_id:path}", operation_id="delete_model")
+async def delete_model(
+    model_id: str,
+    current_user: dict = Depends(get_current_user_dual_auth),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete a model from MLflow registry
+
+    This removes the model and all its versions from MLflow, allowing it to be re-downloaded.
+    Useful for cleaning up failed or incomplete downloads.
+    """
+    try:
+        service = ModelDownloaderService()
+        success = service.delete_model(model_id)
+
+        if success:
+            # Also clean up any associated mirror jobs
+            job = db.query(ModelMirrorJob).filter(
+                ModelMirrorJob.model_id == model_id
+            ).first()
+
+            if job:
+                db.delete(job)
+                db.commit()
+                logger.info(f"Deleted mirror job for {model_id}")
+
+            return {
+                "model_id": model_id,
+                "status": "deleted",
+                "message": f"Model {model_id} deleted successfully"
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to delete model {model_id}"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete model {model_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete model: {str(e)}"
+        )

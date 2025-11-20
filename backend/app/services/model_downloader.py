@@ -799,3 +799,37 @@ except Exception as e:
         except ApiException as e:
             logger.error(f"Failed to cancel workflow {workflow_name}: {e}")
             return False
+
+    def delete_model(self, model_id: str) -> bool:
+        """
+        Delete a model from MLflow registry
+
+        Args:
+            model_id: Model identifier (e.g., "nvidia/Llama-3.1-8B-Instruct-FP8")
+
+        Returns:
+            bool: True if deleted successfully, False otherwise
+        """
+        try:
+            # Convert model_id to MLflow model name format
+            model_name = model_id.replace('/', '-')
+
+            # Get MLflow tracking URI
+            mlflow_uri = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000")
+            mlflow_client = MlflowClient(tracking_uri=mlflow_uri)
+
+            # Delete the registered model (this deletes all versions)
+            mlflow_client.delete_registered_model(model_name)
+
+            logger.info(f"Successfully deleted model {model_id} ({model_name}) from MLflow")
+            return True
+
+        except RestException as e:
+            if "RESOURCE_DOES_NOT_EXIST" in str(e):
+                logger.warning(f"Model {model_id} not found in MLflow registry")
+                return True  # Already deleted, consider it success
+            logger.error(f"Failed to delete model {model_id}: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to delete model {model_id}: {e}")
+            return False
