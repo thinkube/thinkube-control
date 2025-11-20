@@ -480,7 +480,8 @@ except Exception as e:
     print(f'Error during download/registration: {{e}}', flush=True)
     import traceback
     traceback.print_exc()
-    raise
+    import sys
+    sys.exit(1)
 """
 
             # Container environment variables
