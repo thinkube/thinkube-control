@@ -174,8 +174,11 @@ export const useModelDownloadsStore = create<ModelDownloadsState>((set, get) => 
 
       toast.success('Mirror job reset - you can now retry');
 
-      // Refresh downloads to update UI
-      await get().fetchDownloads();
+      // Refresh both models and downloads to update UI
+      await Promise.all([
+        get().fetchModels(),
+        get().fetchDownloads()
+      ]);
     } catch (error: any) {
       const errorMsg = error.response?.data?.detail || 'Failed to reset mirror job';
       toast.error(errorMsg);
