@@ -19,6 +19,7 @@ export default function ModelsPage() {
     fetchDownloads,
     isModelDownloading,
     getDownloadForModel,
+    resetMirrorJob,
     deleteModel,
     startPolling,
     stopPolling,
@@ -269,66 +270,102 @@ export default function ModelsPage() {
                       </TkBadge>
                     </TkTableCell>
                     <TkTableCell className="text-right">
-                      {model.is_downloaded && !download?.is_failed ? (
-                        <div className="flex gap-2 justify-end">
-                          <TkBadge variant="success">
-                            <CheckCircle2 className="w-3 h-3 mr-1" />
-                            Ready
-                          </TkBadge>
+                      <div className="flex gap-2 justify-end">
+                        {model.is_downloaded && !download?.is_failed ? (
+                          <>
+                            <TkBadge variant="success">
+                              <CheckCircle2 className="w-3 h-3 mr-1" />
+                              Ready
+                            </TkBadge>
+                            <TkButton
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleDelete(model.id)}
+                            >
+                              <Trash2 className="w-4 h-4 mr-2" />
+                              Delete
+                            </TkButton>
+                          </>
+                        ) : isDownloading && download?.workflow_name ? (
+                          <>
+                            <TkButton
+                              variant="outline"
+                              size="sm"
+                              asChild
+                            >
+                              <a
+                                href={`https://argo.${window.location.hostname.split('.').slice(-2).join('.')}/workflows/argo/${download.workflow_name}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                <ExternalLink className="w-4 h-4 mr-2" />
+                                Monitor
+                              </a>
+                            </TkButton>
+                            <TkButton
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => resetMirrorJob(model.id)}
+                            >
+                              Reset
+                            </TkButton>
+                          </>
+                        ) : download?.is_failed || (model.is_downloaded && download?.is_failed) ? (
+                          <>
+                            <TkButton
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleDownload(model.id)}
+                            >
+                              <Copy className="w-4 h-4 mr-2" />
+                              Retry
+                            </TkButton>
+                            <TkButton
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => resetMirrorJob(model.id)}
+                            >
+                              Reset
+                            </TkButton>
+                            <TkButton
+                              variant="destructive"
+                              size="sm"
+                              onClick={() => handleDelete(model.id)}
+                            >
+                              <Trash2 className="w-4 h-4 mr-2" />
+                              Delete
+                            </TkButton>
+                          </>
+                        ) : download ? (
+                          <>
+                            <TkButton
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleDownload(model.id)}
+                            >
+                              <Copy className="w-4 h-4 mr-2" />
+                              Mirror
+                            </TkButton>
+                            <TkButton
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => resetMirrorJob(model.id)}
+                            >
+                              Reset
+                            </TkButton>
+                          </>
+                        ) : (
                           <TkButton
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleDelete(model.id)}
-                          >
-                            <Trash2 className="w-4 h-4 mr-2" />
-                            Delete
-                          </TkButton>
-                        </div>
-                      ) : isDownloading && download?.workflow_name ? (
-                        <TkButton
-                          variant="outline"
-                          size="sm"
-                          asChild
-                        >
-                          <a
-                            href={`https://argo.${window.location.hostname.split('.').slice(-2).join('.')}/workflows/argo/${download.workflow_name}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            <ExternalLink className="w-4 h-4 mr-2" />
-                            Monitor
-                          </a>
-                        </TkButton>
-                      ) : download?.is_failed || (model.is_downloaded && download?.is_failed) ? (
-                        <div className="flex gap-2 justify-end">
-                          <TkButton
-                            variant="outline"
+                            variant="default"
                             size="sm"
                             onClick={() => handleDownload(model.id)}
+                            disabled={loading}
                           >
                             <Copy className="w-4 h-4 mr-2" />
-                            Retry
+                            Mirror
                           </TkButton>
-                          <TkButton
-                            variant="destructive"
-                            size="sm"
-                            onClick={() => handleDelete(model.id)}
-                          >
-                            <Trash2 className="w-4 h-4 mr-2" />
-                            Delete
-                          </TkButton>
-                        </div>
-                      ) : (
-                        <TkButton
-                          variant="default"
-                          size="sm"
-                          onClick={() => handleDownload(model.id)}
-                          disabled={loading}
-                        >
-                          <Copy className="w-4 h-4 mr-2" />
-                          Mirror
-                        </TkButton>
-                      )}
+                        )}
+                      </div>
                     </TkTableCell>
                   </TkTableRow>
                 );

@@ -46,6 +46,7 @@ interface ModelDownloadsState {
   startDownload: (modelId: string, hfToken?: string) => Promise<void>;
   fetchDownloads: () => Promise<void>;
   cancelDownload: (workflowId: string) => Promise<void>;
+  resetMirrorJob: (modelId: string) => Promise<void>;
   deleteModel: (modelId: string) => Promise<void>;
   startPolling: () => void;
   stopPolling: () => void;
@@ -163,6 +164,20 @@ export const useModelDownloadsStore = create<ModelDownloadsState>((set, get) => 
       await get().fetchDownloads();
     } catch (error: any) {
       const errorMsg = error.response?.data?.detail || 'Failed to cancel mirror';
+      toast.error(errorMsg);
+    }
+  },
+
+  resetMirrorJob: async (modelId: string) => {
+    try {
+      await api.post(`/models/mirrors/reset/${encodeURIComponent(modelId)}`);
+
+      toast.success('Mirror job reset - you can now retry');
+
+      // Refresh downloads to update UI
+      await get().fetchDownloads();
+    } catch (error: any) {
+      const errorMsg = error.response?.data?.detail || 'Failed to reset mirror job';
       toast.error(errorMsg);
     }
   },

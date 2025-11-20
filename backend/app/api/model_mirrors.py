@@ -457,6 +457,48 @@ async def check_mlflow_status(
         return result
 
 
+@router.post("/mirrors/reset/{model_id:path}", operation_id="reset_mirror_job")
+async def reset_mirror_job(
+    model_id: str,
+    current_user: dict = Depends(get_current_user_dual_auth),
+    db: Session = Depends(get_db)
+):
+    """
+    Reset a mirror job by deleting the job record
+
+    This clears the mirror job from the database without touching the model in MLflow.
+    Useful when a job gets stuck or fails and you want to retry without deleting the model.
+    """
+    try:
+        job = db.query(ModelMirrorJob).filter(
+            ModelMirrorJob.model_id == model_id
+        ).first()
+
+        if job:
+            db.delete(job)
+            db.commit()
+            logger.info(f"Reset mirror job for {model_id}")
+
+            return {
+                "model_id": model_id,
+                "status": "reset",
+                "message": f"Mirror job reset successfully - you can now retry"
+            }
+        else:
+            return {
+                "model_id": model_id,
+                "status": "no_job",
+                "message": "No mirror job found to reset"
+            }
+
+    except Exception as e:
+        logger.error(f"Failed to reset mirror job for {model_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to reset mirror job: {str(e)}"
+        )
+
+
 @router.delete("/models/{model_id:path}", operation_id="delete_model")
 async def delete_model(
     model_id: str,
