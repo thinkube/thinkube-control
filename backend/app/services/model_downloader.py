@@ -386,12 +386,12 @@ try:
         print(f'Could not check S3 (assuming model does not exist): {{list_err}}', flush=True)
         model_already_exists = False
 
-    if not model_already_exists:
-        # Download to temporary local storage
-        temp_download_dir = '/tmp/downloads'
-        os.makedirs(temp_download_dir, exist_ok=True)
-        temp_model_path = os.path.join(temp_download_dir, model_name)
+    # Download to temporary local storage
+    temp_download_dir = '/tmp/downloads'
+    os.makedirs(temp_download_dir, exist_ok=True)
+    temp_model_path = os.path.join(temp_download_dir, model_name)
 
+    if not model_already_exists:
         print('Downloading model files from HuggingFace...', flush=True)
 
         # Download to temporary storage (emptyDir)
@@ -402,24 +402,8 @@ try:
         )
 
         print(f'✓ Download complete! Model at: {{model_path}}', flush=True)
-
-        # Upload all files to S3
-        print(f'Uploading model to S3: s3://{{s3_bucket}}/{{s3_prefix}}/', flush=True)
-        uploaded_count = 0
-
-        for local_file in Path(temp_model_path).rglob('*'):
-            if local_file.is_file():
-                # Calculate relative path for S3 key
-                relative_path = local_file.relative_to(temp_model_path)
-                s3_key = f'{{s3_prefix}}/{{relative_path}}'
-
-                # Upload file
-                s3_client.upload_file(str(local_file), s3_bucket, s3_key)
-                uploaded_count += 1
-                if uploaded_count % 10 == 0:
-                    print(f'  Uploaded {{uploaded_count}} files...', flush=True)
-
-        print(f'✓ Uploaded {{uploaded_count}} files to S3', flush=True)
+    else:
+        print(f'Using existing model from S3', flush=True)
 
     # Re-authenticate with MLflow before registration (token may have expired during long download)
     print(f'Re-authenticating with MLflow before registration...', flush=True)
@@ -438,18 +422,8 @@ try:
     os.environ['MLFLOW_TRACKING_TOKEN'] = token_response.json()['access_token']
     print('✓ MLflow re-authentication successful', flush=True)
 
-    # Register model in MLflow with S3 URI
+    # Register model in MLflow - MLflow will upload artifacts to S3
     print(f'Registering model in MLflow...', flush=True)
-
-    # Create a simple wrapper model that references S3
-    import mlflow.pyfunc
-
-    class S3ModelWrapper(mlflow.pyfunc.PythonModel):
-        def load_context(self, context):
-            pass
-
-        def predict(self, context, model_input):
-            return f"Model located at: s3://{{s3_bucket}}/{{s3_prefix}}/"
 
     with mlflow.start_run(run_name=f"mirror-{{model_name}}") as run:
         # Log model metadata
@@ -458,29 +432,20 @@ try:
             "model_id": model_id,
             "download_method": "huggingface_hub",
             "storage": "s3",
-            "task": model_task,
-            "s3_location": f"s3://{{s3_bucket}}/{{s3_prefix}}/"
+            "task": model_task
         }})
 
-        # Download config.json to log as artifact
+        # Log all model files as artifacts - MLflow will upload to S3 at correct path
         if not model_already_exists:
-            config_path = Path(temp_model_path) / 'config.json'
+            print(f'Uploading model artifacts to MLflow (S3)...', flush=True)
+            mlflow.log_artifacts(temp_model_path, artifact_path="model")
+            print(f'✓ Model artifacts uploaded to MLflow', flush=True)
         else:
-            # Download config.json from S3 for metadata
-            temp_config_dir = '/tmp/config'
-            os.makedirs(temp_config_dir, exist_ok=True)
-            config_path = Path(temp_config_dir) / 'config.json'
-            s3_client.download_file(s3_bucket, f'{{s3_prefix}}/config.json', str(config_path))
-
-        if config_path.exists():
-            mlflow.log_artifact(str(config_path))
-
-        # Log the model wrapper - this creates the required model artifact
-        mlflow.pyfunc.log_model(
-            artifact_path="model",
-            python_model=S3ModelWrapper(),
-            artifacts={{"s3_uri": str(config_path)}}  # Reference to config
-        )
+            # Model already in S3, just create a placeholder
+            placeholder_file = '/tmp/model_reference.txt'
+            with open(placeholder_file, 'w') as f:
+                f.write(f'Model files available at: s3://{{s3_bucket}}/{{s3_prefix}}/')
+            mlflow.log_artifact(placeholder_file, artifact_path="model")
 
     # Register in MLflow model registry
     model_uri = f"runs:/{{run.info.run_id}}/model"
