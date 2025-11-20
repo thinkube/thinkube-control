@@ -611,19 +611,16 @@ except Exception as e:
                     name="AWS_S3_ENDPOINT",
                     value="http://seaweedfs-filer.seaweedfs.svc.cluster.local:8333"
                 ),
-                # MLflow S3 configuration - must use custom endpoint for SeaweedFS
-                hera_models.EnvVar(
-                    name="MLFLOW_S3_ENDPOINT_URL",
-                    value="http://seaweedfs-filer.seaweedfs.svc.cluster.local:8333"
-                ),
-                hera_models.EnvVar(
-                    name="MLFLOW_S3_IGNORE_TLS",
-                    value="true"
-                ),
                 hera_models.EnvVar(
                     name="AWS_DEFAULT_REGION",
                     value="us-east-1"
                 )
+                # NOTE: MLFLOW_S3_ENDPOINT_URL is intentionally NOT set here.
+                # The MLflow server has --serve-artifacts enabled, so the workflow
+                # uploads artifacts via HTTP to the MLflow server, and the server
+                # handles the S3 upload. This works around a bug in MLflow where
+                # mlflow.transformers.log_model() silently fails to upload to
+                # custom S3 endpoints when the client uploads directly.
             ]
 
             # Get Harbor registry from environment
