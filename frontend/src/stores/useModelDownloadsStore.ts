@@ -46,6 +46,7 @@ interface ModelDownloadsState {
   startDownload: (modelId: string, hfToken?: string) => Promise<void>;
   fetchDownloads: () => Promise<void>;
   cancelDownload: (workflowId: string) => Promise<void>;
+  deleteModel: (modelId: string) => Promise<void>;
   startPolling: () => void;
   stopPolling: () => void;
 }
@@ -162,6 +163,26 @@ export const useModelDownloadsStore = create<ModelDownloadsState>((set, get) => 
       await get().fetchDownloads();
     } catch (error: any) {
       const errorMsg = error.response?.data?.detail || 'Failed to cancel mirror';
+      toast.error(errorMsg);
+    }
+  },
+
+  deleteModel: async (modelId: string) => {
+    try {
+      const model = get().models.find(m => m.id === modelId);
+      const modelName = model?.name || modelId;
+
+      await api.delete(`/models/${encodeURIComponent(modelId)}`);
+
+      toast.success(`${modelName} deleted from MLflow`);
+
+      // Refresh both models catalog and downloads to update UI
+      await Promise.all([
+        get().fetchModels(),
+        get().fetchDownloads()
+      ]);
+    } catch (error: any) {
+      const errorMsg = error.response?.data?.detail || 'Failed to delete model';
       toast.error(errorMsg);
     }
   },

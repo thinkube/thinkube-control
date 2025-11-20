@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Copy, Loader2, CheckCircle2, XCircle, Clock, ExternalLink } from 'lucide-react';
+import { Copy, Loader2, CheckCircle2, XCircle, Clock, ExternalLink, Trash2 } from 'lucide-react';
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent } from 'thinkube-style/components/cards-data';
 import { TkTable, TkTableHeader, TkTableBody, TkTableRow, TkTableHead, TkTableCell } from 'thinkube-style/components/tables';
 import { TkButton, TkLoadingButton, TkBadge } from 'thinkube-style/components/buttons-badges';
@@ -19,6 +19,7 @@ export default function ModelsPage() {
     fetchDownloads,
     isModelDownloading,
     getDownloadForModel,
+    deleteModel,
     startPolling,
     stopPolling,
   } = useModelDownloadsStore();
@@ -78,6 +79,12 @@ export default function ModelsPage() {
 
   const handleDownload = async (modelId: string) => {
     await startDownload(modelId);
+  };
+
+  const handleDelete = async (modelId: string) => {
+    if (window.confirm('Are you sure you want to delete this model from MLflow? This will allow you to re-download it.')) {
+      await deleteModel(modelId);
+    }
   };
 
   const getModelStatus = (model: Model): {
@@ -263,10 +270,20 @@ export default function ModelsPage() {
                     </TkTableCell>
                     <TkTableCell className="text-right">
                       {model.is_downloaded && !download?.is_failed ? (
-                        <TkBadge variant="success">
-                          <CheckCircle2 className="w-3 h-3 mr-1" />
-                          Ready
-                        </TkBadge>
+                        <div className="flex gap-2 justify-end">
+                          <TkBadge variant="success">
+                            <CheckCircle2 className="w-3 h-3 mr-1" />
+                            Ready
+                          </TkBadge>
+                          <TkButton
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleDelete(model.id)}
+                          >
+                            <Trash2 className="w-4 h-4 mr-2" />
+                            Delete
+                          </TkButton>
+                        </div>
                       ) : isDownloading && download?.workflow_name ? (
                         <TkButton
                           variant="outline"
@@ -283,14 +300,24 @@ export default function ModelsPage() {
                           </a>
                         </TkButton>
                       ) : download?.is_failed || (model.is_downloaded && download?.is_failed) ? (
-                        <TkButton
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleDownload(model.id)}
-                        >
-                          <Copy className="w-4 h-4 mr-2" />
-                          Retry
-                        </TkButton>
+                        <div className="flex gap-2 justify-end">
+                          <TkButton
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleDownload(model.id)}
+                          >
+                            <Copy className="w-4 h-4 mr-2" />
+                            Retry
+                          </TkButton>
+                          <TkButton
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => handleDelete(model.id)}
+                          >
+                            <Trash2 className="w-4 h-4 mr-2" />
+                            Delete
+                          </TkButton>
+                        </div>
                       ) : (
                         <TkButton
                           variant="default"
