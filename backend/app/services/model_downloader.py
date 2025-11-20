@@ -454,7 +454,29 @@ try:
 
     import mlflow.transformers
 
+    # Set experiment to use S3 artifact location explicitly
+    experiment_name = "model-registry"
+    try:
+        experiment = mlflow.get_experiment_by_name(experiment_name)
+        if experiment is None:
+            experiment_id = mlflow.create_experiment(
+                experiment_name,
+                artifact_location=f"s3://{{s3_bucket}}/artifacts"
+            )
+            print(f'✓ Created experiment "{{experiment_name}}" with S3 artifact storage', flush=True)
+        else:
+            experiment_id = experiment.experiment_id
+            print(f'✓ Using existing experiment "{{experiment_name}}"', flush=True)
+    except Exception as exp_error:
+        print(f'Warning: Could not create/get experiment: {{exp_error}}', flush=True)
+        experiment_id = None
+
+    if experiment_id:
+        mlflow.set_experiment(experiment_name)
+
     with mlflow.start_run(run_name=f"mirror-{{model_name}}") as run:
+        print(f'Run artifact URI: {{run.info.artifact_uri}}', flush=True)
+
         # Log model metadata
         mlflow.log_params({{
             "source": "huggingface",
@@ -474,7 +496,7 @@ try:
         print(f'✓ Model uploaded and registered in MLflow', flush=True)
 
     print(f'✓ Model registered in MLflow as: {{model_name}}', flush=True)
-    print(f'✓ Model stored in S3: s3://{{s3_bucket}}/{{s3_prefix}}/', flush=True)
+    print(f'✓ Artifacts stored in S3 at: {{run.info.artifact_uri}}', flush=True)
 
 except Exception as e:
     print(f'Error during download/registration: {{e}}', flush=True)
