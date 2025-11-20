@@ -469,14 +469,7 @@ try:
             transformers_model=temp_model_path,
             artifact_path="model",
             task=model_task,
-            registered_model_name=model_name,
-            pip_requirements=[
-                "transformers",
-                "torch",
-                "accelerate",
-                "sentencepiece",
-                "protobuf"
-            ]
+            registered_model_name=model_name
         )
         print(f'✓ Model uploaded and registered in MLflow', flush=True)
 
