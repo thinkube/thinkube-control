@@ -610,6 +610,15 @@ except Exception as e:
                 hera_models.EnvVar(
                     name="AWS_S3_ENDPOINT",
                     value="http://seaweedfs-filer.seaweedfs.svc.cluster.local:8333"
+                ),
+                # MLflow S3 configuration - must use custom endpoint for SeaweedFS
+                hera_models.EnvVar(
+                    name="MLFLOW_S3_ENDPOINT_URL",
+                    value="http://seaweedfs-filer.seaweedfs.svc.cluster.local:8333"
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_S3_IGNORE_TLS",
+                    value="true"
                 )
             ]
 
