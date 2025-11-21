@@ -180,7 +180,7 @@
 
     - name: Set SeaweedFS password variable
       ansible.builtin.set_fact:
-        seaweedfs_password: "{{ seaweedfs_secret.resources[0].data['s3-password'] | b64decode }}"
+        seaweedfs_password: "{{ seaweedfs_secret.resources[0].data['AWS_SECRET_ACCESS_KEY'] | b64decode }}"
 
   roles:
     # Roles are loaded from thinkube-control's ansible/roles directory via ANSIBLE_ROLES_PATH
