@@ -153,6 +153,35 @@
       ansible.builtin.set_fact:
         cicd_api_token: "{{ cicd_monitoring_token.resources[0].data.token | b64decode }}"
 
+    - name: Get MLflow authentication credentials from thinkube-control namespace
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: v1
+        kind: Secret
+        namespace: thinkube-control
+        name: mlflow-auth-config
+      register: mlflow_auth_secret
+      failed_when: mlflow_auth_secret.resources | length == 0
+
+    - name: Set MLflow authentication variables
+      ansible.builtin.set_fact:
+        mlflow_client_secret: "{{ mlflow_auth_secret.resources[0].data['client-secret'] | b64decode }}"
+        mlflow_password: "{{ mlflow_auth_secret.resources[0].data['password'] | b64decode }}"
+
+    - name: Get SeaweedFS credentials from mlflow namespace
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: v1
+        kind: Secret
+        namespace: mlflow
+        name: mlflow-s3-secret
+      register: seaweedfs_secret
+      failed_when: seaweedfs_secret.resources | length == 0
+
+    - name: Set SeaweedFS password variable
+      ansible.builtin.set_fact:
+        seaweedfs_password: "{{ seaweedfs_secret.resources[0].data['s3-password'] | b64decode }}"
+
   roles:
     # Roles are loaded from thinkube-control's ansible/roles directory via ANSIBLE_ROLES_PATH
     # Clean up existing deployment artifacts for redeploy support

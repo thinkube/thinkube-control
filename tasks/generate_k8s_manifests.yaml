@@ -40,6 +40,12 @@
           app.kubernetes.io/name: {{ project_name }}
           app.kubernetes.io/managed-by: argocd
 
+# Generate MLflow authentication secrets
+- name: Generate MLflow credentials secret
+  ansible.builtin.template:
+    src: "/home/thinkube-control/templates/k8s/mlflow-secrets.j2"
+    dest: "{{ local_repo_path }}/k8s/mlflow-secrets.yaml"
+
 # Generate ConfigMap for app metadata (used by webhook adapter)
 - name: Generate app metadata ConfigMap
   ansible.builtin.copy:
@@ -122,9 +128,10 @@
     content: |
       apiVersion: kustomize.config.k8s.io/v1beta1
       kind: Kustomization
-      
+
       resources:
         - namespace.yaml
+        - mlflow-secrets.yaml
         - app-metadata.yaml
         - deployments.yaml
         - services.yaml

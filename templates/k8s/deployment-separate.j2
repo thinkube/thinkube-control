@@ -122,6 +122,22 @@ spec:
               value: "https://{{ project_name }}.{{ domain_name }}"
             - name: API_BASE_URL
               value: "https://{{ project_name }}.{{ domain_name }}/api"
+            # MLflow authentication and S3 access credentials
+            - name: MLFLOW_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: mlflow-client-secret
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: admin-password
+            - name: SEAWEEDFS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: seaweedfs-password
             # Container-specific environment variables (if defined)
             {% if container.environment is defined %}
             {% for env in container.environment %}
