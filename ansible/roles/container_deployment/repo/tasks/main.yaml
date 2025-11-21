@@ -157,13 +157,26 @@
 - name: Initialize git repository in the copied directory
   ansible.builtin.shell: |
     cd {{ code_source_path }}/{{ gitea_repo_name }}
-    git init -b main
+
+    # Check if git is already initialized
+    if [ ! -d .git ]; then
+      git init -b main
+    fi
 
     # Configure git user for this repository
     git config user.name "{{ git_user_name | default('Thinkube Automation') }}"
     git config user.email "{{ git_user_email | default('automation@' + domain_name) }}"
 
-    git add -A
-    git commit -m "Initial deployment for {{ domain_name }}"
+    # Only commit if there are changes
+    if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+      git add -A
+      git commit -m "Initial deployment for {{ domain_name }}"
+    elif [ -z "$(git log 2>/dev/null)" ]; then
+      # No commits yet, create initial commit
+      git add -A
+      git commit -m "Initial deployment for {{ domain_name }}"
+    else
+      echo "Repository already initialized with commits, skipping commit"
+    fi
   args:
     executable: /bin/bash
