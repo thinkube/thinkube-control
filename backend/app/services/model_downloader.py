@@ -458,7 +458,10 @@ try:
     experiment_name = "model-registry"
     try:
         experiment = mlflow.get_experiment_by_name(experiment_name)
-        if experiment is None:
+        if experiment is None or (experiment and experiment.lifecycle_stage == 'deleted'):
+            # Experiment doesn't exist or is deleted, create new one
+            if experiment and experiment.lifecycle_stage == 'deleted':
+                print(f'Note: Experiment "{{experiment_name}}" is deleted, creating new one', flush=True)
             experiment_id = mlflow.create_experiment(
                 experiment_name,
                 artifact_location=f"s3://{{s3_bucket}}/artifacts"
