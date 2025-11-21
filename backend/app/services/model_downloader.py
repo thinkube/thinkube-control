@@ -456,22 +456,28 @@ try:
 
     # Set experiment to use S3 artifact location explicitly
     experiment_name = "model-registry"
+    client = mlflow.MlflowClient()
     try:
         experiment = mlflow.get_experiment_by_name(experiment_name)
-        if experiment is None or (experiment and experiment.lifecycle_stage == 'deleted'):
-            # Experiment doesn't exist or is deleted, create new one
-            if experiment and experiment.lifecycle_stage == 'deleted':
-                print(f'Note: Experiment "{{experiment_name}}" is deleted, creating new one', flush=True)
+        if experiment is None:
+            # Experiment doesn't exist, create it
             experiment_id = mlflow.create_experiment(
                 experiment_name,
                 artifact_location=f"s3://{{s3_bucket}}/artifacts"
             )
             print(f'✓ Created experiment "{{experiment_name}}" with S3 artifact storage', flush=True)
+        elif experiment.lifecycle_stage == 'deleted':
+            # Experiment is deleted, restore it
+            print(f'Note: Experiment "{{experiment_name}}" is deleted, restoring it', flush=True)
+            client.restore_experiment(experiment.experiment_id)
+            experiment_id = experiment.experiment_id
+            print(f'✓ Restored experiment "{{experiment_name}}"', flush=True)
         else:
             experiment_id = experiment.experiment_id
             print(f'✓ Using existing experiment "{{experiment_name}}"', flush=True)
     except Exception as exp_error:
         print(f'Warning: Could not create/get experiment: {{exp_error}}', flush=True)
+        # Try to get any active experiment as fallback
         experiment_id = None
 
     if experiment_id:
