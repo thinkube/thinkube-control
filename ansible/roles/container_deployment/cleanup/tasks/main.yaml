@@ -1,0 +1,61 @@
+# roles/container_deployment/cleanup/tasks/main.yaml
+# Clean up existing deployment artifacts for redeployment
+# This role runs BEFORE the repo role to ensure a clean slate
+
+- name: Display cleanup information
+  debug:
+    msg: |
+      Cleaning up existing deployment artifacts for: {{ app_name }}
+      Local repo path: {{ local_repo_path }}
+      Gitea repo: {{ gitea_org }}/{{ gitea_repo_name }}
+
+- name: Clean up Copier cache directories
+  file:
+    path: "{{ item }}"
+    state: absent
+  with_fileglob:
+    - "/tmp/copier*"
+  ignore_errors: yes
+
+- name: Clean up local repository directory
+  file:
+    path: "{{ local_repo_path }}"
+    state: absent
+  when: local_repo_path is defined
+
+- name: Get Gitea admin token from secret
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: v1
+    kind: Secret
+    namespace: "{{ gitea_namespace }}"
+    name: gitea-admin-token
+  register: gitea_token_secret
+  failed_when: gitea_token_secret.resources | length == 0
+
+- name: Set Gitea token fact
+  set_fact:
+    gitea_token: "{{ gitea_token_secret.resources[0].data.token | b64decode }}"
+
+- name: Check if Gitea repository exists
+  uri:
+    url: "https://{{ gitea_hostname }}/api/v1/repos/{{ gitea_org }}/{{ gitea_repo_name }}"
+    headers:
+      Authorization: "token {{ gitea_token }}"
+    validate_certs: true
+    status_code: [200, 404]
+  register: gitea_repo_check
+
+- name: Delete Gitea repository if it exists
+  uri:
+    url: "https://{{ gitea_hostname }}/api/v1/repos/{{ gitea_org }}/{{ gitea_repo_name }}"
+    method: DELETE
+    headers:
+      Authorization: "token {{ gitea_token }}"
+    validate_certs: true
+    status_code: [204, 404]
+  when: gitea_repo_check.status == 200
+
+- name: Display cleanup completion
+  debug:
+    msg: "Cleanup completed successfully for {{ app_name }}"

@@ -155,6 +155,16 @@
 
   roles:
     # Roles are loaded from thinkube-control's ansible/roles directory via ANSIBLE_ROLES_PATH
+    # Clean up existing deployment artifacts for redeploy support
+    - role: container_deployment/cleanup
+      vars:
+        gitea_repo_name: "{{ app_name }}"
+        gitea_org: "{{ gitea_org }}"
+        gitea_hostname: "git.{{ domain_name }}"
+        gitea_namespace: "gitea"
+        local_repo_path: "{{ local_repo_path }}"
+        app_name: "{{ app_name }}"
+
     - role: container_deployment/repo
       vars:
         gitea_repo_name: "{{ app_name }}"
