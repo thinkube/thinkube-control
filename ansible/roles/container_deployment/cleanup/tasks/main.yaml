@@ -9,19 +9,23 @@
       Local repo path: {{ local_repo_path }}
       Gitea repo: {{ gitea_org }}/{{ gitea_repo_name }}
 
-- name: Clean up Copier cache directories
-  file:
-    path: "{{ item }}"
-    state: absent
-  with_fileglob:
-    - "/tmp/copier*"
+- name: Clean up Copier cache directories on target host
+  ansible.builtin.shell: |
+    if ls /tmp/copier* 1> /dev/null 2>&1; then
+      rm -rf /tmp/copier*
+      echo "Cleaned up Copier cache directories"
+    else
+      echo "No Copier cache directories found"
+    fi
   ignore_errors: yes
+  register: copier_cleanup
+  changed_when: "'Cleaned up' in copier_cleanup.stdout"
 
 - name: Clean up local repository directory
-  file:
-    path: "{{ local_repo_path }}"
-    state: absent
+  ansible.builtin.command:
+    cmd: "rm -rf {{ local_repo_path }}"
   when: local_repo_path is defined
+  ignore_errors: false
 
 - name: Get Gitea admin token from secret
   kubernetes.core.k8s_info:
