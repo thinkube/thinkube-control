@@ -675,22 +675,17 @@ except Exception as e:
                     name="HF_HUB_DISABLE_XET",
                     value="1"  # Disable XET to avoid CAS service stability issues
                 ),
-                # S3 Configuration for SeaweedFS
+                # S3 Configuration for JuiceFS Gateway (requires admin credentials)
                 hera_models.EnvVar(
                     name="AWS_ACCESS_KEY_ID",
-                    value_from=hera_models.EnvVarSource(
-                        secret_key_ref=hera_models.SecretKeySelector(
-                            name="seaweedfs-s3-secret",
-                            key="access_key"
-                        )
-                    )
+                    value="tkadmin"  # JuiceFS Gateway MINIO_ROOT_USER
                 ),
                 hera_models.EnvVar(
                     name="AWS_SECRET_ACCESS_KEY",
                     value_from=hera_models.EnvVarSource(
                         secret_key_ref=hera_models.SecretKeySelector(
-                            name="seaweedfs-s3-secret",
-                            key="secret_key"
+                            name="postgres-admin-secret",
+                            key="password"
                         )
                     )
                 ),
