@@ -355,7 +355,7 @@ model_id = '{safe_model_id}'
 model_task = '{safe_model_task}'
 print(f'Starting download of {{model_id}}...', flush=True)
 
-# Configure S3 client for SeaweedFS
+# Configure S3 client for JuiceFS Gateway
 s3_endpoint = os.environ['AWS_S3_ENDPOINT']
 s3_access_key = os.environ['AWS_ACCESS_KEY_ID']
 s3_secret_key = os.environ['AWS_SECRET_ACCESS_KEY']
@@ -696,19 +696,19 @@ except Exception as e:
                 ),
                 hera_models.EnvVar(
                     name="AWS_S3_ENDPOINT",
-                    value="http://seaweedfs-filer.seaweedfs.svc.cluster.local:8333"
+                    value="http://juicefs-mlflow-gateway.juicefs.svc.cluster.local:9001"
                 ),
                 hera_models.EnvVar(
                     name="AWS_DEFAULT_REGION",
                     value="us-east-1"
                 ),
-                # MLflow S3 configuration for artifact listing/reading
-                # These are needed for MLflow to list and verify artifacts in S3
-                # after the manual boto3 upload. Without these, MLflow cannot
-                # access the custom S3 endpoint.
+                # MLflow S3 configuration for artifact listing/reading via JuiceFS Gateway
+                # JuiceFS Gateway provides S3-compatible API access to JuiceFS volume
+                # where MLflow artifacts are stored. This enables dual access pattern:
+                # S3 API for writes, POSIX mount for reads by TensorRT-LLM.
                 hera_models.EnvVar(
                     name="MLFLOW_S3_ENDPOINT_URL",
-                    value="http://seaweedfs-filer.seaweedfs.svc.cluster.local:8333"
+                    value="http://juicefs-mlflow-gateway.juicefs.svc.cluster.local:9001"
                 ),
                 hera_models.EnvVar(
                     name="MLFLOW_S3_IGNORE_TLS",
