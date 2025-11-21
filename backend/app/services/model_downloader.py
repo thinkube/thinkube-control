@@ -311,6 +311,8 @@ class ModelDownloaderService:
             download_script = f"""
 import os
 import sys
+import tempfile
+import shutil
 from pathlib import Path
 from huggingface_hub import snapshot_download
 import mlflow
