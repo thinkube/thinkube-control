@@ -485,18 +485,94 @@ try:
             "task": model_task
         }})
 
-        # Log model using transformers flavor - pass directory path
-        print(f'Uploading model to MLflow (S3) using transformers flavor...', flush=True)
-        mlflow.transformers.log_model(
-            transformers_model=temp_model_path,
-            artifact_path="model",
-            task=model_task,
-            registered_model_name=model_name
-        )
-        print(f'✓ Model uploaded and registered in MLflow', flush=True)
+        # WORKAROUND: Manual S3 upload to make artifacts visible in MLflow UI
+        #
+        # MLflow 3.0+ introduced "Logged Models" API which stores artifacts at
+        # artifacts/models/m-{{id}}/artifacts/ instead of artifacts/{{run_id}}/model.
+        # This causes artifacts to NOT appear in the run UI (client.list_artifacts returns empty).
+        #
+        # By manually uploading to the run's artifact location, we ensure:
+        # 1. Artifacts are visible when viewing the run in MLflow UI
+        # 2. Model registration works with runs://{{run_id}}/model URI
+        # 3. Users can browse and download artifacts from the UI
+        #
+        print(f'Uploading model artifacts to run location...', flush=True)
 
-    print(f'✓ Model registered in MLflow as: {{model_name}}', flush=True)
-    print(f'✓ Artifacts stored in S3 at: {{run.info.artifact_uri}}', flush=True)
+        run_id = run.info.run_id
+        # Extract S3 path from artifact_uri to get correct path with /artifacts subdirectory
+        # e.g., s3://mlflow/artifacts/{{run_id}}/artifacts -> artifacts/{{run_id}}/artifacts
+        artifact_uri = run.info.artifact_uri
+        s3_base_path = artifact_uri.replace('s3://mlflow/', '')
+        s3_artifact_prefix = f'{{s3_base_path}}/model'
+
+        # Upload all model files to S3
+        upload_count = 0
+        for root, dirs, files in os.walk(temp_model_path):
+            for file in files:
+                local_path = os.path.join(root, file)
+                relative_path = os.path.relpath(local_path, temp_model_path)
+                s3_key = f'{{s3_artifact_prefix}}/{{relative_path}}'
+
+                with open(local_path, 'rb') as f:
+                    s3_client.put_object(
+                        Bucket=s3_bucket,
+                        Key=s3_key,
+                        Body=f
+                    )
+                upload_count += 1
+                if upload_count % 10 == 0:
+                    print(f'  Uploaded {{upload_count}} files...', flush=True)
+
+        print(f'✓ Uploaded {{upload_count}} model files', flush=True)
+
+        # Create and upload MLflow metadata
+        print(f'Creating MLflow metadata...', flush=True)
+        import mlflow.transformers
+        temp_mlmodel_dir = tempfile.mkdtemp()
+        mlflow.transformers.save_model(
+            transformers_model=temp_model_path,
+            path=temp_mlmodel_dir,
+            task=model_task
+        )
+
+        # Upload metadata files
+        for metadata_file in ['MLmodel', 'requirements.txt', 'conda.yaml', 'python_env.yaml']:
+            metadata_path = os.path.join(temp_mlmodel_dir, metadata_file)
+            if os.path.exists(metadata_path):
+                s3_key = f'{{s3_artifact_prefix}}/{{metadata_file}}'
+                with open(metadata_path, 'rb') as f:
+                    s3_client.put_object(
+                        Bucket=s3_bucket,
+                        Key=s3_key,
+                        Body=f
+                    )
+
+        shutil.rmtree(temp_mlmodel_dir)
+        print(f'✓ MLflow metadata uploaded', flush=True)
+
+        # Register the model
+        # Use create_model_version (what UI uses) instead of register_model
+        # because register_model requires a logged_model database entry
+        print(f'Registering model in MLflow...', flush=True)
+        model_uri = f'runs:/{{run_id}}/model'
+
+        client = mlflow.MlflowClient()
+        # Ensure registered model exists
+        try:
+            client.create_registered_model(model_name)
+        except Exception as e:
+            if 'already exists' not in str(e).lower():
+                print(f'Warning creating registered model: {{e}}', flush=True)
+
+        # Create model version
+        version = client.create_model_version(
+            name=model_name,
+            source=model_uri,
+            run_id=run_id
+        )
+        print(f'✓ Model registered: {{model_name}} v{{version.version}} ({{version.status}})', flush=True)
+
+    print(f'✓ Model registration completed: {{model_name}}', flush=True)
 
 except Exception as e:
     print(f'Error during download/registration: {{e}}', flush=True)
@@ -614,13 +690,19 @@ except Exception as e:
                 hera_models.EnvVar(
                     name="AWS_DEFAULT_REGION",
                     value="us-east-1"
+                ),
+                # MLflow S3 configuration for artifact listing/reading
+                # These are needed for MLflow to list and verify artifacts in S3
+                # after the manual boto3 upload. Without these, MLflow cannot
+                # access the custom S3 endpoint.
+                hera_models.EnvVar(
+                    name="MLFLOW_S3_ENDPOINT_URL",
+                    value="http://seaweedfs-filer.seaweedfs.svc.cluster.local:8333"
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_S3_IGNORE_TLS",
+                    value="true"
                 )
-                # NOTE: MLFLOW_S3_ENDPOINT_URL is intentionally NOT set here.
-                # The MLflow server has --serve-artifacts enabled, so the workflow
-                # uploads artifacts via HTTP to the MLflow server, and the server
-                # handles the S3 upload. This works around a bug in MLflow where
-                # mlflow.transformers.log_model() silently fails to upload to
-                # custom S3 endpoints when the client uploads directly.
             ]
 
             # Get Harbor registry from environment
