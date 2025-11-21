@@ -268,12 +268,10 @@ spec:
             - name: app-storage
               mountPath: {{ container.volume }}
 {% elif container.gpu is defined and container.gpu.count is defined %}
-          # Auto-add model storage for GPU containers
+          # Auto-add MLflow model storage for GPU containers (JuiceFS)
           volumeMounts:
-            - name: model-storage
-              mountPath: /models
-            - name: cache-storage
-              mountPath: /app/cache
+            - name: mlflow-models
+              mountPath: /mlflow-models
 {%- endif %}
       {% if container.volume is defined %}
       volumes:
@@ -281,13 +279,10 @@ spec:
           persistentVolumeClaim:
             claimName: {{ project_name }}-{{ container.name }}-storage
       {% elif container.gpu is defined and container.gpu.count is defined %}
-      # Auto-add model storage volumes for GPU containers
+      # Auto-add MLflow model storage volume for GPU containers (JuiceFS)
       volumes:
-        - name: model-storage
+        - name: mlflow-models
           persistentVolumeClaim:
-            claimName: {{ project_name }}-{{ container.name }}-models
-        - name: cache-storage
-          persistentVolumeClaim:
-            claimName: {{ project_name }}-{{ container.name }}-cache
+            claimName: {{ project_name }}-{{ container.name }}-mlflow-models
       {% endif %}
 {% endfor %}

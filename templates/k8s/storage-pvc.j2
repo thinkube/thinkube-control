@@ -19,44 +19,25 @@ spec:
       storage: 1Gi
   storageClassName: k8s-hostpath
 {% elif container.gpu is defined and container.gpu.count is defined %}
-# Auto-generated PVCs for GPU containers (AI/ML model storage)
+# Auto-generated PVC for GPU containers (JuiceFS MLflow access)
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ project_name }}-{{ container.name }}-models
+  name: {{ project_name }}-{{ container.name }}-mlflow-models
   namespace: {{ k8s_namespace }}
   labels:
     app.kubernetes.io/name: {{ project_name }}
     app.kubernetes.io/component: {{ container.name }}
     app.kubernetes.io/managed-by: argocd
-    app.kubernetes.io/purpose: model-storage
+    app.kubernetes.io/purpose: mlflow-model-storage
 spec:
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
   resources:
     requests:
-      # Large storage for AI models (adjust based on model size requirements)
-      storage: 100Gi
-  storageClassName: k8s-hostpath
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: {{ project_name }}-{{ container.name }}-cache
-  namespace: {{ k8s_namespace }}
-  labels:
-    app.kubernetes.io/name: {{ project_name }}
-    app.kubernetes.io/component: {{ container.name }}
-    app.kubernetes.io/managed-by: argocd
-    app.kubernetes.io/purpose: cache-storage
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      # Cache storage for HuggingFace and other model caches
-      storage: 50Gi
-  storageClassName: k8s-hostpath
+      # Minimal size - JuiceFS provides POSIX access to MLflow S3 bucket
+      storage: 1Gi
+  storageClassName: juicefs-mlflow
 {% endif %}
 {% endfor %}
