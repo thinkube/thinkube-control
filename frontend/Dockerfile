@@ -21,7 +21,7 @@ COPY . .
 RUN npm run build
 
 # Production stage - serve static files with nginx
-FROM nginx:alpine
+FROM registry.cmxela.com/library/nginx:alpine
 
 # Copy built files to nginx html directory
 COPY --from=builder /app/dist /usr/share/nginx/html
