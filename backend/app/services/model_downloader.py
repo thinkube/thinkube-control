@@ -309,15 +309,17 @@ class ModelDownloaderService:
                 )
             ]
         ) as w:
-            # Download script - direct to JuiceFS POSIX with persistent HF cache symlink
+            # Download script - Manual S3 upload to JuiceFS Gateway (MLflow 3.0 workaround)
             download_script = f"""
 import os
 import sys
 import tempfile
+import shutil
 from pathlib import Path
 from huggingface_hub import snapshot_download
 import mlflow
 import mlflow.transformers
+import boto3
 
 # Force progress bars to show even without TTY
 os.environ['TQDM_DISABLE'] = '0'
@@ -358,6 +360,17 @@ model_name = model_id.replace('/', '-')
 print(f'Model: {{model_id}}', flush=True)
 print(f'Registry name: {{model_name}}', flush=True)
 
+# Configure S3 client for JuiceFS Gateway
+s3_client = boto3.client(
+    's3',
+    endpoint_url=os.environ['AWS_S3_ENDPOINT'],
+    aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+    aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
+    region_name=os.environ['AWS_DEFAULT_REGION']
+)
+s3_bucket = 'mlflow'
+print(f'✓ S3 client configured for JuiceFS Gateway', flush=True)
+
 try:
     # Set up experiment
     experiment_name = "model-registry"
@@ -386,72 +399,107 @@ try:
 
     with mlflow.start_run(run_name=f"mirror-{{model_name}}") as run:
         run_id = run.info.run_id
+        artifact_uri = run.info.artifact_uri
+
         print(f'Run ID: {{run_id}}', flush=True)
-        print(f'Run artifact URI: {{run.info.artifact_uri}}', flush=True)
+        print(f'Artifact URI: {{artifact_uri}}', flush=True)
 
-        # Download directly to JuiceFS at MLflow artifact location
-        # JuiceFS mount: /mnt/juicefs (bucket name stripped by JuiceFS Gateway)
-        # S3 URI: s3://mlflow/artifacts/{{run_id}}/artifacts/model
-        # POSIX path: /mnt/juicefs/artifacts/{{run_id}}/artifacts/model
-        juicefs_model_path = f'/mnt/juicefs/artifacts/{{run_id}}/artifacts/model'
+        # CRITICAL: Extract S3 path from artifact_uri
+        # artifact_uri format: s3://mlflow/artifacts/{{run_id}}/artifacts
+        # We need: artifacts/{{run_id}}/artifacts/model for S3 upload
+        s3_base_path = artifact_uri.replace('s3://mlflow/', '')
+        s3_artifact_prefix = f'{{s3_base_path}}/model'
+        print(f'S3 upload prefix: {{s3_artifact_prefix}}', flush=True)
 
-        print(f'Downloading model to JuiceFS: {{juicefs_model_path}}', flush=True)
-        os.makedirs(juicefs_model_path, exist_ok=True)
+        # Download model to /tmp (not directly to JuiceFS)
+        temp_dir = tempfile.mkdtemp()
+        temp_model_path = os.path.join(temp_dir, 'model')
 
-        # Download from HuggingFace directly to JuiceFS
+        print(f'Downloading model from HuggingFace to /tmp...', flush=True)
         snapshot_download(
             repo_id=model_id,
-            local_dir=juicefs_model_path,
+            local_dir=temp_model_path,
             resume_download=True
         )
-        print(f'✓ Model downloaded to JuiceFS', flush=True)
-
-        # Create persistent HuggingFace cache symlink ON JuiceFS
-        # This makes the model instantly available to all inference pods!
-        hf_cache_base = '/mnt/juicefs/.cache/huggingface/hub'
-        # Convert model ID to HF cache format: nvidia/Phi-4 -> models--nvidia--Phi-4
-        org, model = model_id.split('/', 1)
-        cache_model_dir = f'{{hf_cache_base}}/models--{{org}}--{{model.replace("/", "--")}}/snapshots'
-        os.makedirs(cache_model_dir, exist_ok=True)
-
-        cache_symlink = f'{{cache_model_dir}}/main'
-        if os.path.exists(cache_symlink) or os.path.islink(cache_symlink):
-            os.remove(cache_symlink)  # Remove existing symlink
-
-        os.symlink(juicefs_model_path, cache_symlink)
-        print(f'✓ Created persistent HF cache symlink: {{cache_symlink}} -> {{juicefs_model_path}}', flush=True)
+        print(f'✓ Model downloaded to {{temp_model_path}}', flush=True)
 
         # Log model metadata
         mlflow.log_params({{
             "source": "huggingface",
             "model_id": model_id,
-            "download_method": "direct_juicefs_posix",
-            "task": model_task,
-            "juicefs_path": juicefs_model_path,
-            "hf_cache_symlink": cache_symlink
+            "download_method": "s3_upload_juicefs_gateway",
+            "task": model_task
         }})
 
-        # Create MLflow metadata files directly on JuiceFS
-        print(f'Creating MLflow metadata on JuiceFS...', flush=True)
+        # Manual S3 upload - all model files
+        print(f'Uploading model files to S3 (JuiceFS Gateway)...', flush=True)
+        upload_count = 0
+        for root, dirs, files in os.walk(temp_model_path):
+            for file in files:
+                local_path = os.path.join(root, file)
+                relative_path = os.path.relpath(local_path, temp_model_path)
+                s3_key = f'{{s3_artifact_prefix}}/{{relative_path}}'
+
+                with open(local_path, 'rb') as f:
+                    s3_client.put_object(
+                        Bucket=s3_bucket,
+                        Key=s3_key,
+                        Body=f
+                    )
+                upload_count += 1
+
+        print(f'✓ Uploaded {{upload_count}} model files to S3', flush=True)
+
+        # Create and upload MLflow metadata
+        print(f'Creating MLflow metadata...', flush=True)
+        temp_mlmodel_dir = tempfile.mkdtemp()
         mlflow.transformers.save_model(
-            transformers_model=juicefs_model_path,
-            path=juicefs_model_path,
+            transformers_model=temp_model_path,
+            path=temp_mlmodel_dir,
             task=model_task
         )
-        print(f'✓ MLflow metadata created on JuiceFS', flush=True)
 
-        # Register the model
+        # Upload metadata files via S3
+        metadata_count = 0
+        for metadata_file in ['MLmodel', 'requirements.txt', 'conda.yaml', 'python_env.yaml']:
+            metadata_path = os.path.join(temp_mlmodel_dir, metadata_file)
+            if os.path.exists(metadata_path):
+                s3_key = f'{{s3_artifact_prefix}}/{{metadata_file}}'
+                with open(metadata_path, 'rb') as f:
+                    s3_client.put_object(
+                        Bucket=s3_bucket,
+                        Key=s3_key,
+                        Body=f
+                    )
+                metadata_count += 1
+
+        shutil.rmtree(temp_mlmodel_dir)
+        shutil.rmtree(temp_dir)
+        print(f'✓ Uploaded {{metadata_count}} metadata files', flush=True)
+
+        # Verify artifacts are accessible via MLflow client
+        print(f'Verifying artifacts in MLflow...', flush=True)
+        artifacts = client.list_artifacts(run_id, path='model')
+        if artifacts:
+            print(f'✓ Found {{len(artifacts)}} artifacts via MLflow client', flush=True)
+        else:
+            print(f'⚠ Warning: No artifacts found via MLflow client', flush=True)
+
+        # Register the model using create_model_version (MLflow 3.0 compatible)
         print(f'Registering model in MLflow...', flush=True)
         model_uri = f'runs:/{{run_id}}/model'
 
         # Ensure registered model exists
         try:
             client.create_registered_model(model_name)
+            print(f'✓ Created registered model: {{model_name}}', flush=True)
         except Exception as e:
             if 'already exists' not in str(e).lower():
                 print(f'Warning creating registered model: {{e}}', flush=True)
+            else:
+                print(f'✓ Registered model already exists: {{model_name}}', flush=True)
 
-        # Create model version
+        # Create model version (this is what makes it visible in UI)
         version = client.create_model_version(
             name=model_name,
             source=model_uri,
@@ -459,7 +507,10 @@ try:
         )
         print(f'✓ Model registered: {{model_name}} v{{version.version}} ({{version.status}})', flush=True)
 
-    print(f'✓ Model registration completed: {{model_name}}', flush=True)
+    print(f'✓ Model mirroring completed: {{model_name}}', flush=True)
+    print(f'  - Uploaded via S3 to JuiceFS Gateway', flush=True)
+    print(f'  - Files accessible via POSIX at /mnt/juicefs/{{s3_base_path}}/model', flush=True)
+    print(f'  - Registered in MLflow Model Registry', flush=True)
 
 except Exception as e:
     print(f'Error during download/registration: {{e}}', flush=True)
@@ -550,6 +601,37 @@ except Exception as e:
                 hera_models.EnvVar(
                     name="HF_HUB_DISABLE_XET",
                     value="1"  # Disable XET to avoid CAS service stability issues
+                ),
+                # S3 Configuration for JuiceFS Gateway (manual upload workaround)
+                hera_models.EnvVar(
+                    name="AWS_ACCESS_KEY_ID",
+                    value="tkadmin"
+                ),
+                hera_models.EnvVar(
+                    name="AWS_SECRET_ACCESS_KEY",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="mlflow-auth-config",
+                            key="password"  # Uses admin password for JuiceFS Gateway
+                        )
+                    )
+                ),
+                hera_models.EnvVar(
+                    name="AWS_S3_ENDPOINT",
+                    value="http://juicefs-mlflow-gateway.juicefs.svc.cluster.local:9001"
+                ),
+                hera_models.EnvVar(
+                    name="AWS_DEFAULT_REGION",
+                    value="us-east-1"
+                ),
+                # MLflow S3 configuration for artifact listing/reading
+                hera_models.EnvVar(
+                    name="MLFLOW_S3_ENDPOINT_URL",
+                    value="http://juicefs-mlflow-gateway.juicefs.svc.cluster.local:9001"
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_S3_IGNORE_TLS",
+                    value="true"
                 )
             ]
 
