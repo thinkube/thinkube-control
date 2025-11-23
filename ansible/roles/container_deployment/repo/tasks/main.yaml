@@ -30,10 +30,17 @@
     state: directory
     mode: '0755'
 
-- name: Configure git to avoid pack file race conditions
+- name: Configure git to avoid race conditions (force synchronous operations)
   ansible.builtin.shell: |
+    # Force single-threaded operations
     git config --global pack.threads 1
     git config --global index-pack.threads 1
+    git config --global checkout.workers 1
+    git config --global core.preloadIndex false
+
+    # Force synchronous filesystem operations
+    git config --global core.fsyncObjectFiles true
+    git config --global core.fsync all
   args:
     executable: /bin/bash
   changed_when: false
