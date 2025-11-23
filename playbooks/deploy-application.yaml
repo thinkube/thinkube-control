@@ -178,7 +178,10 @@
 
     - name: Set MLflow authentication variables
       ansible.builtin.set_fact:
+        mlflow_keycloak_token_url: "{{ mlflow_auth_secret.resources[0].data['keycloak-token-url'] | b64decode }}"
+        mlflow_keycloak_client_id: "{{ mlflow_auth_secret.resources[0].data['client-id'] | b64decode }}"
         mlflow_client_secret: "{{ mlflow_auth_secret.resources[0].data['client-secret'] | b64decode }}"
+        mlflow_username: "{{ mlflow_auth_secret.resources[0].data['username'] | b64decode }}"
         mlflow_password: "{{ mlflow_auth_secret.resources[0].data['password'] | b64decode }}"
 
     - name: Get SeaweedFS credentials from mlflow namespace

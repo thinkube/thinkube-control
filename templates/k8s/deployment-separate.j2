@@ -123,11 +123,31 @@ spec:
             - name: API_BASE_URL
               value: "https://{{ project_name }}.{{ domain_name }}/api"
             # MLflow authentication and S3 access credentials
+            - name: MLFLOW_KEYCLOAK_TOKEN_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: keycloak-token-url
+            - name: MLFLOW_KEYCLOAK_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: keycloak-client-id
             - name: MLFLOW_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: {{ project_name }}-mlflow-credentials
                   key: mlflow-client-secret
+            - name: MLFLOW_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: mlflow-username
+            - name: MLFLOW_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: admin-password
             - name: ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
