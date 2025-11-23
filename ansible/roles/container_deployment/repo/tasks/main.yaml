@@ -30,6 +30,14 @@
     state: directory
     mode: '0755'
 
+- name: Configure git to avoid pack file race conditions
+  ansible.builtin.shell: |
+    git config --global pack.threads 1
+    git config --global index-pack.threads 1
+  args:
+    executable: /bin/bash
+  changed_when: false
+
 - name: Use Copier to copy and process template from GitHub
   ansible.builtin.shell: |
     cd {{ code_source_path }}
