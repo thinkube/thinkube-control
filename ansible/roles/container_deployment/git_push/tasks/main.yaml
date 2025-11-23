@@ -43,8 +43,10 @@
       private: true
       auto_init: false
     validate_certs: true
-    status_code: 201
+    status_code: [201, 409]  # 201=created, 409=already exists (idempotent)
   when: repo_check.status == 404
+  register: repo_create
+  failed_when: repo_create.status not in [201, 409]
 
 - name: Configure Git user
   shell: |
