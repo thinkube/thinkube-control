@@ -418,17 +418,21 @@ try:
         s3_artifact_prefix = f'{{s3_base_path}}/model'
         print(f'S3 upload prefix: {{s3_artifact_prefix}}', flush=True)
 
-        # Download model to /tmp (not directly to JuiceFS)
-        temp_dir = tempfile.mkdtemp()
-        temp_model_path = os.path.join(temp_dir, 'model')
+        # Download to persistent staging area on JuiceFS (survives pod restarts)
+        # This is OUTSIDE MLflow's artifact tree so it won't interfere with registration
+        staging_base = '/mnt/juicefs/.staging'
+        os.makedirs(staging_base, exist_ok=True)
+        staging_model_path = f'{{staging_base}}/{{model_name}}'
 
-        print(f'Downloading model from HuggingFace to /tmp...', flush=True)
+        print(f'Downloading model from HuggingFace to staging: {{staging_model_path}}', flush=True)
+        print(f'Note: Files persist across pod restarts, resume_download=True will skip existing files', flush=True)
+
         snapshot_download(
             repo_id=model_id,
-            local_dir=temp_model_path,
+            local_dir=staging_model_path,
             resume_download=True
         )
-        print(f'✓ Model downloaded to {{temp_model_path}}', flush=True)
+        print(f'✓ Model downloaded to staging area', flush=True)
 
         # Refresh token after long download (tokens expire after ~5-60 minutes)
         print('Refreshing MLflow authentication token...', flush=True)
@@ -439,17 +443,18 @@ try:
         mlflow.log_params({{
             "source": "huggingface",
             "model_id": model_id,
-            "download_method": "s3_upload_juicefs_gateway",
-            "task": model_task
+            "download_method": "persistent_staging_s3_upload",
+            "task": model_task,
+            "staging_path": staging_model_path
         }})
 
-        # Manual S3 upload - all model files
-        print(f'Uploading model files to S3 (JuiceFS Gateway)...', flush=True)
+        # Manual S3 upload from staging - all model files
+        print(f'Uploading model files from staging to S3 (JuiceFS Gateway)...', flush=True)
         upload_count = 0
-        for root, dirs, files in os.walk(temp_model_path):
+        for root, dirs, files in os.walk(staging_model_path):
             for file in files:
                 local_path = os.path.join(root, file)
-                relative_path = os.path.relpath(local_path, temp_model_path)
+                relative_path = os.path.relpath(local_path, staging_model_path)
                 s3_key = f'{{s3_artifact_prefix}}/{{relative_path}}'
 
                 with open(local_path, 'rb') as f:
@@ -466,7 +471,7 @@ try:
         print(f'Creating MLflow metadata...', flush=True)
         temp_mlmodel_dir = tempfile.mkdtemp()
         mlflow.transformers.save_model(
-            transformers_model=temp_model_path,
+            transformers_model=staging_model_path,
             path=temp_mlmodel_dir,
             task=model_task
         )
@@ -486,7 +491,6 @@ try:
                 metadata_count += 1
 
         shutil.rmtree(temp_mlmodel_dir)
-        shutil.rmtree(temp_dir)
         print(f'✓ Uploaded {{metadata_count}} metadata files', flush=True)
 
         # Verify artifacts are accessible via MLflow client
@@ -519,10 +523,17 @@ try:
         )
         print(f'✓ Model registered: {{model_name}} v{{version.version}} ({{version.status}})', flush=True)
 
+        # Clean up staging files on success
+        print(f'Cleaning up staging area: {{staging_model_path}}', flush=True)
+        shutil.rmtree(staging_model_path)
+        print(f'✓ Staging area cleaned up', flush=True)
+
     print(f'✓ Model mirroring completed: {{model_name}}', flush=True)
+    print(f'  - Downloaded to persistent staging (resumable)', flush=True)
     print(f'  - Uploaded via S3 to JuiceFS Gateway', flush=True)
     print(f'  - Files accessible via POSIX at /mnt/juicefs/{{s3_base_path}}/model', flush=True)
     print(f'  - Registered in MLflow Model Registry', flush=True)
+    print(f'  - Staging files cleaned up', flush=True)
 
 except Exception as e:
     print(f'Error during download/registration: {{e}}', flush=True)
