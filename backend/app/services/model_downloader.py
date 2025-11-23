@@ -325,28 +325,35 @@ import boto3
 os.environ['TQDM_DISABLE'] = '0'
 os.environ['TQDM_MININTERVAL'] = '10'
 
-# Get MLflow authentication token from Keycloak
-print('Authenticating with MLflow...', flush=True)
+# MLflow authentication function (can be called multiple times to refresh token)
 import requests
-token_url = os.environ['MLFLOW_KEYCLOAK_TOKEN_URL']
-client_id = os.environ['MLFLOW_KEYCLOAK_CLIENT_ID']
-client_secret = os.environ['MLFLOW_CLIENT_SECRET']
-username = os.environ['MLFLOW_AUTH_USERNAME']
-password = os.environ['MLFLOW_AUTH_PASSWORD']
 
-token_response = requests.post(
-    token_url,
-    data={{
-        'grant_type': 'password',
-        'client_id': client_id,
-        'client_secret': client_secret,
-        'username': username,
-        'password': password
-    }},
-    verify=False  # Skip SSL verification for internal cluster communication
-)
-token_response.raise_for_status()
-os.environ['MLFLOW_TRACKING_TOKEN'] = token_response.json()['access_token']
+def refresh_mlflow_token():
+    \"\"\"Refresh MLflow authentication token from Keycloak\"\"\"
+    token_url = os.environ['MLFLOW_KEYCLOAK_TOKEN_URL']
+    client_id = os.environ['MLFLOW_KEYCLOAK_CLIENT_ID']
+    client_secret = os.environ['MLFLOW_CLIENT_SECRET']
+    username = os.environ['MLFLOW_AUTH_USERNAME']
+    password = os.environ['MLFLOW_AUTH_PASSWORD']
+
+    token_response = requests.post(
+        token_url,
+        data={{
+            'grant_type': 'password',
+            'client_id': client_id,
+            'client_secret': client_secret,
+            'username': username,
+            'password': password
+        }},
+        verify=False  # Skip SSL verification for internal cluster communication
+    )
+    token_response.raise_for_status()
+    os.environ['MLFLOW_TRACKING_TOKEN'] = token_response.json()['access_token']
+    return True
+
+# Get initial MLflow authentication token
+print('Authenticating with MLflow...', flush=True)
+refresh_mlflow_token()
 print('✓ MLflow authentication successful', flush=True)
 
 # Get MLflow URI from environment
@@ -422,6 +429,11 @@ try:
             resume_download=True
         )
         print(f'✓ Model downloaded to {{temp_model_path}}', flush=True)
+
+        # Refresh token after long download (tokens expire after ~5-60 minutes)
+        print('Refreshing MLflow authentication token...', flush=True)
+        refresh_mlflow_token()
+        print('✓ Token refreshed', flush=True)
 
         # Log model metadata
         mlflow.log_params({{
