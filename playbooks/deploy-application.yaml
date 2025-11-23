@@ -163,6 +163,19 @@
       register: mlflow_auth_secret
       failed_when: mlflow_auth_secret.resources | length == 0
 
+    - name: Copy MLflow auth config to application namespace
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mlflow-auth-config
+            namespace: "{{ k8s_namespace }}"
+          type: Opaque
+          data: "{{ mlflow_auth_secret.resources[0].data }}"
+
     - name: Set MLflow authentication variables
       ansible.builtin.set_fact:
         mlflow_client_secret: "{{ mlflow_auth_secret.resources[0].data['client-secret'] | b64decode }}"
