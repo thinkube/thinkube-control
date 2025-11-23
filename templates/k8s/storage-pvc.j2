@@ -19,7 +19,31 @@ spec:
       storage: 1Gi
   storageClassName: k8s-hostpath
 {% elif container.gpu is defined and container.gpu.count is defined %}
-# Auto-generated PVC for GPU containers (JuiceFS MLflow access)
+# Auto-generated static PV/PVC for GPU containers (JuiceFS MLflow root access)
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ project_name }}-{{ container.name }}-mlflow-root
+spec:
+  capacity:
+    storage: 1Ti
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  csi:
+    driver: csi.juicefs.com
+    fsType: juicefs
+    volumeHandle: {{ project_name }}-{{ container.name }}-mlflow-root
+    nodePublishSecretRef:
+      name: juicefs-mlflow-secret
+      namespace: juicefs
+    volumeAttributes:
+      juicefs/mount-cpu-limit: ""
+      juicefs/mount-cpu-request: ""
+      juicefs/mount-memory-limit: ""
+      juicefs/mount-memory-request: ""
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -36,8 +60,8 @@ spec:
     - ReadWriteMany
   resources:
     requests:
-      # Minimal size - JuiceFS provides POSIX access to MLflow S3 bucket
-      storage: 1Gi
-  storageClassName: juicefs-mlflow
+      storage: 1Ti
+  volumeName: {{ project_name }}-{{ container.name }}-mlflow-root
+  storageClassName: ""
 {% endif %}
 {% endfor %}
