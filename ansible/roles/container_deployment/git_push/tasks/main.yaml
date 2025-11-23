@@ -20,16 +20,7 @@
   set_fact:
     gitea_token: "{{ gitea_token_secret.resources[0].data.token | b64decode }}"
 
-- name: Check if repository exists in Gitea
-  uri:
-    url: "https://{{ gitea_hostname }}/api/v1/repos/{{ gitea_org }}/{{ gitea_repo_name }}"
-    headers:
-      Authorization: "token {{ gitea_token }}"
-    validate_certs: true
-    status_code: [200, 404]
-  register: repo_check
-
-- name: Create repository in Gitea if it doesn't exist
+- name: Create repository in Gitea (idempotent)
   uri:
     url: "https://{{ gitea_hostname }}/api/v1/orgs/{{ gitea_org }}/repos"
     method: POST
@@ -44,9 +35,8 @@
       auto_init: false
     validate_certs: true
     status_code: [201, 409]  # 201=created, 409=already exists (idempotent)
-  when: repo_check.status == 404
   register: repo_create
-  failed_when: repo_create.status not in [201, 409]
+  changed_when: repo_create.status == 201
 
 - name: Configure Git user
   shell: |
