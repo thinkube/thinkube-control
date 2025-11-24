@@ -777,37 +777,38 @@ except Exception as e:
 
     def check_all_models_exist(self) -> Dict[str, bool]:
         """
-        Check which models are already registered in MLflow model registry.
+        Check which models have been successfully downloaded by querying the database.
 
         Returns:
             Dictionary mapping model_id to existence status
         """
         try:
-            # Get MLflow tracking URI from environment or use default
-            mlflow_uri = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000")
-            mlflow_client = MlflowClient(tracking_uri=mlflow_uri)
+            from app.db.session import SessionLocal
+            from app.models.model_mirrors import ModelMirrorJob
 
-            results = {}
-            for model in AVAILABLE_MODELS:
-                model_id = model["id"]
-                # Convert model_id to MLflow model name format
-                model_name = model_id.replace('/', '-')
+            db = SessionLocal()
+            try:
+                # Query all successfully completed mirror jobs
+                succeeded_jobs = db.query(ModelMirrorJob).filter(
+                    ModelMirrorJob.status == "succeeded"
+                ).all()
 
-                try:
-                    # Check if model exists in MLflow registry
-                    mlflow_client.get_registered_model(model_name)
-                    # Model exists if we get here without exception
-                    results[model_id] = True
-                    logger.debug(f"Model {model_id} exists in MLflow registry")
-                except RestException:
-                    # Model doesn't exist in registry
-                    results[model_id] = False
-                    logger.debug(f"Model {model_id} not found in MLflow registry")
+                # Build result dict - all models are False by default
+                results = {model["id"]: False for model in AVAILABLE_MODELS}
 
-            return results
+                # Mark models as True if they have a succeeded job
+                for job in succeeded_jobs:
+                    if job.model_id in results:
+                        results[job.model_id] = True
+                        logger.debug(f"Model {job.model_id} found in database as succeeded")
+
+                return results
+
+            finally:
+                db.close()
 
         except Exception as e:
-            logger.error(f"Failed to check MLflow model registry: {e}")
+            logger.error(f"Failed to check model download status from database: {e}")
             # Return empty dict on error (all models will show as not downloaded)
             return {}
 
