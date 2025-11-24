@@ -786,7 +786,8 @@ except Exception as e:
             from app.db.session import SessionLocal
             from app.models.model_mirrors import ModelMirrorJob
 
-            db = SessionLocal()
+            session_factory = SessionLocal()
+            db = session_factory()
             try:
                 # Query all successfully completed mirror jobs
                 succeeded_jobs = db.query(ModelMirrorJob).filter(
