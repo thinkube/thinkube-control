@@ -440,11 +440,7 @@
         name: gitea-admin-token
       register: gitea_token_secret
 
-    - name: Create Gitea repository
-      ansible.builtin.include_tasks: "/home/thinkube-control/tasks/create_gitea_repo.yaml"
-      vars:
-        gitea_repo_description: "{{ project_description | default(project_name + ' deployment') }}"
-        gitea_hostname: "git.{{ domain_name }}"
+    # Note: Repository creation is handled by git_push role (no need to create it here)
 
     # Get CI/CD monitoring token for workflow template
 

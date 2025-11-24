@@ -558,9 +558,10 @@ async def _execute_template_deployment(
             if not line_text:
                 continue
 
-            # Write to debug file
+            # Write to debug file with timestamp for chronological accuracy
             if debug_file:
-                debug_file.write(f"{line_text}\n")
+                timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                debug_file.write(f"[{timestamp}] {line_text}\n")
                 debug_file.flush()
 
             # Parse and send to WebSocket

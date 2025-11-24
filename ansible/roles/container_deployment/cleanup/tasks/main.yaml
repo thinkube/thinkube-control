@@ -41,16 +41,7 @@
   set_fact:
     gitea_token: "{{ gitea_token_secret.resources[0].data.token | b64decode }}"
 
-- name: Check if Gitea repository exists
-  uri:
-    url: "https://{{ gitea_hostname }}/api/v1/repos/{{ gitea_org }}/{{ gitea_repo_name }}"
-    headers:
-      Authorization: "token {{ gitea_token }}"
-    validate_certs: true
-    status_code: [200, 404]
-  register: gitea_repo_check
-
-- name: Delete Gitea repository if it exists
+- name: Delete Gitea repository (unconditional cleanup)
   uri:
     url: "https://{{ gitea_hostname }}/api/v1/repos/{{ gitea_org }}/{{ gitea_repo_name }}"
     method: DELETE
@@ -58,7 +49,8 @@
       Authorization: "token {{ gitea_token }}"
     validate_certs: true
     status_code: [204, 404]
-  when: gitea_repo_check.status == 200
+  register: gitea_repo_delete
+  changed_when: gitea_repo_delete.status == 204
 
 - name: Display cleanup completion
   debug:
