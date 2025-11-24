@@ -30,44 +30,6 @@
     state: directory
     mode: '0755'
 
-- name: Configure git to avoid race conditions (force single-threaded operations)
-  ansible.builtin.shell: |
-    # Force single-threaded operations to reduce race conditions
-    git config --global pack.threads 1
-    git config --global index-pack.threads 1
-    git config --global checkout.workers 1
-    git config --global core.preloadIndex false
-  args:
-    executable: /bin/bash
-  changed_when: false
-
-- name: Clone template to /tmp with shallow clone
-  ansible.builtin.shell: |
-    # Extract template name from URL
-    TEMPLATE_NAME=$(basename {{ template_url }} .git)
-    TEMP_PATH="/tmp/thinkube-templates-${USER}/${TEMPLATE_NAME}"
-
-    echo "=== Cloning template to temporary location ==="
-    echo "Template: {{ template_url }}"
-    echo "Temp path: $TEMP_PATH"
-
-    # Clean up any existing temp directory for this template
-    rm -rf "$TEMP_PATH"
-    mkdir -p "$(dirname $TEMP_PATH)"
-
-    # Configure SSH for private repositories if key path is provided
-    {% if ssh_private_key_path is defined and ssh_private_key_path %}
-    export GIT_SSH_COMMAND="ssh -i {{ ssh_private_key_path }} -o StrictHostKeyChecking=no"
-    {% endif %}
-
-    # Shallow clone (last commit only) to avoid git race conditions
-    git clone --depth=1 {{ template_url }} "$TEMP_PATH"
-
-    echo "Template path: $TEMP_PATH"
-  args:
-    executable: /bin/bash
-  register: template_clone_result
-
 - name: Create Copier execution script from template
   ansible.builtin.template:
     src: run_copier.sh.j2
