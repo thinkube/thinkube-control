@@ -1,7 +1,7 @@
 """
 Model Downloader Service
 
-Manages HuggingFace model downloads to thinkube-models PVC using Argo Workflows via Hera.
+Manages HuggingFace model downloads to JuiceFS using Argo Workflows via Hera.
 """
 
 import os
@@ -218,7 +218,6 @@ class ModelDownloaderService:
 
         # Configuration
         self.workflow_namespace = "argo"  # Run workflows in argo namespace
-        self.models_pvc_name = "thinkube-models"
         self.parallelism = 3  # Max concurrent downloads
 
         # Get MLflow URI from environment
