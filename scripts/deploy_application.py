@@ -51,7 +51,8 @@ class ApplicationDeployer:
         self.domain = params['domain_name']
         self.admin_username = params['admin_username']
         self.template_url = params['template_url']
-        self.local_repo_path = f"/home/{params['ansible_user']}/shared-code/{self.app_name}"
+        # Inside container: /home is mounted from host's /home/{ansible_user}/shared-code
+        self.local_repo_path = f"/home/{self.app_name}"
 
         # Will be populated during deployment
         self.secrets = {}
