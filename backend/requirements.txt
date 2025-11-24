@@ -1,35 +1,4 @@
-fastapi==0.115.5
-uvicorn==0.32.1
-python-jose[cryptography]==3.3.0
-PyJWT==2.10.1
-httpx==0.28.1
-python-multipart==0.0.20
-pydantic>=2.11.7
-pydantic-settings>=2.6.1
-cryptography==44.0.0
-kubernetes==31.0.0
-websockets==15.0.1
-sqlalchemy==2.0.36
-psycopg2-binary==2.9.10
-asyncpg==0.30.0
-pyyaml==6.0.2
-jinja2==3.1.2
-boto3==1.35.76
-hera-workflows>=5.19.0
-mlflow==3.6.0
-
-# MCP (Model Context Protocol) support
-fastapi-mcp==0.4.0  # FastAPI-specific MCP implementation
-sse-starlette>=2.1.3  # SSE support for MCP
-starlette>=0.27.0  # Required for MCP integration
-
-# Test dependencies
-pytest==8.3.4
-pytest-asyncio==0.25.0
-pytest-cov==6.0.0
-faker==20.1.0
-
-# Code quality
-flake8==7.1.1
-black==24.10.0
-isort==5.13.0
+# All dependencies are pre-installed in the python-base Docker image
+# See: thinkube/ansible/40_thinkube/core/harbor-images/base-images/python-base.Containerfile.j2
+#
+# This file is intentionally minimal to avoid redundant pip installs during deployment.

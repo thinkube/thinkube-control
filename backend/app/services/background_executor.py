@@ -232,62 +232,114 @@ class BackgroundExecutor:
         self, deployment: TemplateDeployment, db: Session
     ) -> Dict[str, Any]:
         """
-        Execute template deployment using the shared subprocess executor.
+        Execute template deployment using the new Python script.
 
-        This function prepares the template deployment and uses the shared
-        _execute_ansible_subprocess method for consistent execution.
+        This replaces the Ansible playbook with a faster Python implementation.
         """
-        # Validate environment
-        validation = ansible_env.validate_paths()
-        if not validation["valid"]:
-            raise RuntimeError(
-                f"Environment validation failed: {'; '.join(validation['errors'])}"
-            )
-
-        # Get paths
-        playbook_path = ansible_env.get_playbook_path("deploy-application.yaml")
-        inventory_path = ansible_env.get_inventory_path()
-
         # Prepare variables with authentication
         extra_vars = deployment.variables.copy()
         extra_vars = ansible_env.prepare_auth_vars(extra_vars)
 
-        # Create temporary vars file
+        # Create temporary vars file for the Python script
         temp_vars_fd, temp_vars_path = tempfile.mkstemp(
-            suffix=".yml", prefix="ansible-vars-"
+            suffix=".json", prefix="deploy-vars-"
         )
 
         try:
             with os.fdopen(temp_vars_fd, "w") as f:
-                yaml.dump(extra_vars, f)
+                json.dump(extra_vars, f)
         except:
             os.close(temp_vars_fd)
             raise
 
         try:
-            # Get command with buffering
-            cmd = ansible_env.get_command_with_buffer(
-                playbook_path, inventory_path, temp_vars_path
-            )
-
-            # Get shared environment for template deployment
-            env = ansible_env.get_environment(context="template")
+            # Build command for Python deployment script
+            python_script = Path("/home/thinkube-control/scripts/deploy_application.py")
+            cmd = ["python3", str(python_script), temp_vars_path]
 
             # Log start
             self._log_to_db(
-                db, deployment.id, "info", "Starting deployment playbook execution"
+                db, deployment.id, "info", "Starting deployment with Python script"
             )
 
-            # Execute using shared method
-            return await self._execute_ansible_subprocess(
-                cmd, env, deployment, db, playbook_path.parent
-            )
+            # Execute Python script
+            return await self._execute_python_deployment(cmd, deployment, db)
 
         finally:
             try:
                 os.unlink(temp_vars_path)
             except:
                 pass
+
+    async def _execute_python_deployment(
+        self, cmd: list, deployment: TemplateDeployment, db: Session
+    ) -> Dict[str, Any]:
+        """
+        Execute the Python deployment script and stream output.
+        """
+        process = None
+
+        try:
+            # Create subprocess
+            logger.info(f"Running command: {' '.join(cmd)}")
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=os.environ.copy(),
+            )
+
+            # Stream output
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    break
+
+                line_text = line.decode("utf-8", errors="replace").rstrip()
+                if not line_text:
+                    continue
+
+                # Parse output from Python script
+                if "PHASE" in line_text:
+                    self._log_to_db(db, deployment.id, "phase", line_text)
+                elif "ERROR" in line_text:
+                    self._log_to_db(db, deployment.id, "error", line_text)
+                elif "SUCCESS" in line_text or "✅" in line_text:
+                    self._log_to_db(db, deployment.id, "success", line_text)
+                elif any(keyword in line_text for keyword in ["Created", "Updated", "Failed", "Workflow", "Argo"]):
+                    self._log_to_db(db, deployment.id, "info", line_text)
+
+            # Wait for completion
+            return_code = await process.wait()
+
+            # Log final status
+            if return_code == 0:
+                self._log_to_db(
+                    db,
+                    deployment.id,
+                    "complete",
+                    "Deployment completed successfully",
+                )
+                return {"success": True}
+            else:
+                self._log_to_db(
+                    db,
+                    deployment.id,
+                    "error",
+                    f"Deployment failed with return code: {return_code}",
+                )
+                return {"success": False, "error": f"Return code: {return_code}"}
+
+        except Exception as e:
+            logger.error(f"Error executing Python deployment: {e}")
+            self._log_to_db(db, deployment.id, "error", f"Execution error: {str(e)}")
+            return {"success": False, "error": str(e)}
+
+        finally:
+            # Cleanup
+            if process and process.returncode is None:
+                process.terminate()
+                await process.wait()
 
     def _log_to_db(
         self,

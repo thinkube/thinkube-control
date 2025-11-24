@@ -439,31 +439,14 @@ async def _execute_template_deployment(
     websocket: WebSocket, deployment: TemplateDeployment, db: Session
 ) -> Dict[str, Any]:
     """
-    Execute template deployment using simplified v0.2.0 approach
+    Execute template deployment using the new Python script.
 
-    This function uses the same simple execution method that worked in v0.2.0:
-    - Simple ansible-playbook command with stdbuf for line buffering
-    - Minimal environment variables
-    - Real-time output streaming
-    - No complex subprocess handling
+    This replaces the Ansible playbook with a faster Python implementation
+    that provides parallel resource creation and real-time workflow monitoring.
     """
     # Create log directory for debugging
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     app_name = deployment.variables.get("app_name", "unknown")
-
-    # Try to use shared log directory, fall back to /tmp
-    shared_log_base = Path("/home/shared-logs/deployments")
-    tmp_log_base = Path("/tmp/thinkube-deployments")
-
-    if shared_log_base.parent.exists() and os.access(shared_log_base.parent, os.W_OK):
-        log_base_dir = shared_log_base
-    else:
-        log_base_dir = tmp_log_base
-
-    app_log_dir = log_base_dir / app_name
-    app_log_dir.mkdir(parents=True, exist_ok=True)
-
-    debug_log_file = app_log_dir / f"deployment-{timestamp}.log"
 
     # Log callback to save to database
     def log_to_db(log_data: Dict[str, Any]):
@@ -481,74 +464,49 @@ async def _execute_template_deployment(
             logger.error(f"Failed to save deployment log: {e}")
             db.rollback()
 
-    # Validate environment
-    validation = ansible_env.validate_paths()
-    if not validation["valid"]:
-        raise RuntimeError(
-            f"Environment validation failed: {'; '.join(validation['errors'])}"
-        )
-
-    # Get paths
-    playbook_path = ansible_env.get_playbook_path("deploy-application.yaml")
-    inventory_path = ansible_env.get_inventory_path()
-
-    # Prepare variables with authentication
+    # Prepare variables for Python script
     extra_vars = deployment.variables.copy()
     extra_vars = ansible_env.prepare_auth_vars(extra_vars)
 
-    # Create temporary vars file
+    # Create temporary vars file for the Python script
     temp_vars_fd, temp_vars_path = tempfile.mkstemp(
-        suffix=".yml", prefix="ansible-vars-"
+        suffix=".json", prefix="deploy-vars-"
     )
 
     try:
         with os.fdopen(temp_vars_fd, "w") as f:
-            yaml.dump(extra_vars, f)
+            json.dump(extra_vars, f)
     except:
         os.close(temp_vars_fd)
         raise
 
     process = None
-    debug_file = None
 
     try:
-        # Get command with buffering
-        cmd = ansible_env.get_command_with_buffer(
-            playbook_path, inventory_path, temp_vars_path
-        )
-
-        # Get shared environment for template deployment
-        env = ansible_env.get_environment(context="template")
+        # Build command for Python deployment script
+        python_script = Path("/home/thinkube-control/scripts/deploy_application.py")
+        cmd = [
+            "python3",
+            str(python_script),
+            temp_vars_path
+        ]
 
         # Log start
         await websocket.send_json(
-            {"type": "info", "message": f"Starting deployment playbook execution"}
+            {"type": "info", "message": f"Starting deployment of {app_name}"}
         )
-        log_to_db({"type": "info", "message": "Starting deployment playbook execution"})
-
-        # Open debug log
-        debug_file = open(debug_log_file, "w")
-        debug_file.write(f"=== THINKUBE DEPLOYMENT LOG (WebSocket) ===\n")
-        debug_file.write(f"Deployment ID: {deployment.id}\n")
-        debug_file.write(f"Application: {app_name}\n")
-        debug_file.write(f"Started at: {datetime.now()}\n")
-        debug_file.write(f"Command: {' '.join(cmd)}\n")
-        debug_file.write(f"\n=== ANSIBLE OUTPUT ===\n")
+        log_to_db({"type": "info", "message": f"Starting deployment of {app_name}"})
 
         # Create subprocess
-        logger.info(f"Running command: {' '.join(cmd)}")
+        logger.info(f"Running Python deployment script: {' '.join(cmd)}")
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            env=env,
-            cwd=str(playbook_path.parent),
+            env=os.environ.copy(),
         )
 
         # Stream output
-        current_task = "Initializing"
-        task_count = 0
-
         while True:
             line = await process.stdout.readline()
             if not line:
@@ -558,80 +516,30 @@ async def _execute_template_deployment(
             if not line_text:
                 continue
 
-            # Write to debug file with timestamp for chronological accuracy
-            if debug_file:
-                timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                debug_file.write(f"[{timestamp}] {line_text}\n")
-                debug_file.flush()
-
-            # Parse and send to WebSocket
-            if "TASK [" in line_text:
-                task_start = line_text.find("TASK [") + 6
-                task_end = line_text.find("]", task_start)
-                if task_end > task_start:
-                    current_task = line_text[task_start:task_end]
-                    task_count += 1
-
-                    message_data = {
-                        "type": "task",
-                        "task_number": task_count,
-                        "task_name": current_task,
-                        "message": line_text,
-                    }
-                    await send_chunked_message(websocket, message_data)
-                    log_to_db(message_data)
-            elif "PLAY [" in line_text:
-                message_data = {"type": "play", "message": line_text}
+            # Parse output from Python script
+            # The script uses structured logging with timestamps and levels
+            if "PHASE" in line_text:
+                message_data = {"type": "phase", "message": line_text}
                 await send_chunked_message(websocket, message_data)
                 log_to_db(message_data)
-            elif "ok: [" in line_text:
-                message_data = {
-                    "type": "ok",
-                    "task": current_task,
-                    "message": line_text,
-                }
+            elif "ERROR" in line_text:
+                message_data = {"type": "error", "message": line_text}
                 await send_chunked_message(websocket, message_data)
                 log_to_db(message_data)
-            elif "changed: [" in line_text:
-                message_data = {
-                    "type": "changed",
-                    "task": current_task,
-                    "message": line_text,
-                }
-                await send_chunked_message(websocket, message_data)
-                log_to_db(message_data)
-            elif "failed: [" in line_text or "fatal: [" in line_text:
-                message_data = {
-                    "type": "failed",
-                    "task": current_task,
-                    "message": line_text,
-                }
-                await send_chunked_message(websocket, message_data)
-                log_to_db(message_data)
-            elif "skipping: [" in line_text:
-                message_data = {
-                    "type": "skipped",
-                    "task": current_task,
-                    "message": line_text,
-                }
+            elif "SUCCESS" in line_text or "✅" in line_text:
+                message_data = {"type": "success", "message": line_text}
                 await send_chunked_message(websocket, message_data)
                 log_to_db(message_data)
             else:
                 # Regular output
                 message_data = {"type": "output", "message": line_text}
                 await send_chunked_message(websocket, message_data)
-                # Don't log every output line to DB, only important ones
-                if "ERROR" in line_text or "WARNING" in line_text:
+                # Log important messages to DB
+                if any(keyword in line_text for keyword in ["Created", "Updated", "Failed", "Workflow", "Argo"]):
                     log_to_db(message_data)
 
         # Wait for completion
         return_code = await process.wait()
-
-        # Log completion
-        if debug_file:
-            debug_file.write(f"\n=== COMPLETED ===\n")
-            debug_file.write(f"Return code: {return_code}\n")
-            debug_file.write(f"Finished at: {datetime.now()}\n")
 
         # Send completion
         completion_data = {
@@ -647,11 +555,6 @@ async def _execute_template_deployment(
         await websocket.send_json(completion_data)
         log_to_db(completion_data)
 
-        # Log debug file location
-        info_data = {"type": "info", "message": f"Debug log saved to: {debug_log_file}"}
-        await websocket.send_json(info_data)
-        log_to_db(info_data)
-
         return {"return_code": return_code}
 
     except Exception as e:
@@ -666,9 +569,6 @@ async def _execute_template_deployment(
         if process and process.returncode is None:
             process.terminate()
             await process.wait()
-
-        if debug_file:
-            debug_file.close()
 
         try:
             os.unlink(temp_vars_path)
