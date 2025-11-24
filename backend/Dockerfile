@@ -6,10 +6,8 @@ WORKDIR /app
 
 # All dependencies pre-installed in base image (python-base:3.12-slim)
 # Including: Python packages, system tools (git, podman, ssh, debugging tools), podman config
+# Including: hera-workflows, kubernetes, kubernetes-asyncio
 # See: thinkube/ansible/.../base-images/python-base.Containerfile.j2
-
-# Install hera for Argo Workflows integration
-RUN pip install --no-cache-dir hera-workflows
 
 # Copy and install fastapi-mcp-extended package
 COPY fastapi-mcp-extended /app/fastapi-mcp-extended
