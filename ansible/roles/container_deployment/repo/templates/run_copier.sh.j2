@@ -22,17 +22,17 @@ if [ -d "{{ gitea_repo_name }}" ]; then
   rm -rf "{{ gitea_repo_name }}"
 fi
 
-# Extract template name and set up temp path
+# Extract template name and set up temp path with unique identifier
 TEMPLATE_NAME=$(basename {{ template_url }} .git)
-TEMP_PATH="/tmp/thinkube-templates-${USER}/${TEMPLATE_NAME}"
+UNIQUE_ID="$(date +%s)-$$"  # timestamp + process ID for uniqueness
+TEMP_PATH="/tmp/thinkube-templates-${USER}/${TEMPLATE_NAME}-${UNIQUE_ID}"
 
 # Clone template to temporary location
 echo "=== Cloning template to temporary location ==="
 echo "Template: {{ template_url }}"
 echo "Temp path: $TEMP_PATH"
 
-# Clean up any existing temp directory for this template
-rm -rf "$TEMP_PATH"
+# Create parent directory (no need to remove, path is unique)
 mkdir -p "$(dirname $TEMP_PATH)"
 
 # Configure single-threaded git operations to reduce race conditions

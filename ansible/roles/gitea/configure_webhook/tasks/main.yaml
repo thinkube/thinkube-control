@@ -53,6 +53,24 @@
       ansible.builtin.set_fact:
         webhook_secret: "{{ webhook_secret_data.resources[0].data.secret | b64decode }}"
 
+    - name: Ensure repository exists for webhook configuration
+      ansible.builtin.uri:
+        url: "{{ gitea_api_url }}/orgs/{{ gitea_org }}/repos"
+        method: POST
+        headers:
+          Authorization: "token {{ gitea_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          name: "{{ gitea_repo_name }}"
+          description: "{{ gitea_repo_description | default('Deployment manifests for ' + gitea_repo_name) }}"
+          private: true
+          auto_init: false
+        status_code: [201, 409]
+        validate_certs: yes
+      register: repo_ensure
+      changed_when: repo_ensure.status == 201
+
     - name: Check existing webhooks for repository
       ansible.builtin.uri:
         url: "{{ gitea_api_url }}/repos/{{ gitea_org }}/{{ gitea_repo_name }}/hooks"
