@@ -45,10 +45,37 @@
     executable: /bin/bash
   changed_when: false
 
-- name: Use Copier to copy and process template from GitHub
+- name: Clone template to /tmp with shallow clone
+  ansible.builtin.shell: |
+    # Extract template name from URL
+    TEMPLATE_NAME=$(basename {{ template_url }} .git)
+    TEMP_PATH="/tmp/thinkube-templates-${USER}/${TEMPLATE_NAME}"
+
+    echo "=== Cloning template to temporary location ==="
+    echo "Template: {{ template_url }}"
+    echo "Temp path: $TEMP_PATH"
+
+    # Clean up any existing temp directory for this template
+    rm -rf "$TEMP_PATH"
+    mkdir -p "$(dirname $TEMP_PATH)"
+
+    # Configure SSH for private repositories if key path is provided
+    {% if ssh_private_key_path is defined and ssh_private_key_path %}
+    export GIT_SSH_COMMAND="ssh -i {{ ssh_private_key_path }} -o StrictHostKeyChecking=no"
+    {% endif %}
+
+    # Shallow clone (last commit only) to avoid git race conditions
+    git clone --depth=1 {{ template_url }} "$TEMP_PATH"
+
+    echo "Template path: $TEMP_PATH"
+  args:
+    executable: /bin/bash
+  register: template_clone_result
+
+- name: Use Copier with locally cloned template
   ansible.builtin.shell: |
     cd {{ code_source_path }}
-    
+
     # Debug environment
     echo "=== DEBUG: Environment Info ==="
     echo "Current user: $(whoami)"
@@ -62,25 +89,19 @@
     echo "Copier in venv: $(ls -la ~/.venv/bin/copier 2>&1)"
     echo "Python in venv: $(~/.venv/bin/python --version 2>&1)"
     echo "=== END DEBUG ==="
-    
+
     # Remove existing directory if it exists
     if [ -d "{{ gitea_repo_name }}" ]; then
       rm -rf "{{ gitea_repo_name }}"
     fi
 
-    # Clear any existing Copier cache to force fresh clone
-    # If cache exists, it means previous copier run got stuck
-    if ls /tmp/copier* 1> /dev/null 2>&1; then
-      rm -rf /tmp/copier*
-    fi
-    
-    # Configure SSH for private repositories if key path is provided
-    {% if ssh_private_key_path is defined and ssh_private_key_path %}
-    export GIT_SSH_COMMAND="ssh -i {{ ssh_private_key_path }} -o StrictHostKeyChecking=no"
-    {% endif %}
-    
+    # Extract template path from clone output
+    TEMPLATE_NAME=$(basename {{ template_url }} .git)
+    TEMP_PATH="/tmp/thinkube-templates-${USER}/${TEMPLATE_NAME}"
+
     # Build copier command with dynamic parameters
-    COPIER_CMD="~/.venv/bin/copier copy --trust --defaults --vcs-ref=HEAD"
+    # Note: --vcs-ref=HEAD is removed because we're using a local path, not a git URL
+    COPIER_CMD="~/.venv/bin/copier copy --trust --defaults"
     
     # Add required parameters
     COPIER_CMD="$COPIER_CMD --data 'project_name={{ app_name }}'"
@@ -112,23 +133,33 @@
     {% endif %}
     {% endfor %}
     
-    # Execute copier with all parameters
+    # Execute copier with all parameters using local template path
     echo "=== DEBUG: Copier Command ==="
-    echo "Full command: $COPIER_CMD '{{ template_url }}' '{{ gitea_repo_name }}'"
+    echo "Full command: $COPIER_CMD '$TEMP_PATH' '{{ gitea_repo_name }}'"
+    echo "Template path: $TEMP_PATH"
     echo "=== Running Copier ==="
-    
-    # Run with timeout to prevent hanging
-    timeout 120 bash -c "eval \"$COPIER_CMD '{{ template_url }}' '{{ gitea_repo_name }}'\"" 2>&1
+
+    # Run with timeout - should be faster since no git operations
+    timeout 120 bash -c "eval \"$COPIER_CMD '$TEMP_PATH' '{{ gitea_repo_name }}'\"" 2>&1
     COPIER_EXIT=$?
     
     echo "=== Copier Exit Code: $COPIER_EXIT ==="
     if [ $COPIER_EXIT -eq 124 ]; then
       echo "ERROR: Copier command timed out after 120 seconds"
+      # Clean up temp directory on failure
+      rm -rf "$TEMP_PATH"
       exit 1
     elif [ $COPIER_EXIT -ne 0 ]; then
       echo "ERROR: Copier command failed with exit code $COPIER_EXIT"
+      # Clean up temp directory on failure
+      rm -rf "$TEMP_PATH"
       exit 1
     fi
+
+    # Clean up temp directory on success
+    echo "=== Cleaning up temporary template directory ==="
+    rm -rf "$TEMP_PATH"
+    echo "Cleanup complete"
   args:
     executable: /bin/bash
   async: 180  # Give ansible 3 minutes before timing out
