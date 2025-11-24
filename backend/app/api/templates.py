@@ -32,6 +32,7 @@ from app.models.deployment_schemas import (
 from pathlib import Path
 from app.services.background_executor import background_executor
 from app.services.dependency_manager import DependencyManager
+from app.services.model_downloader import ModelDownloaderService
 import yaml
 import aiohttp
 
@@ -91,6 +92,9 @@ class TemplateParameter(BaseModel):
     placeholder: Optional[str] = None
     group: Optional[str] = None
     order: Optional[int] = None
+    # Dynamic choice fields
+    dynamic_source: Optional[str] = None  # e.g., "model_catalog"
+    filter: Optional[Dict[str, Any]] = None  # Filter criteria for dynamic choices
 
 
 class TemplateMetadata(BaseModel):
@@ -214,13 +218,49 @@ async def get_template_metadata(
         # Convert parameters to Pydantic models
         parameters = []
         for param_data in template_data.get("parameters", []):
+            # Handle dynamic choices from model catalog
+            dynamic_source = param_data.get("dynamic_source")
+            filter_criteria = param_data.get("filter", {})
+            choices = param_data.get("choices")
+
+            if dynamic_source == "model_catalog":
+                # Fetch models from catalog and apply filters
+                try:
+                    model_service = ModelDownloaderService()
+                    available_models = model_service.get_available_models()
+                    downloaded_models = model_service.check_all_models_exist()
+
+                    # Apply filters
+                    filtered_models = []
+                    for model in available_models:
+                        # Check server_type filter
+                        if "server_type" in filter_criteria:
+                            required_type = filter_criteria["server_type"]
+                            if required_type not in model.get("server_type", []):
+                                continue
+
+                        # Check is_downloaded filter
+                        if filter_criteria.get("is_downloaded", False):
+                            if not downloaded_models.get(model["id"], False):
+                                continue
+
+                        filtered_models.append(model["id"])
+
+                    # Use filtered models as choices
+                    choices = filtered_models
+                    logger.info(f"Dynamic choices for {param_data['name']}: {len(choices)} models")
+                except Exception as e:
+                    logger.error(f"Failed to fetch dynamic choices from model catalog: {e}")
+                    # Keep static choices or empty list as fallback
+                    pass
+
             param = TemplateParameter(
                 name=param_data["name"],
                 type=param_data["type"],
                 description=param_data.get("description", ""),
                 default=param_data.get("default"),
                 required=param_data.get("required", True),
-                choices=param_data.get("choices"),
+                choices=choices,
                 pattern=param_data.get("pattern"),
                 min=param_data.get("min"),
                 max=param_data.get("max"),
@@ -229,6 +269,8 @@ async def get_template_metadata(
                 placeholder=param_data.get("placeholder"),
                 group=param_data.get("group"),
                 order=param_data.get("order"),
+                dynamic_source=dynamic_source,
+                filter=filter_criteria,
             )
             parameters.append(param)
 
