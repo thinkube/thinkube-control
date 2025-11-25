@@ -596,12 +596,12 @@ class ApplicationDeployer:
         org = "thinkube-deployments"
 
         git_commands = [
-            # Configure git
+            # Initialize if needed (must come first)
+            "git init",
+
+            # Configure git (after init)
             f"git config user.name '{self.admin_username}'",
             f"git config user.email '{self.admin_username}@{self.domain}'",
-
-            # Initialize if needed
-            "git init",
 
             # Add remote
             f"git remote remove origin || true",
