@@ -13,9 +13,6 @@ WORKDIR /app
 COPY fastapi-mcp-extended /app/fastapi-mcp-extended
 RUN pip install --no-cache-dir /app/fastapi-mcp-extended
 
-# Install yamlinclude (required by copier but not auto-installed)
-RUN pip install --no-cache-dir yamlinclude
-
 # Copy application code
 COPY app /app/app
 COPY start.sh /app/start.sh
