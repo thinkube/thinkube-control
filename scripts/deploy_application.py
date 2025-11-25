@@ -663,20 +663,20 @@ class ApplicationDeployer:
         gitea_hostname = f"git.{self.domain}"
         org = "thinkube-deployments"
 
-        # Build a single atomic git command to avoid race conditions with lock files
-        # Clear git env vars to avoid interference from container environment
+        # Match Ansible: only init if .git doesn't exist, preserve existing history
         git_script = f"""
 set -e
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE 2>/dev/null || true
 cd {self.local_repo_path}
-rm -rf .git
-git init -b main
+if [ ! -d .git ]; then
+  git init -b main
+fi
 git config user.name '{self.admin_username}'
 git config user.email '{self.admin_username}@{self.domain}'
+git remote remove origin 2>/dev/null || true
 git remote add origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.app_name}.git'
 git add -A
-git commit --allow-empty -m 'Deploy {self.app_name} to {self.domain}'
-git push --force origin HEAD:refs/heads/main
+git commit -m 'Deploy {self.app_name} to {self.domain}' || echo "No changes to commit"
+git push -u origin main --force
 """
 
         process = await asyncio.create_subprocess_shell(
