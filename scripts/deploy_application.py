@@ -527,7 +527,7 @@ class ApplicationDeployer:
 
     async def configure_webhook(self):
         """Configure Gitea webhook (atomic operation - prevents duplicates)."""
-        gitea_token = self.secrets['gitea'].data['token']
+        gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
         gitea_hostname = f"git.{self.domain}"
         webhook_url = f"https://argo-events.{self.domain}/gitea"
         org = "thinkube-deployments"
@@ -536,7 +536,7 @@ class ApplicationDeployer:
         # Get webhook secret from Argo namespace
         try:
             webhook_secret_obj = await self.k8s_core.read_namespaced_secret('gitea-webhook-secret', 'argo')
-            webhook_secret = webhook_secret_obj.data['secret']
+            webhook_secret = self._decode_secret_data(webhook_secret_obj, 'secret')
         except ApiException as e:
             DeploymentLogger.error(f"Failed to get webhook secret: {e}")
             raise
