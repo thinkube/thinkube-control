@@ -79,6 +79,7 @@ class AnsibleEnvironment:
             raise RuntimeError("SYSTEM_USERNAME environment variable not set")
 
         extra_vars["ansible_user"] = system_username
+        extra_vars["system_username"] = system_username
 
         # SSH key authentication
         ssh_key_path = self.get_ssh_key_path()
