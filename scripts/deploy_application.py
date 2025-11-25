@@ -391,16 +391,14 @@ class ApplicationDeployer:
         - app-pull-secret in app namespace (type kubernetes.io/dockerconfigjson) for pod image pulls
         """
         harbor = self.secrets['harbor']
-        harbor_user = self._decode_secret_data(harbor, 'username')
-        harbor_token = self._decode_secret_data(harbor, 'password')
+        harbor_user = self._decode_secret_data(harbor, 'robot-user')
+        harbor_token = self._decode_secret_data(harbor, 'robot-token')
         container_registry = f"registry.{self.domain}"
 
-        # Build the docker config JSON
+        # Build the docker config JSON - matches Ansible (auth field only, no separate username/password)
         docker_config = {
             "auths": {
                 container_registry: {
-                    "username": harbor_user,
-                    "password": harbor_token,
                     "auth": base64.b64encode(f"{harbor_user}:{harbor_token}".encode()).decode()
                 }
             }
