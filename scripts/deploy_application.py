@@ -595,41 +595,32 @@ class ApplicationDeployer:
         gitea_hostname = f"git.{self.domain}"
         org = "thinkube-deployments"
 
-        git_commands = [
-            # Clean up and initialize in one atomic operation
-            "rm -rf .git && git init -b main",
+        # Build a single atomic git command to avoid race conditions with lock files
+        # All operations run in one shell invocation
+        git_script = f"""
+rm -rf .git && \
+git init -b main && \
+git config user.name '{self.admin_username}' && \
+git config user.email '{self.admin_username}@{self.domain}' && \
+git remote add origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.app_name}.git' && \
+git add -A && \
+git commit --allow-empty -m 'Deploy {self.app_name} to {self.domain}' && \
+git push -u origin main --force
+"""
 
-            # Configure git
-            f"git config user.name '{self.admin_username}'",
-            f"git config user.email '{self.admin_username}@{self.domain}'",
+        process = await asyncio.create_subprocess_shell(
+            git_script,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=self.local_repo_path
+        )
 
-            # Add remote
-            f"git remote add origin https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.app_name}.git",
+        stdout, stderr = await process.communicate()
 
-            # Stage all changes
-            "git add -A",
-
-            # Commit (--allow-empty ensures we always have at least one commit)
-            f"git commit --allow-empty -m 'Deploy {self.app_name} to {self.domain}'",
-
-            # Push
-            "git push -u origin main --force"
-        ]
-
-        for cmd in git_commands:
-            process = await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=self.local_repo_path
-            )
-
-            stdout, stderr = await process.communicate()
-
-            if process.returncode != 0 and "No changes to commit" not in stdout.decode():
-                if "git remote add origin" not in cmd:  # Ignore remote errors
-                    DeploymentLogger.error(f"Git command failed: {cmd}")
-                    DeploymentLogger.error(f"Error: {stderr.decode()}")
+        if process.returncode != 0:
+            DeploymentLogger.error(f"Git operations failed")
+            DeploymentLogger.error(f"Error: {stderr.decode()}")
+            raise RuntimeError(f"Git operations failed: {stderr.decode()}")
 
         DeploymentLogger.success("Pushed changes to Gitea")
 
