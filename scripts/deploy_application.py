@@ -619,6 +619,394 @@ class ApplicationDeployer:
 
         return workflow_spec
 
+    def generate_k8s_manifests(self):
+        """Generate all Kubernetes manifests from thinkube.yaml specification.
+
+        This mirrors the Ansible task: tasks/generate_k8s_manifests.yaml
+        Generates: namespace, mlflow-secrets, app-metadata, deployments, services,
+        ingress, paused-backend, postgresql (conditional), storage-pvc (conditional),
+        kustomization, argocd-postsync-hook, argocd-syncfail-hook
+        """
+        DeploymentLogger.log("Generating Kubernetes manifests from thinkube.yaml")
+
+        k8s_dir = Path(self.local_repo_path) / 'k8s'
+        k8s_dir.mkdir(parents=True, exist_ok=True)
+
+        # Load thinkube.yaml if not already loaded
+        if not self.thinkube_config:
+            thinkube_path = Path(self.local_repo_path) / 'thinkube.yaml'
+            if thinkube_path.exists():
+                with open(thinkube_path, 'r') as f:
+                    self.thinkube_config = yaml.safe_load(f)
+
+        # Setup Jinja2 environment
+        template_dir = Path("/home/thinkube-control/templates/k8s")
+        env = jinja2.Environment(
+            loader=jinja2.FileSystemLoader(str(template_dir)),
+            undefined=jinja2.StrictUndefined,
+            lstrip_blocks=True,
+            trim_blocks=True
+        )
+        # Add to_yaml and to_json filters
+        env.filters['to_yaml'] = lambda x: yaml.dump(x, default_flow_style=False)
+        env.filters['to_json'] = lambda x: json.dumps(x)
+
+        # Common template variables
+        container_registry = f"registry.{self.domain}"
+        admin_password = self._decode_secret_data(self.secrets['admin'], 'admin-password')
+
+        # Get MLflow credentials
+        mlflow_secret = self.secrets.get('mlflow', {}).get('secret')
+        mlflow_keycloak_token_url = self._decode_secret_data(mlflow_secret, 'keycloak-token-url') if mlflow_secret else ''
+        mlflow_keycloak_client_id = self._decode_secret_data(mlflow_secret, 'keycloak-client-id') if mlflow_secret else ''
+        mlflow_client_secret = self._decode_secret_data(mlflow_secret, 'mlflow-client-secret') if mlflow_secret else ''
+        mlflow_username = self._decode_secret_data(mlflow_secret, 'mlflow-username') if mlflow_secret else ''
+        mlflow_password = self._decode_secret_data(mlflow_secret, 'admin-password') if mlflow_secret else admin_password
+
+        # Get SeaweedFS credentials
+        seaweedfs_secret = self.secrets.get('seaweedfs')
+        seaweedfs_password = self._decode_secret_data(seaweedfs_secret, 's3_secret_key') if seaweedfs_secret else ''
+
+        template_vars = {
+            'project_name': self.app_name,
+            'k8s_namespace': self.namespace,
+            'domain_name': self.domain,
+            'container_registry': container_registry,
+            'admin_username': self.admin_username,
+            'admin_password': admin_password,
+            'thinkube_spec': self.thinkube_config,
+            'mlflow_keycloak_token_url': mlflow_keycloak_token_url,
+            'mlflow_keycloak_client_id': mlflow_keycloak_client_id,
+            'mlflow_client_secret': mlflow_client_secret,
+            'mlflow_username': mlflow_username,
+            'mlflow_password': mlflow_password,
+            'seaweedfs_password': seaweedfs_password,
+        }
+
+        # 1. Generate namespace.yaml
+        namespace_content = f"""apiVersion: v1
+kind: Namespace
+metadata:
+  name: {self.namespace}
+  labels:
+    app.kubernetes.io/name: {self.app_name}
+    app.kubernetes.io/managed-by: argocd
+"""
+        (k8s_dir / 'namespace.yaml').write_text(namespace_content)
+
+        # 2. Generate mlflow-secrets.yaml from template
+        mlflow_template = env.get_template('mlflow-secrets.j2')
+        mlflow_content = mlflow_template.render(**template_vars)
+        (k8s_dir / 'mlflow-secrets.yaml').write_text(mlflow_content)
+
+        # 3. Generate app-metadata.yaml
+        containers_json = json.dumps(self.thinkube_config.get('spec', {}).get('containers', []))
+        app_metadata_content = f"""apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {self.app_name}-metadata
+  namespace: {self.namespace}
+data:
+  app_name: "{self.app_name}"
+  containers: |
+    {containers_json}
+"""
+        (k8s_dir / 'app-metadata.yaml').write_text(app_metadata_content)
+
+        # 4. Generate deployments.yaml from deployment-separate.j2
+        deployment_template = env.get_template('deployment-separate.j2')
+        deployment_content = deployment_template.render(**template_vars)
+        (k8s_dir / 'deployments.yaml').write_text(deployment_content)
+
+        # 5. Generate services.yaml from services-separate.j2
+        services_template = env.get_template('services-separate.j2')
+        services_content = services_template.render(**template_vars)
+        (k8s_dir / 'services.yaml').write_text(services_content)
+
+        # 6. Generate ingress.yaml using Python generator
+        # Import the generate_ingress function
+        sys.path.insert(0, str(template_dir))
+        from generate_ingress import generate_ingress
+        ingress_config = generate_ingress(
+            self.app_name,
+            self.namespace,
+            self.domain,
+            self.thinkube_config
+        )
+        if ingress_config:
+            ingress_content = "# Generated ingress configuration\n---\n" + yaml.dump(ingress_config, default_flow_style=False, sort_keys=False)
+            (k8s_dir / 'ingress.yaml').write_text(ingress_content)
+
+        # 7. Generate paused-backend.yaml from template
+        paused_template = env.get_template('paused-backend.yaml.j2')
+        paused_content = paused_template.render(**template_vars)
+        (k8s_dir / 'paused-backend.yaml').write_text(paused_content)
+
+        # 8. Generate postgresql.yaml (conditional)
+        services = self.thinkube_config.get('spec', {}).get('services', [])
+        has_database = 'database' in services
+        if has_database:
+            postgresql_template = env.get_template('postgresql.j2')
+            postgresql_content = postgresql_template.render(**template_vars)
+            (k8s_dir / 'postgresql.yaml').write_text(postgresql_content)
+
+        # 9. Generate storage-pvc.yaml (conditional)
+        containers = self.thinkube_config.get('spec', {}).get('containers', [])
+        needs_storage = (
+            'storage' in services or
+            any(c.get('gpu', {}).get('count') for c in containers) or
+            any('volume' in c for c in containers)
+        )
+        if needs_storage:
+            storage_template = env.get_template('storage-pvc.j2')
+            storage_content = storage_template.render(**template_vars)
+            (k8s_dir / 'storage-pvc.yaml').write_text(storage_content)
+
+        # 10. Generate build-workflow.yaml
+        workflow_template = env.get_template('build-workflow.j2')
+        system_username = self.params.get('system_username', 'thinkube')
+        master_node_name = self.params.get('master_node_name', 'tkspark')
+        workflow_vars = {**template_vars, 'system_username': system_username, 'master_node_name': master_node_name}
+        workflow_content = workflow_template.render(**workflow_vars)
+        (k8s_dir / 'build-workflow.yaml').write_text(workflow_content)
+
+        # 11. Generate kustomization.yaml
+        kustomization_resources = [
+            'namespace.yaml',
+            'mlflow-secrets.yaml',
+            'app-metadata.yaml',
+            'deployments.yaml',
+            'services.yaml',
+            'ingress.yaml',
+        ]
+        if has_database:
+            kustomization_resources.append('postgresql.yaml')
+        if needs_storage:
+            kustomization_resources.append('storage-pvc.yaml')
+        kustomization_resources.append('argocd-postsync-hook.yaml')
+
+        # Build images list
+        images_list = []
+        for container in containers:
+            images_list.append(f"  - name: {container_registry}/thinkube/{self.app_name}-{container['name']}\n    newTag: latest")
+
+        kustomization_content = f"""apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+{chr(10).join(f"  - {r}" for r in kustomization_resources)}
+
+images:
+{chr(10).join(images_list)}
+"""
+        (k8s_dir / 'kustomization.yaml').write_text(kustomization_content)
+
+        # 12. Generate argocd-postsync-hook.yaml
+        postsync_content = f"""apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {self.app_name}-deployment-completed
+  namespace: {self.namespace}
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: default
+      containers:
+      - name: report-deployment
+        image: {container_registry}/library/ci-utils:latest
+        imagePullPolicy: Always
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            set -e
+
+            # Get the image tag from the current deployment using Kubernetes API
+            K8S_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+            K8S_CERT=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+
+            # Get deployment info from Kubernetes API
+            DEPLOYMENT_JSON=$(curl -s --cacert $K8S_CERT \\
+              -H "Authorization: Bearer $K8S_TOKEN" \\
+              "https://kubernetes.default.svc/apis/apps/v1/namespaces/{self.namespace}/deployments")
+
+            # Extract image tag from first deployment
+            if command -v jq >/dev/null 2>&1; then
+              IMAGE_TAG=$(echo "$DEPLOYMENT_JSON" | jq -r '.items[0].spec.template.spec.containers[0].image' | cut -d: -f2)
+            else
+              IMAGE_TAG=$(echo "$DEPLOYMENT_JSON" | grep -o '"image":"[^"]*"' | head -1 | sed 's/"image":"//' | sed 's/".*//' | cut -d: -f2)
+            fi
+
+            if [ -z "$IMAGE_TAG" ]; then
+              echo "Could not determine image tag from deployment"
+              exit 0
+            fi
+
+            echo "Current deployment tag (workflow UID): $IMAGE_TAG"
+
+            # Get the pipeline by workflow UID
+            echo "Fetching pipeline for {self.app_name} with workflow UID: $IMAGE_TAG"
+
+            PIPELINE_RESPONSE=$(curl -s -X GET \\
+              "https://control.{self.domain}/api/v1/cicd/pipelines?app_name={self.app_name}&workflow_uid=${{IMAGE_TAG}}&limit=1" \\
+              -H "Authorization: Bearer ${{CICD_TOKEN}}")
+
+            echo "API Response: $PIPELINE_RESPONSE"
+
+            # Extract pipeline ID
+            PIPELINE_ID=$(echo "$PIPELINE_RESPONSE" | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
+
+            if [ -z "$PIPELINE_ID" ]; then
+              echo "No pipeline found for {self.app_name} with workflow UID: $IMAGE_TAG"
+              exit 0
+            fi
+
+            echo "Found pipeline: $PIPELINE_ID"
+
+            # Create deployment_completed stage
+            STAGE_DATA='{{"stageName": "deployment_completed", "component": "argocd", "appName": "{self.app_name}", "namespace": "{self.namespace}", "adapterVersion": "0.1.0"}}'
+
+            echo "Creating deployment_completed stage..."
+
+            STAGE_RESPONSE=$(curl -s -X POST \\
+              "https://control.{self.domain}/api/v1/cicd/pipelines/${{PIPELINE_ID}}/stages/argocd" \\
+              -H "Authorization: Bearer ${{CICD_TOKEN}}" \\
+              -H "Content-Type: application/json" \\
+              -d "$STAGE_DATA")
+
+            echo "Stage creation response: $STAGE_RESPONSE"
+
+            # Mark the entire pipeline as SUCCEEDED
+            echo "Marking pipeline as SUCCEEDED..."
+
+            PIPELINE_UPDATE_DATA='{{"status": "SUCCEEDED", "completedAt": '$(date +%s)'}}'
+
+            PIPELINE_UPDATE_RESPONSE=$(curl -s -X PATCH \\
+              "https://control.{self.domain}/api/v1/cicd/pipelines/${{PIPELINE_ID}}" \\
+              -H "Authorization: Bearer ${{CICD_TOKEN}}" \\
+              -H "Content-Type: application/json" \\
+              -d "$PIPELINE_UPDATE_DATA")
+
+            echo "Pipeline update response: $PIPELINE_UPDATE_RESPONSE"
+            echo "Deployment completed successfully"
+        env:
+        - name: CICD_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: {self.app_name}-cicd-token
+              key: token
+"""
+        (k8s_dir / 'argocd-postsync-hook.yaml').write_text(postsync_content)
+
+        # 13. Generate argocd-syncfail-hook.yaml
+        syncfail_content = f"""apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {self.app_name}-deployment-failed
+  namespace: {self.namespace}
+  annotations:
+    argocd.argoproj.io/hook: SyncFail
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: default
+      containers:
+      - name: report-deployment-failure
+        image: {container_registry}/library/ci-utils:latest
+        imagePullPolicy: Always
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            set -e
+
+            # Get the image tag from the current deployment using Kubernetes API
+            K8S_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+            K8S_CERT=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+
+            # Get deployment info from Kubernetes API
+            DEPLOYMENT_JSON=$(curl -s --cacert $K8S_CERT \\
+              -H "Authorization: Bearer $K8S_TOKEN" \\
+              "https://kubernetes.default.svc/apis/apps/v1/namespaces/{self.namespace}/deployments")
+
+            # Extract image tag from first deployment
+            if command -v jq >/dev/null 2>&1; then
+              IMAGE_TAG=$(echo "$DEPLOYMENT_JSON" | jq -r '.items[0].spec.template.spec.containers[0].image' | cut -d: -f2)
+            else
+              IMAGE_TAG=$(echo "$DEPLOYMENT_JSON" | grep -o '"image":"[^"]*"' | head -1 | sed 's/"image":"//' | sed 's/".*//' | cut -d: -f2)
+            fi
+
+            if [ -z "$IMAGE_TAG" ]; then
+              echo "Could not determine image tag from deployment"
+              IMAGE_TAG="unknown"
+            fi
+
+            echo "Failed deployment tag (workflow UID): $IMAGE_TAG"
+
+            # Get the pipeline by workflow UID
+            echo "Fetching pipeline for {self.app_name} with workflow UID: $IMAGE_TAG"
+
+            PIPELINE_RESPONSE=$(curl -s -X GET \\
+              "https://control.{self.domain}/api/v1/cicd/pipelines?app_name={self.app_name}&workflow_uid=${{IMAGE_TAG}}&limit=1" \\
+              -H "Authorization: Bearer ${{CICD_TOKEN}}")
+
+            echo "API Response: $PIPELINE_RESPONSE"
+
+            # Extract pipeline ID
+            PIPELINE_ID=$(echo "$PIPELINE_RESPONSE" | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
+
+            if [ -z "$PIPELINE_ID" ]; then
+              echo "ERROR: No pipeline found for {self.app_name} with workflow UID: $IMAGE_TAG"
+              exit 1
+            fi
+
+            echo "Found pipeline: $PIPELINE_ID"
+
+            # Create deployment_failed stage
+            STAGE_DATA='{{"stageName": "deployment_failed", "component": "argocd", "appName": "{self.app_name}", "namespace": "{self.namespace}", "adapterVersion": "0.1.0", "status": "FAILED"}}'
+
+            echo "Creating deployment_failed stage..."
+
+            STAGE_RESPONSE=$(curl -s -X POST \\
+              "https://control.{self.domain}/api/v1/cicd/pipelines/${{PIPELINE_ID}}/stages/argocd" \\
+              -H "Authorization: Bearer ${{CICD_TOKEN}}" \\
+              -H "Content-Type: application/json" \\
+              -d "$STAGE_DATA")
+
+            echo "Stage creation response: $STAGE_RESPONSE"
+
+            # Mark the entire pipeline as FAILED
+            echo "Marking pipeline as FAILED..."
+
+            PIPELINE_UPDATE_DATA='{{"status": "FAILED", "completedAt": '$(date +%s)'}}'
+
+            PIPELINE_UPDATE_RESPONSE=$(curl -s -X PATCH \\
+              "https://control.{self.domain}/api/v1/cicd/pipelines/${{PIPELINE_ID}}" \\
+              -H "Authorization: Bearer ${{CICD_TOKEN}}" \\
+              -H "Content-Type: application/json" \\
+              -d "$PIPELINE_UPDATE_DATA")
+
+            echo "Pipeline update response: $PIPELINE_UPDATE_RESPONSE"
+            echo "Deployment failure reported successfully"
+        env:
+        - name: CICD_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: {self.app_name}-cicd-token
+              key: token
+"""
+        (k8s_dir / 'argocd-syncfail-hook.yaml').write_text(syncfail_content)
+
+        # Count generated files
+        generated_files = list(k8s_dir.glob('*.yaml'))
+        DeploymentLogger.success(f"Generated {len(generated_files)} Kubernetes manifest files in k8s/")
+
     async def deploy_workflow_template(self):
         """Deploy Argo Workflow template."""
         workflow_file = Path(self.local_repo_path) / 'k8s' / 'build-workflow.yaml'
@@ -673,9 +1061,13 @@ class ApplicationDeployer:
         """Phase 4: Sequential git operations + build monitoring."""
         DeploymentLogger.phase(4, "Git Operations & Build Monitoring")
 
-        # Sequential order: create repo → configure webhook → push code
+        # Sequential order: generate manifests → migrations → git hooks → repo → webhook → push
         await self.generate_migrations()
         await self.setup_git_hooks()
+
+        # Generate k8s manifests from thinkube.yaml (mirrors Ansible generate_k8s_manifests.yaml)
+        self.generate_k8s_manifests()
+
         await self.ensure_gitea_repo()
         await self.configure_webhook()
 
