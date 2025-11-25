@@ -291,7 +291,29 @@ class ApplicationDeployer:
                 'Content-Type': 'application/json'
             }
 
-            # Delete existing repository first to ensure clean state (handles corrupted repos)
+            # STEP 1: Delete webhooks FIRST (before repo deletion)
+            # This ensures clean state before we recreate the repository
+            repo_url = f"https://{gitea_hostname}/api/v1/repos/{org}/{self.app_name}"
+            async with session.get(repo_url, headers=headers, ssl=False) as resp:
+                if resp.status == 200:
+                    # Repository exists - delete all webhooks first
+                    hooks_url = f"https://{gitea_hostname}/api/v1/repos/{org}/{self.app_name}/hooks"
+                    async with session.get(hooks_url, headers=headers, ssl=False) as hooks_resp:
+                        if hooks_resp.status == 200:
+                            hooks = await hooks_resp.json()
+                            for hook in hooks:
+                                hook_id = hook.get('id')
+                                if hook_id:
+                                    delete_hook_url = f"{hooks_url}/{hook_id}"
+                                    async with session.delete(delete_hook_url, headers=headers, ssl=False) as del_resp:
+                                        if del_resp.status == 204:
+                                            DeploymentLogger.log(f"Deleted webhook {hook_id} from {org}/{self.app_name}")
+                                        else:
+                                            DeploymentLogger.log(f"Failed to delete webhook {hook_id}: {del_resp.status}")
+                            if hooks:
+                                DeploymentLogger.log(f"Deleted {len(hooks)} webhook(s) from existing repository")
+
+            # STEP 2: Delete the repository
             delete_url = f"https://{gitea_hostname}/api/v1/repos/{org}/{self.app_name}"
             async with session.delete(delete_url, headers=headers, ssl=False) as resp:
                 if resp.status == 204:
@@ -304,14 +326,13 @@ class ApplicationDeployer:
                     # Log but don't fail - we'll try to create anyway
                     DeploymentLogger.log(f"Delete returned {resp.status}, continuing...")
 
-            # Create repository WITHOUT auto_init to avoid triggering duplicate webhooks
-            # auto_init creates a commit which triggers webhook #1, then our push triggers #2
+            # STEP 3: Create fresh repository
             repo_url = f"https://{gitea_hostname}/api/v1/orgs/{org}/repos"
             repo_payload = {
                 'name': self.app_name,
                 'description': f'Deployment manifests for {self.app_name}',
                 'private': True,
-                'auto_init': False  # Don't create initial commit - our push will be the only commit
+                'auto_init': False
             }
 
             async with session.post(repo_url, headers=headers, json=repo_payload, ssl=False) as resp:
@@ -566,11 +587,7 @@ class ApplicationDeployer:
         """Phase 4: Sequential git operations + build monitoring."""
         DeploymentLogger.phase(4, "Git Operations & Build Monitoring")
 
-        # These must happen in order:
-        # 1. Create Gitea repo (no auto_init)
-        # 2. Configure webhook
-        # 3. Push code
-        # This ensures only ONE webhook is triggered
+        # Sequential order: create repo → configure webhook → push code
         await self.generate_migrations()
         await self.setup_git_hooks()
         await self.ensure_gitea_repo()
