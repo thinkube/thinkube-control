@@ -338,6 +338,8 @@ class ApplicationDeployer:
             async with session.post(create_url, headers=headers, json=repo_payload, ssl=False) as resp:
                 if resp.status == 201:
                     DeploymentLogger.log(f"Created Gitea repository: {org}/{self.app_name}")
+                elif resp.status == 409:
+                    DeploymentLogger.log(f"Gitea repository already exists: {org}/{self.app_name} (race condition)")
                 else:
                     error_text = await resp.text()
                     DeploymentLogger.error(f"Failed to create Gitea repo: {resp.status} - {error_text}")
@@ -1469,11 +1471,12 @@ Install git hooks for automatic template processing:
 
         max_retries = 2
         for attempt in range(max_retries):
-            # Match Ansible: only init if .git doesn't exist, preserve existing history
+            # Initialize git repo if not already valid (Copier may create empty .git/hooks/)
             git_script = f"""
 set -e
 cd {self.local_repo_path}
-if [ ! -d .git ]; then
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+  rm -rf .git
   git init -b main
 fi
 git config user.name '{self.admin_username}'
