@@ -596,8 +596,8 @@ class ApplicationDeployer:
         org = "thinkube-deployments"
 
         git_commands = [
-            # Initialize if needed (must come first)
-            "git init",
+            # Initialize with main branch (must come first)
+            "git init -b main",
 
             # Configure git (after init)
             f"git config user.name '{self.admin_username}'",
@@ -610,8 +610,8 @@ class ApplicationDeployer:
             # Stage all changes
             "git add -A",
 
-            # Commit
-            f"git commit -m 'Update deployment manifests for {self.domain}' || echo 'No changes to commit'",
+            # Commit (--allow-empty ensures we always have at least one commit)
+            f"git commit --allow-empty -m 'Deploy {self.app_name} to {self.domain}'",
 
             # Push
             "git push -u origin main --force"
