@@ -21,6 +21,7 @@ import jinja2
 import yaml
 from kubernetes_asyncio import client, config
 from kubernetes_asyncio.client.rest import ApiException
+from kubernetes_asyncio.stream import WsApiClient
 
 
 class DeploymentLogger:
@@ -580,55 +581,60 @@ class ApplicationDeployer:
                     DeploymentLogger.error(f"Failed to create Keycloak client: {resp.status} - {error_text}")
                     raise RuntimeError(f"Failed to create Keycloak client: {resp.status}")
 
-    async def manage_databases(self):
-        """Create PostgreSQL databases using asyncpg (DROP then CREATE to match Ansible)."""
-        import asyncpg
+    async def _exec_in_pod(self, namespace: str, pod: str, container: str, command: list) -> str:
+        """Execute a command in a pod using kubernetes_asyncio stream API.
 
-        admin_password = self._decode_secret_data(self.secrets['admin'], 'admin-password')
-        admin_username = self._decode_secret_data(self.secrets['admin'], 'admin-username')
-        pg_host = "postgresql-official.postgres.svc.cluster.local"
-
-        try:
-            # Connect to 'postgres' database for admin operations (not template1)
-            conn = await asyncpg.connect(
-                host=pg_host,
-                user=admin_username,
-                password=admin_password,
-                database='postgres'
+        Matches Ansible kubernetes.core.k8s_exec behavior.
+        """
+        # Create a new API client with websocket support for exec
+        async with WsApiClient() as ws_api:
+            v1 = client.CoreV1Api(api_client=ws_api)
+            resp = await v1.connect_get_namespaced_pod_exec(
+                name=pod,
+                namespace=namespace,
+                container=container,
+                command=command,
+                stderr=True,
+                stdin=False,
+                stdout=True,
+                tty=False
             )
+            return resp
 
-            for db_name in [f'{self.app_name}_prod', f'{self.app_name}_test', f'test_{self.app_name}']:
-                # Terminate active connections to allow DROP (match Ansible clean slate approach)
-                await conn.execute("""
-                    SELECT pg_terminate_backend(pid)
-                    FROM pg_stat_activity
-                    WHERE datname = $1 AND pid <> pg_backend_pid()
-                """, db_name)
+    async def manage_databases(self):
+        """Create PostgreSQL databases using kubernetes exec (matches Ansible k8s_exec)."""
+        admin_username = self._decode_secret_data(self.secrets['admin'], 'admin-username')
 
-                # DROP with FORCE (PostgreSQL 13+) then CREATE for clean slate
-                # FORCE terminates any remaining connections
-                try:
-                    await conn.execute(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)')
-                    DeploymentLogger.log(f"Dropped database {db_name}")
-                except asyncpg.exceptions.PostgresSyntaxError:
-                    # Fallback for older PostgreSQL without FORCE option
-                    await conn.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
-                    DeploymentLogger.log(f"Dropped database {db_name} (no FORCE)")
-                except Exception as drop_e:
-                    DeploymentLogger.log(f"DROP DATABASE {db_name} failed: {drop_e}")
-                    # Continue anyway - CREATE will fail if DB still exists
+        for db_name in [f'{self.app_name}_prod', f'{self.app_name}_test', f'test_{self.app_name}']:
+            # DROP then CREATE using k8s exec (exactly like Ansible)
+            drop_sql = f'DROP DATABASE IF EXISTS {db_name};'
+            create_sql = f'CREATE DATABASE {db_name} OWNER {admin_username};'
 
-                try:
-                    await conn.execute(f'CREATE DATABASE "{db_name}"')
-                    DeploymentLogger.log(f"Created database {db_name}")
-                except asyncpg.exceptions.UniqueViolationError:
-                    # Database still exists - DROP didn't work, but that's OK for redeployment
-                    DeploymentLogger.log(f"Database {db_name} already exists (keeping existing)")
+            # Run DROP
+            try:
+                drop_result = await self._exec_in_pod(
+                    namespace='postgres',
+                    pod='postgresql-official-0',
+                    container='postgres',
+                    command=['psql', '-U', admin_username, '-d', 'postgres', '-c', drop_sql]
+                )
+                DeploymentLogger.log(f"Dropped database {db_name}")
+            except Exception as e:
+                DeploymentLogger.error(f"DROP DATABASE {db_name} failed: {e}")
+                raise RuntimeError(f"DROP DATABASE {db_name} failed: {e}")
 
-            await conn.close()
-        except Exception as e:
-            DeploymentLogger.error(f"Failed to manage databases: {e}")
-            raise
+            # Run CREATE
+            try:
+                create_result = await self._exec_in_pod(
+                    namespace='postgres',
+                    pod='postgresql-official-0',
+                    container='postgres',
+                    command=['psql', '-U', admin_username, '-d', 'postgres', '-c', create_sql]
+                )
+                DeploymentLogger.log(f"Created database {db_name}")
+            except Exception as e:
+                DeploymentLogger.error(f"CREATE DATABASE {db_name} failed: {e}")
+                raise RuntimeError(f"CREATE DATABASE {db_name} failed: {e}")
 
     def _generate_workflow_template(self) -> dict:
         """Generate a WorkflowTemplate using the Jinja2 template from templates/k8s/build-workflow.j2."""
