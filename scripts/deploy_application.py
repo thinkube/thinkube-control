@@ -443,22 +443,35 @@ class ApplicationDeployer:
                 DeploymentLogger.log("App metadata already exists")
 
     async def manage_databases(self):
-        """Create PostgreSQL databases."""
+        """Create PostgreSQL databases using asyncpg (psql not available in container)."""
+        import asyncpg
+
         admin_password = self._decode_secret_data(self.secrets['admin'], 'admin-password')
         admin_username = self._decode_secret_data(self.secrets['admin'], 'admin-username')
+        pg_host = "postgresql-official.postgres.svc.cluster.local"
 
-        # Simple database creation via subprocess
-        # Create both naming conventions to support various templates
-        for db_name in [f'{self.app_name}_prod', f'{self.app_name}_test', f'test_{self.app_name}']:
-            cmd = f"PGPASSWORD='{admin_password}' psql -h postgresql-official.postgres.svc.cluster.local -U {admin_username} -tc \"SELECT 1 FROM pg_database WHERE datname = '{db_name}'\" | grep -q 1 || PGPASSWORD='{admin_password}' psql -h postgresql-official.postgres.svc.cluster.local -U {admin_username} -c \"CREATE DATABASE {db_name}\""
-
-            process = await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+        try:
+            conn = await asyncpg.connect(
+                host=pg_host,
+                user=admin_username,
+                password=admin_password,
+                database='template1'
             )
-            await process.communicate()
-            DeploymentLogger.log(f"Ensured database {db_name} exists")
+
+            for db_name in [f'{self.app_name}_prod', f'{self.app_name}_test', f'test_{self.app_name}']:
+                exists = await conn.fetchval(
+                    "SELECT 1 FROM pg_database WHERE datname = $1", db_name
+                )
+                if not exists:
+                    await conn.execute(f'CREATE DATABASE "{db_name}"')
+                    DeploymentLogger.log(f"Created database {db_name}")
+                else:
+                    DeploymentLogger.log(f"Database {db_name} already exists")
+
+            await conn.close()
+        except Exception as e:
+            DeploymentLogger.error(f"Failed to manage databases: {e}")
+            raise
 
     def _generate_workflow_template(self) -> dict:
         """Generate a WorkflowTemplate using the Jinja2 template from templates/k8s/build-workflow.j2."""
