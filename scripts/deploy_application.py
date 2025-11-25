@@ -1110,7 +1110,10 @@ spec:
         await self.setup_git_hooks()
 
         # Generate k8s manifests from thinkube.yaml (mirrors Ansible generate_k8s_manifests.yaml)
-        self.generate_k8s_manifests()
+        # Run in thread pool to avoid blocking the event loop
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            await loop.run_in_executor(executor, self.generate_k8s_manifests)
 
         await self.ensure_gitea_repo()
         await self.configure_webhook()
