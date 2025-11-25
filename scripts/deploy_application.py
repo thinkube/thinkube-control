@@ -1538,6 +1538,14 @@ git push -u origin main --force
                     continue  # Retry push
                 else:
                     raise RuntimeError(f"Failed to recover from corrupted Gitea repository")
+            elif "cannot lock ref" in stderr or "failed to update ref" in stderr:
+                # Stale local refs - delete .git and reinitialize
+                DeploymentLogger.log(f"Stale git refs, reinitializing local repo (attempt {attempt + 1}/{max_retries})")
+                git_dir = Path(self.local_repo_path) / ".git"
+                if git_dir.exists():
+                    import shutil
+                    shutil.rmtree(git_dir)
+                continue  # Retry with fresh .git
             else:
                 # Non-recoverable error
                 DeploymentLogger.error(f"Git operations failed")
