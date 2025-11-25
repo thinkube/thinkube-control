@@ -382,7 +382,7 @@ class ApplicationDeployer:
                 DeploymentLogger.log("Harbor secret already exists")
 
     async def create_postgres_secret(self):
-        """Create PostgreSQL credentials secret."""
+        """Create or replace PostgreSQL credentials secret."""
         admin_secret = self.secrets['admin']
         postgres_password = self._decode_secret_data(admin_secret, 'admin-password')
         postgres_username = self._decode_secret_data(admin_secret, 'admin-username')
@@ -400,7 +400,9 @@ class ApplicationDeployer:
             DeploymentLogger.log("Created PostgreSQL secret")
         except ApiException as e:
             if e.status == 409:
-                DeploymentLogger.log("PostgreSQL secret already exists")
+                # Replace existing secret to ensure correct credentials
+                await self.k8s_core.replace_namespaced_secret('postgres-credentials', self.namespace, secret)
+                DeploymentLogger.log("Replaced existing PostgreSQL secret")
 
     async def create_cicd_secrets(self):
         """Create CI/CD token secrets in both argo and app namespaces."""
@@ -493,7 +495,7 @@ class ApplicationDeployer:
         # Get required variables
         system_username = self.params.get('system_username', 'thinkube')
         master_node_name = self.params.get('master_node_name', 'tkspark')
-        admin_password = self._decode_secret_data(self.secrets['admin'], 'password')
+        admin_password = self._decode_secret_data(self.secrets['admin'], 'admin-password')
 
         # Render template with all required variables (matching Ansible)
         rendered = template.render(
