@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import aiohttp
+import jinja2
 import yaml
 from kubernetes_asyncio import client, config
 from kubernetes_asyncio.client.rest import ApiException
@@ -453,102 +454,44 @@ class ApplicationDeployer:
             DeploymentLogger.log(f"Ensured database {db_name} exists")
 
     def _generate_workflow_template(self) -> dict:
-        """Generate a WorkflowTemplate based on thinkube.yaml configuration."""
-        containers = self.thinkube_config.get('spec', {}).get('containers', [])
+        """Generate a WorkflowTemplate using the Jinja2 template from templates/k8s/build-workflow.j2."""
+        # Template path - inside container it's at /home/thinkube-control/templates
+        template_path = Path("/home/thinkube-control/templates/k8s/build-workflow.j2")
 
-        # Size to resource mapping
-        size_resources = {
-            'small': {'requests': {'cpu': '500m', 'memory': '512Mi'}, 'limits': {'cpu': '1', 'memory': '1Gi'}},
-            'medium': {'requests': {'cpu': '1', 'memory': '1Gi'}, 'limits': {'cpu': '2', 'memory': '2Gi'}},
-            'large': {'requests': {'cpu': '2', 'memory': '2Gi'}, 'limits': {'cpu': '4', 'memory': '4Gi'}},
-        }
+        if not template_path.exists():
+            raise FileNotFoundError(f"Workflow template not found: {template_path}")
 
-        # Generate build templates for each container
-        build_templates = []
-        dag_tasks = []
+        # Read the Jinja2 template
+        with open(template_path, 'r') as f:
+            template_content = f.read()
 
-        for container in containers:
-            name = container['name']
-            build_path = container.get('build', f'./{name}')
-            size = container.get('size', 'medium')
-            resources = size_resources.get(size, size_resources['medium'])
+        # Create Jinja2 environment
+        env = jinja2.Environment(
+            loader=jinja2.BaseLoader(),
+            undefined=jinja2.StrictUndefined
+        )
+        template = env.from_string(template_content)
 
-            # Add DAG task
-            dag_tasks.append({
-                'name': f'build-{name}',
-                'template': f'build-{name}',
-                'arguments': {
-                    'parameters': [{'name': 'image-tag', 'value': '{{workflow.uid}}'}]
-                }
-            })
-
-            # Add build template
-            build_templates.append({
-                'name': f'build-{name}',
-                'inputs': {'parameters': [{'name': 'image-tag'}]},
-                'container': {
-                    'image': f'registry.{self.domain}/library/kaniko-executor:latest',
-                    'args': [
-                        f'--dockerfile=/workspace/{name}/Dockerfile',
-                        f'--context=/workspace/{name}',
-                        f'--destination=registry.{self.domain}/apps/{self.app_name}-{name}:{{{{inputs.parameters.image-tag}}}}',
-                        f'--destination=registry.{self.domain}/apps/{self.app_name}-{name}:latest',
-                        f'--build-arg=REGISTRY=registry.{self.domain}',
-                        '--cache-dir=/workspace/.cache/kaniko',
-                    ],
-                    'resources': resources,
-                    'volumeMounts': [
-                        {'name': 'docker-config', 'mountPath': '/kaniko/.docker'},
-                        {'name': 'shared-code', 'mountPath': '/workspace'},
-                        {'name': 'build-cache', 'mountPath': '/workspace/.cache'},
-                    ]
-                }
-            })
-
-        # Get the system username for host paths
+        # Get required variables
         system_username = self.params.get('system_username', 'thinkube')
+        master_node_name = self.params.get('master_node_name', 'tkspark')
+        admin_password = self._decode_secret_data(self.secrets['admin'], 'password')
 
-        workflow_spec = {
-            'apiVersion': 'argoproj.io/v1alpha1',
-            'kind': 'WorkflowTemplate',
-            'metadata': {
-                'name': f'{self.app_name}-build',
-                'namespace': 'argo',
-                'labels': {
-                    'app.kubernetes.io/name': self.app_name,
-                    'app.kubernetes.io/component': 'ci-cd',
-                    'app.kubernetes.io/part-of': 'thinkube',
-                    'thinkube.io/app-name': self.app_name,
-                    'thinkube.io/namespace': self.namespace,
-                    'thinkube.io/trigger': 'webhook',
-                    'thinkube.io/build-type': 'container',
-                }
-            },
-            'spec': {
-                'entrypoint': 'build-and-push',
-                'serviceAccountName': 'kaniko-builder',
-                'nodeSelector': {'kubernetes.io/hostname': 'tkspark'},  # TODO: make configurable
-                'arguments': {
-                    'parameters': [{'name': 'webhook-timestamp', 'value': ''}]
-                },
-                'artifactRepositoryRef': {
-                    'configMap': 'artifact-repositories',
-                    'key': 'default-v1'
-                },
-                'templates': [
-                    {
-                        'name': 'build-and-push',
-                        'dag': {'tasks': dag_tasks}
-                    },
-                    *build_templates
-                ],
-                'volumes': [
-                    {'name': 'docker-config', 'secret': {'secretName': 'docker-config'}},
-                    {'name': 'shared-code', 'hostPath': {'path': f'/home/{system_username}/shared-code/{self.app_name}', 'type': 'Directory'}},
-                    {'name': 'build-cache', 'hostPath': {'path': f'/home/{system_username}/.cache/thinkube-builds', 'type': 'DirectoryOrCreate'}},
-                ]
-            }
-        }
+        # Render template with all required variables (matching Ansible)
+        rendered = template.render(
+            project_name=self.app_name,
+            k8s_namespace=self.namespace,
+            master_node_name=master_node_name,
+            system_username=system_username,
+            container_registry=f"registry.{self.domain}",
+            domain_name=self.domain,
+            admin_username=self.admin_username,
+            admin_password=admin_password,
+            thinkube_spec=self.thinkube_config
+        )
+
+        # Parse the rendered YAML
+        workflow_spec = yaml.safe_load(rendered)
 
         return workflow_spec
 
