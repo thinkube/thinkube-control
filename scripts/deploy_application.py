@@ -554,12 +554,16 @@ class ApplicationDeployer:
         await self.generate_migrations()
         await self.setup_git_hooks()
         await self.configure_webhook()
+
+        # Get existing workflow names BEFORE git push so we can detect NEW workflows
+        existing_workflows = await self._get_existing_workflow_names()
+
         await self.git_commit_and_push()
 
         DeploymentLogger.success("Changes pushed to Gitea")
 
-        # Wait for webhook to trigger workflow
-        workflow_name = await self.wait_for_workflow_trigger()
+        # Wait for webhook to trigger workflow (only detect NEW workflows)
+        workflow_name = await self.wait_for_workflow_trigger(exclude_workflows=existing_workflows)
 
         # Monitor workflow until completion
         await self.monitor_workflow(workflow_name)
@@ -686,9 +690,26 @@ git push -u origin main --force
 
         DeploymentLogger.success("Pushed changes to Gitea")
 
-    async def wait_for_workflow_trigger(self, timeout: int = 60) -> str:
-        """Wait for webhook to trigger Argo Workflow."""
+    async def _get_existing_workflow_names(self) -> set:
+        """Get set of existing workflow names for this app."""
+        try:
+            workflows = await self.k8s_custom.list_namespaced_custom_object(
+                group="argoproj.io",
+                version="v1alpha1",
+                namespace="argo",
+                plural="workflows",
+                label_selector=f"thinkube.io/app-name={self.app_name}"
+            )
+            return {item['metadata']['name'] for item in workflows.get('items', [])}
+        except ApiException:
+            return set()
+
+    async def wait_for_workflow_trigger(self, timeout: int = 60, exclude_workflows: set = None) -> str:
+        """Wait for webhook to trigger a NEW Argo Workflow."""
         DeploymentLogger.log("Waiting for webhook to trigger build workflow...")
+
+        if exclude_workflows is None:
+            exclude_workflows = set()
 
         start_time = asyncio.get_event_loop().time()
         workflow_name = None
@@ -704,12 +725,14 @@ git push -u origin main --force
                     label_selector=f"thinkube.io/app-name={self.app_name}"
                 )
 
-                # Find the most recent workflow
+                # Find a NEW workflow (not in exclude list)
                 items = workflows.get('items', [])
-                if items:
+                new_workflows = [w for w in items if w['metadata']['name'] not in exclude_workflows]
+
+                if new_workflows:
                     # Sort by creation timestamp, get latest
-                    items.sort(key=lambda x: x['metadata']['creationTimestamp'], reverse=True)
-                    latest = items[0]
+                    new_workflows.sort(key=lambda x: x['metadata']['creationTimestamp'], reverse=True)
+                    latest = new_workflows[0]
                     workflow_name = latest['metadata']['name']
 
                     DeploymentLogger.success(f"Workflow triggered: {workflow_name}")
