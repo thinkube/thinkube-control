@@ -111,8 +111,15 @@ class ApplicationDeployer:
                 namespace = client.V1Namespace(
                     metadata=client.V1ObjectMeta(name=self.namespace)
                 )
-                await self.k8s_core.create_namespace(namespace)
-                DeploymentLogger.success(f"Created namespace {self.namespace}")
+                try:
+                    await self.k8s_core.create_namespace(namespace)
+                    DeploymentLogger.success(f"Created namespace {self.namespace}")
+                except ApiException as create_e:
+                    # Handle race condition - namespace may have been created between read and create
+                    if create_e.status == 409:
+                        DeploymentLogger.log(f"Namespace {self.namespace} already exists (race condition)")
+                    else:
+                        raise
             else:
                 raise
 
