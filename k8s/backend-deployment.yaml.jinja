@@ -154,13 +154,16 @@ spec:
             path: /health
             port: 8000
           initialDelaySeconds: 30
-          periodSeconds: 10
+          periodSeconds: 30
+          timeoutSeconds: 20
+          failureThreshold: 3
         readinessProbe:
           httpGet:
             path: /health
             port: 8000
           initialDelaySeconds: 5
-          periodSeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 10
         # Mount volumes for ansible execution
         volumeMounts:
         - name: shared-code
