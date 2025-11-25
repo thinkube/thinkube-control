@@ -1515,6 +1515,13 @@ git push -u origin main --force
                     continue  # Retry push
                 else:
                     raise RuntimeError(f"Failed to recover from corrupted Gitea repository")
+            elif "index.lock" in stderr and "File exists" in stderr:
+                # Stale git lock file from crashed process (e.g., OOMKill)
+                DeploymentLogger.log(f"Removing stale git lock file (attempt {attempt + 1}/{max_retries})")
+                lock_file = Path(self.local_repo_path) / ".git" / "index.lock"
+                if lock_file.exists():
+                    lock_file.unlink()
+                continue  # Retry push
             else:
                 # Non-recoverable error
                 DeploymentLogger.error(f"Git operations failed")
