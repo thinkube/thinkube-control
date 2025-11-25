@@ -338,8 +338,6 @@ class ApplicationDeployer:
             async with session.post(create_url, headers=headers, json=repo_payload, ssl=False) as resp:
                 if resp.status == 201:
                     DeploymentLogger.log(f"Created Gitea repository: {org}/{self.app_name}")
-                elif resp.status == 409:
-                    DeploymentLogger.log(f"Gitea repository already exists: {org}/{self.app_name} (race condition)")
                 else:
                     error_text = await resp.text()
                     DeploymentLogger.error(f"Failed to create Gitea repo: {resp.status} - {error_text}")
