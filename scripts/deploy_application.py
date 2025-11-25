@@ -646,7 +646,7 @@ class ApplicationDeployer:
                         else:
                             DeploymentLogger.error(f"Failed to delete webhook {hook_id}: {resp.status}")
 
-            # 3. Create the new webhook
+            # 3. Create the new webhook - only 'push' event to avoid duplicates
             webhook_payload = {
                 'type': 'gitea',
                 'config': {
@@ -654,7 +654,7 @@ class ApplicationDeployer:
                     'content_type': 'json',
                     'secret': webhook_secret
                 },
-                'events': ['push', 'pull_request'],
+                'events': ['push'],
                 'active': True
             }
 
