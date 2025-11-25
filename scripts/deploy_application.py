@@ -596,7 +596,10 @@ class ApplicationDeployer:
         org = "thinkube-deployments"
 
         git_commands = [
-            # Initialize with main branch (must come first)
+            # Clean up any existing git state to start fresh
+            "rm -rf .git",
+
+            # Initialize with main branch
             "git init -b main",
 
             # Configure git (after init)
@@ -604,7 +607,6 @@ class ApplicationDeployer:
             f"git config user.email '{self.admin_username}@{self.domain}'",
 
             # Add remote
-            f"git remote remove origin || true",
             f"git remote add origin https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.app_name}.git",
 
             # Stage all changes
