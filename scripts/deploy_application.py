@@ -525,11 +525,12 @@ class ApplicationDeployer:
         pg_host = "postgresql-official.postgres.svc.cluster.local"
 
         try:
+            # Connect to 'postgres' database for admin operations (not template1)
             conn = await asyncpg.connect(
                 host=pg_host,
                 user=admin_username,
                 password=admin_password,
-                database='template1'
+                database='postgres'
             )
 
             for db_name in [f'{self.app_name}_prod', f'{self.app_name}_test', f'test_{self.app_name}']:
