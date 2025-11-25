@@ -10,7 +10,9 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -114,8 +116,19 @@ class ApplicationDeployer:
             else:
                 raise
 
+    def _run_copier_sync(self, copier_cmd: list, cwd: str) -> tuple:
+        """Synchronous Copier execution (runs in thread pool to avoid blocking event loop)."""
+        result = subprocess.run(
+            copier_cmd,
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            timeout=300  # 5 minute timeout for Copier
+        )
+        return result.returncode, result.stdout, result.stderr
+
     async def run_copier(self):
-        """Run Copier to process the template."""
+        """Run Copier to process the template (in thread pool to keep event loop responsive)."""
         DeploymentLogger.log(f"Running Copier for template: {self.template_url}")
 
         # Build copier command with all template parameters
@@ -135,18 +148,19 @@ class ApplicationDeployer:
             if key not in ['app_name', 'template_url', 'deployment_namespace', 'domain_name', 'admin_username']:
                 copier_cmd.extend(["--data", f"{key}={value}"])
 
-        # Run copier
-        process = await asyncio.create_subprocess_exec(
-            *copier_cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=Path(self.local_repo_path).parent
-        )
+        # Run copier in thread pool to avoid blocking the event loop
+        # This ensures health checks can still respond during long Copier runs
+        loop = asyncio.get_event_loop()
+        cwd = str(Path(self.local_repo_path).parent)
 
-        stdout, stderr = await process.communicate()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            returncode, stdout, stderr = await loop.run_in_executor(
+                executor,
+                partial(self._run_copier_sync, copier_cmd, cwd)
+            )
 
-        if process.returncode != 0:
-            DeploymentLogger.error(f"Copier failed: {stderr.decode()}")
+        if returncode != 0:
+            DeploymentLogger.error(f"Copier failed: {stderr}")
             raise RuntimeError("Copier execution failed")
 
         DeploymentLogger.success("Copier processing complete")
@@ -668,6 +682,18 @@ class ApplicationDeployer:
 
         DeploymentLogger.success("Phase 4 complete - build succeeded!")
 
+    def _run_migration_sync(self, migration_script: str, cwd: str) -> tuple:
+        """Synchronous migration execution (runs in thread pool to avoid blocking event loop)."""
+        result = subprocess.run(
+            migration_script,
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            timeout=120  # 2 minute timeout for migrations
+        )
+        return result.returncode, result.stdout, result.stderr
+
     async def generate_migrations(self):
         """Generate Alembic migrations for containers that need them (matches Ansible)."""
         containers = self.thinkube_config.get('spec', {}).get('containers', [])
@@ -722,19 +748,19 @@ else
 fi
 """
 
-            process = await asyncio.create_subprocess_shell(
-                migration_script,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=str(container_path)
-            )
+            # Run migration in thread pool to avoid blocking the event loop
+            loop = asyncio.get_event_loop()
 
-            stdout, stderr = await process.communicate()
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                returncode, stdout, stderr = await loop.run_in_executor(
+                    executor,
+                    partial(self._run_migration_sync, migration_script, str(container_path))
+                )
 
-            if process.returncode == 0:
+            if returncode == 0:
                 DeploymentLogger.log(f"Generated Alembic migrations for {build_path}")
             else:
-                DeploymentLogger.log(f"Migration generation: {stderr.decode().strip()}")
+                DeploymentLogger.log(f"Migration generation: {stderr.strip()}")
 
     async def setup_git_hooks(self):
         """Setup git hooks for template processing (matches Ansible setup_git_hooks.yaml)."""
@@ -958,8 +984,20 @@ Install git hooks for automatic template processing:
                         DeploymentLogger.error(f"Failed to create webhook: {resp.status} - {error_text}")
                         raise RuntimeError(f"Failed to create webhook: {resp.status}")
 
+    def _run_git_sync(self, git_script: str, cwd: str) -> tuple:
+        """Synchronous git execution (runs in thread pool to avoid blocking event loop)."""
+        result = subprocess.run(
+            git_script,
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            timeout=120  # 2 minute timeout for git operations
+        )
+        return result.returncode, result.stdout, result.stderr
+
     async def git_commit_and_push(self):
-        """Commit and push changes to Gitea."""
+        """Commit and push changes to Gitea (in thread pool to keep event loop responsive)."""
         gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
         gitea_hostname = f"git.{self.domain}"
         org = "thinkube-deployments"
@@ -980,19 +1018,19 @@ git commit --allow-empty -m 'Deploy {self.app_name} to {self.domain}'
 git push -u origin main --force
 """
 
-        process = await asyncio.create_subprocess_shell(
-            git_script,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=self.local_repo_path
-        )
+        # Run git operations in thread pool to avoid blocking the event loop
+        loop = asyncio.get_event_loop()
 
-        stdout, stderr = await process.communicate()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            returncode, stdout, stderr = await loop.run_in_executor(
+                executor,
+                partial(self._run_git_sync, git_script, self.local_repo_path)
+            )
 
-        if process.returncode != 0:
+        if returncode != 0:
             DeploymentLogger.error(f"Git operations failed")
-            DeploymentLogger.error(f"Error: {stderr.decode()}")
-            raise RuntimeError(f"Git operations failed: {stderr.decode()}")
+            DeploymentLogger.error(f"Error: {stderr}")
+            raise RuntimeError(f"Git operations failed: {stderr}")
 
         DeploymentLogger.success("Pushed changes to Gitea")
 
