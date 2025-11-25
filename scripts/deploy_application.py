@@ -283,7 +283,7 @@ class ApplicationDeployer:
             raise
 
     async def ensure_gitea_repo(self):
-        """Ensure Gitea repository exists (idempotent)."""
+        """Ensure Gitea repository exists in clean state (delete and recreate to avoid corruption)."""
         gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
         gitea_hostname = f"git.{self.domain}"
         org = "thinkube-deployments"
@@ -294,7 +294,20 @@ class ApplicationDeployer:
                 'Content-Type': 'application/json'
             }
 
-            # Create repository (idempotent - accepts 409)
+            # Delete existing repository first to ensure clean state (handles corrupted repos)
+            delete_url = f"https://{gitea_hostname}/api/v1/repos/{org}/{self.app_name}"
+            async with session.delete(delete_url, headers=headers, ssl=False) as resp:
+                if resp.status == 204:
+                    DeploymentLogger.log(f"Deleted existing Gitea repository: {org}/{self.app_name}")
+                    # Small delay to ensure deletion is processed
+                    await asyncio.sleep(1)
+                elif resp.status == 404:
+                    DeploymentLogger.log(f"No existing repository to delete: {org}/{self.app_name}")
+                else:
+                    # Log but don't fail - we'll try to create anyway
+                    DeploymentLogger.log(f"Delete returned {resp.status}, continuing...")
+
+            # Create fresh repository
             repo_url = f"https://{gitea_hostname}/api/v1/orgs/{org}/repos"
             repo_payload = {
                 'name': self.app_name,
@@ -307,11 +320,12 @@ class ApplicationDeployer:
                 if resp.status == 201:
                     DeploymentLogger.log(f"Created Gitea repository: {org}/{self.app_name}")
                 elif resp.status == 409:
+                    # Shouldn't happen after delete, but handle gracefully
                     DeploymentLogger.log(f"Gitea repository already exists: {org}/{self.app_name}")
                 else:
                     error_text = await resp.text()
-                    DeploymentLogger.error(f"Failed to ensure Gitea repo: {resp.status} - {error_text}")
-                    raise RuntimeError(f"Failed to create/verify Gitea repository: {resp.status}")
+                    DeploymentLogger.error(f"Failed to create Gitea repo: {resp.status} - {error_text}")
+                    raise RuntimeError(f"Failed to create Gitea repository: {resp.status}")
 
     # ==================== PHASE 3: Resource Creation ====================
 
@@ -667,8 +681,7 @@ class ApplicationDeployer:
         git_script = f"""
 set -e
 rm -rf .git && sync
-git init --template=''
-git symbolic-ref HEAD refs/heads/main
+git init -b main --template=''
 git config user.name '{self.admin_username}'
 git config user.email '{self.admin_username}@{self.domain}'
 git remote add origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.app_name}.git'
