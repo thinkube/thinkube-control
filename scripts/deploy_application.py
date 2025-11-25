@@ -280,7 +280,7 @@ class ApplicationDeployer:
             raise
 
     async def ensure_gitea_repo(self):
-        """Ensure Gitea repository exists in clean state (delete and recreate to avoid corruption)."""
+        """Ensure Gitea repository exists (match Ansible create_gitea_repo.yaml)."""
         gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
         gitea_hostname = f"git.{self.domain}"
         org = "thinkube-deployments"
@@ -291,43 +291,21 @@ class ApplicationDeployer:
                 'Content-Type': 'application/json'
             }
 
-            # STEP 1: Delete webhooks FIRST (before repo deletion)
-            # This ensures clean state before we recreate the repository
+            # Check if repository exists
             repo_url = f"https://{gitea_hostname}/api/v1/repos/{org}/{self.app_name}"
             async with session.get(repo_url, headers=headers, ssl=False) as resp:
-                if resp.status == 200:
-                    # Repository exists - delete all webhooks first
-                    hooks_url = f"https://{gitea_hostname}/api/v1/repos/{org}/{self.app_name}/hooks"
-                    async with session.get(hooks_url, headers=headers, ssl=False) as hooks_resp:
-                        if hooks_resp.status == 200:
-                            hooks = await hooks_resp.json()
-                            for hook in hooks:
-                                hook_id = hook.get('id')
-                                if hook_id:
-                                    delete_hook_url = f"{hooks_url}/{hook_id}"
-                                    async with session.delete(delete_hook_url, headers=headers, ssl=False) as del_resp:
-                                        if del_resp.status == 204:
-                                            DeploymentLogger.log(f"Deleted webhook {hook_id} from {org}/{self.app_name}")
-                                        else:
-                                            DeploymentLogger.log(f"Failed to delete webhook {hook_id}: {del_resp.status}")
-                            if hooks:
-                                DeploymentLogger.log(f"Deleted {len(hooks)} webhook(s) from existing repository")
+                repo_exists = resp.status == 200
 
-            # STEP 2: Delete the repository
-            delete_url = f"https://{gitea_hostname}/api/v1/repos/{org}/{self.app_name}"
-            async with session.delete(delete_url, headers=headers, ssl=False) as resp:
-                if resp.status == 204:
-                    DeploymentLogger.log(f"Deleted existing Gitea repository: {org}/{self.app_name}")
-                    # Small delay to ensure deletion is processed
-                    await asyncio.sleep(1)
-                elif resp.status == 404:
-                    DeploymentLogger.log(f"No existing repository to delete: {org}/{self.app_name}")
-                else:
-                    # Log but don't fail - we'll try to create anyway
-                    DeploymentLogger.log(f"Delete returned {resp.status}, continuing...")
+            # Delete existing repository if it exists
+            if repo_exists:
+                async with session.delete(repo_url, headers=headers, ssl=False) as resp:
+                    if resp.status == 204:
+                        DeploymentLogger.log(f"Deleted existing Gitea repository: {org}/{self.app_name}")
+                    elif resp.status != 404:
+                        DeploymentLogger.log(f"Delete returned {resp.status}, continuing...")
 
-            # STEP 3: Create fresh repository
-            repo_url = f"https://{gitea_hostname}/api/v1/orgs/{org}/repos"
+            # Create repository
+            create_url = f"https://{gitea_hostname}/api/v1/orgs/{org}/repos"
             repo_payload = {
                 'name': self.app_name,
                 'description': f'Deployment manifests for {self.app_name}',
@@ -335,12 +313,9 @@ class ApplicationDeployer:
                 'auto_init': False
             }
 
-            async with session.post(repo_url, headers=headers, json=repo_payload, ssl=False) as resp:
+            async with session.post(create_url, headers=headers, json=repo_payload, ssl=False) as resp:
                 if resp.status == 201:
                     DeploymentLogger.log(f"Created Gitea repository: {org}/{self.app_name}")
-                elif resp.status == 409:
-                    # Shouldn't happen after delete, but handle gracefully
-                    DeploymentLogger.log(f"Gitea repository already exists: {org}/{self.app_name}")
                 else:
                     error_text = await resp.text()
                     DeploymentLogger.error(f"Failed to create Gitea repo: {resp.status} - {error_text}")
@@ -657,39 +632,36 @@ class ApplicationDeployer:
                     raise RuntimeError(f"Failed to fetch existing webhooks: {resp.status}")
                 existing_hooks = await resp.json()
 
-            # 2. Delete any webhooks with matching URL (atomic cleanup)
-            for hook in existing_hooks:
-                hook_config_url = hook.get('config', {}).get('url')
-                if hook_config_url == webhook_url:
-                    hook_id = hook['id']
-                    delete_url = f"{hooks_url}/{hook_id}"
-                    async with session.delete(delete_url, headers=headers, ssl=False) as resp:
-                        if resp.status == 204:
-                            DeploymentLogger.log(f"Deleted duplicate webhook ID {hook_id}")
-                        else:
-                            DeploymentLogger.error(f"Failed to delete webhook {hook_id}: {resp.status}")
+            # 2. Check if webhook already exists (match Ansible behavior)
+            webhook_exists = any(
+                hook.get('config', {}).get('url') == webhook_url
+                for hook in existing_hooks
+            )
 
-            # 3. Create the new webhook - only 'push' event to avoid duplicates
-            webhook_payload = {
-                'type': 'gitea',
-                'config': {
-                    'url': webhook_url,
-                    'content_type': 'json',
-                    'secret': webhook_secret
-                },
-                'events': ['push'],
-                'active': True
-            }
+            if webhook_exists:
+                DeploymentLogger.log(f"Webhook already configured for {org}/{repo}")
+            else:
+                # 3. Create webhook only if it doesn't exist
+                webhook_payload = {
+                    'type': 'gitea',
+                    'config': {
+                        'url': webhook_url,
+                        'content_type': 'json',
+                        'secret': webhook_secret
+                    },
+                    'events': ['push'],
+                    'active': True
+                }
 
-            async with session.post(hooks_url, headers=headers, json=webhook_payload, ssl=False) as resp:
-                if resp.status == 201:
-                    webhook_data = await resp.json()
-                    webhook_id = webhook_data['id']
-                    DeploymentLogger.success(f"Created webhook ID {webhook_id} for {org}/{repo}")
-                else:
-                    error_text = await resp.text()
-                    DeploymentLogger.error(f"Failed to create webhook: {resp.status} - {error_text}")
-                    raise RuntimeError(f"Failed to create webhook: {resp.status}")
+                async with session.post(hooks_url, headers=headers, json=webhook_payload, ssl=False) as resp:
+                    if resp.status == 201:
+                        webhook_data = await resp.json()
+                        webhook_id = webhook_data['id']
+                        DeploymentLogger.success(f"Created webhook ID {webhook_id} for {org}/{repo}")
+                    else:
+                        error_text = await resp.text()
+                        DeploymentLogger.error(f"Failed to create webhook: {resp.status} - {error_text}")
+                        raise RuntimeError(f"Failed to create webhook: {resp.status}")
 
     async def git_commit_and_push(self):
         """Commit and push changes to Gitea."""
