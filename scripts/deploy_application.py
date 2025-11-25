@@ -307,13 +307,14 @@ class ApplicationDeployer:
                     # Log but don't fail - we'll try to create anyway
                     DeploymentLogger.log(f"Delete returned {resp.status}, continuing...")
 
-            # Create fresh repository
+            # Create repository with initial commit so main branch exists
+            # This ensures our push is an UPDATE (1 event) not a branch creation (2 events)
             repo_url = f"https://{gitea_hostname}/api/v1/orgs/{org}/repos"
             repo_payload = {
                 'name': self.app_name,
                 'description': f'Deployment manifests for {self.app_name}',
                 'private': True,
-                'auto_init': False
+                'auto_init': True  # Creates initial commit, so main branch exists
             }
 
             async with session.post(repo_url, headers=headers, json=repo_payload, ssl=False) as resp:
