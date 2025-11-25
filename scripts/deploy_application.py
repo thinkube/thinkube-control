@@ -663,15 +663,18 @@ class ApplicationDeployer:
         # All operations run in one shell invocation
         # Use --template='' to skip copying template files (avoids "File exists" errors)
         # Use sync to ensure filesystem has processed deletion before init
+        # Use HEAD:refs/heads/main for push to avoid "cannot be resolved to branch" error
         git_script = f"""
-rm -rf .git && sync && \
-git init -b main --template='' && \
-git config user.name '{self.admin_username}' && \
-git config user.email '{self.admin_username}@{self.domain}' && \
-git remote add origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.app_name}.git' && \
-git add -A && \
-git commit --allow-empty -m 'Deploy {self.app_name} to {self.domain}' && \
-git push -u origin main --force
+set -e
+rm -rf .git && sync
+git init --template=''
+git symbolic-ref HEAD refs/heads/main
+git config user.name '{self.admin_username}'
+git config user.email '{self.admin_username}@{self.domain}'
+git remote add origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.app_name}.git'
+git add -A
+git commit --allow-empty -m 'Deploy {self.app_name} to {self.domain}'
+git push --force origin HEAD:refs/heads/main
 """
 
         process = await asyncio.create_subprocess_shell(
