@@ -452,16 +452,119 @@ class ApplicationDeployer:
             await process.communicate()
             DeploymentLogger.log(f"Ensured database {db_name} exists")
 
+    def _generate_workflow_template(self) -> dict:
+        """Generate a WorkflowTemplate based on thinkube.yaml configuration."""
+        containers = self.thinkube_config.get('spec', {}).get('containers', [])
+
+        # Size to resource mapping
+        size_resources = {
+            'small': {'requests': {'cpu': '500m', 'memory': '512Mi'}, 'limits': {'cpu': '1', 'memory': '1Gi'}},
+            'medium': {'requests': {'cpu': '1', 'memory': '1Gi'}, 'limits': {'cpu': '2', 'memory': '2Gi'}},
+            'large': {'requests': {'cpu': '2', 'memory': '2Gi'}, 'limits': {'cpu': '4', 'memory': '4Gi'}},
+        }
+
+        # Generate build templates for each container
+        build_templates = []
+        dag_tasks = []
+
+        for container in containers:
+            name = container['name']
+            build_path = container.get('build', f'./{name}')
+            size = container.get('size', 'medium')
+            resources = size_resources.get(size, size_resources['medium'])
+
+            # Add DAG task
+            dag_tasks.append({
+                'name': f'build-{name}',
+                'template': f'build-{name}',
+                'arguments': {
+                    'parameters': [{'name': 'image-tag', 'value': '{{workflow.uid}}'}]
+                }
+            })
+
+            # Add build template
+            build_templates.append({
+                'name': f'build-{name}',
+                'inputs': {'parameters': [{'name': 'image-tag'}]},
+                'container': {
+                    'image': f'registry.{self.domain}/library/kaniko-executor:latest',
+                    'args': [
+                        f'--dockerfile=/workspace/{name}/Dockerfile',
+                        f'--context=/workspace/{name}',
+                        f'--destination=registry.{self.domain}/apps/{self.app_name}-{name}:{{{{inputs.parameters.image-tag}}}}',
+                        f'--destination=registry.{self.domain}/apps/{self.app_name}-{name}:latest',
+                        f'--build-arg=REGISTRY=registry.{self.domain}',
+                        '--cache-dir=/workspace/.cache/kaniko',
+                    ],
+                    'resources': resources,
+                    'volumeMounts': [
+                        {'name': 'docker-config', 'mountPath': '/kaniko/.docker'},
+                        {'name': 'shared-code', 'mountPath': '/workspace'},
+                        {'name': 'build-cache', 'mountPath': '/workspace/.cache'},
+                    ]
+                }
+            })
+
+        # Get the system username for host paths
+        system_username = self.params.get('system_username', 'thinkube')
+
+        workflow_spec = {
+            'apiVersion': 'argoproj.io/v1alpha1',
+            'kind': 'WorkflowTemplate',
+            'metadata': {
+                'name': f'{self.app_name}-build',
+                'namespace': 'argo',
+                'labels': {
+                    'app.kubernetes.io/name': self.app_name,
+                    'app.kubernetes.io/component': 'ci-cd',
+                    'app.kubernetes.io/part-of': 'thinkube',
+                    'thinkube.io/app-name': self.app_name,
+                    'thinkube.io/namespace': self.namespace,
+                    'thinkube.io/trigger': 'webhook',
+                    'thinkube.io/build-type': 'container',
+                }
+            },
+            'spec': {
+                'entrypoint': 'build-and-push',
+                'serviceAccountName': 'kaniko-builder',
+                'nodeSelector': {'kubernetes.io/hostname': 'tkspark'},  # TODO: make configurable
+                'arguments': {
+                    'parameters': [{'name': 'webhook-timestamp', 'value': ''}]
+                },
+                'artifactRepositoryRef': {
+                    'configMap': 'artifact-repositories',
+                    'key': 'default-v1'
+                },
+                'templates': [
+                    {
+                        'name': 'build-and-push',
+                        'dag': {'tasks': dag_tasks}
+                    },
+                    *build_templates
+                ],
+                'volumes': [
+                    {'name': 'docker-config', 'secret': {'secretName': 'docker-config'}},
+                    {'name': 'shared-code', 'hostPath': {'path': f'/home/{system_username}/shared-code/{self.app_name}', 'type': 'Directory'}},
+                    {'name': 'build-cache', 'hostPath': {'path': f'/home/{system_username}/.cache/thinkube-builds', 'type': 'DirectoryOrCreate'}},
+                ]
+            }
+        }
+
+        return workflow_spec
+
     async def deploy_workflow_template(self):
         """Deploy Argo Workflow template."""
         workflow_file = Path(self.local_repo_path) / 'k8s' / 'build-workflow.yaml'
 
-        if not workflow_file.exists():
-            DeploymentLogger.log("No workflow template found, skipping")
-            return
-
-        with open(workflow_file, 'r') as f:
-            workflow_spec = yaml.safe_load(f)
+        if workflow_file.exists():
+            # Use custom workflow template from app
+            with open(workflow_file, 'r') as f:
+                workflow_spec = yaml.safe_load(f)
+            DeploymentLogger.log("Using custom workflow template from k8s/build-workflow.yaml")
+        else:
+            # Generate workflow template from thinkube.yaml
+            workflow_spec = self._generate_workflow_template()
+            DeploymentLogger.log("Generated workflow template from thinkube.yaml")
 
         try:
             await self.k8s_custom.create_namespaced_custom_object(
@@ -471,7 +574,7 @@ class ApplicationDeployer:
                 plural="workflowtemplates",
                 body=workflow_spec
             )
-            DeploymentLogger.log("Deployed workflow template")
+            DeploymentLogger.log(f"Deployed workflow template: {workflow_spec['metadata']['name']}")
         except ApiException as e:
             if e.status == 409:
                 await self.k8s_custom.replace_namespaced_custom_object(
@@ -482,7 +585,7 @@ class ApplicationDeployer:
                     name=workflow_spec['metadata']['name'],
                     body=workflow_spec
                 )
-                DeploymentLogger.log("Updated workflow template")
+                DeploymentLogger.log(f"Updated workflow template: {workflow_spec['metadata']['name']}")
 
     # ==================== PHASE 4: Git Operations ====================
 
