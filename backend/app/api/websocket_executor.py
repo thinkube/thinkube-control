@@ -4,7 +4,7 @@ Adapted from installer for thinkube-control
 """
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Set
 import asyncio
 import logging
 import os
@@ -21,6 +21,9 @@ from app.services.ansible_environment import ansible_env
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ansible-stream"])
+
+# Registry to track active deployment processes for cleanup on disconnect
+_active_deployment_processes: Dict[str, asyncio.subprocess.Process] = {}
 
 # Maximum size for a single WebSocket message (64KB to be safe)
 MAX_MESSAGE_SIZE = 64 * 1024
@@ -422,6 +425,17 @@ async def stream_template_deployment(websocket: WebSocket, deployment_id: str):
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected during template deployment")
+        # Kill any running subprocess for this deployment
+        if deployment_id in _active_deployment_processes:
+            process = _active_deployment_processes.pop(deployment_id)
+            if process.returncode is None:
+                logger.info(f"Terminating orphaned process for deployment {deployment_id}")
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
         # Update deployment status if still running
         if deployment and deployment.status == "running":
             deployment.status = "failed"
@@ -432,6 +446,8 @@ async def stream_template_deployment(websocket: WebSocket, deployment_id: str):
         logger.error(f"WebSocket error during template deployment: {e}")
         await websocket.send_json({"type": "error", "message": str(e)})
     finally:
+        # Clean up process registry
+        _active_deployment_processes.pop(deployment_id, None)
         db.close()
 
 
@@ -506,6 +522,10 @@ async def _execute_template_deployment(
             env=os.environ.copy(),
         )
 
+        # Register process for cleanup on disconnect
+        deployment_id = str(deployment.id)
+        _active_deployment_processes[deployment_id] = process
+
         # Stream output
         while True:
             line = await process.stdout.readline()
@@ -565,7 +585,10 @@ async def _execute_template_deployment(
         return {"return_code": -1}
 
     finally:
-        # Cleanup
+        # Cleanup process from registry
+        deployment_id = str(deployment.id)
+        _active_deployment_processes.pop(deployment_id, None)
+
         if process and process.returncode is None:
             process.terminate()
             await process.wait()
