@@ -353,7 +353,6 @@ class ApplicationDeployer:
         await asyncio.gather(
             self.create_tls_secret(),
             self.create_harbor_secret(),
-            self.create_postgres_secret(),
             self.create_cicd_secrets(),
             self.create_mlflow_config(),
             self.create_app_metadata(),
@@ -435,29 +434,6 @@ class ApplicationDeployer:
                 DeploymentLogger.log(f"app-pull-secret already exists in {self.namespace}")
             else:
                 raise
-
-    async def create_postgres_secret(self):
-        """Create or replace PostgreSQL credentials secret (name matches Ansible: postgresql-official)."""
-        admin_secret = self.secrets['admin']
-        postgres_password = self._decode_secret_data(admin_secret, 'admin-password')
-        postgres_username = self._decode_secret_data(admin_secret, 'admin-username')
-
-        secret = client.V1Secret(
-            metadata=client.V1ObjectMeta(name='postgresql-official', namespace=self.namespace),
-            string_data={
-                'username': postgres_username,
-                'password': postgres_password,
-                'database': f'{self.app_name}_prod'
-            }
-        )
-        try:
-            await self.k8s_core.create_namespaced_secret(self.namespace, secret)
-            DeploymentLogger.log("Created PostgreSQL secret: postgresql-official")
-        except ApiException as e:
-            if e.status == 409:
-                # Replace existing secret to ensure correct credentials
-                await self.k8s_core.replace_namespaced_secret('postgresql-official', self.namespace, secret)
-                DeploymentLogger.log("Replaced existing PostgreSQL secret")
 
     async def create_cicd_secrets(self):
         """Create CI/CD token secrets in both argo and app namespaces."""
@@ -603,36 +579,38 @@ class ApplicationDeployer:
         """Create PostgreSQL databases using kubernetes exec (matches Ansible k8s_exec)."""
         admin_username = self._decode_secret_data(self.secrets['admin'], 'admin-username')
 
-        for db_name in [f'{self.app_name}_prod', f'{self.app_name}_test', f'test_{self.app_name}']:
-            # DROP then CREATE using k8s exec (exactly like Ansible)
-            drop_sql = f'DROP DATABASE IF EXISTS {db_name};'
-            create_sql = f'CREATE DATABASE {db_name} OWNER {admin_username};'
+        # Create database with hyphens replaced by underscores (matches postgresql.j2 template)
+        db_name = self.app_name.replace('-', '_')
 
-            # Run DROP
-            try:
-                drop_result = await self._exec_in_pod(
-                    namespace='postgres',
-                    pod='postgresql-official-0',
-                    container='postgres',
-                    command=['psql', '-U', admin_username, '-d', 'postgres', '-c', drop_sql]
-                )
-                DeploymentLogger.log(f"Dropped database {db_name}")
-            except Exception as e:
-                DeploymentLogger.error(f"DROP DATABASE {db_name} failed: {e}")
-                raise RuntimeError(f"DROP DATABASE {db_name} failed: {e}")
+        # DROP then CREATE using k8s exec (exactly like Ansible)
+        drop_sql = f'DROP DATABASE IF EXISTS {db_name};'
+        create_sql = f'CREATE DATABASE {db_name} OWNER {admin_username};'
 
-            # Run CREATE
-            try:
-                create_result = await self._exec_in_pod(
-                    namespace='postgres',
-                    pod='postgresql-official-0',
-                    container='postgres',
-                    command=['psql', '-U', admin_username, '-d', 'postgres', '-c', create_sql]
-                )
-                DeploymentLogger.log(f"Created database {db_name}")
-            except Exception as e:
-                DeploymentLogger.error(f"CREATE DATABASE {db_name} failed: {e}")
-                raise RuntimeError(f"CREATE DATABASE {db_name} failed: {e}")
+        # Run DROP
+        try:
+            drop_result = await self._exec_in_pod(
+                namespace='postgres',
+                pod='postgresql-official-0',
+                container='postgres',
+                command=['psql', '-U', admin_username, '-d', 'postgres', '-c', drop_sql]
+            )
+            DeploymentLogger.log(f"Dropped database {db_name}")
+        except Exception as e:
+            DeploymentLogger.error(f"DROP DATABASE {db_name} failed: {e}")
+            raise RuntimeError(f"DROP DATABASE {db_name} failed: {e}")
+
+        # Run CREATE
+        try:
+            create_result = await self._exec_in_pod(
+                namespace='postgres',
+                pod='postgresql-official-0',
+                container='postgres',
+                command=['psql', '-U', admin_username, '-d', 'postgres', '-c', create_sql]
+            )
+            DeploymentLogger.log(f"Created database {db_name}")
+        except Exception as e:
+            DeploymentLogger.error(f"CREATE DATABASE {db_name} failed: {e}")
+            raise RuntimeError(f"CREATE DATABASE {db_name} failed: {e}")
 
     def _generate_workflow_template(self) -> dict:
         """Generate a WorkflowTemplate using the Jinja2 template from templates/k8s/build-workflow.j2."""
