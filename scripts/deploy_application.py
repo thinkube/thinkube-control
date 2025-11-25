@@ -177,9 +177,6 @@ class ApplicationDeployer:
                 DeploymentLogger.error(f"Resource gathering failed: {result}")
                 raise result
 
-        # ensure_gitea_repo depends on gitea token, run after gather
-        await self.ensure_gitea_repo()
-
         DeploymentLogger.success("Phase 2 complete - all resources gathered")
 
     async def get_wildcard_cert(self):
@@ -569,9 +566,14 @@ class ApplicationDeployer:
         """Phase 4: Sequential git operations + build monitoring."""
         DeploymentLogger.phase(4, "Git Operations & Build Monitoring")
 
-        # These must happen in order
+        # These must happen in order:
+        # 1. Create Gitea repo (no auto_init)
+        # 2. Configure webhook
+        # 3. Push code
+        # This ensures only ONE webhook is triggered
         await self.generate_migrations()
         await self.setup_git_hooks()
+        await self.ensure_gitea_repo()
         await self.configure_webhook()
 
         # Get existing workflow names BEFORE git push so we can detect NEW workflows
