@@ -1462,14 +1462,39 @@ Install git hooks for automatic template processing:
         )
         return result.returncode, result.stdout, result.stderr
 
+    async def _delete_gitea_repo(self, org: str, repo: str):
+        """Delete a Gitea repository via API."""
+        gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
+        gitea_hostname = f"git.{self.domain}"
+
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                'Authorization': f'token {gitea_token}',
+                'Content-Type': 'application/json'
+            }
+            delete_url = f"https://{gitea_hostname}/api/v1/repos/{org}/{repo}"
+            async with session.delete(delete_url, headers=headers, ssl=False) as resp:
+                if resp.status == 204:
+                    DeploymentLogger.log(f"Deleted corrupted Gitea repository: {org}/{repo}")
+                    return True
+                elif resp.status == 404:
+                    DeploymentLogger.log(f"Repository {org}/{repo} not found (already deleted)")
+                    return True
+                else:
+                    error_text = await resp.text()
+                    DeploymentLogger.error(f"Failed to delete repo: {resp.status} - {error_text}")
+                    return False
+
     async def git_commit_and_push(self):
-        """Commit and push changes to Gitea (in thread pool to keep event loop responsive)."""
+        """Commit and push changes to Gitea with automatic recovery from corrupted repos."""
         gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
         gitea_hostname = f"git.{self.domain}"
         org = "thinkube-deployments"
 
-        # Match Ansible: only init if .git doesn't exist, preserve existing history
-        git_script = f"""
+        max_retries = 2
+        for attempt in range(max_retries):
+            # Match Ansible: only init if .git doesn't exist, preserve existing history
+            git_script = f"""
 set -e
 cd {self.local_repo_path}
 if [ ! -d .git ]; then
@@ -1488,21 +1513,39 @@ git commit -m 'Deploy {self.app_name} to {self.domain}'
 git push -u origin main --force
 """
 
-        # Run git operations in thread pool to avoid blocking the event loop
-        loop = asyncio.get_event_loop()
+            # Run git operations in thread pool to avoid blocking the event loop
+            loop = asyncio.get_event_loop()
 
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            returncode, stdout, stderr = await loop.run_in_executor(
-                executor,
-                partial(self._run_git_sync, git_script, self.local_repo_path)
-            )
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                returncode, stdout, stderr = await loop.run_in_executor(
+                    executor,
+                    partial(self._run_git_sync, git_script, self.local_repo_path)
+                )
 
-        if returncode != 0:
-            DeploymentLogger.error(f"Git operations failed")
-            DeploymentLogger.error(f"Error: {stderr}")
-            raise RuntimeError(f"Git operations failed: {stderr}")
+            if returncode == 0:
+                DeploymentLogger.success("Pushed changes to Gitea")
+                return
 
-        DeploymentLogger.success("Pushed changes to Gitea")
+            # Check for specific recoverable errors
+            if "unable to migrate objects to permanent storage" in stderr:
+                DeploymentLogger.log(f"Gitea repository corrupted, deleting and recreating (attempt {attempt + 1}/{max_retries})")
+                deleted = await self._delete_gitea_repo(org, self.app_name)
+                if deleted:
+                    # Recreate the repo
+                    await self.ensure_gitea_repo()
+                    # Reconfigure webhook
+                    await self.configure_webhook()
+                    continue  # Retry push
+                else:
+                    raise RuntimeError(f"Failed to recover from corrupted Gitea repository")
+            else:
+                # Non-recoverable error
+                DeploymentLogger.error(f"Git operations failed")
+                DeploymentLogger.error(f"Error: {stderr}")
+                raise RuntimeError(f"Git operations failed: {stderr}")
+
+        # If we exhausted retries
+        raise RuntimeError(f"Git push failed after {max_retries} attempts")
 
     async def _get_existing_workflow_names(self) -> set:
         """Get set of existing workflow names for this app."""
