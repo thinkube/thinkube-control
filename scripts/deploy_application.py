@@ -404,18 +404,19 @@ class ApplicationDeployer:
                     DeploymentLogger.log(f"CI/CD secret already exists in {ns}")
 
     async def create_mlflow_config(self):
-        """Create MLflow configuration ConfigMap."""
-        mlflow_cm = self.secrets['mlflow']['configmap']
-        new_cm = client.V1ConfigMap(
-            metadata=client.V1ObjectMeta(name='mlflow-auth', namespace=self.namespace),
-            data=mlflow_cm.data
+        """Create MLflow configuration secret in target namespace."""
+        mlflow_secret = self.secrets['mlflow']['secret']
+        # Copy the secret data to the target namespace
+        new_secret = client.V1Secret(
+            metadata=client.V1ObjectMeta(name='mlflow-auth-config', namespace=self.namespace),
+            data=mlflow_secret.data  # Already base64 encoded
         )
         try:
-            await self.k8s_core.create_namespaced_config_map(self.namespace, new_cm)
-            DeploymentLogger.log("Created MLflow config")
+            await self.k8s_core.create_namespaced_secret(self.namespace, new_secret)
+            DeploymentLogger.log("Created MLflow config secret")
         except ApiException as e:
             if e.status == 409:
-                DeploymentLogger.log("MLflow config already exists")
+                DeploymentLogger.log("MLflow config secret already exists")
 
     async def create_app_metadata(self):
         """Create application metadata ConfigMap."""
