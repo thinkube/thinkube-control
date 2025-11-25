@@ -384,12 +384,13 @@ class ApplicationDeployer:
     async def create_postgres_secret(self):
         """Create PostgreSQL credentials secret."""
         admin_secret = self.secrets['admin']
-        postgres_password = self._decode_secret_data(admin_secret, 'password')
+        postgres_password = self._decode_secret_data(admin_secret, 'admin-password')
+        postgres_username = self._decode_secret_data(admin_secret, 'admin-username')
 
         secret = client.V1Secret(
             metadata=client.V1ObjectMeta(name='postgres-credentials', namespace=self.namespace),
             string_data={
-                'username': 'postgres',
+                'username': postgres_username,
                 'password': postgres_password,
                 'database': f'{self.app_name}_prod'
             }
@@ -454,12 +455,13 @@ class ApplicationDeployer:
 
     async def manage_databases(self):
         """Create PostgreSQL databases."""
-        admin_password = self._decode_secret_data(self.secrets['admin'], 'password')
+        admin_password = self._decode_secret_data(self.secrets['admin'], 'admin-password')
+        admin_username = self._decode_secret_data(self.secrets['admin'], 'admin-username')
 
         # Simple database creation via subprocess
         # Create both naming conventions to support various templates
         for db_name in [f'{self.app_name}_prod', f'{self.app_name}_test', f'test_{self.app_name}']:
-            cmd = f"PGPASSWORD='{admin_password}' psql -h postgresql-official.postgres.svc.cluster.local -U postgres -tc \"SELECT 1 FROM pg_database WHERE datname = '{db_name}'\" | grep -q 1 || PGPASSWORD='{admin_password}' psql -h postgresql-official.postgres.svc.cluster.local -U postgres -c \"CREATE DATABASE {db_name}\""
+            cmd = f"PGPASSWORD='{admin_password}' psql -h postgresql-official.postgres.svc.cluster.local -U {admin_username} -tc \"SELECT 1 FROM pg_database WHERE datname = '{db_name}'\" | grep -q 1 || PGPASSWORD='{admin_password}' psql -h postgresql-official.postgres.svc.cluster.local -U {admin_username} -c \"CREATE DATABASE {db_name}\""
 
             process = await asyncio.create_subprocess_shell(
                 cmd,
