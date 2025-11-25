@@ -156,7 +156,7 @@ class ApplicationDeployer:
         """Phase 2: Fetch all required resources in parallel."""
         DeploymentLogger.phase(2, "Resource Gathering (Parallel)")
 
-        # Run all fetch operations concurrently
+        # Run all fetch operations concurrently (except those with dependencies)
         results = await asyncio.gather(
             self.get_wildcard_cert(),
             self.get_harbor_credentials(),
@@ -167,7 +167,6 @@ class ApplicationDeployer:
             self.get_argocd_credentials(),
             self.get_gitea_token(),
             self.parse_thinkube_yaml(),
-            self.ensure_gitea_repo(),
             return_exceptions=True
         )
 
@@ -176,6 +175,9 @@ class ApplicationDeployer:
             if isinstance(result, Exception):
                 DeploymentLogger.error(f"Resource gathering failed: {result}")
                 raise result
+
+        # ensure_gitea_repo depends on gitea token, run after gather
+        await self.ensure_gitea_repo()
 
         DeploymentLogger.success("Phase 2 complete - all resources gathered")
 
