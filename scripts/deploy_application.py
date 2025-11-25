@@ -444,7 +444,7 @@ class ApplicationDeployer:
         # Simple database creation via subprocess
         # Create both naming conventions to support various templates
         for db_name in [f'{self.app_name}_prod', f'{self.app_name}_test', f'test_{self.app_name}']:
-            cmd = f"PGPASSWORD='{admin_password}' psql -h postgres -U postgres -tc \"SELECT 1 FROM pg_database WHERE datname = '{db_name}'\" | grep -q 1 || PGPASSWORD='{admin_password}' psql -h postgres -U postgres -c \"CREATE DATABASE {db_name}\""
+            cmd = f"PGPASSWORD='{admin_password}' psql -h postgresql-official.postgres.svc.cluster.local -U postgres -tc \"SELECT 1 FROM pg_database WHERE datname = '{db_name}'\" | grep -q 1 || PGPASSWORD='{admin_password}' psql -h postgresql-official.postgres.svc.cluster.local -U postgres -c \"CREATE DATABASE {db_name}\""
 
             process = await asyncio.create_subprocess_shell(
                 cmd,
