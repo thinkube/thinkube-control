@@ -596,13 +596,10 @@ class ApplicationDeployer:
         org = "thinkube-deployments"
 
         git_commands = [
-            # Clean up any existing git state to start fresh
-            "rm -rf .git",
+            # Clean up and initialize in one atomic operation
+            "rm -rf .git && git init -b main",
 
-            # Initialize with main branch
-            "git init -b main",
-
-            # Configure git (after init)
+            # Configure git
             f"git config user.name '{self.admin_username}'",
             f"git config user.email '{self.admin_username}@{self.domain}'",
 
