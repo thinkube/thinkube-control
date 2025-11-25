@@ -298,20 +298,34 @@ class ApplicationDeployer:
 
             # Delete existing repository if it exists
             if repo_exists:
-                async with session.delete(repo_url, headers=headers, ssl=False) as resp:
-                    if resp.status == 204:
-                        DeploymentLogger.log(f"Deleted existing Gitea repository: {org}/{self.app_name}")
-                    elif resp.status != 404:
-                        DeploymentLogger.log(f"Delete returned {resp.status}, continuing...")
+                delete_success = False
+                for attempt in range(3):
+                    async with session.delete(repo_url, headers=headers, ssl=False) as resp:
+                        if resp.status == 204:
+                            DeploymentLogger.log(f"Deleted existing Gitea repository: {org}/{self.app_name}")
+                            delete_success = True
+                            break
+                        elif resp.status == 404:
+                            DeploymentLogger.log(f"Repository already gone")
+                            delete_success = True
+                            break
+                        else:
+                            DeploymentLogger.log(f"Delete attempt {attempt + 1} returned {resp.status}")
+                            if attempt < 2:
+                                await asyncio.sleep(2)
+
+                if not delete_success:
+                    raise RuntimeError(f"Failed to delete existing repository after 3 attempts")
 
                 # Wait until repo is actually gone (poll with timeout)
-                for _ in range(10):
+                for i in range(15):
                     await asyncio.sleep(1)
                     async with session.get(repo_url, headers=headers, ssl=False) as resp:
                         if resp.status == 404:
+                            DeploymentLogger.log(f"Repository confirmed deleted after {i + 1}s")
                             break
                 else:
-                    DeploymentLogger.error("Timeout waiting for repo deletion")
+                    raise RuntimeError("Timeout waiting for repo deletion - repo still exists after 15s")
 
             # Create repository
             create_url = f"https://{gitea_hostname}/api/v1/orgs/{org}/repos"
