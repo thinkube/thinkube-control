@@ -132,15 +132,21 @@ class ApplicationDeployer:
         DeploymentLogger.log(f"Running Copier for template: {self.template_url}")
 
         # Build copier command with all template parameters
+        # container_registry is critical for Dockerfile base images
+        container_registry = f"registry.{self.domain}"
         copier_cmd = [
             "copier", "copy",
             "--force",
             "--vcs-ref=HEAD",
             self.template_url,
             self.local_repo_path,
+            "--data", f"project_name={self.app_name}",
             "--data", f"domain_name={self.domain}",
             "--data", f"admin_username={self.admin_username}",
             "--data", f"namespace={self.namespace}",
+            "--data", f"k8s_namespace={self.namespace}",
+            "--data", f"container_registry={container_registry}",
+            "--data", f"registry_subdomain=registry",
         ]
 
         # Add all other parameters from self.params
