@@ -200,7 +200,7 @@ class ApplicationDeployer:
     async def get_harbor_credentials(self):
         """Fetch Harbor robot credentials."""
         try:
-            secret = await self.k8s_core.read_namespaced_secret('harbor-robot-thinkube', 'kube-system')
+            secret = await self.k8s_core.read_namespaced_secret('harbor-robot-credentials', 'kube-system')
             self.secrets['harbor'] = secret
             DeploymentLogger.log("Retrieved Harbor credentials")
         except ApiException as e:
@@ -220,7 +220,7 @@ class ApplicationDeployer:
     async def get_cicd_api_token(self):
         """Fetch CI/CD API token."""
         try:
-            secret = await self.k8s_core.read_namespaced_secret('thinkube-control-api-token', 'thinkube-control')
+            secret = await self.k8s_core.read_namespaced_secret('cicd-monitoring-token', 'thinkube-control')
             self.secrets['cicd_token'] = secret
             DeploymentLogger.log("Retrieved CI/CD API token")
         except ApiException as e:
@@ -230,9 +230,9 @@ class ApplicationDeployer:
     async def get_mlflow_credentials(self):
         """Fetch MLflow credentials."""
         try:
-            secret = await self.k8s_core.read_namespaced_secret('mlflow-auth', 'thinkube-control')
-            configmap = await self.k8s_core.read_namespaced_config_map('mlflow-auth', 'thinkube-control')
-            self.secrets['mlflow'] = {'secret': secret, 'configmap': configmap}
+            # mlflow-auth-config is a secret containing username, password, client-id, client-secret, keycloak-token-url
+            secret = await self.k8s_core.read_namespaced_secret('mlflow-auth-config', 'thinkube-control')
+            self.secrets['mlflow'] = {'secret': secret}
             DeploymentLogger.log("Retrieved MLflow credentials")
         except ApiException as e:
             DeploymentLogger.error(f"Failed to get MLflow credentials: {e}")
@@ -241,7 +241,7 @@ class ApplicationDeployer:
     async def get_seaweedfs_credentials(self):
         """Fetch SeaweedFS credentials."""
         try:
-            secret = await self.k8s_core.read_namespaced_secret('seaweedfs-s3', 'mlflow')
+            secret = await self.k8s_core.read_namespaced_secret('seaweedfs-s3-credentials', 'seaweedfs')
             self.secrets['seaweedfs'] = secret
             DeploymentLogger.log("Retrieved SeaweedFS credentials")
         except ApiException as e:
