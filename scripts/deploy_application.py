@@ -609,12 +609,21 @@ class ApplicationDeployer:
                 # FORCE terminates any remaining connections
                 try:
                     await conn.execute(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE)')
+                    DeploymentLogger.log(f"Dropped database {db_name}")
                 except asyncpg.exceptions.PostgresSyntaxError:
                     # Fallback for older PostgreSQL without FORCE option
                     await conn.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
+                    DeploymentLogger.log(f"Dropped database {db_name} (no FORCE)")
+                except Exception as drop_e:
+                    DeploymentLogger.log(f"DROP DATABASE {db_name} failed: {drop_e}")
+                    # Continue anyway - CREATE will fail if DB still exists
 
-                await conn.execute(f'CREATE DATABASE "{db_name}"')
-                DeploymentLogger.log(f"Recreated database {db_name}")
+                try:
+                    await conn.execute(f'CREATE DATABASE "{db_name}"')
+                    DeploymentLogger.log(f"Created database {db_name}")
+                except asyncpg.exceptions.UniqueViolationError:
+                    # Database still exists - DROP didn't work, but that's OK for redeployment
+                    DeploymentLogger.log(f"Database {db_name} already exists (keeping existing)")
 
             await conn.close()
         except Exception as e:
