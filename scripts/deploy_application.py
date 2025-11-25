@@ -1473,7 +1473,7 @@ Install git hooks for automatic template processing:
             git_script = f"""
 set -e
 cd {self.local_repo_path}
-if ! git rev-parse --git-dir >/dev/null 2>&1; then
+if [ ! -f .git/HEAD ]; then
   rm -rf .git
   git init -b main
 fi
