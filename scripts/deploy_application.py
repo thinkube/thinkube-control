@@ -509,6 +509,8 @@ class ApplicationDeployer:
             workflow_spec = self._generate_workflow_template()
             DeploymentLogger.log("Generated workflow template from thinkube.yaml")
 
+        template_name = workflow_spec['metadata']['name']
+
         try:
             await self.k8s_custom.create_namespaced_custom_object(
                 group="argoproj.io",
@@ -517,18 +519,29 @@ class ApplicationDeployer:
                 plural="workflowtemplates",
                 body=workflow_spec
             )
-            DeploymentLogger.log(f"Deployed workflow template: {workflow_spec['metadata']['name']}")
+            DeploymentLogger.log(f"Deployed workflow template: {template_name}")
         except ApiException as e:
             if e.status == 409:
+                # Get existing template to retrieve resourceVersion
+                existing = await self.k8s_custom.get_namespaced_custom_object(
+                    group="argoproj.io",
+                    version="v1alpha1",
+                    namespace="argo",
+                    plural="workflowtemplates",
+                    name=template_name
+                )
+                # Set resourceVersion for update
+                workflow_spec['metadata']['resourceVersion'] = existing['metadata']['resourceVersion']
+
                 await self.k8s_custom.replace_namespaced_custom_object(
                     group="argoproj.io",
                     version="v1alpha1",
                     namespace="argo",
                     plural="workflowtemplates",
-                    name=workflow_spec['metadata']['name'],
+                    name=template_name,
                     body=workflow_spec
                 )
-                DeploymentLogger.log(f"Updated workflow template: {workflow_spec['metadata']['name']}")
+                DeploymentLogger.log(f"Updated workflow template: {template_name}")
 
     # ==================== PHASE 4: Git Operations ====================
 
