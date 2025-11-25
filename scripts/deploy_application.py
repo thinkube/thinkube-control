@@ -304,6 +304,15 @@ class ApplicationDeployer:
                     elif resp.status != 404:
                         DeploymentLogger.log(f"Delete returned {resp.status}, continuing...")
 
+                # Wait until repo is actually gone (poll with timeout)
+                for _ in range(10):
+                    await asyncio.sleep(1)
+                    async with session.get(repo_url, headers=headers, ssl=False) as resp:
+                        if resp.status == 404:
+                            break
+                else:
+                    DeploymentLogger.error("Timeout waiting for repo deletion")
+
             # Create repository
             create_url = f"https://{gitea_hostname}/api/v1/orgs/{org}/repos"
             repo_payload = {
