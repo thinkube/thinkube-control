@@ -664,14 +664,13 @@ class ApplicationDeployer:
         org = "thinkube-deployments"
 
         # Build a single atomic git command to avoid race conditions with lock files
-        # All operations run in one shell invocation
-        # Use --template='' to skip copying template files (avoids "File exists" errors)
-        # Use sync to ensure filesystem has processed deletion before init
-        # Use HEAD:refs/heads/main for push to avoid "cannot be resolved to branch" error
+        # Clear git env vars to avoid interference from container environment
         git_script = f"""
 set -e
-rm -rf .git && sync
-git init -b main --template=''
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE 2>/dev/null || true
+cd {self.local_repo_path}
+rm -rf .git
+git init -b main
 git config user.name '{self.admin_username}'
 git config user.email '{self.admin_username}@{self.domain}'
 git remote add origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.app_name}.git'
