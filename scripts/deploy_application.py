@@ -330,6 +330,7 @@ class ApplicationDeployer:
             self.create_mlflow_config(),
             self.create_app_metadata(),
             self.manage_databases(),
+            self.create_keycloak_client(),
             self.deploy_workflow_template(),
             return_exceptions=False
         )
@@ -337,45 +338,49 @@ class ApplicationDeployer:
         DeploymentLogger.success("Phase 3 complete - all resources created")
 
     async def create_tls_secret(self):
-        """Copy TLS certificate to application namespace."""
+        """Copy TLS certificate to application namespace (name: {namespace}-tls-secret to match Ansible)."""
         cert = self.secrets['wildcard_cert']
+        tls_secret_name = f"{self.namespace}-tls-secret"
         new_secret = client.V1Secret(
-            metadata=client.V1ObjectMeta(name=cert.metadata.name, namespace=self.namespace),
+            metadata=client.V1ObjectMeta(name=tls_secret_name, namespace=self.namespace),
             data=cert.data,
             type=cert.type
         )
         try:
             await self.k8s_core.create_namespaced_secret(self.namespace, new_secret)
-            DeploymentLogger.log(f"Created TLS secret in {self.namespace}")
+            DeploymentLogger.log(f"Created TLS secret: {tls_secret_name}")
         except ApiException as e:
             if e.status == 409:
-                DeploymentLogger.log("TLS secret already exists")
+                DeploymentLogger.log(f"TLS secret {tls_secret_name} already exists")
             else:
                 raise
 
     async def create_harbor_secret(self):
-        """Create Harbor robot secret in application namespace."""
+        """Create Harbor robot secret in BOTH argo and app namespaces (matches Ansible)."""
         harbor = self.secrets['harbor']
-        new_secret = client.V1Secret(
-            metadata=client.V1ObjectMeta(name='harbor-docker-config', namespace=self.namespace),
-            data=harbor.data,
-            type=harbor.type
-        )
-        try:
-            await self.k8s_core.create_namespaced_secret(self.namespace, new_secret)
-            DeploymentLogger.log("Created Harbor secret")
-        except ApiException as e:
-            if e.status == 409:
-                DeploymentLogger.log("Harbor secret already exists")
+
+        # Create in both namespaces (argo for Kaniko builds, app namespace for pods)
+        for ns in ['argo', self.namespace]:
+            new_secret = client.V1Secret(
+                metadata=client.V1ObjectMeta(name='harbor-docker-config', namespace=ns),
+                data=harbor.data,
+                type=harbor.type
+            )
+            try:
+                await self.k8s_core.create_namespaced_secret(ns, new_secret)
+                DeploymentLogger.log(f"Created Harbor secret in {ns}")
+            except ApiException as e:
+                if e.status == 409:
+                    DeploymentLogger.log(f"Harbor secret already exists in {ns}")
 
     async def create_postgres_secret(self):
-        """Create or replace PostgreSQL credentials secret."""
+        """Create or replace PostgreSQL credentials secret (name matches Ansible: postgresql-official)."""
         admin_secret = self.secrets['admin']
         postgres_password = self._decode_secret_data(admin_secret, 'admin-password')
         postgres_username = self._decode_secret_data(admin_secret, 'admin-username')
 
         secret = client.V1Secret(
-            metadata=client.V1ObjectMeta(name='postgres-credentials', namespace=self.namespace),
+            metadata=client.V1ObjectMeta(name='postgresql-official', namespace=self.namespace),
             string_data={
                 'username': postgres_username,
                 'password': postgres_password,
@@ -384,11 +389,11 @@ class ApplicationDeployer:
         )
         try:
             await self.k8s_core.create_namespaced_secret(self.namespace, secret)
-            DeploymentLogger.log("Created PostgreSQL secret")
+            DeploymentLogger.log("Created PostgreSQL secret: postgresql-official")
         except ApiException as e:
             if e.status == 409:
                 # Replace existing secret to ensure correct credentials
-                await self.k8s_core.replace_namespaced_secret('postgres-credentials', self.namespace, secret)
+                await self.k8s_core.replace_namespaced_secret('postgresql-official', self.namespace, secret)
                 DeploymentLogger.log("Replaced existing PostgreSQL secret")
 
     async def create_cicd_secrets(self):
@@ -427,7 +432,7 @@ class ApplicationDeployer:
     async def create_app_metadata(self):
         """Create application metadata ConfigMap."""
         metadata = client.V1ConfigMap(
-            metadata=client.V1ObjectMeta(name='app-metadata', namespace=self.namespace),
+            metadata=client.V1ObjectMeta(name=f'{self.app_name}-metadata', namespace=self.namespace),
             data={
                 'app_name': self.app_name,
                 'domain': self.domain,
@@ -437,13 +442,82 @@ class ApplicationDeployer:
         )
         try:
             await self.k8s_core.create_namespaced_config_map(self.namespace, metadata)
-            DeploymentLogger.log("Created app metadata")
+            DeploymentLogger.log(f"Created app metadata: {self.app_name}-metadata")
         except ApiException as e:
             if e.status == 409:
                 DeploymentLogger.log("App metadata already exists")
 
+    async def create_keycloak_client(self):
+        """Create Keycloak OIDC client for the application (matches Ansible keycloak_client role)."""
+        admin_username = self._decode_secret_data(self.secrets['admin'], 'admin-username')
+        admin_password = self._decode_secret_data(self.secrets['admin'], 'admin-password')
+        keycloak_url = f"https://auth.{self.domain}"
+        keycloak_realm = self.params.get('keycloak_realm', 'thinkube')
+        client_id = self.namespace  # Match Ansible: keycloak_app_client_id = namespace
+        app_host = f"{self.app_name}.{self.domain}"
+
+        async with aiohttp.ClientSession() as session:
+            # Step 1: Get Keycloak admin token
+            token_url = f"{keycloak_url}/realms/master/protocol/openid-connect/token"
+            token_data = {
+                'client_id': 'admin-cli',
+                'username': admin_username,
+                'password': admin_password,
+                'grant_type': 'password'
+            }
+
+            async with session.post(token_url, data=token_data, ssl=False) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    DeploymentLogger.error(f"Failed to get Keycloak admin token: {resp.status} - {error_text}")
+                    raise RuntimeError("Failed to get Keycloak admin token")
+                token_response = await resp.json()
+                access_token = token_response['access_token']
+
+            headers = {
+                'Authorization': f'Bearer {access_token}',
+                'Content-Type': 'application/json'
+            }
+
+            # Step 2: Check if client already exists
+            clients_url = f"{keycloak_url}/admin/realms/{keycloak_realm}/clients"
+            query_url = f"{clients_url}?clientId={client_id}"
+
+            async with session.get(query_url, headers=headers, ssl=False) as resp:
+                if resp.status != 200:
+                    error_text = await resp.text()
+                    DeploymentLogger.error(f"Failed to query Keycloak clients: {resp.status} - {error_text}")
+                    raise RuntimeError("Failed to query Keycloak clients")
+                existing_clients = await resp.json()
+
+            if len(existing_clients) > 0:
+                DeploymentLogger.log(f"Keycloak client '{client_id}' already exists")
+                return
+
+            # Step 3: Create client (matches Ansible keycloak_client_body structure)
+            client_body = {
+                'clientId': client_id,
+                'enabled': True,
+                'rootUrl': f'https://{app_host}',
+                'baseUrl': f'https://{app_host}',
+                'redirectUris': [f'https://{app_host}/*'],
+                'webOrigins': [f'https://{app_host}'],
+                'publicClient': True,
+                'protocol': 'openid-connect'
+            }
+
+            async with session.post(clients_url, headers=headers, json=client_body, ssl=False) as resp:
+                if resp.status == 201:
+                    DeploymentLogger.success(f"Created Keycloak client: {client_id}")
+                elif resp.status == 409:
+                    DeploymentLogger.log(f"Keycloak client '{client_id}' already exists (409)")
+                else:
+                    error_text = await resp.text()
+                    DeploymentLogger.error(f"Failed to create Keycloak client: {resp.status} - {error_text}")
+                    raise RuntimeError(f"Failed to create Keycloak client: {resp.status}")
+
     async def manage_databases(self):
-        """Create PostgreSQL databases using asyncpg (psql not available in container)."""
+        """Create PostgreSQL databases using asyncpg (DROP then CREATE to match Ansible)."""
         import asyncpg
 
         admin_password = self._decode_secret_data(self.secrets['admin'], 'admin-password')
@@ -459,14 +533,17 @@ class ApplicationDeployer:
             )
 
             for db_name in [f'{self.app_name}_prod', f'{self.app_name}_test', f'test_{self.app_name}']:
-                exists = await conn.fetchval(
-                    "SELECT 1 FROM pg_database WHERE datname = $1", db_name
-                )
-                if not exists:
-                    await conn.execute(f'CREATE DATABASE "{db_name}"')
-                    DeploymentLogger.log(f"Created database {db_name}")
-                else:
-                    DeploymentLogger.log(f"Database {db_name} already exists")
+                # Terminate active connections to allow DROP (match Ansible clean slate approach)
+                await conn.execute("""
+                    SELECT pg_terminate_backend(pid)
+                    FROM pg_stat_activity
+                    WHERE datname = $1 AND pid <> pg_backend_pid()
+                """, db_name)
+
+                # DROP then CREATE for clean slate (matches Ansible behavior)
+                await conn.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
+                await conn.execute(f'CREATE DATABASE "{db_name}"')
+                DeploymentLogger.log(f"Recreated database {db_name}")
 
             await conn.close()
         except Exception as e:
@@ -591,23 +668,233 @@ class ApplicationDeployer:
         DeploymentLogger.success("Phase 4 complete - build succeeded!")
 
     async def generate_migrations(self):
-        """Generate Alembic migrations if needed."""
-        # Check if alembic.ini exists in the repo
-        alembic_ini = Path(self.local_repo_path) / 'alembic.ini'
-        if not alembic_ini.exists():
-            DeploymentLogger.log("No alembic.ini found, skipping migrations")
-            return
+        """Generate Alembic migrations for containers that need them (matches Ansible)."""
+        containers = self.thinkube_config.get('spec', {}).get('containers', [])
 
-        # Run alembic revision if needed
-        # This is optional - migrations can be generated separately
-        DeploymentLogger.log("Alembic configuration found (migrations can be generated manually if needed)")
+        for container in containers:
+            migrations = container.get('migrations', {})
+            if migrations.get('tool') != 'alembic':
+                continue
+
+            build_path = container.get('build', 'backend')
+            container_path = Path(self.local_repo_path) / build_path
+
+            # Check if alembic.ini exists
+            alembic_ini = container_path / 'alembic.ini'
+            if not alembic_ini.exists():
+                DeploymentLogger.log(f"No alembic.ini in {build_path}, skipping migrations")
+                continue
+
+            admin_username = self._decode_secret_data(self.secrets['admin'], 'admin-username')
+            admin_password = self._decode_secret_data(self.secrets['admin'], 'admin-password')
+            db_name = self.app_name.replace('-', '_')
+            app_host = f"{self.app_name}.{self.domain}"
+
+            # Build migration script (matches Ansible environment setup)
+            migration_script = f"""
+set -e
+cd {container_path}
+
+# Set up database connection
+export POSTGRES_USER="{admin_username}"
+export POSTGRES_PASSWORD="{admin_password}"
+export POSTGRES_HOST="postgres.{self.domain}"
+export POSTGRES_PORT="5432"
+export POSTGRES_DATABASE="{db_name}"
+
+# Set required application config vars for Pydantic Settings validation
+export KEYCLOAK_URL="https://auth.{self.domain}"
+export KEYCLOAK_REALM="thinkube"
+export KEYCLOAK_CLIENT_ID="{self.namespace}"
+export KEYCLOAK_CLIENT_SECRET="dummy"
+export FRONTEND_URL="https://{app_host}"
+
+# Set Python path for model imports
+export PYTHONPATH="{container_path}:$PYTHONPATH"
+
+# Generate migrations
+echo "Generating migrations..."
+if alembic revision --autogenerate -m "initial_schema"; then
+    echo "Migration generated successfully"
+else
+    echo "Migration generation failed or no changes detected"
+fi
+"""
+
+            process = await asyncio.create_subprocess_shell(
+                migration_script,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(container_path)
+            )
+
+            stdout, stderr = await process.communicate()
+
+            if process.returncode == 0:
+                DeploymentLogger.log(f"Generated Alembic migrations for {build_path}")
+            else:
+                DeploymentLogger.log(f"Migration generation: {stderr.decode().strip()}")
 
     async def setup_git_hooks(self):
-        """Setup git hooks in local repository."""
-        # Git hooks are typically set up by the Ansible role
-        # For now, we'll skip this in the Python version
-        # The hooks will be set up when the role is ported
-        DeploymentLogger.log("Git hooks setup (handled separately)")
+        """Setup git hooks for template processing (matches Ansible setup_git_hooks.yaml)."""
+        hooks_dir = Path(self.local_repo_path) / '.git' / 'hooks'
+        hooks_dir.mkdir(parents=True, exist_ok=True)
+
+        # Pre-commit hook for Copier template processing
+        pre_commit_content = '''#!/bin/bash
+# Pre-commit hook to automatically process Copier templates
+
+set -e
+
+# Check if any .jinja files were modified
+if ! git diff --cached --name-only | grep -q '\\.jinja$'; then
+  exit 0
+fi
+
+echo "Processing Copier templates..."
+
+if [ ! -f .copier-answers.yml ]; then
+  echo "ERROR: .copier-answers.yml not found."
+  exit 1
+fi
+
+if command -v copier >/dev/null 2>&1; then
+  copier recopy --defaults --overwrite --quiet .
+else
+  echo "ERROR: Copier not installed."
+  exit 1
+fi
+
+for jinja_file in $(git diff --cached --name-only | grep '\\.jinja$'); do
+  yaml_file="${jinja_file%.jinja}"
+  if [ -f "$yaml_file" ]; then
+    git add "$yaml_file"
+    echo "Added generated file: $yaml_file"
+  fi
+done
+
+echo "Template processing complete!"
+'''
+
+        # Commit-msg hook
+        commit_msg_content = '''#!/bin/bash
+# Append note if templates were processed
+
+COMMIT_MSG_FILE=$1
+
+if git diff --cached --name-only | grep -q '\\.yaml$' && git diff --cached --name-only | grep -q '\\.jinja$'; then
+  echo "" >> "$COMMIT_MSG_FILE"
+  echo "[Templates processed by git hook]" >> "$COMMIT_MSG_FILE"
+fi
+'''
+
+        # Write hooks
+        pre_commit_path = hooks_dir / 'pre-commit'
+        with open(pre_commit_path, 'w') as f:
+            f.write(pre_commit_content)
+        pre_commit_path.chmod(0o755)
+
+        commit_msg_path = hooks_dir / 'commit-msg'
+        with open(commit_msg_path, 'w') as f:
+            f.write(commit_msg_content)
+        commit_msg_path.chmod(0o755)
+
+        # Create install-hooks.sh
+        install_hooks_content = '''#!/bin/bash
+# Reinstall git hooks if needed
+echo "Installing git hooks..."
+mkdir -p .git/hooks
+cp .git-hooks/pre-commit .git/hooks/pre-commit 2>/dev/null || true
+chmod +x .git/hooks/pre-commit 2>/dev/null || true
+echo "Git hooks installed!"
+'''
+        install_hooks_path = Path(self.local_repo_path) / 'install-hooks.sh'
+        with open(install_hooks_path, 'w') as f:
+            f.write(install_hooks_content)
+        install_hooks_path.chmod(0o755)
+
+        # Create reprocess-templates.sh
+        reprocess_content = f'''#!/bin/bash
+# Script to manually reprocess templates
+DOMAIN_NAME="{self.domain}"
+NAMESPACE="{self.namespace}"
+
+echo "Processing all templates for domain: $DOMAIN_NAME"
+for template in $(find . -name "*.jinja" 2>/dev/null); do
+    output="${{template%.jinja}}"
+    echo "Processing $template -> $output"
+    sed -e "s|{{{{ domain_name }}}}|${{DOMAIN_NAME}}|g" \\
+        -e "s|{{{{ namespace }}}}|${{NAMESPACE}}|g" \\
+        "$template" > "$output"
+done
+echo "Templates processed!"
+'''
+        reprocess_path = Path(self.local_repo_path) / 'reprocess-templates.sh'
+        with open(reprocess_path, 'w') as f:
+            f.write(reprocess_content)
+        reprocess_path.chmod(0o755)
+
+        # Create prepare-for-github.sh
+        prepare_github_content = '''#!/bin/bash
+# Script to prepare repository for pushing to GitHub
+echo "Preparing repository for GitHub contribution..."
+
+for template in $(find . -name "*.yaml.jinja" 2>/dev/null); do
+    processed="${template%.jinja}"
+    if [ -f "$processed" ]; then
+        echo "Removing processed file: $processed"
+        rm "$processed"
+    fi
+done
+
+echo "Repository is ready for GitHub contribution"
+'''
+        prepare_github_path = Path(self.local_repo_path) / 'prepare-for-github.sh'
+        with open(prepare_github_path, 'w') as f:
+            f.write(prepare_github_content)
+        prepare_github_path.chmod(0o755)
+
+        # Create DEVELOPMENT.md
+        development_md_content = f'''# Development Workflow
+
+This repository is hosted on Gitea for local development with Thinkube.
+
+## Initial Setup
+
+Install git hooks for automatic template processing:
+```bash
+./install-hooks.sh
+```
+
+## Making Changes
+
+1. **Edit templates** (`.yaml.jinja` files), not processed files
+2. **Commit your changes** - templates are automatically processed!
+   ```bash
+   git add .
+   git commit -m "Update deployment configuration"
+   ```
+
+## Manual Template Processing
+
+```bash
+./reprocess-templates.sh
+```
+
+## Contributing to GitHub
+
+1. **Prepare for GitHub** (removes processed files):
+   ```bash
+   ./prepare-for-github.sh
+   ```
+
+2. **Push to GitHub** and create PR
+'''
+        dev_md_path = Path(self.local_repo_path) / 'DEVELOPMENT.md'
+        with open(dev_md_path, 'w') as f:
+            f.write(development_md_content)
+
+        DeploymentLogger.log("Setup git hooks and helper scripts")
 
     async def configure_webhook(self):
         """Configure Gitea webhook (atomic operation - prevents duplicates)."""
@@ -847,19 +1134,82 @@ git push -u origin main --force
         DeploymentLogger.success("Phase 5 complete - application deployed")
 
     async def deploy_argocd_app(self):
-        """Create and sync ArgoCD application."""
+        """Create ArgoCD application with SSH setup (matches Ansible argocd role)."""
+        gitea_hostname = f"git.{self.domain}"
+        argocd_namespace = "argocd"
+
+        # Step 1: Get gitea-ssh-key from argo namespace
+        try:
+            gitea_ssh_secret = await self.k8s_core.read_namespaced_secret('gitea-ssh-key', 'argo')
+            ssh_private_key = self._decode_secret_data(gitea_ssh_secret, 'ssh-privatekey')
+        except ApiException as e:
+            DeploymentLogger.error(f"Failed to get gitea-ssh-key from argo namespace: {e}")
+            raise
+
+        # Step 2: Create SSH repository secret for ArgoCD
+        ssh_secret_name = f"gitea-{self.app_name}-ssh"
+        ssh_repo_url = f"ssh://git@{gitea_hostname}:2222/thinkube-deployments/{self.app_name}.git"
+
+        ssh_secret = client.V1Secret(
+            metadata=client.V1ObjectMeta(
+                name=ssh_secret_name,
+                namespace=argocd_namespace,
+                labels={'argocd.argoproj.io/secret-type': 'repository'}
+            ),
+            string_data={
+                'url': ssh_repo_url,
+                'sshPrivateKey': ssh_private_key,
+                'type': 'git'
+            }
+        )
+
+        try:
+            await self.k8s_core.create_namespaced_secret(argocd_namespace, ssh_secret)
+            DeploymentLogger.log(f"Created SSH secret: {ssh_secret_name}")
+        except ApiException as e:
+            if e.status == 409:
+                await self.k8s_core.replace_namespaced_secret(ssh_secret_name, argocd_namespace, ssh_secret)
+                DeploymentLogger.log(f"Updated SSH secret: {ssh_secret_name}")
+
+        # Step 3: Restart argocd-repo-server to pick up SSH config
+        try:
+            # Patch the deployment to trigger a restart (update an annotation)
+            patch_body = {
+                'spec': {
+                    'template': {
+                        'metadata': {
+                            'annotations': {
+                                'kubectl.kubernetes.io/restartedAt': datetime.now().isoformat()
+                            }
+                        }
+                    }
+                }
+            }
+            await self.k8s_apps.patch_namespaced_deployment(
+                name='argocd-repo-server',
+                namespace=argocd_namespace,
+                body=patch_body
+            )
+            DeploymentLogger.log("Restarted argocd-repo-server to pick up SSH config")
+
+            # Wait briefly for restart to begin
+            await asyncio.sleep(5)
+        except ApiException as e:
+            DeploymentLogger.error(f"Failed to restart argocd-repo-server: {e}")
+
+        # Step 4: Create ArgoCD Application with SSH URL
         argocd_app = {
             'apiVersion': 'argoproj.io/v1alpha1',
             'kind': 'Application',
             'metadata': {
                 'name': self.app_name,
-                'namespace': 'argocd'
+                'namespace': argocd_namespace
             },
             'spec': {
                 'project': 'default',
                 'source': {
-                    'repoURL': f'https://git.{self.domain}/thinkube-deployments/{self.app_name}.git',
-                    'targetRevision': 'main',
+                    'repoURL': ssh_repo_url,
+                    'targetRevision': 'HEAD',
                     'path': 'k8s'
                 },
                 'destination': {
@@ -867,11 +1217,9 @@ git push -u origin main --force
                     'namespace': self.namespace
                 },
                 'syncPolicy': {
-                    'automated': {
-                        'prune': True,
-                        'selfHeal': True
-                    }
-                }
+                    'syncOptions': ['CreateNamespace=true']
+                },
+                'revisionHistoryLimit': 3
             }
         }
 
@@ -879,17 +1227,26 @@ git push -u origin main --force
             await self.k8s_custom.create_namespaced_custom_object(
                 group="argoproj.io",
                 version="v1alpha1",
-                namespace="argocd",
+                namespace=argocd_namespace,
                 plural="applications",
                 body=argocd_app
             )
             DeploymentLogger.success(f"Created ArgoCD application: {self.app_name}")
         except ApiException as e:
             if e.status == 409:
+                # Get existing to preserve resourceVersion
+                existing = await self.k8s_custom.get_namespaced_custom_object(
+                    group="argoproj.io",
+                    version="v1alpha1",
+                    namespace=argocd_namespace,
+                    plural="applications",
+                    name=self.app_name
+                )
+                argocd_app['metadata']['resourceVersion'] = existing['metadata']['resourceVersion']
                 await self.k8s_custom.replace_namespaced_custom_object(
                     group="argoproj.io",
                     version="v1alpha1",
-                    namespace="argocd",
+                    namespace=argocd_namespace,
                     plural="applications",
                     name=self.app_name,
                     body=argocd_app
@@ -897,40 +1254,103 @@ git push -u origin main --force
                 DeploymentLogger.log("Updated ArgoCD application")
 
     async def configure_cicd_monitoring(self):
-        """Configure CI/CD monitoring webhook."""
+        """Register repository with CI/CD monitoring API (matches Ansible)."""
         # CI/CD monitoring webhook is optional
         if not self.thinkube_config.get('cicd', {}).get('enable_monitoring', True):
             DeploymentLogger.log("CI/CD monitoring disabled, skipping")
             return
 
-        DeploymentLogger.log("Configured CI/CD monitoring")
+        cicd_token = self._decode_secret_data(self.secrets['cicd_token'], 'token')
+        control_url = f"https://control.{self.domain}/api/v1/cicd/repositories"
+
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                'Authorization': f'Bearer {cicd_token}',
+                'Content-Type': 'application/json'
+            }
+
+            body = {
+                'repository_url': f"https://git.{self.domain}/thinkube-deployments/{self.app_name}",
+                'repository_name': self.app_name,
+                'active': True
+            }
+
+            async with session.post(control_url, headers=headers, json=body, ssl=False) as resp:
+                if resp.status in [200, 201]:
+                    DeploymentLogger.success(f"Registered {self.app_name} with CI/CD monitoring")
+                elif resp.status == 409:
+                    DeploymentLogger.log("Repository already registered with CI/CD monitoring")
+                else:
+                    error_text = await resp.text()
+                    DeploymentLogger.error(f"Failed to register with CI/CD monitoring: {resp.status} - {error_text}")
 
     async def setup_service_discovery(self):
-        """Setup service discovery."""
-        # Service discovery registration
-        discovery_cm = client.V1ConfigMap(
-            metadata=client.V1ObjectMeta(
-                name=f'{self.app_name}-service-discovery',
-                namespace=self.namespace
-            ),
-            data={
-                'service_name': self.app_name,
-                'namespace': self.namespace,
-                'domain': f'{self.app_name}.{self.domain}'
-            }
-        )
+        """Setup service discovery via thinkube-control API (matches Ansible)."""
+        cicd_token = self._decode_secret_data(self.secrets['cicd_token'], 'token')
+        control_base = f"https://control.{self.domain}"
+        app_host = f"{self.app_name}.{self.domain}"
 
-        try:
-            await self.k8s_core.create_namespaced_config_map(self.namespace, discovery_cm)
-            DeploymentLogger.log("Created service discovery config")
-        except ApiException as e:
-            if e.status == 409:
-                await self.k8s_core.replace_namespaced_config_map(
-                    f'{self.app_name}-service-discovery',
-                    self.namespace,
-                    discovery_cm
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                'Authorization': f'Bearer {cicd_token}',
+                'Content-Type': 'application/json'
+            }
+
+            # Step 1: Generate service discovery YAML via API
+            generate_url = f"{control_base}/api/v1/config/service-discovery/generate-configmap-yaml"
+            body = {
+                'app_name': self.app_name,
+                'app_host': app_host,
+                'k8s_namespace': self.namespace,
+                'template_url': self.template_url,
+                'project_description': self.params.get('project_description', ''),
+                'deployment_date': datetime.now().isoformat(),
+                'containers': self.thinkube_config.get('spec', {}).get('containers', [])
+            }
+
+            yaml_content = None
+            async with session.post(generate_url, headers=headers, json=body, ssl=False) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    yaml_content = result.get('yaml_content', '')
+                    DeploymentLogger.log("Generated service discovery YAML")
+                else:
+                    error_text = await resp.text()
+                    DeploymentLogger.error(f"Failed to generate service discovery YAML: {resp.status} - {error_text}")
+
+            # Step 2: Create ConfigMap with the generated YAML
+            if yaml_content:
+                discovery_cm = client.V1ConfigMap(
+                    metadata=client.V1ObjectMeta(
+                        name='thinkube-service-config',
+                        namespace=self.namespace,
+                        labels={
+                            'app': self.app_name,
+                            'thinkube.io/managed': 'true',
+                            'thinkube.io/service-type': 'user_app',
+                            'thinkube.io/service-name': self.app_name
+                        }
+                    ),
+                    data={'service.yaml': yaml_content}
                 )
-                DeploymentLogger.log("Updated service discovery config")
+
+                try:
+                    await self.k8s_core.create_namespaced_config_map(self.namespace, discovery_cm)
+                    DeploymentLogger.log("Created thinkube-service-config ConfigMap")
+                except ApiException as e:
+                    if e.status == 409:
+                        await self.k8s_core.replace_namespaced_config_map(
+                            'thinkube-service-config', self.namespace, discovery_cm
+                        )
+                        DeploymentLogger.log("Updated thinkube-service-config ConfigMap")
+
+            # Step 3: Trigger service sync to register app immediately
+            sync_url = f"{control_base}/api/v1/services/sync"
+            async with session.post(sync_url, headers=headers, ssl=False) as resp:
+                if resp.status in [200, 201]:
+                    DeploymentLogger.success("Service discovery sync triggered - app registered")
+                else:
+                    DeploymentLogger.log("Service sync trigger failed (app will appear via auto-discovery within 5 min)")
 
     # ==================== Main Orchestration ====================
 
