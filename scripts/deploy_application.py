@@ -383,22 +383,59 @@ class ApplicationDeployer:
                 raise
 
     async def create_harbor_secret(self):
-        """Create Harbor robot secret in BOTH argo and app namespaces (matches Ansible)."""
-        harbor = self.secrets['harbor']
+        """Create Harbor secrets for Kaniko (argo) and pod pulls (app namespace).
 
-        # Create in both namespaces (argo for Kaniko builds, app namespace for pods)
-        for ns in ['argo', self.namespace]:
-            new_secret = client.V1Secret(
-                metadata=client.V1ObjectMeta(name='harbor-docker-config', namespace=ns),
-                data=harbor.data,
-                type=harbor.type
-            )
-            try:
-                await self.k8s_core.create_namespaced_secret(ns, new_secret)
-                DeploymentLogger.log(f"Created Harbor secret in {ns}")
-            except ApiException as e:
-                if e.status == 409:
-                    DeploymentLogger.log(f"Harbor secret already exists in {ns}")
+        Matches Ansible docker_kaniko role:
+        - harbor-docker-config in argo namespace (type Opaque, key config.json) for Kaniko builds
+        - app-pull-secret in app namespace (type kubernetes.io/dockerconfigjson) for pod image pulls
+        """
+        harbor = self.secrets['harbor']
+        harbor_user = self._decode_secret_data(harbor, 'username')
+        harbor_token = self._decode_secret_data(harbor, 'password')
+        container_registry = f"registry.{self.domain}"
+
+        # Build the docker config JSON
+        docker_config = {
+            "auths": {
+                container_registry: {
+                    "username": harbor_user,
+                    "password": harbor_token,
+                    "auth": base64.b64encode(f"{harbor_user}:{harbor_token}".encode()).decode()
+                }
+            }
+        }
+        docker_config_json = json.dumps(docker_config)
+        docker_config_b64 = base64.b64encode(docker_config_json.encode()).decode()
+
+        # 1. Create harbor-docker-config in argo namespace for Kaniko (type Opaque, key config.json)
+        kaniko_secret = client.V1Secret(
+            metadata=client.V1ObjectMeta(name='harbor-docker-config', namespace='argo'),
+            data={'config.json': docker_config_b64},
+            type='Opaque'
+        )
+        try:
+            await self.k8s_core.create_namespaced_secret('argo', kaniko_secret)
+            DeploymentLogger.log("Created harbor-docker-config in argo namespace")
+        except ApiException as e:
+            if e.status == 409:
+                DeploymentLogger.log("harbor-docker-config already exists in argo")
+            else:
+                raise
+
+        # 2. Create app-pull-secret in app namespace for pod pulls (type dockerconfigjson)
+        pull_secret = client.V1Secret(
+            metadata=client.V1ObjectMeta(name='app-pull-secret', namespace=self.namespace),
+            data={'.dockerconfigjson': docker_config_b64},
+            type='kubernetes.io/dockerconfigjson'
+        )
+        try:
+            await self.k8s_core.create_namespaced_secret(self.namespace, pull_secret)
+            DeploymentLogger.log(f"Created app-pull-secret in {self.namespace}")
+        except ApiException as e:
+            if e.status == 409:
+                DeploymentLogger.log(f"app-pull-secret already exists in {self.namespace}")
+            else:
+                raise
 
     async def create_postgres_secret(self):
         """Create or replace PostgreSQL credentials secret (name matches Ansible: postgresql-official)."""
