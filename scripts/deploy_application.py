@@ -326,7 +326,26 @@ class ApplicationDeployer:
                 'Content-Type': 'application/json'
             }
 
-            # Always create new repository with unique name (no GET check)
+            # Check if repo already exists (shouldn't happen with UUID, but Gitea has bugs)
+            check_url = f"https://{gitea_hostname}/api/v1/repos/{org}/{self.gitea_repo_name}"
+            DeploymentLogger.log(f"[DEBUG] Checking if repo exists: {self.gitea_repo_name}")
+            async with session.get(check_url, headers=headers, ssl=False) as check_resp:
+                DeploymentLogger.log(f"[DEBUG] Check response status: {check_resp.status}")
+                if check_resp.status == 200:
+                    repo_data = await check_resp.json()
+                    DeploymentLogger.log(f"[DEBUG] Repo already exists! Created: {repo_data.get('created_at')}")
+                    DeploymentLogger.log(f"[DEBUG] Deleting orphaned repo before recreating...")
+                    delete_url = f"https://{gitea_hostname}/api/v1/repos/{org}/{self.gitea_repo_name}"
+                    async with session.delete(delete_url, headers=headers, ssl=False) as del_resp:
+                        if del_resp.status == 204:
+                            DeploymentLogger.log("Deleted orphaned repository")
+                            await asyncio.sleep(2)  # Allow Gitea to clean up
+                        else:
+                            del_error = await del_resp.text()
+                            DeploymentLogger.error(f"Failed to delete orphaned repo: {del_resp.status} - {del_error}")
+                            raise RuntimeError(f"Failed to clean up orphaned repository")
+
+            # Create new repository with unique name
             create_url = f"https://{gitea_hostname}/api/v1/orgs/{org}/repos"
             repo_payload = {
                 'name': self.gitea_repo_name,
@@ -335,7 +354,7 @@ class ApplicationDeployer:
                 'auto_init': False
             }
 
-            DeploymentLogger.log(f"[DEBUG] Attempting to create Gitea repo at {create_url}")
+            DeploymentLogger.log(f"[DEBUG] Attempting to create Gitea repo: {self.gitea_repo_name}")
             async with session.post(create_url, headers=headers, json=repo_payload, ssl=False) as resp:
                 DeploymentLogger.log(f"[DEBUG] Gitea API response status: {resp.status}")
                 if resp.status == 201:
@@ -344,7 +363,7 @@ class ApplicationDeployer:
                 else:
                     error_text = await resp.text()
                     DeploymentLogger.error(f"Failed to create Gitea repo: {resp.status} - {error_text}")
-                    DeploymentLogger.error("[DEBUG] About to raise RuntimeError")
+                    DeploymentLogger.error(f"[DEBUG] This should be impossible with UUID: {self.deployment_id}")
                     raise RuntimeError(f"Failed to create Gitea repository: {resp.status}")
 
     # ==================== PHASE 3: Resource Creation ====================
