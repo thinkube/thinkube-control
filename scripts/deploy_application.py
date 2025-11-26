@@ -1117,6 +1117,11 @@ spec:
             await loop.run_in_executor(executor, self.generate_k8s_manifests)
 
         await self.ensure_gitea_repo()
+
+        # Wait for Gitea to fully initialize the repository (database + filesystem sync)
+        DeploymentLogger.log("[DEBUG] Waiting 10 seconds for Gitea to stabilize...")
+        await asyncio.sleep(10)
+
         await self.configure_webhook()
 
         # Get existing workflow names BEFORE git push so we can detect NEW workflows
