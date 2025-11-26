@@ -151,6 +151,32 @@ class ApplicationDeployer:
 
     async def run_copier(self):
         """Run Copier to process the template (in thread pool to keep event loop responsive)."""
+        # Pull latest changes from Gitea first to avoid conflicts
+        # This handles the case where the repository already exists from a previous deployment
+        if Path(self.local_repo_path).exists() and Path(self.local_repo_path, '.git').exists():
+            DeploymentLogger.log("Pulling latest changes from Gitea repository")
+            gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
+            gitea_hostname = f"git.{self.domain}"
+            org = "thinkube-deployments"
+
+            pull_script = f"""
+set -e
+cd {self.local_repo_path}
+git config user.name '{self.admin_username}'
+git config user.email '{self.admin_username}@{self.domain}'
+git remote set-url origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.gitea_repo_name}.git' || \
+git remote add origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.gitea_repo_name}.git'
+git pull origin main || true
+"""
+            loop = asyncio.get_event_loop()
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                returncode, stdout, stderr = await loop.run_in_executor(
+                    executor,
+                    partial(self._run_git_sync, pull_script, self.local_repo_path)
+                )
+            if returncode == 0:
+                DeploymentLogger.log("Successfully pulled latest changes")
+
         DeploymentLogger.log(f"Running Copier for template: {self.template_url}")
 
         # Build copier command with all template parameters
@@ -1540,8 +1566,6 @@ git add -A
 if ! git diff --cached --quiet; then
   git commit -m 'Deploy {self.app_name} to {self.domain}'
 fi
-# Pull latest changes (webhook adapter may have pushed .argocd-source updates)
-git pull --rebase origin main || true
 git push -u origin main
 """
 
