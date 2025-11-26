@@ -1931,81 +1931,6 @@ git push -u origin main --force
                 else:
                     DeploymentLogger.log("Service sync trigger failed (app will appear via auto-discovery within 5 min)")
 
-    async def cleanup_old_gitea_repos(self):
-        """
-        Cleanup obsolete Gitea repositories after successful deployment.
-
-        Keeps only the current active repository (referenced by ArgoCD).
-        Deletes all other repos matching {app_name}-* pattern.
-        """
-        try:
-            DeploymentLogger.log("Cleaning up old Gitea repositories...")
-
-            gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
-            gitea_hostname = f"git.{self.domain}"
-            org = "thinkube-deployments"
-
-            # Get current repo from ArgoCD application
-            argocd_namespace = "argocd"
-            try:
-                argocd_app = await self.k8s_custom.get_namespaced_custom_object(
-                    group="argoproj.io",
-                    version="v1alpha1",
-                    namespace=argocd_namespace,
-                    plural="applications",
-                    name=self.app_name
-                )
-                # Extract repo name from SSH URL: ssh://git@host:2222/org/repo-name.git
-                repo_url = argocd_app['spec']['source']['repoURL']
-                current_repo = repo_url.split('/')[-1].replace('.git', '')
-                DeploymentLogger.log(f"Current active repository: {current_repo}")
-            except ApiException as e:
-                DeploymentLogger.log(f"Could not get ArgoCD application, skipping cleanup: {e}")
-                return
-
-            # List all repositories in the organization
-            async with aiohttp.ClientSession() as session:
-                headers = {
-                    'Authorization': f'token {gitea_token}',
-                    'Content-Type': 'application/json'
-                }
-
-                list_url = f"https://{gitea_hostname}/api/v1/orgs/{org}/repos"
-                async with session.get(list_url, headers=headers, ssl=False) as resp:
-                    if resp.status != 200:
-                        DeploymentLogger.log(f"Failed to list repos: {resp.status}, skipping cleanup")
-                        return
-
-                    repos = await resp.json()
-
-                    # Find repos matching {app_name}-* pattern
-                    repos_to_delete = []
-                    for repo in repos:
-                        repo_name = repo['name']
-                        # Match pattern: starts with app_name followed by dash
-                        if repo_name.startswith(f"{self.app_name}-") and repo_name != current_repo:
-                            repos_to_delete.append(repo_name)
-
-                    if not repos_to_delete:
-                        DeploymentLogger.log("No old repositories to cleanup")
-                        return
-
-                    # Delete old repositories
-                    DeploymentLogger.log(f"Found {len(repos_to_delete)} old repositories to delete")
-                    for repo_name in repos_to_delete:
-                        delete_url = f"https://{gitea_hostname}/api/v1/repos/{org}/{repo_name}"
-                        async with session.delete(delete_url, headers=headers, ssl=False) as resp:
-                            if resp.status == 204:
-                                DeploymentLogger.log(f"Deleted old repository: {repo_name}")
-                            else:
-                                error_text = await resp.text()
-                                DeploymentLogger.log(f"Failed to delete {repo_name}: {resp.status} - {error_text}")
-
-                    DeploymentLogger.success(f"Cleaned up {len(repos_to_delete)} old Gitea repositories")
-
-        except Exception as e:
-            # Don't fail the deployment if cleanup fails
-            DeploymentLogger.log(f"Cleanup of old repos failed (non-critical): {e}")
 
     # ==================== Main Orchestration ====================
 
@@ -2118,10 +2043,6 @@ LIMIT 5;"
             DeploymentLogger.debug(" Starting Phase 5")
             await self.phase5_deploy()
             DeploymentLogger.debug(" Phase 5 complete")
-
-            # Cleanup old Gitea repositories after successful deployment
-            DeploymentLogger.debug(" Cleaning up old repos")
-            await self.cleanup_old_gitea_repos()
 
             elapsed = (datetime.now() - start_time).total_seconds()
             DeploymentLogger.success(f"Deployment complete in {elapsed:.1f} seconds")
