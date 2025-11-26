@@ -340,32 +340,17 @@ class ApplicationDeployer:
                 'Content-Type': 'application/json'
             }
 
-            # Check if repo already exists (shouldn't happen with UUID, but Gitea has bugs)
+            # Check if repo already exists - if so, just reuse it (truly synchronous)
             check_url = f"https://{gitea_hostname}/api/v1/repos/{org}/{self.gitea_repo_name}"
-            DeploymentLogger.debug(f" About to send GET request to {check_url}")
+            DeploymentLogger.debug(f" Checking if repo exists: {check_url}")
             async with session.get(check_url, headers=headers, ssl=False) as check_resp:
-                DeploymentLogger.debug(f" GET request completed with status: {check_resp.status}")
+                DeploymentLogger.debug(f" Repo check status: {check_resp.status}")
                 if check_resp.status == 200:
                     repo_data = await check_resp.json()
-                    DeploymentLogger.debug(f" Repo already exists! Created: {repo_data.get('created_at')}")
-                    DeploymentLogger.debug(f" Deleting orphaned repo before recreating...")
-                    delete_url = f"https://{gitea_hostname}/api/v1/repos/{org}/{self.gitea_repo_name}"
-                    async with session.delete(delete_url, headers=headers, ssl=False) as del_resp:
-                        if del_resp.status == 204:
-                            DeploymentLogger.log("Deleted orphaned repository")
-                            # Wait for deletion to complete (verify repo is gone)
-                            for i in range(10):
-                                await asyncio.sleep(1)
-                                async with session.get(check_url, headers=headers, ssl=False) as verify_resp:
-                                    if verify_resp.status == 404:
-                                        DeploymentLogger.log("Repository deletion confirmed")
-                                        break
-                                if i == 9:
-                                    raise RuntimeError("Repository deletion timeout - repo still exists after 10 seconds")
-                        else:
-                            del_error = await del_resp.text()
-                            DeploymentLogger.error(f"Failed to delete orphaned repo: {del_resp.status} - {del_error}")
-                            raise RuntimeError(f"Failed to clean up orphaned repository")
+                    DeploymentLogger.log(f"Repository already exists, reusing it")
+                    repo_url = repo_data['clone_url']
+                    DeploymentLogger.log(f"Gitea repo ready: {repo_url}")
+                    return repo_url
 
             # Create new repository with unique name
             create_url = f"https://{gitea_hostname}/api/v1/orgs/{org}/repos"
