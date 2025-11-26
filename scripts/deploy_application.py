@@ -468,7 +468,9 @@ class ApplicationDeployer:
             DeploymentLogger.log("Created MLflow config secret")
         except ApiException as e:
             if e.status == 409:
-                DeploymentLogger.log("MLflow config secret already exists")
+                # Update existing secret with fresh credentials
+                await self.k8s_core.replace_namespaced_secret('mlflow-auth-config', self.namespace, new_secret)
+                DeploymentLogger.log("Updated MLflow config secret")
 
     async def create_app_metadata(self):
         """Create application metadata ConfigMap."""
