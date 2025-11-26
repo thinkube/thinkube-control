@@ -97,7 +97,7 @@ class ApplicationDeployer:
     # ==================== PHASE 1: Setup & Validation ====================
 
     async def phase1_setup(self):
-        """Phase 1: Validate parameters and run Copier."""
+        """Phase 1: Validate parameters, create namespace, and run Copier."""
         DeploymentLogger.phase(1, "Setup & Validation")
 
         # Validate required parameters
@@ -111,10 +111,50 @@ class ApplicationDeployer:
         # Create namespace
         await self.create_namespace()
 
+        DeploymentLogger.success("Phase 1 complete")
+
+    async def phase1b_copier(self):
+        """Phase 1B: Pull latest changes and run Copier (requires secrets from Phase 2)."""
+        DeploymentLogger.phase("1B", "Copier & Repository Sync")
+
+        # Pull latest changes from Gitea before running Copier
+        await self.pull_latest_from_gitea()
+
         # Run Copier
+        DeploymentLogger.log(f"Running Copier for template: {self.template_url}")
         await self.run_copier()
 
-        DeploymentLogger.success("Phase 1 complete")
+        DeploymentLogger.success("Phase 1B complete")
+
+    async def pull_latest_from_gitea(self):
+        """Pull latest changes from Gitea repository to avoid merge conflicts."""
+        # Only pull if the repository already exists from a previous deployment
+        if not (Path(self.local_repo_path).exists() and Path(self.local_repo_path, '.git').exists()):
+            DeploymentLogger.log("No existing git repository, will be created fresh")
+            return
+
+        DeploymentLogger.log("Pulling latest changes from Gitea repository")
+        gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
+        gitea_hostname = f"git.{self.domain}"
+        org = "thinkube-deployments"
+
+        pull_script = f"""
+set -e
+cd {self.local_repo_path}
+git config user.name '{self.admin_username}'
+git config user.email '{self.admin_username}@{self.domain}'
+git remote set-url origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.gitea_repo_name}.git' || \
+git remote add origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.gitea_repo_name}.git'
+git pull origin main || true
+"""
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            returncode, stdout, stderr = await loop.run_in_executor(
+                executor,
+                partial(self._run_git_sync, pull_script, self.local_repo_path)
+            )
+        if returncode == 0:
+            DeploymentLogger.log("Successfully pulled latest changes")
 
     async def create_namespace(self):
         """Create application namespace if it doesn't exist."""
@@ -151,33 +191,7 @@ class ApplicationDeployer:
 
     async def run_copier(self):
         """Run Copier to process the template (in thread pool to keep event loop responsive)."""
-        # Pull latest changes from Gitea first to avoid conflicts
-        # This handles the case where the repository already exists from a previous deployment
-        if Path(self.local_repo_path).exists() and Path(self.local_repo_path, '.git').exists():
-            DeploymentLogger.log("Pulling latest changes from Gitea repository")
-            gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
-            gitea_hostname = f"git.{self.domain}"
-            org = "thinkube-deployments"
-
-            pull_script = f"""
-set -e
-cd {self.local_repo_path}
-git config user.name '{self.admin_username}'
-git config user.email '{self.admin_username}@{self.domain}'
-git remote set-url origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.gitea_repo_name}.git' || \
-git remote add origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.gitea_repo_name}.git'
-git pull origin main || true
-"""
-            loop = asyncio.get_event_loop()
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                returncode, stdout, stderr = await loop.run_in_executor(
-                    executor,
-                    partial(self._run_git_sync, pull_script, self.local_repo_path)
-                )
-            if returncode == 0:
-                DeploymentLogger.log("Successfully pulled latest changes")
-
-        DeploymentLogger.log(f"Running Copier for template: {self.template_url}")
+        DeploymentLogger.log(f"Processing template: {self.template_url}")
 
         # Build copier command with all template parameters
         # container_registry is critical for Dockerfile base images
@@ -2056,6 +2070,10 @@ LIMIT 5;"
             DeploymentLogger.debug(" Starting Phase 2")
             await self.phase2_gather_resources()
             DeploymentLogger.debug(" Phase 2 complete")
+
+            DeploymentLogger.debug(" Starting Phase 1B")
+            await self.phase1b_copier()
+            DeploymentLogger.debug(" Phase 1B complete")
 
             DeploymentLogger.debug(" Starting Phase 3")
             await self.phase3_create_resources()
