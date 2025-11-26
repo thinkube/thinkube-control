@@ -62,6 +62,7 @@ class ApplicationDeployer:
         # Unique Gitea repository name: {app_name}-{deployment_id}
         # This prevents conflicts and database corruption
         self.gitea_repo_name = f"{self.app_name}-{self.deployment_id}"
+        DeploymentLogger.log(f"Unique Gitea repo name: {self.gitea_repo_name}")
 
         # Will be populated during deployment
         self.secrets = {}
