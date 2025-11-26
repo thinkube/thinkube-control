@@ -191,6 +191,12 @@ class ApplicationDeployer:
             DeploymentLogger.error(f"Copier failed: {stderr}")
             raise RuntimeError("Copier execution failed")
 
+        # Add deployment trigger file with timestamp to ensure there's always a change to commit
+        # This ensures webhook triggers even when template hasn't changed
+        trigger_file = Path(self.local_repo_path) / '.deployment-trigger'
+        trigger_file.write_text(f"Deployment triggered at {datetime.utcnow().isoformat()}Z\n")
+        DeploymentLogger.debug(f" Created deployment trigger file")
+
         DeploymentLogger.success("Copier processing complete")
 
     # ==================== PHASE 2: Resource Gathering ====================
