@@ -1529,7 +1529,10 @@ git remote remove origin 2>/dev/null || true
 git remote add origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.gitea_repo_name}.git'
 
 git add -A
-git commit -m 'Deploy {self.app_name} to {self.domain}'
+# Only commit if there are changes
+if ! git diff --cached --quiet; then
+  git commit -m 'Deploy {self.app_name} to {self.domain}'
+fi
 git push -u origin main --force
 """
 
