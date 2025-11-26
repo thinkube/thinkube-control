@@ -353,7 +353,15 @@ class ApplicationDeployer:
                     async with session.delete(delete_url, headers=headers, ssl=False) as del_resp:
                         if del_resp.status == 204:
                             DeploymentLogger.log("Deleted orphaned repository")
-                            await asyncio.sleep(2)  # Allow Gitea to clean up
+                            # Wait for deletion to complete (verify repo is gone)
+                            for i in range(10):
+                                await asyncio.sleep(1)
+                                async with session.get(check_url, headers=headers, ssl=False) as verify_resp:
+                                    if verify_resp.status == 404:
+                                        DeploymentLogger.log("Repository deletion confirmed")
+                                        break
+                                if i == 9:
+                                    raise RuntimeError("Repository deletion timeout - repo still exists after 10 seconds")
                         else:
                             del_error = await del_resp.text()
                             DeploymentLogger.error(f"Failed to delete orphaned repo: {del_resp.status} - {del_error}")
