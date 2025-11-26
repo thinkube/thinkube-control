@@ -51,12 +51,17 @@ class ApplicationDeployer:
     def __init__(self, params: Dict[str, Any]):
         self.params = params
         self.app_name = params['app_name']
+        self.deployment_id = params['deployment_id']
         self.namespace = params['deployment_namespace']
         self.domain = params['domain_name']
         self.admin_username = params['admin_username']
         self.template_url = params['template_url']
         # Inside container: /home is mounted from host's /home/{ansible_user}/shared-code
         self.local_repo_path = f"/home/{self.app_name}"
+
+        # Unique Gitea repository name: {app_name}-{deployment_id}
+        # This prevents conflicts and database corruption
+        self.gitea_repo_name = f"{self.app_name}-{self.deployment_id}"
 
         # Will be populated during deployment
         self.secrets = {}
@@ -308,7 +313,7 @@ class ApplicationDeployer:
             raise
 
     async def ensure_gitea_repo(self):
-        """Ensure Gitea repository exists (create only if missing - match Ansible)."""
+        """Create unique Gitea repository with deployment_id suffix."""
         gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
         gitea_hostname = f"git.{self.domain}"
         org = "thinkube-deployments"
@@ -319,25 +324,18 @@ class ApplicationDeployer:
                 'Content-Type': 'application/json'
             }
 
-            # Check if repository exists
-            repo_url = f"https://{gitea_hostname}/api/v1/repos/{org}/{self.app_name}"
-            async with session.get(repo_url, headers=headers, ssl=False) as resp:
-                if resp.status == 200:
-                    DeploymentLogger.log(f"Gitea repository already exists: {org}/{self.app_name}")
-                    return
-
-            # Create repository only if it doesn't exist
+            # Always create new repository with unique name (no GET check)
             create_url = f"https://{gitea_hostname}/api/v1/orgs/{org}/repos"
             repo_payload = {
-                'name': self.app_name,
-                'description': f'Deployment manifests for {self.app_name}',
+                'name': self.gitea_repo_name,
+                'description': f'Deployment manifests for {self.app_name} (deployment {self.deployment_id})',
                 'private': True,
                 'auto_init': False
             }
 
             async with session.post(create_url, headers=headers, json=repo_payload, ssl=False) as resp:
                 if resp.status == 201:
-                    DeploymentLogger.log(f"Created Gitea repository: {org}/{self.app_name}")
+                    DeploymentLogger.log(f"Created Gitea repository: {org}/{self.gitea_repo_name}")
                 else:
                     error_text = await resp.text()
                     DeploymentLogger.error(f"Failed to create Gitea repo: {resp.status} - {error_text}")
@@ -1371,7 +1369,7 @@ Install git hooks for automatic template processing:
         gitea_hostname = f"git.{self.domain}"
         webhook_url = f"https://argo-events.{self.domain}/gitea"
         org = "thinkube-deployments"
-        repo = self.app_name
+        repo = self.gitea_repo_name
 
         # Get webhook secret from Argo namespace
         try:
@@ -1462,7 +1460,7 @@ Install git hooks for automatic template processing:
                     return False
 
     async def git_commit_and_push(self):
-        """Commit and push changes to Gitea with automatic recovery from corrupted repos."""
+        """Commit and push changes to Gitea using unique repository name."""
         gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
         gitea_hostname = f"git.{self.domain}"
         org = "thinkube-deployments"
@@ -1480,7 +1478,7 @@ fi
 git config user.name '{self.admin_username}'
 git config user.email '{self.admin_username}@{self.domain}'
 git remote remove origin 2>/dev/null || true
-git remote add origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.app_name}.git'
+git remote add origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.gitea_repo_name}.git'
 
 # Add deployment token to ensure there's always a change (triggers webhook)
 echo "deployed_at: {datetime.now().isoformat()}" > .deployment-trigger
@@ -1503,19 +1501,8 @@ git push -u origin main --force
                 DeploymentLogger.success("Pushed changes to Gitea")
                 return
 
-            # Check for specific recoverable errors
-            if "unable to migrate objects to permanent storage" in stderr:
-                DeploymentLogger.log(f"Gitea repository corrupted, deleting and recreating (attempt {attempt + 1}/{max_retries})")
-                deleted = await self._delete_gitea_repo(org, self.app_name)
-                if deleted:
-                    # Recreate the repo
-                    await self.ensure_gitea_repo()
-                    # Reconfigure webhook
-                    await self.configure_webhook()
-                    continue  # Retry push
-                else:
-                    raise RuntimeError(f"Failed to recover from corrupted Gitea repository")
-            elif "index.lock" in stderr and "File exists" in stderr:
+            # Check for stale lock file (only recoverable error with unique repos)
+            if "index.lock" in stderr and "File exists" in stderr:
                 # Stale git lock file from crashed process (e.g., OOMKill)
                 DeploymentLogger.log(f"Removing stale git lock file (attempt {attempt + 1}/{max_retries})")
                 lock_file = Path(self.local_repo_path) / ".git" / "index.lock"
@@ -1684,7 +1671,7 @@ git push -u origin main --force
 
         # Step 2: Create SSH repository secret for ArgoCD
         ssh_secret_name = f"gitea-{self.app_name}-ssh"
-        ssh_repo_url = f"ssh://git@{gitea_hostname}:2222/thinkube-deployments/{self.app_name}.git"
+        ssh_repo_url = f"ssh://git@{gitea_hostname}:2222/thinkube-deployments/{self.gitea_repo_name}.git"
 
         ssh_secret = client.V1Secret(
             metadata=client.V1ObjectMeta(
@@ -1888,6 +1875,82 @@ git push -u origin main --force
                 else:
                     DeploymentLogger.log("Service sync trigger failed (app will appear via auto-discovery within 5 min)")
 
+    async def cleanup_old_gitea_repos(self):
+        """
+        Cleanup obsolete Gitea repositories after successful deployment.
+
+        Keeps only the current active repository (referenced by ArgoCD).
+        Deletes all other repos matching {app_name}-* pattern.
+        """
+        try:
+            DeploymentLogger.log("Cleaning up old Gitea repositories...")
+
+            gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
+            gitea_hostname = f"git.{self.domain}"
+            org = "thinkube-deployments"
+
+            # Get current repo from ArgoCD application
+            argocd_namespace = "argocd"
+            try:
+                argocd_app = await self.k8s_custom.get_namespaced_custom_object(
+                    group="argoproj.io",
+                    version="v1alpha1",
+                    namespace=argocd_namespace,
+                    plural="applications",
+                    name=self.app_name
+                )
+                # Extract repo name from SSH URL: ssh://git@host:2222/org/repo-name.git
+                repo_url = argocd_app['spec']['source']['repoURL']
+                current_repo = repo_url.split('/')[-1].replace('.git', '')
+                DeploymentLogger.log(f"Current active repository: {current_repo}")
+            except ApiException as e:
+                DeploymentLogger.log(f"Could not get ArgoCD application, skipping cleanup: {e}")
+                return
+
+            # List all repositories in the organization
+            async with aiohttp.ClientSession() as session:
+                headers = {
+                    'Authorization': f'token {gitea_token}',
+                    'Content-Type': 'application/json'
+                }
+
+                list_url = f"https://{gitea_hostname}/api/v1/orgs/{org}/repos"
+                async with session.get(list_url, headers=headers, ssl=False) as resp:
+                    if resp.status != 200:
+                        DeploymentLogger.log(f"Failed to list repos: {resp.status}, skipping cleanup")
+                        return
+
+                    repos = await resp.json()
+
+                    # Find repos matching {app_name}-* pattern
+                    repos_to_delete = []
+                    for repo in repos:
+                        repo_name = repo['name']
+                        # Match pattern: starts with app_name followed by dash
+                        if repo_name.startswith(f"{self.app_name}-") and repo_name != current_repo:
+                            repos_to_delete.append(repo_name)
+
+                    if not repos_to_delete:
+                        DeploymentLogger.log("No old repositories to cleanup")
+                        return
+
+                    # Delete old repositories
+                    DeploymentLogger.log(f"Found {len(repos_to_delete)} old repositories to delete")
+                    for repo_name in repos_to_delete:
+                        delete_url = f"https://{gitea_hostname}/api/v1/repos/{org}/{repo_name}"
+                        async with session.delete(delete_url, headers=headers, ssl=False) as resp:
+                            if resp.status == 204:
+                                DeploymentLogger.log(f"Deleted old repository: {repo_name}")
+                            else:
+                                error_text = await resp.text()
+                                DeploymentLogger.log(f"Failed to delete {repo_name}: {resp.status} - {error_text}")
+
+                    DeploymentLogger.success(f"Cleaned up {len(repos_to_delete)} old Gitea repositories")
+
+        except Exception as e:
+            # Don't fail the deployment if cleanup fails
+            DeploymentLogger.log(f"Cleanup of old repos failed (non-critical): {e}")
+
     # ==================== Main Orchestration ====================
 
     async def deploy(self):
@@ -1903,6 +1966,9 @@ git push -u origin main --force
             await self.phase3_create_resources()
             await self.phase4_git_operations()
             await self.phase5_deploy()
+
+            # Cleanup old Gitea repositories after successful deployment
+            await self.cleanup_old_gitea_repos()
 
             elapsed = (datetime.now() - start_time).total_seconds()
             DeploymentLogger.success(f"Deployment complete in {elapsed:.1f} seconds")

@@ -238,6 +238,8 @@ class BackgroundExecutor:
         """
         # Prepare variables with authentication
         extra_vars = deployment.variables.copy()
+        # Add deployment_id for unique Gitea repository naming
+        extra_vars['deployment_id'] = str(deployment.id)
         extra_vars = ansible_env.prepare_auth_vars(extra_vars)
 
         # Create temporary vars file for the Python script

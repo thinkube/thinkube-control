@@ -482,6 +482,8 @@ async def _execute_template_deployment(
 
     # Prepare variables for Python script
     extra_vars = deployment.variables.copy()
+    # Add deployment_id for unique Gitea repository naming
+    extra_vars['deployment_id'] = str(deployment.id)
     extra_vars = ansible_env.prepare_auth_vars(extra_vars)
 
     # Create temporary vars file for the Python script
