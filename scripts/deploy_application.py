@@ -611,7 +611,7 @@ class ApplicationDeployer:
     async def manage_databases(self):
         """Create PostgreSQL databases using kubernetes exec (matches Ansible k8s_exec)."""
         # Check if database is needed
-        services = self.thinkube_spec.get('spec', {}).get('services', [])
+        services = self.thinkube_config.get('spec', {}).get('services', [])
         if 'database' not in services:
             DeploymentLogger.log("Skipping database creation - not required by template")
             return
