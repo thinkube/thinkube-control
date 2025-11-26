@@ -2032,6 +2032,40 @@ LIMIT 5;"
         except Exception as e:
             DeploymentLogger.log(f"[DEBUG] Could not query existing deployments: {e}")
 
+    async def list_existing_gitea_repos(self):
+        """List existing Gitea repositories for this app."""
+        try:
+            gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
+            gitea_hostname = f"git.{self.domain}"
+            org = "thinkube-deployments"
+
+            async with aiohttp.ClientSession() as session:
+                headers = {
+                    'Authorization': f'token {gitea_token}',
+                    'Content-Type': 'application/json'
+                }
+
+                # List all repos in the organization
+                list_url = f"https://{gitea_hostname}/api/v1/orgs/{org}/repos"
+                async with session.get(list_url, headers=headers, ssl=False) as resp:
+                    if resp.status == 200:
+                        repos = await resp.json()
+                        # Filter repos that match this app name
+                        matching_repos = [r for r in repos if r['name'].startswith(f"{self.app_name}-")]
+
+                        if matching_repos:
+                            DeploymentLogger.log(f"[DEBUG] Found {len(matching_repos)} existing Gitea repos for {self.app_name}:")
+                            for repo in matching_repos:
+                                DeploymentLogger.log(f"[DEBUG]   {repo['name']} (created: {repo.get('created_at', 'unknown')})")
+                        else:
+                            DeploymentLogger.log(f"[DEBUG] No existing Gitea repos found for {self.app_name}")
+                    else:
+                        error_text = await resp.text()
+                        DeploymentLogger.log(f"[DEBUG] Could not list Gitea repos: {resp.status} - {error_text}")
+
+        except Exception as e:
+            DeploymentLogger.log(f"[DEBUG] Could not query Gitea repos: {e}")
+
     async def deploy(self):
         """Main deployment orchestration."""
         start_time = datetime.now()
@@ -2041,8 +2075,9 @@ LIMIT 5;"
         try:
             await self.initialize_k8s_clients()
 
-            # List existing deployments for debugging
+            # List existing deployments and repos for debugging
             await self.list_existing_deployments()
+            await self.list_existing_gitea_repos()
 
             DeploymentLogger.log("[DEBUG] Starting Phase 1")
             await self.phase1_setup()
