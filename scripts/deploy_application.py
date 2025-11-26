@@ -1528,9 +1528,6 @@ git config user.email '{self.admin_username}@{self.domain}'
 git remote remove origin 2>/dev/null || true
 git remote add origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.gitea_repo_name}.git'
 
-# Add deployment token to ensure there's always a change (triggers webhook)
-echo "deployed_at: {datetime.now().isoformat()}" > .deployment-trigger
-
 git add -A
 git commit -m 'Deploy {self.app_name} to {self.domain}'
 git push -u origin main --force
