@@ -315,6 +315,7 @@ class ApplicationDeployer:
 
     async def ensure_gitea_repo(self):
         """Create unique Gitea repository with deployment_id suffix."""
+        DeploymentLogger.log(f"[DEBUG] ensure_gitea_repo() called for {self.gitea_repo_name}")
         gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
         gitea_hostname = f"git.{self.domain}"
         org = "thinkube-deployments"
@@ -334,12 +335,16 @@ class ApplicationDeployer:
                 'auto_init': False
             }
 
+            DeploymentLogger.log(f"[DEBUG] Attempting to create Gitea repo at {create_url}")
             async with session.post(create_url, headers=headers, json=repo_payload, ssl=False) as resp:
+                DeploymentLogger.log(f"[DEBUG] Gitea API response status: {resp.status}")
                 if resp.status == 201:
                     DeploymentLogger.log(f"Created Gitea repository: {org}/{self.gitea_repo_name}")
+                    DeploymentLogger.log("[DEBUG] ensure_gitea_repo() exiting normally")
                 else:
                     error_text = await resp.text()
                     DeploymentLogger.error(f"Failed to create Gitea repo: {resp.status} - {error_text}")
+                    DeploymentLogger.error("[DEBUG] About to raise RuntimeError")
                     raise RuntimeError(f"Failed to create Gitea repository: {resp.status}")
 
     # ==================== PHASE 3: Resource Creation ====================
@@ -1964,26 +1969,45 @@ git push -u origin main --force
         """Main deployment orchestration."""
         start_time = datetime.now()
         DeploymentLogger.log(f"Starting deployment of {self.app_name}")
+        DeploymentLogger.log(f"[DEBUG] Deployment ID: {self.deployment_id}")
 
         try:
             await self.initialize_k8s_clients()
 
+            DeploymentLogger.log("[DEBUG] Starting Phase 1")
             await self.phase1_setup()
+            DeploymentLogger.log("[DEBUG] Phase 1 complete")
+
+            DeploymentLogger.log("[DEBUG] Starting Phase 2")
             await self.phase2_gather_resources()
+            DeploymentLogger.log("[DEBUG] Phase 2 complete")
+
+            DeploymentLogger.log("[DEBUG] Starting Phase 3")
             await self.phase3_create_resources()
+            DeploymentLogger.log("[DEBUG] Phase 3 complete")
+
+            DeploymentLogger.log("[DEBUG] Starting Phase 4")
             await self.phase4_git_operations()
+            DeploymentLogger.log("[DEBUG] Phase 4 complete")
+
+            DeploymentLogger.log("[DEBUG] Starting Phase 5")
             await self.phase5_deploy()
+            DeploymentLogger.log("[DEBUG] Phase 5 complete")
 
             # Cleanup old Gitea repositories after successful deployment
+            DeploymentLogger.log("[DEBUG] Cleaning up old repos")
             await self.cleanup_old_gitea_repos()
 
             elapsed = (datetime.now() - start_time).total_seconds()
             DeploymentLogger.success(f"Deployment complete in {elapsed:.1f} seconds")
+            DeploymentLogger.log("[DEBUG] Returning exit code 0")
 
             return 0
 
         except Exception as e:
             DeploymentLogger.error(f"Deployment failed: {e}")
+            DeploymentLogger.error(f"[DEBUG] Exception type: {type(e).__name__}")
+            DeploymentLogger.error(f"[DEBUG] Returning exit code 1")
             import traceback
             traceback.print_exc()
             return 1
@@ -2007,7 +2031,10 @@ async def main():
         sys.exit(1)
 
     deployer = ApplicationDeployer(params)
+    DeploymentLogger.log("[DEBUG] Calling deployer.deploy()")
     exit_code = await deployer.deploy()
+    DeploymentLogger.log(f"[DEBUG] deployer.deploy() returned: {exit_code}")
+    DeploymentLogger.log(f"[DEBUG] Exiting with code: {exit_code}")
     sys.exit(exit_code)
 
 
