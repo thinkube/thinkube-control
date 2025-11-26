@@ -743,10 +743,10 @@ class ApplicationDeployer:
         # Get MLflow credentials
         mlflow_secret = self.secrets.get('mlflow', {}).get('secret')
         mlflow_keycloak_token_url = self._decode_secret_data(mlflow_secret, 'keycloak-token-url') if mlflow_secret else ''
-        mlflow_keycloak_client_id = self._decode_secret_data(mlflow_secret, 'keycloak-client-id') if mlflow_secret else ''
-        mlflow_client_secret = self._decode_secret_data(mlflow_secret, 'mlflow-client-secret') if mlflow_secret else ''
-        mlflow_username = self._decode_secret_data(mlflow_secret, 'mlflow-username') if mlflow_secret else ''
-        mlflow_password = self._decode_secret_data(mlflow_secret, 'admin-password') if mlflow_secret else admin_password
+        mlflow_keycloak_client_id = self._decode_secret_data(mlflow_secret, 'client-id') if mlflow_secret else ''
+        mlflow_client_secret = self._decode_secret_data(mlflow_secret, 'client-secret') if mlflow_secret else ''
+        mlflow_username = self._decode_secret_data(mlflow_secret, 'username') if mlflow_secret else ''
+        mlflow_password = self._decode_secret_data(mlflow_secret, 'password') if mlflow_secret else admin_password
 
         # Get SeaweedFS credentials
         seaweedfs_secret = self.secrets.get('seaweedfs')
