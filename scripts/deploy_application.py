@@ -315,7 +315,11 @@ class ApplicationDeployer:
 
     async def ensure_gitea_repo(self):
         """Create unique Gitea repository with deployment_id suffix."""
-        DeploymentLogger.log(f"[DEBUG] ensure_gitea_repo() called for {self.gitea_repo_name}")
+        import os
+        pid = os.getpid()
+        import threading
+        thread_id = threading.get_ident()
+        DeploymentLogger.log(f"[DEBUG] ensure_gitea_repo() called for {self.gitea_repo_name} (PID={pid}, thread={thread_id})")
         gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
         gitea_hostname = f"git.{self.domain}"
         org = "thinkube-deployments"
@@ -606,6 +610,12 @@ class ApplicationDeployer:
 
     async def manage_databases(self):
         """Create PostgreSQL databases using kubernetes exec (matches Ansible k8s_exec)."""
+        # Check if database is needed
+        services = self.thinkube_spec.get('spec', {}).get('services', [])
+        if 'database' not in services:
+            DeploymentLogger.log("Skipping database creation - not required by template")
+            return
+
         admin_username = self._decode_secret_data(self.secrets['admin'], 'admin-username')
 
         # Create database with hyphens replaced by underscores (matches postgresql.j2 template)
