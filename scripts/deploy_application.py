@@ -1540,7 +1540,9 @@ git add -A
 if ! git diff --cached --quiet; then
   git commit -m 'Deploy {self.app_name} to {self.domain}'
 fi
-git push -u origin main --force
+# Pull latest changes (webhook adapter may have pushed .argocd-source updates)
+git pull --rebase origin main || true
+git push -u origin main
 """
 
             # Run git operations in thread pool to avoid blocking the event loop
