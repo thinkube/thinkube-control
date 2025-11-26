@@ -324,7 +324,9 @@ class ApplicationDeployer:
         gitea_hostname = f"git.{self.domain}"
         org = "thinkube-deployments"
 
-        async with aiohttp.ClientSession() as session:
+        # Use TCPConnector with limit=1 to prevent connection pooling race conditions
+        connector = aiohttp.TCPConnector(limit=1, limit_per_host=1)
+        async with aiohttp.ClientSession(connector=connector) as session:
             headers = {
                 'Authorization': f'token {gitea_token}',
                 'Content-Type': 'application/json'
@@ -332,9 +334,9 @@ class ApplicationDeployer:
 
             # Check if repo already exists (shouldn't happen with UUID, but Gitea has bugs)
             check_url = f"https://{gitea_hostname}/api/v1/repos/{org}/{self.gitea_repo_name}"
-            DeploymentLogger.log(f"[DEBUG] Checking if repo exists: {self.gitea_repo_name}")
+            DeploymentLogger.log(f"[DEBUG] About to send GET request to {check_url}")
             async with session.get(check_url, headers=headers, ssl=False) as check_resp:
-                DeploymentLogger.log(f"[DEBUG] Check response status: {check_resp.status}")
+                DeploymentLogger.log(f"[DEBUG] GET request completed with status: {check_resp.status}")
                 if check_resp.status == 200:
                     repo_data = await check_resp.json()
                     DeploymentLogger.log(f"[DEBUG] Repo already exists! Created: {repo_data.get('created_at')}")
@@ -358,9 +360,9 @@ class ApplicationDeployer:
                 'auto_init': False
             }
 
-            DeploymentLogger.log(f"[DEBUG] Attempting to create Gitea repo: {self.gitea_repo_name}")
+            DeploymentLogger.log(f"[DEBUG] About to send POST request to create repo")
             async with session.post(create_url, headers=headers, json=repo_payload, ssl=False) as resp:
-                DeploymentLogger.log(f"[DEBUG] Gitea API response status: {resp.status}")
+                DeploymentLogger.log(f"[DEBUG] POST request completed with status: {resp.status}")
                 if resp.status == 201:
                     DeploymentLogger.log(f"Created Gitea repository: {org}/{self.gitea_repo_name}")
                     DeploymentLogger.log("[DEBUG] ensure_gitea_repo() exiting normally")
