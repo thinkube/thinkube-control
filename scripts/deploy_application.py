@@ -1989,6 +1989,49 @@ git push -u origin main --force
 
     # ==================== Main Orchestration ====================
 
+    async def list_existing_deployments(self):
+        """List existing deployments for this app from the database."""
+        try:
+            postgres_secret = await self.k8s_core.read_namespaced_secret('postgresql-app', 'postgres')
+            db_password = self._decode_secret_data(postgres_secret, 'password')
+            db_user = self._decode_secret_data(postgres_secret, 'username')
+
+            # Query PostgreSQL for existing deployments
+            query_script = f"""
+export PGPASSWORD="{db_password}"
+psql -h postgres.{self.domain} -U {db_user} -d control_hub -t -c "
+SELECT
+    id::text,
+    name,
+    status,
+    created_at::text,
+    started_at::text,
+    completed_at::text
+FROM template_deployments
+WHERE name = '{self.app_name}'
+ORDER BY created_at DESC
+LIMIT 5;"
+"""
+
+            result = subprocess.run(
+                query_script,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+
+            if result.returncode == 0 and result.stdout.strip():
+                DeploymentLogger.log(f"[DEBUG] Found existing deployments for {self.app_name}:")
+                for line in result.stdout.strip().split('\n'):
+                    if line.strip():
+                        DeploymentLogger.log(f"[DEBUG]   {line.strip()}")
+            else:
+                DeploymentLogger.log(f"[DEBUG] No existing deployments found for {self.app_name}")
+
+        except Exception as e:
+            DeploymentLogger.log(f"[DEBUG] Could not query existing deployments: {e}")
+
     async def deploy(self):
         """Main deployment orchestration."""
         start_time = datetime.now()
@@ -1997,6 +2040,9 @@ git push -u origin main --force
 
         try:
             await self.initialize_k8s_clients()
+
+            # List existing deployments for debugging
+            await self.list_existing_deployments()
 
             DeploymentLogger.log("[DEBUG] Starting Phase 1")
             await self.phase1_setup()
