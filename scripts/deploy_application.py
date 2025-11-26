@@ -449,7 +449,11 @@ class ApplicationDeployer:
                 DeploymentLogger.log(f"Created CI/CD secret in {ns}")
             except ApiException as e:
                 if e.status == 409:
-                    DeploymentLogger.log(f"CI/CD secret already exists in {ns}")
+                    # Update existing secret with fresh token
+                    await self.k8s_core.replace_namespaced_secret(f'{self.app_name}-cicd-token', ns, secret)
+                    DeploymentLogger.log(f"Updated CI/CD secret in {ns}")
+                else:
+                    raise
 
     async def create_mlflow_config(self):
         """Create MLflow configuration secret in target namespace."""
