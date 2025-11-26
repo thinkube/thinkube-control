@@ -27,10 +27,19 @@ from kubernetes_asyncio.stream import WsApiClient
 class DeploymentLogger:
     """Handles real-time logging with timestamps."""
 
+    # Set to True to enable debug logging
+    DEBUG = os.environ.get('DEPLOYMENT_DEBUG', 'false').lower() == 'true'
+
     @staticmethod
     def log(message: str, level: str = "INFO"):
         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         print(f"[{timestamp}] [{level}] {message}", flush=True)
+
+    @staticmethod
+    def debug(message: str):
+        """Only log if DEBUG is enabled."""
+        if DeploymentLogger.DEBUG:
+            DeploymentLogger.log(message, "DEBUG")
 
     @staticmethod
     def error(message: str):
@@ -319,7 +328,7 @@ class ApplicationDeployer:
         pid = os.getpid()
         import threading
         thread_id = threading.get_ident()
-        DeploymentLogger.log(f"[DEBUG] ensure_gitea_repo() called for {self.gitea_repo_name} (PID={pid}, thread={thread_id})")
+        DeploymentLogger.debug(f" ensure_gitea_repo() called for {self.gitea_repo_name} (PID={pid}, thread={thread_id})")
         gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
         gitea_hostname = f"git.{self.domain}"
         org = "thinkube-deployments"
@@ -334,13 +343,13 @@ class ApplicationDeployer:
 
             # Check if repo already exists (shouldn't happen with UUID, but Gitea has bugs)
             check_url = f"https://{gitea_hostname}/api/v1/repos/{org}/{self.gitea_repo_name}"
-            DeploymentLogger.log(f"[DEBUG] About to send GET request to {check_url}")
+            DeploymentLogger.debug(f" About to send GET request to {check_url}")
             async with session.get(check_url, headers=headers, ssl=False) as check_resp:
-                DeploymentLogger.log(f"[DEBUG] GET request completed with status: {check_resp.status}")
+                DeploymentLogger.debug(f" GET request completed with status: {check_resp.status}")
                 if check_resp.status == 200:
                     repo_data = await check_resp.json()
-                    DeploymentLogger.log(f"[DEBUG] Repo already exists! Created: {repo_data.get('created_at')}")
-                    DeploymentLogger.log(f"[DEBUG] Deleting orphaned repo before recreating...")
+                    DeploymentLogger.debug(f" Repo already exists! Created: {repo_data.get('created_at')}")
+                    DeploymentLogger.debug(f" Deleting orphaned repo before recreating...")
                     delete_url = f"https://{gitea_hostname}/api/v1/repos/{org}/{self.gitea_repo_name}"
                     async with session.delete(delete_url, headers=headers, ssl=False) as del_resp:
                         if del_resp.status == 204:
@@ -360,16 +369,16 @@ class ApplicationDeployer:
                 'auto_init': False
             }
 
-            DeploymentLogger.log(f"[DEBUG] About to send POST request to create repo")
+            DeploymentLogger.debug(f" About to send POST request to create repo")
             async with session.post(create_url, headers=headers, json=repo_payload, ssl=False) as resp:
-                DeploymentLogger.log(f"[DEBUG] POST request completed with status: {resp.status}")
+                DeploymentLogger.debug(f" POST request completed with status: {resp.status}")
                 if resp.status == 201:
                     DeploymentLogger.log(f"Created Gitea repository: {org}/{self.gitea_repo_name}")
-                    DeploymentLogger.log("[DEBUG] ensure_gitea_repo() exiting normally")
+                    DeploymentLogger.debug(" ensure_gitea_repo() exiting normally")
                 else:
                     error_text = await resp.text()
                     DeploymentLogger.error(f"Failed to create Gitea repo: {resp.status} - {error_text}")
-                    DeploymentLogger.error(f"[DEBUG] This should be impossible with UUID: {self.deployment_id}")
+                    DeploymentLogger.debug(f" This should be impossible with UUID: {self.deployment_id}")
                     raise RuntimeError(f"Failed to create Gitea repository: {resp.status}")
 
     # ==================== PHASE 3: Resource Creation ====================
@@ -1150,7 +1159,7 @@ spec:
         await self.ensure_gitea_repo()
 
         # Wait for Gitea to fully initialize the repository (database + filesystem sync)
-        DeploymentLogger.log("[DEBUG] Waiting 10 seconds for Gitea to stabilize...")
+        DeploymentLogger.debug(" Waiting 10 seconds for Gitea to stabilize...")
         await asyncio.sleep(10)
 
         await self.configure_webhook()
@@ -2034,15 +2043,15 @@ LIMIT 5;"
             )
 
             if result.returncode == 0 and result.stdout.strip():
-                DeploymentLogger.log(f"[DEBUG] Found existing deployments for {self.app_name}:")
+                DeploymentLogger.debug(f" Found existing deployments for {self.app_name}:")
                 for line in result.stdout.strip().split('\n'):
                     if line.strip():
-                        DeploymentLogger.log(f"[DEBUG]   {line.strip()}")
+                        DeploymentLogger.debug(f"   {line.strip()}")
             else:
-                DeploymentLogger.log(f"[DEBUG] No existing deployments found for {self.app_name}")
+                DeploymentLogger.debug(f" No existing deployments found for {self.app_name}")
 
         except Exception as e:
-            DeploymentLogger.log(f"[DEBUG] Could not query existing deployments: {e}")
+            DeploymentLogger.debug(f" Could not query existing deployments: {e}")
 
     async def list_existing_gitea_repos(self):
         """List existing Gitea repositories for this app."""
@@ -2066,23 +2075,23 @@ LIMIT 5;"
                         matching_repos = [r for r in repos if r['name'].startswith(f"{self.app_name}-")]
 
                         if matching_repos:
-                            DeploymentLogger.log(f"[DEBUG] Found {len(matching_repos)} existing Gitea repos for {self.app_name}:")
+                            DeploymentLogger.debug(f" Found {len(matching_repos)} existing Gitea repos for {self.app_name}:")
                             for repo in matching_repos:
-                                DeploymentLogger.log(f"[DEBUG]   {repo['name']} (created: {repo.get('created_at', 'unknown')})")
+                                DeploymentLogger.debug(f"   {repo['name']} (created: {repo.get('created_at', 'unknown')})")
                         else:
-                            DeploymentLogger.log(f"[DEBUG] No existing Gitea repos found for {self.app_name}")
+                            DeploymentLogger.debug(f" No existing Gitea repos found for {self.app_name}")
                     else:
                         error_text = await resp.text()
-                        DeploymentLogger.log(f"[DEBUG] Could not list Gitea repos: {resp.status} - {error_text}")
+                        DeploymentLogger.debug(f" Could not list Gitea repos: {resp.status} - {error_text}")
 
         except Exception as e:
-            DeploymentLogger.log(f"[DEBUG] Could not query Gitea repos: {e}")
+            DeploymentLogger.debug(f" Could not query Gitea repos: {e}")
 
     async def deploy(self):
         """Main deployment orchestration."""
         start_time = datetime.now()
         DeploymentLogger.log(f"Starting deployment of {self.app_name}")
-        DeploymentLogger.log(f"[DEBUG] Deployment ID: {self.deployment_id}")
+        DeploymentLogger.debug(f" Deployment ID: {self.deployment_id}")
 
         try:
             await self.initialize_k8s_clients()
@@ -2091,40 +2100,40 @@ LIMIT 5;"
             await self.list_existing_deployments()
             await self.list_existing_gitea_repos()
 
-            DeploymentLogger.log("[DEBUG] Starting Phase 1")
+            DeploymentLogger.debug(" Starting Phase 1")
             await self.phase1_setup()
-            DeploymentLogger.log("[DEBUG] Phase 1 complete")
+            DeploymentLogger.debug(" Phase 1 complete")
 
-            DeploymentLogger.log("[DEBUG] Starting Phase 2")
+            DeploymentLogger.debug(" Starting Phase 2")
             await self.phase2_gather_resources()
-            DeploymentLogger.log("[DEBUG] Phase 2 complete")
+            DeploymentLogger.debug(" Phase 2 complete")
 
-            DeploymentLogger.log("[DEBUG] Starting Phase 3")
+            DeploymentLogger.debug(" Starting Phase 3")
             await self.phase3_create_resources()
-            DeploymentLogger.log("[DEBUG] Phase 3 complete")
+            DeploymentLogger.debug(" Phase 3 complete")
 
-            DeploymentLogger.log("[DEBUG] Starting Phase 4")
+            DeploymentLogger.debug(" Starting Phase 4")
             await self.phase4_git_operations()
-            DeploymentLogger.log("[DEBUG] Phase 4 complete")
+            DeploymentLogger.debug(" Phase 4 complete")
 
-            DeploymentLogger.log("[DEBUG] Starting Phase 5")
+            DeploymentLogger.debug(" Starting Phase 5")
             await self.phase5_deploy()
-            DeploymentLogger.log("[DEBUG] Phase 5 complete")
+            DeploymentLogger.debug(" Phase 5 complete")
 
             # Cleanup old Gitea repositories after successful deployment
-            DeploymentLogger.log("[DEBUG] Cleaning up old repos")
+            DeploymentLogger.debug(" Cleaning up old repos")
             await self.cleanup_old_gitea_repos()
 
             elapsed = (datetime.now() - start_time).total_seconds()
             DeploymentLogger.success(f"Deployment complete in {elapsed:.1f} seconds")
-            DeploymentLogger.log("[DEBUG] Returning exit code 0")
+            DeploymentLogger.debug(" Returning exit code 0")
 
             return 0
 
         except Exception as e:
             DeploymentLogger.error(f"Deployment failed: {e}")
-            DeploymentLogger.error(f"[DEBUG] Exception type: {type(e).__name__}")
-            DeploymentLogger.error(f"[DEBUG] Returning exit code 1")
+            DeploymentLogger.debug(f" Exception type: {type(e).__name__}")
+            DeploymentLogger.debug(f" Returning exit code 1")
             import traceback
             traceback.print_exc()
             return 1
@@ -2148,10 +2157,10 @@ async def main():
         sys.exit(1)
 
     deployer = ApplicationDeployer(params)
-    DeploymentLogger.log("[DEBUG] Calling deployer.deploy()")
+    DeploymentLogger.debug(" Calling deployer.deploy()")
     exit_code = await deployer.deploy()
-    DeploymentLogger.log(f"[DEBUG] deployer.deploy() returned: {exit_code}")
-    DeploymentLogger.log(f"[DEBUG] Exiting with code: {exit_code}")
+    DeploymentLogger.debug(f" deployer.deploy() returned: {exit_code}")
+    DeploymentLogger.debug(f" Exiting with code: {exit_code}")
     sys.exit(exit_code)
 
 
