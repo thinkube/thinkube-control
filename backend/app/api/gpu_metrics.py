@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional
 import httpx
 import re
 from datetime import datetime
-from ..core.security import get_current_user_dual_auth
+from app.core.api_tokens import get_current_user_dual_auth
 
 router = APIRouter()
 
