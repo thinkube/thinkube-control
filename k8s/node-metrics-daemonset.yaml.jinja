@@ -13,7 +13,7 @@ spec:
     - name: http
       port: 9100
       targetPort: 9100
-  clusterIP: None  # Headless service
+  type: ClusterIP
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -31,7 +31,6 @@ spec:
       labels:
         app: node-metrics
     spec:
-      hostNetwork: true
       hostPID: true
       containers:
       - name: node-metrics
@@ -97,7 +96,6 @@ spec:
             server.serve_forever()
         ports:
         - containerPort: 9100
-          hostPort: 9100
           name: http
         volumeMounts:
         - name: proc
