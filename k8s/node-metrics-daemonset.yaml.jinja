@@ -143,11 +143,8 @@ spec:
             memory: 256Mi
             cpu: 100m
         securityContext:
-          privileged: false
+          privileged: true
           readOnlyRootFilesystem: false
-          capabilities:
-            add:
-              - SYS_ADMIN
       volumes:
       - name: proc
         hostPath:
