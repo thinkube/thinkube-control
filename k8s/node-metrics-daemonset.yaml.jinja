@@ -137,11 +137,11 @@ spec:
           readOnly: true
         resources:
           requests:
-            memory: 32Mi
+            memory: 64Mi
             cpu: 10m
           limits:
-            memory: 64Mi
-            cpu: 50m
+            memory: 256Mi
+            cpu: 100m
         securityContext:
           privileged: false
           readOnlyRootFilesystem: false
