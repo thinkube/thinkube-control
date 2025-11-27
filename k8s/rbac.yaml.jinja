@@ -71,6 +71,13 @@ rules:
     - customresourcedefinitions
   verbs: ["get", "list", "watch"]
 
+# Metrics API (for node and pod metrics)
+- apiGroups: ["metrics.k8s.io"]
+  resources:
+    - nodes
+    - pods
+  verbs: ["get", "list"]
+
 # Argo Workflows
 - apiGroups: ["argoproj.io"]
   resources:
