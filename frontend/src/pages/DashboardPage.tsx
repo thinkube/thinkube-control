@@ -25,6 +25,7 @@ import {
   rectSortingStrategy,
 } from '@dnd-kit/sortable';
 import { SortableServiceCard } from '@/components/SortableServiceCard';
+import { GPUMetricsCard } from '@/components/GPUMetricsCard';
 
 export default function DashboardPage() {
   const location = useLocation();
@@ -258,6 +259,11 @@ export default function DashboardPage() {
             Sync Services
           </TkButton>
         </div>
+      </div>
+
+      {/* GPU Metrics Card */}
+      <div className="mb-6">
+        <GPUMetricsCard />
       </div>
 
       {/* Dashboard content based on route */}
