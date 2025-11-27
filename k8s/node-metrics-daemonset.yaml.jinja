@@ -59,12 +59,21 @@ spec:
                                         value = parts[1].strip().split()[0]
                                         meminfo[key] = int(value) * 1024
 
-                            # Read /proc/stat for CPU
-                            with open("/host/proc/stat", "r") as f:
-                                cpu_line = f.readline()
-                                cpu_times = [int(x) for x in cpu_line.split()[1:]]
-                                total_time = sum(cpu_times)
-                                idle_time = cpu_times[3]
+                            # Read /proc/stat for CPU (read twice to calculate percentage)
+                            import time
+                            def read_cpu_times():
+                                with open("/host/proc/stat", "r") as f:
+                                    cpu_line = f.readline()
+                                    cpu_times = [int(x) for x in cpu_line.split()[1:]]
+                                    return sum(cpu_times), cpu_times[3]  # total, idle
+
+                            total_1, idle_1 = read_cpu_times()
+                            time.sleep(0.2)  # Brief delay to measure delta
+                            total_2, idle_2 = read_cpu_times()
+
+                            total_delta = total_2 - total_1
+                            idle_delta = idle_2 - idle_1
+                            cpu_percent = 100.0 * (1 - idle_delta / total_delta) if total_delta > 0 else 0.0
 
                             # Get GPU stats from nvidia-smi (run in host namespace using nsenter)
                             def safe_float(value, default=0):
@@ -108,8 +117,7 @@ spec:
                                 "memory_used_bytes": meminfo.get("MemTotal", 0) - meminfo.get("MemAvailable", 0),
                                 "memory_buffers_bytes": meminfo.get("Buffers", 0),
                                 "memory_cached_bytes": meminfo.get("Cached", 0),
-                                "cpu_total_time": total_time,
-                                "cpu_idle_time": idle_time,
+                                "cpu_percent": cpu_percent,
                                 "gpu_utilization": gpu_util,
                                 "gpu_memory_used_mb": gpu_mem_used,
                                 "gpu_memory_total_mb": gpu_mem_total,

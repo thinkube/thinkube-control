@@ -62,6 +62,7 @@ async def fetch_node_metrics() -> Dict[str, Any]:
             return {
                 'memory_bytes': data['memory_used_bytes'],
                 'memory_total_bytes': data['memory_total_bytes'],
+                'cpu_percent': data.get('cpu_percent', 0),
                 'gpu_utilization': data.get('gpu_utilization', 0),
                 'gpu_temp': data.get('gpu_temp', 0),
                 'gpu_power': data.get('gpu_power', 0),
@@ -105,9 +106,8 @@ async def get_gpu_metrics(
     system_memory_used_gb = node['memory_bytes'] / (1024 ** 3)
     system_memory_percent = (system_memory_used_gb / system_memory_total_gb) * 100
 
-    # CPU usage - use DCGM GPU utilization as proxy for now
-    # TODO: Implement proper CPU monitoring from /proc/stat
-    cpu_percent = 0.0
+    # CPU usage from node-metrics (/proc/stat)
+    cpu_percent = node.get('cpu_percent', 0.0)
 
     return {
         # GPU metrics from nvidia-smi (via node-metrics)
