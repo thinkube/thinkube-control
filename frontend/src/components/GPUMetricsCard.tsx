@@ -5,6 +5,7 @@ import { Activity, Gauge as GaugeIcon } from 'lucide-react';
 
 interface GPUMetrics {
   gpu_utilization: number;
+  memory_bandwidth: number;
   system_memory_used_gb: number;
   system_memory_total_gb: number;
   system_memory_percent: number;
@@ -185,7 +186,7 @@ export function GPUMetricsCard() {
           </div>
           <div className="text-center">
             <div className="text-xs text-muted-foreground">Memory BW</div>
-            <div className="text-sm font-medium">{metrics.system_memory_percent.toFixed(1)}%</div>
+            <div className="text-sm font-medium">{metrics.memory_bandwidth.toFixed(1)}%</div>
           </div>
         </div>
       </TkCardContent>

@@ -1,0 +1,123 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: node-metrics
+  namespace: {{ namespace }}
+  labels:
+    app: node-metrics
+spec:
+  selector:
+    app: node-metrics
+  ports:
+    - name: http
+      port: 9100
+      targetPort: 9100
+  clusterIP: None  # Headless service
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-metrics
+  namespace: {{ namespace }}
+  labels:
+    app: node-metrics
+spec:
+  selector:
+    matchLabels:
+      app: node-metrics
+  template:
+    metadata:
+      labels:
+        app: node-metrics
+    spec:
+      hostNetwork: true
+      hostPID: true
+      containers:
+      - name: node-metrics
+        image: python:3.11-slim
+        command:
+          - python3
+          - -u
+          - -c
+          - |
+            from http.server import BaseHTTPRequestHandler, HTTPServer
+            import json
+
+            class MetricsHandler(BaseHTTPRequestHandler):
+                def do_GET(self):
+                    if self.path == '/metrics':
+                        try:
+                            # Read /proc/meminfo
+                            with open('/host/proc/meminfo', 'r') as f:
+                                meminfo = {}
+                                for line in f:
+                                    parts = line.split(':')
+                                    if len(parts) == 2:
+                                        key = parts[0].strip()
+                                        value = parts[1].strip().split()[0]  # Get number only
+                                        meminfo[key] = int(value) * 1024  # Convert KB to bytes
+
+                            # Read /proc/stat for CPU
+                            with open('/host/proc/stat', 'r') as f:
+                                cpu_line = f.readline()
+                                cpu_times = [int(x) for x in cpu_line.split()[1:]]
+                                total_time = sum(cpu_times)
+                                idle_time = cpu_times[3]  # idle is 4th field
+
+                            metrics = {
+                                'memory_total_bytes': meminfo.get('MemTotal', 0),
+                                'memory_free_bytes': meminfo.get('MemFree', 0),
+                                'memory_available_bytes': meminfo.get('MemAvailable', 0),
+                                'memory_used_bytes': meminfo.get('MemTotal', 0) - meminfo.get('MemAvailable', 0),
+                                'memory_buffers_bytes': meminfo.get('Buffers', 0),
+                                'memory_cached_bytes': meminfo.get('Cached', 0),
+                                'cpu_total_time': total_time,
+                                'cpu_idle_time': idle_time
+                            }
+
+                            self.send_response(200)
+                            self.send_header('Content-type', 'application/json')
+                            self.end_headers()
+                            self.wfile.write(json.dumps(metrics).encode())
+                        except Exception as e:
+                            self.send_response(500)
+                            self.send_header('Content-type', 'application/json')
+                            self.end_headers()
+                            self.wfile.write(json.dumps({'error': str(e)}).encode())
+                    else:
+                        self.send_response(404)
+                        self.end_headers()
+
+                def log_message(self, format, *args):
+                    pass  # Suppress logs
+
+            server = HTTPServer(('0.0.0.0', 9100), MetricsHandler)
+            print('Node metrics server started on port 9100')
+            server.serve_forever()
+        ports:
+        - containerPort: 9100
+          hostPort: 9100
+          name: http
+        volumeMounts:
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+        resources:
+          requests:
+            memory: 32Mi
+            cpu: 10m
+          limits:
+            memory: 64Mi
+            cpu: 50m
+        securityContext:
+          privileged: false
+          readOnlyRootFilesystem: false
+      volumes:
+      - name: proc
+        hostPath:
+          path: /proc
+          type: Directory
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists

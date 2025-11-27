@@ -52,57 +52,18 @@ async def fetch_dcgm_metrics() -> Dict[str, float]:
 
 
 async def fetch_node_metrics() -> Dict[str, Any]:
-    """Fetch node metrics from Kubernetes metrics-server API"""
+    """Fetch node metrics from node-metrics DaemonSet"""
     try:
-        # Use Kubernetes Python client to get node metrics
-        from kubernetes import client, config
+        async with httpx.AsyncClient(timeout=METRICS_SERVER_TIMEOUT) as client:
+            response = await client.get("http://node-metrics.thinkube-control.svc.cluster.local:9100/metrics")
+            response.raise_for_status()
+            data = response.json()
 
-        # Load in-cluster config
-        config.load_incluster_config()
-
-        # Create custom objects API client
-        api = client.CustomObjectsApi()
-
-        # Get node metrics
-        node_metrics = api.list_cluster_custom_object(
-            group="metrics.k8s.io",
-            version="v1beta1",
-            plural="nodes"
-        )
-
-        # Find tkspark node
-        for item in node_metrics.get('items', []):
-            if item['metadata']['name'] == 'tkspark':
-                usage = item['usage']
-
-                # Parse memory (e.g., "21782Mi" -> bytes)
-                memory_str = usage['memory']
-                if memory_str.endswith('Ki'):
-                    memory_bytes = int(memory_str[:-2]) * 1024
-                elif memory_str.endswith('Mi'):
-                    memory_bytes = int(memory_str[:-2]) * 1024 * 1024
-                elif memory_str.endswith('Gi'):
-                    memory_bytes = int(memory_str[:-2]) * 1024 * 1024 * 1024
-                else:
-                    memory_bytes = int(memory_str)
-
-                # Parse CPU (e.g., "1297m" -> millicores)
-                cpu_str = usage['cpu']
-                if cpu_str.endswith('m'):
-                    cpu_millicores = int(cpu_str[:-1])
-                elif cpu_str.endswith('n'):
-                    cpu_millicores = int(cpu_str[:-1]) // 1000000
-                else:
-                    cpu_millicores = int(float(cpu_str) * 1000)
-
-                return {
-                    'memory_bytes': memory_bytes,
-                    'cpu_millicores': cpu_millicores
-                }
-
-        raise HTTPException(status_code=404, detail="tkspark node not found")
-
-    except Exception as e:
+            return {
+                'memory_bytes': data['memory_used_bytes'],
+                'memory_total_bytes': data['memory_total_bytes']
+            }
+    except httpx.HTTPError as e:
         raise HTTPException(
             status_code=503,
             detail=f"Failed to fetch node metrics: {str(e)}"
@@ -131,18 +92,17 @@ async def get_gpu_metrics(
     # Fetch DCGM metrics
     dcgm = await fetch_dcgm_metrics()
 
-    # Fetch node metrics
+    # Fetch node metrics (actual system memory from /proc/meminfo)
     node = await fetch_node_metrics()
 
     # System memory (unified memory - shared by CPU and GPU)
-    # DGX Spark GB10 has 128GB total system RAM
-    system_memory_total_gb = 128.0
+    system_memory_total_gb = node['memory_total_bytes'] / (1024 ** 3)
     system_memory_used_gb = node['memory_bytes'] / (1024 ** 3)
     system_memory_percent = (system_memory_used_gb / system_memory_total_gb) * 100
 
-    # CPU usage (96 cores * 1000 millicores = 96000 total)
-    cpu_total_millicores = 96000
-    cpu_percent = (node['cpu_millicores'] / cpu_total_millicores) * 100
+    # CPU usage - use DCGM GPU utilization as proxy for now
+    # TODO: Implement proper CPU monitoring from /proc/stat
+    cpu_percent = 0.0
 
     return {
         # GPU metrics from DCGM
