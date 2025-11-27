@@ -67,6 +67,15 @@ spec:
                                 idle_time = cpu_times[3]
 
                             # Get GPU stats from nvidia-smi (run in host namespace using nsenter)
+                            def safe_float(value, default=0):
+                                try:
+                                    v = value.strip()
+                                    if v.lower() in ['[n/a]', 'n/a', '[not supported]', 'not supported']:
+                                        return default
+                                    return float(v)
+                                except (ValueError, AttributeError):
+                                    return default
+
                             try:
                                 result = subprocess.run(
                                     ["nsenter", "-t", "1", "-m", "-u", "-n", "-i", "nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw", "--format=csv,noheader,nounits"],
@@ -74,11 +83,11 @@ spec:
                                 )
                                 if result.returncode == 0:
                                     gpu_data = result.stdout.strip().split(",")
-                                    gpu_util = float(gpu_data[0].strip())
-                                    gpu_mem_used = float(gpu_data[1].strip())
-                                    gpu_mem_total = float(gpu_data[2].strip())
-                                    gpu_temp = float(gpu_data[3].strip())
-                                    gpu_power = float(gpu_data[4].strip())
+                                    gpu_util = safe_float(gpu_data[0])
+                                    gpu_mem_used = safe_float(gpu_data[1])
+                                    gpu_mem_total = safe_float(gpu_data[2])
+                                    gpu_temp = safe_float(gpu_data[3])
+                                    gpu_power = safe_float(gpu_data[4])
                                 else:
                                     gpu_util = 0
                                     gpu_mem_used = 0
