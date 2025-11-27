@@ -29,9 +29,9 @@ function SemicircularGauge({ value, max, label, unit, size = 140 }: GaugeProps) 
 
   // Calculate color based on percentage
   const getColor = (pct: number) => {
-    if (pct < 50) return '#90EE90'; // Light green
-    if (pct < 75) return '#FFA500'; // Orange
-    return '#FF4444'; // Red
+    if (pct < 50) return '#10b981'; // Green
+    if (pct < 75) return '#f59e0b'; // Amber
+    return '#ef4444'; // Red
   };
 
   const radius = size / 2 - 10;
@@ -65,7 +65,7 @@ function SemicircularGauge({ value, max, label, unit, size = 140 }: GaugeProps) 
         </svg>
         {/* Center text */}
         <div className="absolute inset-0 flex flex-col items-center justify-center" style={{ top: '10px' }}>
-          <div className="text-2xl font-bold">{value.toFixed(value >= 10 ? 1 : 2)}{unit}</div>
+          <div className="text-3xl font-bold" style={{ color }}>{value.toFixed(value >= 10 ? 0 : 1)}{unit}</div>
           <div className="text-xs text-muted-foreground mt-1">{label}</div>
         </div>
       </div>
@@ -151,7 +151,7 @@ export function GPUMetricsCard() {
             <SemicircularGauge
               value={metrics.system_memory_used_gb}
               max={metrics.system_memory_total_gb}
-              label={`${metrics.system_memory_total_gb} GB available`}
+              label={`of ${metrics.system_memory_total_gb.toFixed(0)} GB`}
               unit=" GB"
               size={140}
             />
@@ -163,8 +163,8 @@ export function GPUMetricsCard() {
             <SemicircularGauge
               value={metrics.gpu_utilization}
               max={100}
-              label="100%"
-              unit=" %"
+              label="of 100%"
+              unit="%"
               size={140}
             />
           </div>
