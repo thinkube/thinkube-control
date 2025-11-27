@@ -64,6 +64,33 @@ spec:
                                 total_time = sum(cpu_times)
                                 idle_time = cpu_times[3]  # idle is 4th field
 
+                            # Get GPU stats from nvidia-smi
+                            import subprocess
+                            try:
+                                result = subprocess.run(
+                                    ['nvidia-smi', '--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw', '--format=csv,noheader,nounits'],
+                                    capture_output=True, text=True, timeout=2
+                                )
+                                if result.returncode == 0:
+                                    gpu_data = result.stdout.strip().split(',')
+                                    gpu_util = float(gpu_data[0].strip())
+                                    gpu_mem_used = float(gpu_data[1].strip())
+                                    gpu_mem_total = float(gpu_data[2].strip())
+                                    gpu_temp = float(gpu_data[3].strip())
+                                    gpu_power = float(gpu_data[4].strip())
+                                else:
+                                    gpu_util = 0
+                                    gpu_mem_used = 0
+                                    gpu_mem_total = 0
+                                    gpu_temp = 0
+                                    gpu_power = 0
+                            except Exception:
+                                gpu_util = 0
+                                gpu_mem_used = 0
+                                gpu_mem_total = 0
+                                gpu_temp = 0
+                                gpu_power = 0
+
                             metrics = {
                                 'memory_total_bytes': meminfo.get('MemTotal', 0),
                                 'memory_free_bytes': meminfo.get('MemFree', 0),
@@ -72,7 +99,12 @@ spec:
                                 'memory_buffers_bytes': meminfo.get('Buffers', 0),
                                 'memory_cached_bytes': meminfo.get('Cached', 0),
                                 'cpu_total_time': total_time,
-                                'cpu_idle_time': idle_time
+                                'cpu_idle_time': idle_time,
+                                'gpu_utilization': gpu_util,
+                                'gpu_memory_used_mb': gpu_mem_used,
+                                'gpu_memory_total_mb': gpu_mem_total,
+                                'gpu_temp': gpu_temp,
+                                'gpu_power': gpu_power
                             }
 
                             self.send_response(200)

@@ -52,7 +52,7 @@ async def fetch_dcgm_metrics() -> Dict[str, float]:
 
 
 async def fetch_node_metrics() -> Dict[str, Any]:
-    """Fetch node metrics from node-metrics DaemonSet"""
+    """Fetch node and GPU metrics from node-metrics DaemonSet"""
     try:
         async with httpx.AsyncClient(timeout=METRICS_SERVER_TIMEOUT) as client:
             response = await client.get("http://node-metrics.thinkube-control.svc.cluster.local:9100/metrics")
@@ -61,7 +61,12 @@ async def fetch_node_metrics() -> Dict[str, Any]:
 
             return {
                 'memory_bytes': data['memory_used_bytes'],
-                'memory_total_bytes': data['memory_total_bytes']
+                'memory_total_bytes': data['memory_total_bytes'],
+                'gpu_utilization': data.get('gpu_utilization', 0),
+                'gpu_temp': data.get('gpu_temp', 0),
+                'gpu_power': data.get('gpu_power', 0),
+                'gpu_memory_used_mb': data.get('gpu_memory_used_mb', 0),
+                'gpu_memory_total_mb': data.get('gpu_memory_total_mb', 0)
             }
     except httpx.HTTPError as e:
         raise HTTPException(
@@ -89,10 +94,10 @@ async def get_gpu_metrics(
         - system_memory_percent: Memory usage percentage
         - cpu_percent: CPU usage percentage
     """
-    # Fetch DCGM metrics
+    # Fetch DCGM metrics (for memory bandwidth only)
     dcgm = await fetch_dcgm_metrics()
 
-    # Fetch node metrics (actual system memory from /proc/meminfo)
+    # Fetch node metrics (actual system memory and GPU stats from nvidia-smi)
     node = await fetch_node_metrics()
 
     # System memory (unified memory - shared by CPU and GPU)
@@ -105,17 +110,17 @@ async def get_gpu_metrics(
     cpu_percent = 0.0
 
     return {
-        # GPU metrics from DCGM
-        "gpu_utilization": dcgm.get('DCGM_FI_DEV_GPU_UTIL', 0),
-        "memory_bandwidth": dcgm.get('DCGM_FI_DEV_MEM_COPY_UTIL', 0),
-        "gpu_temp": dcgm.get('DCGM_FI_DEV_GPU_TEMP', 0),
-        "memory_temp": dcgm.get('DCGM_FI_DEV_MEMORY_TEMP', 0),
-        "power_usage": dcgm.get('DCGM_FI_DEV_POWER_USAGE', 0),
-        "sm_clock": dcgm.get('DCGM_FI_DEV_SM_CLOCK', 0),
+        # GPU metrics from nvidia-smi (via node-metrics)
+        "gpu_utilization": node['gpu_utilization'],
+        "memory_bandwidth": dcgm.get('DCGM_FI_DEV_MEM_COPY_UTIL', 0),  # Still from DCGM
+        "gpu_temp": node['gpu_temp'],
+        "memory_temp": dcgm.get('DCGM_FI_DEV_MEMORY_TEMP', 0),  # Still from DCGM
+        "power_usage": node['gpu_power'],
+        "sm_clock": dcgm.get('DCGM_FI_DEV_SM_CLOCK', 0),  # Still from DCGM
 
         # System metrics (unified memory)
         "system_memory_used_gb": round(system_memory_used_gb, 2),
-        "system_memory_total_gb": system_memory_total_gb,
+        "system_memory_total_gb": round(system_memory_total_gb, 1),
         "system_memory_percent": round(system_memory_percent, 1),
         "cpu_percent": round(cpu_percent, 1),
 
