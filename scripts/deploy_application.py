@@ -149,7 +149,9 @@ git config user.name '{self.admin_username}'
 git config user.email '{self.admin_username}@{self.domain}'
 git remote set-url origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.gitea_repo_name}.git' || \
 git remote add origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.gitea_repo_name}.git'
-git pull origin main || true
+# Fetch and reset to match remote exactly (discard any local changes)
+git fetch origin main
+git reset --hard origin/main
 """
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -1589,7 +1591,7 @@ if ! git diff --cached --quiet; then
   git commit -m 'Deploy {self.app_name} to {self.domain}'
 fi
 # Pull with rebase to handle any remote changes before pushing
-git pull --rebase origin main || true
+git pull --rebase origin main
 git push -u origin main
 """
 
