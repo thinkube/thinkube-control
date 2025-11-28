@@ -2072,13 +2072,13 @@ LIMIT 5;"
             await self.phase1_setup()
             DeploymentLogger.debug(" Phase 1 complete")
 
-            DeploymentLogger.debug(" Starting Phase 2")
-            await self.phase2_gather_resources()
-            DeploymentLogger.debug(" Phase 2 complete")
-
             DeploymentLogger.debug(" Starting Phase 1B")
             await self.phase1b_copier()
             DeploymentLogger.debug(" Phase 1B complete")
+
+            DeploymentLogger.debug(" Starting Phase 2")
+            await self.phase2_gather_resources()
+            DeploymentLogger.debug(" Phase 2 complete")
 
             DeploymentLogger.debug(" Starting Phase 3")
             await self.phase3_create_resources()
