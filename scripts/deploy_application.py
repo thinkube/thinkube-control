@@ -1588,6 +1588,8 @@ git add -A
 if ! git diff --cached --quiet; then
   git commit -m 'Deploy {self.app_name} to {self.domain}'
 fi
+# Pull with rebase to handle any remote changes before pushing
+git pull --rebase origin main || true
 git push -u origin main
 """
 
