@@ -114,8 +114,12 @@ class ApplicationDeployer:
         DeploymentLogger.success("Phase 1 complete")
 
     async def phase1b_copier(self):
-        """Phase 1B: Pull latest changes and run Copier (requires secrets from Phase 2)."""
+        """Phase 1B: Pull latest changes and run Copier."""
         DeploymentLogger.phase("1B", "Copier & Repository Sync")
+
+        # Load Gitea token if needed for pulling
+        if not self.secrets.get('gitea'):
+            await self.get_gitea_token()
 
         # Pull latest changes from Gitea before running Copier
         await self.pull_latest_from_gitea()
