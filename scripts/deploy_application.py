@@ -1184,7 +1184,7 @@ spec:
         """Phase 4: Sequential git operations + build monitoring."""
         DeploymentLogger.phase(4, "Git Operations & Build Monitoring")
 
-        # Sequential order: generate manifests → migrations → git hooks → repo → webhook → push
+        # Sequential order: generate manifests → migrations → git hooks → repo → webhook → ArgoCD app → push
         await self.generate_migrations()
         await self.setup_git_hooks()
 
@@ -1201,6 +1201,10 @@ spec:
         await asyncio.sleep(10)
 
         await self.configure_webhook()
+
+        # CRITICAL: Create ArgoCD application BEFORE git push
+        # This prevents race condition where Harbor webhook fires before ArgoCD app exists
+        await self.deploy_argocd_app()
 
         # Get existing workflow names BEFORE git push so we can detect NEW workflows
         existing_workflows = await self._get_existing_workflow_names()
@@ -1739,13 +1743,13 @@ git push -u origin main
 
             await asyncio.sleep(5)
 
-    # ==================== PHASE 5: Deployment ====================
+    # ==================== PHASE 5: Service Discovery ====================
 
     async def phase5_deploy(self):
-        """Phase 5: ArgoCD deployment and service discovery."""
-        DeploymentLogger.phase(5, "Deployment & Service Discovery")
+        """Phase 5: CI/CD monitoring and service discovery."""
+        DeploymentLogger.phase(5, "Service Discovery & Monitoring")
 
-        await self.deploy_argocd_app()
+        # ArgoCD app was already created in Phase 4 (before git push)
         await self.configure_cicd_monitoring()
         await self.setup_service_discovery()
 
