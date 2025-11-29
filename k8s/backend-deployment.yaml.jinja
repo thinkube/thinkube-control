@@ -142,6 +142,8 @@ spec:
               key: argocd-deployment-secret
         securityContext:
           privileged: true
+          runAsUser: 1000
+          runAsGroup: 1000
         resources:
           limits:
             cpu: 500m
