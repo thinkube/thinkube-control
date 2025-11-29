@@ -10,11 +10,11 @@ if [ -z "$DATABASE_URL" ]; then
     echo "Constructed DATABASE_URL from individual variables"
 fi
 
-# Configure podman registries with the actual domain
+# Configure podman registries with the actual domain (rootless podman path)
 if [ -n "$DOMAIN_NAME" ]; then
     echo "Configuring podman registries for domain: $DOMAIN_NAME"
-    mkdir -p /etc/containers
-    cat > /etc/containers/registries.conf << EOF
+    mkdir -p "$HOME/.config/containers"
+    cat > "$HOME/.config/containers/registries.conf" << EOF
 unqualified-search-registries = ["docker.io", "registry.${DOMAIN_NAME}"]
 
 [[registry]]
