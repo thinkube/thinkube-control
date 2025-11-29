@@ -196,7 +196,64 @@ AVAILABLE_MODELS = [
         "size": "~120GB",
         "quantization": "FP4",
         "description": "Alibaba Qwen3 235B-A22B large model",
-        "server_type": ["tensorrt-llm"]
+        "server_type": ["tensorrt-llm"],
+        "task": "text-generation"
+    },
+    # Text Embedding Models - General Purpose
+    {
+        "id": "nomic-ai/nomic-embed-text-v1.5",
+        "name": "Nomic Embed Text v1.5",
+        "size": "~550MB",
+        "quantization": "FP16",
+        "description": "Nomic's embedding model with 8192 token context and Matryoshka embedding support (256, 512, 768 dimensions). Apache 2.0 license.",
+        "server_type": ["text-embeddings"],
+        "task": "feature-extraction"
+    },
+    {
+        "id": "BAAI/bge-base-en-v1.5",
+        "name": "BGE Base English v1.5",
+        "size": "~440MB",
+        "quantization": "FP16",
+        "description": "BAAI's BGE base model. 768 dimensions, 512 token context. Top performer on MTEB benchmark. MIT license.",
+        "server_type": ["text-embeddings"],
+        "task": "feature-extraction"
+    },
+    {
+        "id": "BAAI/bge-large-en-v1.5",
+        "name": "BGE Large English v1.5",
+        "size": "~1.3GB",
+        "quantization": "FP16",
+        "description": "BAAI's BGE large model. 1024 dimensions, 512 token context. Higher quality than base. MIT license.",
+        "server_type": ["text-embeddings"],
+        "task": "feature-extraction"
+    },
+    {
+        "id": "Alibaba-NLP/gte-large-en-v1.5",
+        "name": "GTE Large English v1.5",
+        "size": "~1.6GB",
+        "quantization": "FP16",
+        "description": "Alibaba's GTE large model. 1024 dimensions, 8192 token context. State-of-the-art on MTEB. Apache 2.0 license.",
+        "server_type": ["text-embeddings"],
+        "task": "feature-extraction"
+    },
+    # Text Embedding Models - Code Specific
+    {
+        "id": "jinaai/jina-embeddings-v2-base-code",
+        "name": "Jina Code Embeddings v2",
+        "size": "~560MB",
+        "quantization": "FP16",
+        "description": "Jina's code embedding model. 768 dimensions, 8192 token context. Trained on code and documentation. Apache 2.0 license.",
+        "server_type": ["text-embeddings"],
+        "task": "feature-extraction"
+    },
+    {
+        "id": "jinaai/jina-embeddings-v3",
+        "name": "Jina Embeddings v3",
+        "size": "~2.3GB",
+        "quantization": "FP16",
+        "description": "Jina's latest multilingual model. 1024 dimensions, 8192 token context. Excellent for code and 89 languages. Apache 2.0 license.",
+        "server_type": ["text-embeddings"],
+        "task": "feature-extraction"
     }
 ]
 
