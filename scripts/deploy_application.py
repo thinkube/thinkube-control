@@ -1607,7 +1607,7 @@ if [ ! -f .git/HEAD ]; then
 fi
 git config user.name '{self.admin_username}'
 git config user.email '{self.admin_username}@{self.domain}'
-git remote remove origin 2>/dev/null || true
+git remote set-url origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.gitea_repo_name}.git' 2>/dev/null || \
 git remote add origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.gitea_repo_name}.git'
 
 git add -A
