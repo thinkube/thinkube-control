@@ -81,6 +81,13 @@ spec:
             limits:
               memory: "1Gi"
               cpu: "2000m"
+            {% elif container.size == 'xlarge' %}
+            requests:
+              memory: "4Gi"
+              cpu: "1000m"
+            limits:
+              memory: "24Gi"
+              cpu: "4000m"
             {% else %}
             # Default to small if size is not recognized
             requests:
