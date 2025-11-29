@@ -363,8 +363,8 @@ def edit_image_template_in_code_server(
         )
 
     # Create template directory structure
-    # Backend uses /home/dockerfiles/, code-server sees it as /home/coder/dockerfiles/
-    templates_base = Path("/home/dockerfiles/templates/mirrored")
+    # Backend uses /home/dockerfiles/, code-server sees it as /home/thinkube/dockerfiles/
+    templates_base = Path("/home/thinkube/dockerfiles/templates/mirrored")
     templates_base.mkdir(parents=True, exist_ok=True)
     templates_base.chmod(0o775)
 
@@ -392,10 +392,10 @@ def edit_image_template_in_code_server(
         db.commit()
 
     # Generate code-server URL with payload parameter to open file
-    # Code-server sees the path as /home/coder/dockerfiles/
+    # Code-server sees the path as /home/thinkube/dockerfiles/
     domain = os.environ.get("DOMAIN_NAME", "thinkube.com")
-    coder_folder_path = "/home/coder/dockerfiles/templates/mirrored"
-    coder_file_path = f"/home/coder/dockerfiles/templates/mirrored/{safe_name}.Dockerfile"
+    coder_folder_path = "/home/thinkube/dockerfiles/templates/mirrored"
+    coder_file_path = f"/home/thinkube/dockerfiles/templates/mirrored/{safe_name}.Dockerfile"
     payload = f'[["openFile","vscode-remote://{coder_file_path}"]]'
     editor_url = f"https://code.{domain}/?folder={coder_folder_path}&payload={payload}"
 

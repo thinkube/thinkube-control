@@ -171,19 +171,12 @@ class BackgroundExecutor:
         """Execute an ansible playbook for optional component installation."""
         
         # The playbook path is relative to the thinkube repository root
-        # Code-server clones thinkube repo to /home/coder/thinkube-platform/thinkube
-        # This maps to /home/thinkube-platform/thinkube in the backend container
-        # (because shared-code is mounted at /home in backend container)
-        
-        # Primary path: where code-server clones the thinkube repo
-        thinkube_path = Path("/home/thinkube-platform/thinkube")
+        # Both code-server and backend now mount shared-code at /home/thinkube
+        # so paths are consistent: /home/thinkube/thinkube-platform/thinkube
+
+        # Primary path: thinkube repo in shared-code
+        thinkube_path = Path("/home/thinkube/thinkube-platform/thinkube")
         full_playbook_path = thinkube_path / playbook_path
-        
-        # Fallback for development/testing on host
-        if not full_playbook_path.exists():
-            # Try host path when running outside container
-            thinkube_path = Path("/home/thinkube/thinkube")
-            full_playbook_path = thinkube_path / playbook_path
         
         if not full_playbook_path.exists():
             error_msg = f"Playbook not found: {full_playbook_path}"
@@ -256,7 +249,7 @@ class BackgroundExecutor:
 
         try:
             # Build command for Python deployment script
-            python_script = Path("/home/thinkube-control/scripts/deploy_application.py")
+            python_script = Path("/home/thinkube/thinkube-control/scripts/deploy_application.py")
             cmd = ["python3", str(python_script), temp_vars_path]
 
             # Log start
@@ -384,7 +377,7 @@ class BackgroundExecutor:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         app_name = deployment.variables.get("app_name", deployment.name)
         
-        log_base_dir = Path("/home/shared-logs/deployments")
+        log_base_dir = Path("/home/thinkube/shared-logs/deployments")
         if not log_base_dir.exists():
             log_base_dir.mkdir(parents=True, exist_ok=True)
         

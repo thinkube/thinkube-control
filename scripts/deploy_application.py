@@ -65,8 +65,8 @@ class ApplicationDeployer:
         self.domain = params['domain_name']
         self.admin_username = params['admin_username']
         self.template_url = params['template_url']
-        # Inside container: /home is mounted from host's /home/{ansible_user}/shared-code
-        self.local_repo_path = f"/home/{self.app_name}"
+        # Inside container: /home/thinkube is mounted from host's /home/{ansible_user}/shared-code
+        self.local_repo_path = f"/home/thinkube/{self.app_name}"
 
         # Unique Gitea repository name: {app_name}-{deployment_id}
         # This prevents conflicts and database corruption
@@ -708,8 +708,8 @@ git reset --hard origin/main
 
     def _generate_workflow_template(self) -> dict:
         """Generate a WorkflowTemplate using the Jinja2 template from templates/k8s/build-workflow.j2."""
-        # Template path - inside container it's at /home/thinkube-control/templates
-        template_path = Path("/home/thinkube-control/templates/k8s/build-workflow.j2")
+        # Template path - inside container it's at /home/thinkube/thinkube-control/templates
+        template_path = Path("/home/thinkube/thinkube-control/templates/k8s/build-workflow.j2")
 
         if not template_path.exists():
             raise FileNotFoundError(f"Workflow template not found: {template_path}")
@@ -769,7 +769,7 @@ git reset --hard origin/main
                     self.thinkube_config = yaml.safe_load(f)
 
         # Setup Jinja2 environment
-        template_dir = Path("/home/thinkube-control/templates/k8s")
+        template_dir = Path("/home/thinkube/thinkube-control/templates/k8s")
         env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(str(template_dir)),
             undefined=jinja2.StrictUndefined,

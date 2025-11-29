@@ -71,7 +71,7 @@
   when: manifest_file is not failed
 
 - name: Process application secrets
-  ansible.builtin.include_tasks: "/home/thinkube-control/tasks/inject_secrets.yaml"
+  ansible.builtin.include_tasks: "/home/thinkube/thinkube-control/tasks/inject_secrets.yaml"
   vars:
     api_token: "{{ cicd_api_token }}"
     k8s_namespace: "{{ deployment_namespace }}"
@@ -79,7 +79,7 @@
   when: manifest_file is not failed
 
 - name: Generate k8s manifests from thinkube.yaml
-  ansible.builtin.include_tasks: "/home/thinkube-control/tasks/generate_k8s_manifests.yaml"
+  ansible.builtin.include_tasks: "/home/thinkube/thinkube-control/tasks/generate_k8s_manifests.yaml"
   vars:
     local_repo_path: "{{ code_source_path }}/{{ gitea_repo_name }}"
 

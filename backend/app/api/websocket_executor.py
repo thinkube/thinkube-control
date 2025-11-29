@@ -502,7 +502,7 @@ async def _execute_template_deployment(
 
     try:
         # Build command for Python deployment script
-        python_script = Path("/home/thinkube-control/scripts/deploy_application.py")
+        python_script = Path("/home/thinkube/thinkube-control/scripts/deploy_application.py")
         cmd = [
             "python3",
             str(python_script),
@@ -801,10 +801,10 @@ async def _execute_optional_component(
         raise ValueError(f"No playbook path found for component {component}")
     
     # Build the full playbook path
-    full_playbook_path = Path("/home/thinkube-platform/thinkube") / playbook_path
+    full_playbook_path = Path("/home/thinkube/thinkube-platform/thinkube") / playbook_path
 
     # Inventory path (shared location)
-    inventory_path = Path("/home/.ansible/inventory/inventory.yaml")
+    inventory_path = Path("/home/thinkube/.ansible/inventory/inventory.yaml")
     
     # Create temp vars file
     temp_vars_fd, temp_vars_path = tempfile.mkstemp(suffix='.yml', prefix=f'{component}-vars-')
@@ -839,7 +839,7 @@ async def _execute_optional_component(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env,
-            cwd="/home/thinkube-platform/thinkube"
+            cwd="/home/thinkube/thinkube-platform/thinkube"
         )
         
         # Stream output - exactly like templates

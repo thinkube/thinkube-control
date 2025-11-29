@@ -154,7 +154,7 @@ async def get_environment(current_user: dict = Depends(get_current_user)):
 
     # Get inventory if available
     inventory_info = {}
-    inventory_path = Path("/home/.ansible/inventory/inventory.yaml")
+    inventory_path = Path("/home/thinkube/.ansible/inventory/inventory.yaml")
     if inventory_path.exists():
         try:
             with open(inventory_path, "r") as f:

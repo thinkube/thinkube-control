@@ -500,7 +500,7 @@
 
     # Setup git hooks for automatic template processing
     - name: Setup git hooks in local repository
-      ansible.builtin.include_tasks: "/home/thinkube-control/tasks/setup_git_hooks.yaml"
+      ansible.builtin.include_tasks: "/home/thinkube/thinkube-control/tasks/setup_git_hooks.yaml"
 
     # Push to Gitea - this will trigger the webhook!
     - name: Push to Gitea

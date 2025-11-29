@@ -124,7 +124,7 @@ spec:
               name: github-token
               key: token
         - name: HOME
-          value: "/home"
+          value: "/home/thinkube"
         - name: HARBOR_ROBOT_TOKEN
           valueFrom:
             secretKeyRef:
@@ -167,7 +167,7 @@ spec:
         # Mount volumes for ansible execution
         volumeMounts:
         - name: shared-code
-          mountPath: /home
+          mountPath: /home/thinkube
         - name: container-storage
           mountPath: /var/lib/containers
       # Add nodeSelector to ensure pod runs on control plane node

@@ -43,7 +43,7 @@
 # Generate MLflow authentication secrets
 - name: Generate MLflow credentials secret
   ansible.builtin.template:
-    src: "/home/thinkube-control/templates/k8s/mlflow-secrets.j2"
+    src: "/home/thinkube/thinkube-control/templates/k8s/mlflow-secrets.j2"
     dest: "{{ local_repo_path }}/k8s/mlflow-secrets.yaml"
 
 # Generate ConfigMap for app metadata (used by webhook adapter)
@@ -64,7 +64,7 @@
 # Generate deployment manifests (always separate deployments per container)
 - name: Generate deployment manifests for each container
   ansible.builtin.template:
-    src: "/home/thinkube-control/templates/k8s/{{ item.src }}"
+    src: "/home/thinkube/thinkube-control/templates/k8s/{{ item.src }}"
     dest: "{{ local_repo_path }}/k8s/{{ item.dest }}"
   loop:
     - { src: "deployment-separate.j2", dest: "deployments.yaml" }
@@ -73,7 +73,7 @@
 # Generate ingress using Python to avoid Jinja2 whitespace issues
 - name: Create temporary Python script for ingress generation
   ansible.builtin.template:
-    src: "/home/thinkube-control/templates/k8s/ingress_generator.py.j2"
+    src: "/home/thinkube/thinkube-control/templates/k8s/ingress_generator.py.j2"
     dest: "/tmp/generate_ingress_{{ project_name }}.py"
     mode: '0755'
 
@@ -90,14 +90,14 @@
 # Generate paused-backend for handling scaled-to-zero scenarios
 - name: Generate paused-backend manifest
   ansible.builtin.template:
-    src: "/home/thinkube-control/templates/k8s/paused-backend.yaml.j2"
+    src: "/home/thinkube/thinkube-control/templates/k8s/paused-backend.yaml.j2"
     dest: "{{ local_repo_path }}/k8s/paused-backend.yaml"
 
 # Generate service-specific resources based on services list
 - name: Generate PostgreSQL resources
   when: "thinkube_spec.spec.services is defined and 'database' in thinkube_spec.spec.services"
   ansible.builtin.template:
-    src: "/home/thinkube-control/templates/k8s/postgresql.j2"
+    src: "/home/thinkube/thinkube-control/templates/k8s/postgresql.j2"
     dest: "{{ local_repo_path }}/k8s/postgresql.yaml"
 
 - name: Check if storage PVCs are needed
@@ -112,13 +112,13 @@
 - name: Generate storage PVC
   when: needs_storage_pvcs | bool
   ansible.builtin.template:
-    src: "/home/thinkube-control/templates/k8s/storage-pvc.j2"
+    src: "/home/thinkube/thinkube-control/templates/k8s/storage-pvc.j2"
     dest: "{{ local_repo_path }}/k8s/storage-pvc.yaml"
 
 # Generate CI/CD workflow template
 - name: Generate CI/CD workflow template
   ansible.builtin.template:
-    src: "/home/thinkube-control/templates/k8s/build-workflow.j2"
+    src: "/home/thinkube/thinkube-control/templates/k8s/build-workflow.j2"
     dest: "{{ local_repo_path }}/k8s/build-workflow.yaml"
 
 # Generate kustomization.yaml for ArgoCD

@@ -345,10 +345,10 @@ async def _execute_component_installation(
         
         # Build the full playbook path using the mounted thinkube-platform repo
         # The playbook path from service is like: ansible/40_thinkube/optional/qdrant/00_install.yaml
-        full_playbook_path = Path("/home/thinkube-platform/thinkube") / playbook_path
+        full_playbook_path = Path("/home/thinkube/thinkube-platform/thinkube") / playbook_path
 
         # Inventory is in shared location
-        inventory_path = Path("/home/.ansible/inventory/inventory.yaml")
+        inventory_path = Path("/home/thinkube/.ansible/inventory/inventory.yaml")
         
         # Create temporary vars file
         temp_vars_fd, temp_vars_file = tempfile.mkstemp(suffix='.yml', prefix='component-vars-')
@@ -381,7 +381,7 @@ async def _execute_component_installation(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,  # Merge stderr into stdout like templates
             env=env,
-            cwd="/home/thinkube-platform/thinkube"  # Use the thinkube repo root as working directory
+            cwd="/home/thinkube/thinkube-platform/thinkube"  # Use the thinkube repo root as working directory
         )
         
         # Stream output line by line

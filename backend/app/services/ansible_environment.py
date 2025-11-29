@@ -15,7 +15,7 @@ class AnsibleEnvironment:
     """Manages shared Ansible environment configuration."""
 
     def __init__(self):
-        self.shared_code_path = Path("/home")
+        self.shared_code_path = Path("/home/thinkube")
         self.thinkube_control_path = self.shared_code_path / "thinkube-control"
 
     def validate_paths(self) -> Dict[str, Any]:
@@ -23,7 +23,7 @@ class AnsibleEnvironment:
         errors = []
 
         if not self.shared_code_path.exists():
-            errors.append("Shared-code directory not mounted at /home")
+            errors.append("Shared-code directory not mounted at /home/thinkube")
 
         if not self.thinkube_control_path.exists():
             errors.append("thinkube-control not found in shared-code")
@@ -36,7 +36,7 @@ class AnsibleEnvironment:
 
     def get_inventory_path(self) -> Path:
         """Get the inventory path from shared location."""
-        return Path("/home/.ansible/inventory/inventory.yaml")
+        return Path("/home/thinkube/.ansible/inventory/inventory.yaml")
 
     def get_playbook_path(
         self, playbook_name: str, working_dir: Optional[Path] = None
@@ -57,7 +57,7 @@ class AnsibleEnvironment:
         """
         if context == "optional":
             # ONLY thinkube-platform roles for optional components
-            return "/home/thinkube-platform/thinkube/ansible/roles"
+            return "/home/thinkube/thinkube-platform/thinkube/ansible/roles"
         else:
             # ONLY thinkube-control roles for templates (default)
             return str(self.thinkube_control_path / "ansible" / "roles")

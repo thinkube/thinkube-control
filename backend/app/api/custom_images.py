@@ -223,7 +223,7 @@ async def create_custom_image(
 
         # Create directory structure in shared-code mount
         # shared-code is mounted at /home in the container
-        dockerfiles_dir = Path("/home/dockerfiles/custom")
+        dockerfiles_dir = Path("/home/thinkube/dockerfiles/custom")
         dockerfiles_dir.mkdir(parents=True, exist_ok=True)
 
         image_dir = dockerfiles_dir / request.name
@@ -731,7 +731,7 @@ async def get_editor_url(
     # Using VS Code's payload parameter to open the Dockerfile directly
     # Reference: https://github.com/coder/code-server/issues/1964#issuecomment-916590294
     domain = os.environ.get("DOMAIN_NAME", "thinkube.com")
-    folder_path = f"/home/coder/dockerfiles/custom/{build.name}"
+    folder_path = f"/home/thinkube/dockerfiles/custom/{build.name}"
     file_path = f"{folder_path}/Dockerfile"
 
     # VS Code uses vscode-remote:// URI scheme for files

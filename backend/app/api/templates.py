@@ -604,7 +604,7 @@ async def get_deployment_debug_logs(
 
     # Find log files - check both possible locations
     app_name = deployment.variables.get("app_name", "unknown")
-    shared_log_dir = Path("/home/shared-logs/deployments") / app_name
+    shared_log_dir = Path("/home/thinkube/shared-logs/deployments") / app_name
     tmp_log_dir = Path("/tmp/thinkube-deployments") / app_name
 
     # Check which directory exists
@@ -683,7 +683,7 @@ async def download_debug_log(
 
     # Find the log file - check both possible locations
     app_name = deployment.variables.get("app_name", "unknown")
-    shared_log_file = Path("/home/shared-logs/deployments") / app_name / filename
+    shared_log_file = Path("/home/thinkube/shared-logs/deployments") / app_name / filename
     tmp_log_file = Path("/tmp/thinkube-deployments") / app_name / filename
 
     log_file = None
