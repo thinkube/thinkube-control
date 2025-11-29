@@ -1469,7 +1469,14 @@ Install git hooks for automatic template processing:
         DeploymentLogger.log("Setup git hooks and helper scripts")
 
     async def configure_webhook(self):
-        """Configure Gitea webhook (atomic operation - prevents duplicates)."""
+        """Configure Gitea webhook (idempotent - cleans up duplicates).
+
+        DEFENSIVE FIX (2025-11-29): We observed duplicate webhooks being created
+        (e.g., nomic repo had IDs 6 and 7 with identical timestamps). Root cause
+        is unknown despite investigation - the code has only one git push and
+        checks for existing webhooks before creating. This function now detects
+        and removes duplicate webhooks to prevent duplicate workflow triggers.
+        """
         gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
         gitea_hostname = f"git.{self.domain}"
         webhook_url = f"https://argo-events.{self.domain}/gitea"
@@ -1498,16 +1505,15 @@ Install git hooks for automatic template processing:
                     raise RuntimeError(f"Failed to fetch existing webhooks: {resp.status}")
                 existing_hooks = await resp.json()
 
-            # 2. Check if webhook already exists (match Ansible behavior)
-            webhook_exists = any(
-                hook.get('config', {}).get('url') == webhook_url
-                for hook in existing_hooks
-            )
+            # 2. Find ALL webhooks matching our URL
+            matching_hooks = [
+                hook for hook in existing_hooks
+                if hook.get('config', {}).get('url') == webhook_url
+            ]
 
-            if webhook_exists:
-                DeploymentLogger.log(f"Webhook already configured for {org}/{repo}")
-            else:
-                # 3. Create webhook only if it doesn't exist
+            # 3. Handle based on count
+            if len(matching_hooks) == 0:
+                # No webhook exists - create one
                 webhook_payload = {
                     'type': 'gitea',
                     'config': {
@@ -1518,7 +1524,6 @@ Install git hooks for automatic template processing:
                     'events': ['push'],
                     'active': True
                 }
-
                 async with session.post(hooks_url, headers=headers, json=webhook_payload, ssl=False) as resp:
                     if resp.status == 201:
                         webhook_data = await resp.json()
@@ -1528,6 +1533,26 @@ Install git hooks for automatic template processing:
                         error_text = await resp.text()
                         DeploymentLogger.error(f"Failed to create webhook: {resp.status} - {error_text}")
                         raise RuntimeError(f"Failed to create webhook: {resp.status}")
+
+            elif len(matching_hooks) == 1:
+                # Exactly one webhook - nothing to do
+                DeploymentLogger.log(f"Webhook already configured for {org}/{repo}")
+
+            else:
+                # Multiple webhooks found - delete duplicates (keep the first one)
+                DeploymentLogger.log(f"Found {len(matching_hooks)} duplicate webhooks for {org}/{repo}, cleaning up...")
+                keep_hook_id = matching_hooks[0]['id']
+
+                for hook in matching_hooks[1:]:
+                    hook_id = hook['id']
+                    delete_url = f"{hooks_url}/{hook_id}"
+                    async with session.delete(delete_url, headers=headers, ssl=False) as resp:
+                        if resp.status == 204:
+                            DeploymentLogger.log(f"Deleted duplicate webhook ID {hook_id}")
+                        else:
+                            DeploymentLogger.error(f"Failed to delete webhook {hook_id}: {resp.status}")
+
+                DeploymentLogger.success(f"Cleaned up duplicates, kept webhook ID {keep_hook_id}")
 
     def _run_git_sync(self, git_script: str, cwd: str) -> tuple:
         """Synchronous git execution (runs in thread pool to avoid blocking event loop)."""
