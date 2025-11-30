@@ -1610,6 +1610,11 @@ git config user.email '{self.admin_username}@{self.domain}'
 git remote set-url origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.gitea_repo_name}.git' 2>/dev/null || \
 git remote add origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.gitea_repo_name}.git'
 
+# Sync with remote right before commit to ensure fast-forward push
+# This fixes non-fast-forward errors when local refs are stale from previous deployments
+git fetch origin main 2>/dev/null || true
+git reset --hard origin/main 2>/dev/null || true
+
 git add -A
 # Only commit if there are changes
 if ! git diff --cached --quiet; then
