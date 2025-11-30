@@ -33,4 +33,4 @@ ENV PYTHONUNBUFFERED=1
 EXPOSE 8000
 
 # Command to run the server via startup script
-CMD ["/app/start.sh"]
+CMD ["/app/start.sh"]# Force rebuild 1764502675
