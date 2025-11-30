@@ -1,4 +1,5 @@
 # Use optimized base image with common dependencies from library
+# Cache bust: 2025-11-30 - force pull new base image with thinkube user
 ARG REGISTRY
 FROM ${REGISTRY}/library/python-base:3.12-slim
 
