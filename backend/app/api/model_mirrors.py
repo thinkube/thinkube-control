@@ -335,13 +335,13 @@ async def check_mlflow_status(
     """
     import os
     import requests
-    import mlflow
+    import base64
+
+    # Get MLflow configuration
+    mlflow_uri = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000")
+    mlflow_public_url = f"https://mlflow.{os.getenv('DOMAIN_NAME', 'thinkube.com')}"
 
     try:
-        # Get MLflow configuration
-        mlflow_uri = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000")
-        mlflow_public_url = f"https://mlflow.{os.getenv('DOMAIN_NAME', 'thinkube.com')}"
-
         # Get credentials from secret
         try:
             from kubernetes import client as k8s_client, config as k8s_config
@@ -352,7 +352,6 @@ async def check_mlflow_status(
 
             v1 = k8s_client.CoreV1Api()
             secret = v1.read_namespaced_secret("mlflow-auth-config", "thinkube-control")
-            import base64
             keycloak_token_url = base64.b64decode(secret.data['keycloak-token-url']).decode('utf-8')
             client_id = base64.b64decode(secret.data['client-id']).decode('utf-8')
             client_secret = base64.b64decode(secret.data['client-secret']).decode('utf-8')
@@ -390,7 +389,6 @@ async def check_mlflow_status(
                 "error": "Could not authenticate with Keycloak"
             }
 
-        # Set MLflow token
         access_token = token_response.json().get('access_token')
         if not access_token:
             return {
@@ -400,61 +398,63 @@ async def check_mlflow_status(
                 "error": "No access token received"
             }
 
-        # Try to connect to MLflow
-        os.environ['MLFLOW_TRACKING_TOKEN'] = access_token
-        mlflow.set_tracking_uri(mlflow_uri)
+        # Test MLflow connection with direct HTTP request (more reliable than Python client)
+        mlflow_response = requests.get(
+            f"{mlflow_uri}/api/2.0/mlflow/experiments/search",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=5
+        )
 
-        # Test connection by listing experiments with timeout
-        import asyncio
-        import concurrent.futures
-
-        def check_mlflow_connection():
-            return mlflow.search_experiments()
-
-        try:
-            # Run MLflow API call with timeout in thread pool
-            loop = asyncio.get_event_loop()
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                experiments = await asyncio.wait_for(
-                    loop.run_in_executor(pool, check_mlflow_connection),
-                    timeout=10.0
-                )
-        except asyncio.TimeoutError:
+        if mlflow_response.status_code == 200:
+            experiments = mlflow_response.json().get('experiments', [])
+            result = {
+                "initialized": True,
+                "needs_browser_login": False,
+                "mlflow_url": mlflow_public_url,
+                "message": f"MLflow is ready ({len(experiments)} experiments found)"
+            }
+            logger.info(f"MLflow status check succeeded: {result}")
+            return result
+        elif mlflow_response.status_code == 500:
+            # 500 error usually means user not initialized in MLflow OIDC
+            logger.info(f"MLflow returned 500 - user likely not initialized")
             return {
                 "initialized": False,
                 "needs_browser_login": True,
                 "mlflow_url": mlflow_public_url,
-                "error": "MLflow connection timeout - service may be unavailable"
+                "error": "MLflow user not initialized - please log in via browser to create your account"
+            }
+        elif mlflow_response.status_code == 401:
+            return {
+                "initialized": False,
+                "needs_browser_login": True,
+                "mlflow_url": mlflow_public_url,
+                "error": "MLflow authentication failed - please log in via browser"
+            }
+        else:
+            return {
+                "initialized": False,
+                "needs_browser_login": True,
+                "mlflow_url": mlflow_public_url,
+                "error": f"MLflow returned status {mlflow_response.status_code}"
             }
 
-        result = {
-            "initialized": True,
-            "needs_browser_login": False,
-            "mlflow_url": mlflow_public_url,
-            "message": f"MLflow is ready ({len(experiments)} experiments found)"
-        }
-        logger.info(f"MLflow status check succeeded: {result}")
-        return result
-
     except requests.exceptions.Timeout:
-        # Timeout usually means user needs to initialize via browser
         return {
             "initialized": False,
             "needs_browser_login": True,
             "mlflow_url": mlflow_public_url,
-            "error": "MLflow user not initialized - please log in via browser first"
+            "error": "MLflow connection timeout - service may be unavailable"
         }
 
     except Exception as e:
         logger.error(f"MLflow status check failed: {e}", exc_info=True)
-        result = {
+        return {
             "initialized": False,
             "needs_browser_login": True,
             "mlflow_url": mlflow_public_url,
             "error": str(e)
         }
-        logger.info(f"Returning error response: {result}")
-        return result
 
 
 @router.post("/mirrors/reset/{model_id:path}", operation_id="reset_mirror_job")
