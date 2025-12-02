@@ -208,7 +208,7 @@ class OptionalComponentService:
             "description": "LLM observability platform for tracing and monitoring AI applications (MIT)",
             "category": "ai",
             "icon": "/icons/tk_observability.svg",
-            "requirements": ["postgresql", "keycloak", "clickhouse"],
+            "requirements": ["postgresql", "keycloak", "clickhouse", "valkey"],
             "namespace": "langfuse",
             "playbooks": {
                 "install": "00_install.yaml",
