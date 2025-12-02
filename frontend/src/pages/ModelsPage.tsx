@@ -323,6 +323,7 @@ export default function ModelsPage() {
                               variant="outline"
                               size="sm"
                               onClick={() => handleDownload(model.id)}
+                              disabled={!mlflowStatus?.initialized}
                             >
                               <Copy className="w-4 h-4 mr-2" />
                               Retry
@@ -349,6 +350,7 @@ export default function ModelsPage() {
                               variant="outline"
                               size="sm"
                               onClick={() => handleDownload(model.id)}
+                              disabled={!mlflowStatus?.initialized}
                             >
                               <Copy className="w-4 h-4 mr-2" />
                               Mirror
@@ -366,7 +368,7 @@ export default function ModelsPage() {
                             variant="default"
                             size="sm"
                             onClick={() => handleDownload(model.id)}
-                            disabled={loading}
+                            disabled={loading || !mlflowStatus?.initialized}
                           >
                             <Copy className="w-4 h-4 mr-2" />
                             Mirror
