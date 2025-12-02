@@ -402,6 +402,7 @@ async def check_mlflow_status(
         mlflow_response = requests.get(
             f"{mlflow_uri}/api/2.0/mlflow/experiments/search",
             headers={"Authorization": f"Bearer {access_token}"},
+            params={"max_results": 10},
             timeout=5
         )
 
