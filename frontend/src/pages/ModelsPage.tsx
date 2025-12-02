@@ -52,16 +52,24 @@ export default function ModelsPage() {
   }, []);
 
   const checkMlflowStatus = async () => {
+    // Construct MLflow URL from current domain
+    const domainParts = window.location.hostname.split('.');
+    const baseDomain = domainParts.slice(-2).join('.');
+    const mlflowUrl = `https://mlflow.${baseDomain}`;
+
     try {
       const response = await api.get('/models/mlflow/status');
       setMlflowStatus(response.data);
     } catch (err: any) {
       console.error('Failed to check MLflow status:', err);
+      // Use mlflow_url from error response if available, otherwise construct it
+      const errorMlflowUrl = err.response?.data?.mlflow_url || mlflowUrl;
+      const errorMessage = err.response?.data?.error || err.response?.data?.detail || 'Failed to check MLflow status';
       setMlflowStatus({
         initialized: false,
         needs_browser_login: true,
-        mlflow_url: '',
-        error: err.response?.data?.detail || 'Failed to check MLflow status',
+        mlflow_url: errorMlflowUrl,
+        error: errorMessage,
       });
     } finally {
       setCheckingMlflow(false);
