@@ -10,6 +10,8 @@ export interface Model {
   description: string;
   server_type: string[];
   is_downloaded: boolean;
+  is_finetuned: boolean;
+  task: string;
 }
 
 export interface MirrorJob {

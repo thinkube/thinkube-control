@@ -103,6 +103,15 @@ export default function ModelsPage() {
   } => {
     const download = getDownloadForModel(model.id);
 
+    // Fine-tuned models are always registered
+    if (model.is_finetuned) {
+      return {
+        label: 'Registered',
+        icon: <CheckCircle2 className="w-3 h-3" />,
+        variant: 'success',
+      };
+    }
+
     if (model.is_downloaded) {
       return {
         label: 'Mirrored',
@@ -250,7 +259,14 @@ export default function ModelsPage() {
                   <TkTableRow key={model.id}>
                     <TkTableCell className="font-medium">
                       <div>
-                        <div>{model.name}</div>
+                        <div className="flex items-center gap-2">
+                          {model.name}
+                          {model.is_finetuned && (
+                            <TkBadge variant="secondary" className="text-xs">
+                              Fine-tuned
+                            </TkBadge>
+                          )}
+                        </div>
                         <div className="text-sm text-muted-foreground">
                           {model.description}
                         </div>
@@ -279,7 +295,23 @@ export default function ModelsPage() {
                     </TkTableCell>
                     <TkTableCell className="text-right">
                       <div className="flex gap-2 justify-end">
-                        {model.is_downloaded && download && !download.is_failed ? (
+                        {/* Fine-tuned models are always ready - no Mirror button */}
+                        {model.is_finetuned ? (
+                          <>
+                            <TkBadge variant="success">
+                              <CheckCircle2 className="w-3 h-3 mr-1" />
+                              Ready
+                            </TkBadge>
+                            <TkButton
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleDelete(model.id)}
+                            >
+                              <Trash2 className="w-4 h-4 mr-2" />
+                              Delete
+                            </TkButton>
+                          </>
+                        ) : model.is_downloaded && download && !download.is_failed ? (
                           <>
                             <TkBadge variant="success">
                               <CheckCircle2 className="w-3 h-3 mr-1" />
