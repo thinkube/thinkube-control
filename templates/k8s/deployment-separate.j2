@@ -207,7 +207,9 @@ spec:
               memory: "4Gi"
               cpu: "1000m"
             limits:
-              memory: "24Gi"
+              # xlarge is for ML/AI workloads - 80Gi covers most LLM inference scenarios
+              # on unified memory systems (DGX Spark) where GPU+CPU share memory pool
+              memory: "80Gi"
               cpu: "4000m"
             {% else %}
             # Default to small if size is not recognized
