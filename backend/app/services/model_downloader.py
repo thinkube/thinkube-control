@@ -297,14 +297,73 @@ class ModelDownloaderService:
             namespace=self.workflow_namespace
         )
 
-    def get_available_models(self) -> List[Dict]:
+    def get_available_models(self, include_finetuned: bool = True) -> List[Dict]:
         """
-        Get list of available models for download
+        Get list of available models for download/deployment
+
+        Args:
+            include_finetuned: If True, include fine-tuned models from MLflow
 
         Returns:
             List of model dictionaries with metadata
         """
-        return AVAILABLE_MODELS.copy()
+        models = AVAILABLE_MODELS.copy()
+
+        if include_finetuned:
+            finetuned = self._get_finetuned_models()
+            models.extend(finetuned)
+
+        return models
+
+    def _get_finetuned_models(self) -> List[Dict]:
+        """
+        Query MLflow for fine-tuned models registered via thinkube-control
+
+        Returns:
+            List of fine-tuned model dictionaries
+        """
+        try:
+            from app.db.session import SessionLocal
+            from app.models.model_mirrors import ModelMirrorJob
+
+            # Get all successfully registered models from database
+            session_factory = SessionLocal()
+            db = session_factory()
+            try:
+                succeeded_jobs = db.query(ModelMirrorJob).filter(
+                    ModelMirrorJob.status == "succeeded"
+                ).all()
+
+                # Filter to only include fine-tuned models (not in AVAILABLE_MODELS)
+                hf_model_ids = {m["id"] for m in AVAILABLE_MODELS}
+                finetuned_models = []
+
+                for job in succeeded_jobs:
+                    # Skip if it's a HuggingFace model (already in catalog)
+                    if job.model_id in hf_model_ids:
+                        continue
+
+                    # This is a fine-tuned model
+                    finetuned_models.append({
+                        "id": job.model_id,
+                        "name": job.model_id,
+                        "size": "Unknown",
+                        "quantization": "FP16",  # Merged models are typically FP16
+                        "description": f"Fine-tuned model registered on {job.created_at.strftime('%Y-%m-%d') if job.created_at else 'unknown'}",
+                        "server_type": ["tensorrt-llm"],
+                        "task": "text-generation",
+                        "is_finetuned": True
+                    })
+
+                logger.debug(f"Found {len(finetuned_models)} fine-tuned models in database")
+                return finetuned_models
+
+            finally:
+                db.close()
+
+        except Exception as e:
+            logger.warning(f"Could not query fine-tuned models: {e}")
+            return []
 
     def submit_download(self, model_id: str) -> str:
         """
@@ -920,6 +979,450 @@ except Exception as e:
         except ApiException as e:
             logger.error(f"Failed to cancel workflow {workflow_name}: {e}")
             return False
+
+    def submit_register(
+        self,
+        name: str,
+        source_path: str,
+        base_model: str,
+        task: str,
+        server_type: str,
+        description: str,
+        username: str
+    ) -> str:
+        """
+        Submit a fine-tuned model registration workflow to Argo
+
+        Args:
+            name: Model name for catalog (e.g., "gpt-oss-tool-use")
+            source_path: Relative path in user's models directory
+            base_model: Original model (e.g., "unsloth/gpt-oss-20b")
+            task: Model task (e.g., "text-generation")
+            server_type: Target server type (e.g., "tensorrt-llm")
+            description: Model description
+            username: JupyterHub username (for JuiceFS path)
+
+        Returns:
+            Workflow name/ID
+
+        Raises:
+            ValueError: If source path is invalid
+            ApiException: If workflow submission fails
+
+        Note:
+            Model is read from /mnt/juicefs/users/{username}/thinkube/models/{source_path}/
+        """
+        logger.info(f"Creating registration workflow for model: {name} from {source_path} (user: {username})")
+
+        # Escape for safe use in Python script
+        safe_name = name.replace("'", "\\'")
+        safe_source_path = source_path.replace("'", "\\'")
+        safe_base_model = base_model.replace("'", "\\'")
+        safe_task = task.replace("'", "\\'")
+        safe_server_type = server_type.replace("'", "\\'")
+        safe_description = description.replace("'", "\\'")
+        safe_username = username.replace("'", "\\'")
+
+        # Create Hera workflow
+        with Workflow(
+            generate_name="model-register-",
+            namespace=self.workflow_namespace,
+            workflows_service=self.workflows_service,
+            service_account_name="thinkube-control",
+            entrypoint="register",
+            parallelism=self.parallelism,
+            labels={
+                "model-id": name.replace("/", "-"),
+                "workflow-type": "model-register"
+            },
+            retry_strategy=hera_models.RetryStrategy(
+                limit=3,
+                retry_policy="OnFailure",
+                backoff=hera_models.Backoff(
+                    duration="30s",
+                    factor=2,
+                    max_duration="5m"
+                )
+            ),
+            volumes=[
+                hera_models.Volume(
+                    name="juicefs-mlflow",
+                    persistent_volume_claim=hera_models.PersistentVolumeClaimVolumeSource(
+                        claim_name="juicefs-mlflow"
+                    )
+                )
+            ]
+        ) as w:
+            # Registration script - reads from user's JuiceFS and uploads to MLflow
+            register_script = f"""
+import os
+import sys
+import tempfile
+import shutil
+from pathlib import Path
+import mlflow
+import mlflow.transformers
+import boto3
+import requests
+
+# Force progress bars to show even without TTY
+os.environ['TQDM_DISABLE'] = '0'
+os.environ['TQDM_MININTERVAL'] = '10'
+
+# MLflow authentication function (can be called multiple times to refresh token)
+def refresh_mlflow_token():
+    \"\"\"Refresh MLflow authentication token from Keycloak\"\"\"
+    token_url = os.environ['MLFLOW_KEYCLOAK_TOKEN_URL']
+    client_id = os.environ['MLFLOW_KEYCLOAK_CLIENT_ID']
+    client_secret = os.environ['MLFLOW_CLIENT_SECRET']
+    username = os.environ['MLFLOW_AUTH_USERNAME']
+    password = os.environ['MLFLOW_AUTH_PASSWORD']
+
+    token_response = requests.post(
+        token_url,
+        data={{
+            'grant_type': 'password',
+            'client_id': client_id,
+            'client_secret': client_secret,
+            'username': username,
+            'password': password
+        }},
+        verify=False  # Skip SSL verification for internal cluster communication
+    )
+    token_response.raise_for_status()
+    os.environ['MLFLOW_TRACKING_TOKEN'] = token_response.json()['access_token']
+    return True
+
+# Get initial MLflow authentication token
+print('Authenticating with MLflow...', flush=True)
+refresh_mlflow_token()
+print('✓ MLflow authentication successful', flush=True)
+
+# Get MLflow URI from environment
+mlflow_uri = os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow.mlflow.svc.cluster.local:5000')
+mlflow.set_tracking_uri(mlflow_uri)
+
+# Model parameters
+model_name = '{safe_name}'
+source_path = '{safe_source_path}'
+base_model = '{safe_base_model}'
+model_task = '{safe_task}'
+server_type = '{safe_server_type}'
+description = '{safe_description}'
+username = '{safe_username}'
+
+# Construct full path to model in staging area
+# JupyterHub saves to: /home/jovyan/thinkube/mlflow/.staging/{source_path}/
+# This maps to: /mnt/juicefs/.staging/{source_path}/
+# Same volume used by mirroring workflow - no additional PVCs needed
+model_source_path = f'/mnt/juicefs/.staging/{{source_path}}'
+
+print(f'Model name: {{model_name}}', flush=True)
+print(f'Source path: {{model_source_path}}', flush=True)
+print(f'Base model: {{base_model}}', flush=True)
+print(f'Task: {{model_task}}', flush=True)
+
+# Validate source path exists
+if not os.path.exists(model_source_path):
+    print(f'ERROR: Model source path does not exist: {{model_source_path}}', flush=True)
+    sys.exit(1)
+
+# Check for expected model files
+model_files = os.listdir(model_source_path)
+print(f'Found {{len(model_files)}} files in source directory', flush=True)
+if not model_files:
+    print(f'ERROR: No files found in model source path', flush=True)
+    sys.exit(1)
+
+# Look for key model files
+has_config = 'config.json' in model_files
+has_safetensors = any(f.endswith('.safetensors') for f in model_files)
+has_bin = any(f.endswith('.bin') for f in model_files)
+print(f'  config.json: {{has_config}}', flush=True)
+print(f'  .safetensors files: {{has_safetensors}}', flush=True)
+print(f'  .bin files: {{has_bin}}', flush=True)
+
+if not has_config:
+    print(f'ERROR: config.json not found - not a valid HuggingFace model', flush=True)
+    sys.exit(1)
+
+if not (has_safetensors or has_bin):
+    print(f'ERROR: No model weights found (.safetensors or .bin)', flush=True)
+    sys.exit(1)
+
+# Configure S3 client for JuiceFS Gateway
+s3_client = boto3.client(
+    's3',
+    endpoint_url=os.environ['AWS_S3_ENDPOINT'],
+    aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+    aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
+    region_name=os.environ['AWS_DEFAULT_REGION']
+)
+s3_bucket = 'mlflow'
+print(f'✓ S3 client configured for JuiceFS Gateway', flush=True)
+
+try:
+    # Set up experiment for fine-tuned models
+    experiment_name = "finetuned-models"
+    client = mlflow.MlflowClient()
+    try:
+        experiment = mlflow.get_experiment_by_name(experiment_name)
+        if experiment is None:
+            experiment_id = mlflow.create_experiment(experiment_name)
+            print(f'✓ Created experiment "{{experiment_name}}"', flush=True)
+        elif experiment.lifecycle_stage == 'deleted':
+            print(f'Note: Experiment "{{experiment_name}}" is deleted, restoring it', flush=True)
+            client.restore_experiment(experiment.experiment_id)
+            experiment_id = experiment.experiment_id
+            print(f'✓ Restored experiment "{{experiment_name}}"', flush=True)
+        else:
+            experiment_id = experiment.experiment_id
+            print(f'✓ Using existing experiment "{{experiment_name}}"', flush=True)
+    except Exception as exp_error:
+        print(f'Warning: Could not create/get experiment: {{exp_error}}', flush=True)
+        experiment_id = None
+
+    if experiment_id:
+        mlflow.set_experiment(experiment_name)
+
+    with mlflow.start_run(run_name=f"register-{{model_name}}") as run:
+        run_id = run.info.run_id
+        artifact_uri = run.info.artifact_uri
+
+        print(f'Run ID: {{run_id}}', flush=True)
+        print(f'Artifact URI: {{artifact_uri}}', flush=True)
+
+        # CRITICAL: Extract S3 path from artifact_uri
+        # artifact_uri format: s3://mlflow/artifacts/{{run_id}}/artifacts
+        # We need: artifacts/{{run_id}}/artifacts/model for S3 upload
+        s3_base_path = artifact_uri.replace('s3://mlflow/', '')
+        s3_artifact_prefix = f'{{s3_base_path}}/model'
+        print(f'S3 upload prefix: {{s3_artifact_prefix}}', flush=True)
+
+        # Log model metadata as params
+        mlflow.log_params({{
+            "source": "finetuned",
+            "base_model": base_model,
+            "task": model_task,
+            "server_type": server_type,
+            "description": description,
+            "source_path": source_path,
+            "username": username
+        }})
+
+        # Upload model files from user's storage to S3 (JuiceFS Gateway)
+        print(f'Uploading model files to S3 (JuiceFS Gateway)...', flush=True)
+        upload_count = 0
+        for root, dirs, files in os.walk(model_source_path):
+            for file in files:
+                local_path = os.path.join(root, file)
+                relative_path = os.path.relpath(local_path, model_source_path)
+                s3_key = f'{{s3_artifact_prefix}}/{{relative_path}}'
+
+                with open(local_path, 'rb') as f:
+                    s3_client.put_object(
+                        Bucket=s3_bucket,
+                        Key=s3_key,
+                        Body=f
+                    )
+                upload_count += 1
+                if upload_count % 10 == 0:
+                    print(f'  Uploaded {{upload_count}} files...', flush=True)
+
+        print(f'✓ Uploaded {{upload_count}} model files to S3', flush=True)
+
+        # Refresh token after uploads (tokens expire after ~5-60 minutes)
+        print('Refreshing MLflow authentication token...', flush=True)
+        refresh_mlflow_token()
+        print('✓ Token refreshed', flush=True)
+
+        # Create and upload MLflow metadata
+        print(f'Creating MLflow metadata...', flush=True)
+        temp_mlmodel_dir = tempfile.mkdtemp()
+        mlflow.transformers.save_model(
+            transformers_model=model_source_path,
+            path=temp_mlmodel_dir,
+            task=model_task
+        )
+
+        # Upload metadata files via S3
+        metadata_count = 0
+        for metadata_file in ['MLmodel', 'requirements.txt', 'conda.yaml', 'python_env.yaml']:
+            metadata_path = os.path.join(temp_mlmodel_dir, metadata_file)
+            if os.path.exists(metadata_path):
+                s3_key = f'{{s3_artifact_prefix}}/{{metadata_file}}'
+                with open(metadata_path, 'rb') as f:
+                    s3_client.put_object(
+                        Bucket=s3_bucket,
+                        Key=s3_key,
+                        Body=f
+                    )
+                metadata_count += 1
+
+        shutil.rmtree(temp_mlmodel_dir)
+        print(f'✓ Uploaded {{metadata_count}} metadata files', flush=True)
+
+        # Verify artifacts are accessible via MLflow client
+        print(f'Verifying artifacts in MLflow...', flush=True)
+        artifacts = client.list_artifacts(run_id, path='model')
+        if artifacts:
+            print(f'✓ Found {{len(artifacts)}} artifacts via MLflow client', flush=True)
+        else:
+            print(f'⚠ Warning: No artifacts found via MLflow client', flush=True)
+
+        # Register the model using create_model_version (MLflow 3.0 compatible)
+        print(f'Registering model in MLflow...', flush=True)
+        model_uri = f'runs:/{{run_id}}/model'
+
+        # Ensure registered model exists
+        try:
+            client.create_registered_model(model_name)
+            print(f'✓ Created registered model: {{model_name}}', flush=True)
+        except Exception as e:
+            if 'already exists' not in str(e).lower():
+                print(f'Warning creating registered model: {{e}}', flush=True)
+            else:
+                print(f'✓ Registered model already exists: {{model_name}}', flush=True)
+
+        # Create model version (this is what makes it visible in UI)
+        version = client.create_model_version(
+            name=model_name,
+            source=model_uri,
+            run_id=run_id
+        )
+        print(f'✓ Model registered: {{model_name}} v{{version.version}} ({{version.status}})', flush=True)
+
+    print(f'✓ Model registration completed: {{model_name}}', flush=True)
+    print(f'  - Read from user storage: {{model_source_path}}', flush=True)
+    print(f'  - Uploaded via S3 to JuiceFS Gateway', flush=True)
+    print(f'  - Files accessible via POSIX at /mnt/juicefs/{{s3_base_path}}/model', flush=True)
+    print(f'  - Registered in MLflow Model Registry', flush=True)
+    print(f'  - Base model: {{base_model}}', flush=True)
+
+except Exception as e:
+    print(f'Error during registration: {{e}}', flush=True)
+    import traceback
+    traceback.print_exc()
+    sys.exit(1)
+"""
+
+            # Container environment variables - same as download workflow
+            env_vars = [
+                hera_models.EnvVar(
+                    name="PYTHONUNBUFFERED",
+                    value="1"
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_TRACKING_URI",
+                    value=self.mlflow_uri
+                ),
+                # MLflow Authentication via Keycloak
+                hera_models.EnvVar(
+                    name="MLFLOW_KEYCLOAK_TOKEN_URL",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="mlflow-auth-config",
+                            key="keycloak-token-url"
+                        )
+                    )
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_KEYCLOAK_CLIENT_ID",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="mlflow-auth-config",
+                            key="client-id"
+                        )
+                    )
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_CLIENT_SECRET",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="mlflow-auth-config",
+                            key="client-secret"
+                        )
+                    )
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_AUTH_USERNAME",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="mlflow-auth-config",
+                            key="username"
+                        )
+                    )
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_AUTH_PASSWORD",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="mlflow-auth-config",
+                            key="password"
+                        )
+                    )
+                ),
+                # S3 Configuration for JuiceFS Gateway
+                hera_models.EnvVar(
+                    name="AWS_ACCESS_KEY_ID",
+                    value="tkadmin"
+                ),
+                hera_models.EnvVar(
+                    name="AWS_SECRET_ACCESS_KEY",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="mlflow-auth-config",
+                            key="password"
+                        )
+                    )
+                ),
+                hera_models.EnvVar(
+                    name="AWS_S3_ENDPOINT",
+                    value="http://juicefs-mlflow-gateway.juicefs.svc.cluster.local:9001"
+                ),
+                hera_models.EnvVar(
+                    name="AWS_DEFAULT_REGION",
+                    value="us-east-1"
+                ),
+                # MLflow S3 configuration for artifact listing/reading
+                hera_models.EnvVar(
+                    name="MLFLOW_S3_ENDPOINT_URL",
+                    value="http://juicefs-mlflow-gateway.juicefs.svc.cluster.local:9001"
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_S3_IGNORE_TLS",
+                    value="true"
+                )
+            ]
+
+            # Get Harbor registry from environment
+            domain_name = os.getenv("DOMAIN_NAME", "thinkube.com")
+            harbor_registry = f"registry.{domain_name}"
+            model_mirror_image = f"{harbor_registry}/library/model-mirror:latest"
+
+            # Registration container
+            Container(
+                name="register",
+                image=model_mirror_image,
+                image_pull_secrets=[hera_models.LocalObjectReference(name="app-pull-secret")],
+                command=["python", "-c"],
+                args=[register_script],
+                volume_mounts=[
+                    hera_models.VolumeMount(name="juicefs-mlflow", mount_path="/mnt/juicefs")
+                ],
+                env=env_vars,
+                resources=hera_models.ResourceRequirements(
+                    requests={"memory": "4Gi", "cpu": "1"},
+                    limits={"memory": "12Gi", "cpu": "2"}
+                )
+            )
+
+        # Submit workflow to Argo
+        result = w.create()
+        workflow_name = result.metadata.name
+
+        logger.info(f"Registration workflow submitted: {workflow_name}")
+        return workflow_name
 
     def delete_model(self, model_id: str) -> bool:
         """
