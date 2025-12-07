@@ -29,6 +29,15 @@ AVAILABLE_MODELS = [
         "task": "text-generation"
     },
     {
+        "id": "unsloth/gpt-oss-20b",
+        "name": "GPT-OSS 20B (Unsloth)",
+        "size": "~14GB",
+        "quantization": "BNB-4bit",
+        "description": "Unsloth's pre-converted GPT-OSS 20B for QLoRA fine-tuning with BitsAndBytes 4-bit quantization",
+        "server_type": ["unsloth"],
+        "task": "text-generation"
+    },
+    {
         "id": "openai/gpt-oss-120b",
         "name": "GPT-OSS 120B",
         "size": "~70GB",
