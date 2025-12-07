@@ -30,10 +30,19 @@ AVAILABLE_MODELS = [
     },
     {
         "id": "unsloth/gpt-oss-20b",
-        "name": "GPT-OSS 20B (Unsloth)",
+        "name": "GPT-OSS 20B (Unsloth MXFP4)",
+        "size": "~14GB",
+        "quantization": "MXFP4",
+        "description": "Unsloth's GPT-OSS 20B in MXFP4 format (OpenAI's native quantization). For inference only - cannot train.",
+        "server_type": ["unsloth"],
+        "task": "text-generation"
+    },
+    {
+        "id": "unsloth/gpt-oss-20b-bnb-4bit",
+        "name": "GPT-OSS 20B (Unsloth BNB-4bit)",
         "size": "~14GB",
         "quantization": "BNB-4bit",
-        "description": "Unsloth's pre-converted GPT-OSS 20B for QLoRA fine-tuning with BitsAndBytes 4-bit quantization",
+        "description": "Unsloth's pre-converted GPT-OSS 20B with BitsAndBytes 4-bit quantization. Use this for QLoRA fine-tuning.",
         "server_type": ["unsloth"],
         "task": "text-generation"
     },
