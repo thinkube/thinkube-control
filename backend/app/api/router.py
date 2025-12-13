@@ -22,6 +22,7 @@ from app.api import (
     jupyterhub_config,
     model_mirrors,
     gpu_metrics,
+    jupyter_venvs,
 )
 
 api_router = APIRouter()
@@ -47,6 +48,7 @@ api_router.include_router(custom_images.router, tags=["custom-images"])
 api_router.include_router(jupyterhub_config.router, tags=["jupyterhub-config"])
 api_router.include_router(model_mirrors.router, prefix="/models", tags=["models"])
 api_router.include_router(gpu_metrics.router, tags=["gpu-metrics"])
+api_router.include_router(jupyter_venvs.router, tags=["jupyter-venvs"])
 api_router.include_router(debug.router, tags=["debug"])
 
 # Include WebSocket routes (no prefix for WebSocket endpoints)

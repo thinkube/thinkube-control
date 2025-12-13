@@ -19,6 +19,7 @@ from app.models.services import Service, ServiceHealth, ServiceAction, ServiceEn
 from app.models.favorites import UserFavorite
 from app.models.container_images import ContainerImage, ImageMirrorJob
 from app.models.custom_images import CustomImageBuild
+from app.models.jupyter_venvs import JupyterVenv
 from app.services import health_checker, ServiceDiscovery
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,13 @@ async def app_lifespan(app: FastAPI):
         logger.warning(f"Failed to initialize container images: {e}")
         logger.info("Container images can be synced later via /api/v1/harbor/images/sync")
 
+    # Initialize Jupyter venv templates
+    try:
+        from app.db.init_venvs import init_venvs
+
+        init_venvs()
+    except Exception as e:
+        logger.warning(f"Failed to initialize Jupyter venv templates: {e}")
 
     # Start health check background task
     health_check_task = asyncio.create_task(health_checker.start())

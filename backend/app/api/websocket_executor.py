@@ -1446,3 +1446,393 @@ async def _execute_custom_image_build(
         if process and process.returncode is None:
             process.terminate()
             await process.wait()
+
+
+@router.websocket("/ws/jupyter-venvs/build/{build_id}")
+async def stream_jupyter_venv_build(websocket: WebSocket, build_id: str):
+    """
+    Stream Jupyter venv build execution via WebSocket
+
+    This endpoint executes the venv build directly and streams
+    real-time output to the client.
+    """
+    logger.info(f"WebSocket endpoint called for venv build {build_id}")
+    await websocket.accept()
+    logger.info(f"WebSocket connection accepted for venv build {build_id}")
+
+    from app.models.jupyter_venvs import JupyterVenv
+
+    session_factory = SessionLocal()
+    db = session_factory()
+
+    try:
+        # Get venv record
+        venv = db.query(JupyterVenv).filter_by(id=build_id).first()
+        if not venv:
+            await websocket.send_json({
+                "type": "error",
+                "message": f"Venv {build_id} not found"
+            })
+            return
+
+        # Check if already running or completed
+        if venv.status != "pending":
+            await websocket.send_json({
+                "type": "error",
+                "message": f"Venv is already {venv.status}. Cannot restart."
+            })
+            return
+
+        # Update status to building
+        venv.status = "building"
+        venv.started_at = datetime.utcnow()
+        db.commit()
+
+        # Send start message
+        await websocket.send_json({
+            "type": "start",
+            "message": f"Starting build for venv: {venv.name}",
+            "venv": {
+                "id": str(venv.id),
+                "name": venv.name,
+                "status": "building"
+            }
+        })
+
+        try:
+            # Execute the build
+            result = await _execute_jupyter_venv_build(websocket, venv, db)
+
+            # Update venv status based on result
+            if result["return_code"] == 0:
+                venv.status = "success"
+                venv.output = result.get("log_file", "Build completed successfully")
+                venv.venv_path = result.get("venv_path")
+                venv.architecture = result.get("architecture")
+
+                await websocket.send_json({
+                    "type": "status",
+                    "status": "completed",
+                    "message": "Venv build completed successfully",
+                    "venv_path": result.get("venv_path"),
+                    "log_file": result.get("log_file")
+                })
+            else:
+                venv.status = "failed"
+                venv.output = result.get("log_file", f"Build failed with return code: {result['return_code']}")
+
+                await websocket.send_json({
+                    "type": "status",
+                    "status": "failed",
+                    "message": f"Build failed with return code: {result['return_code']}",
+                    "log_file": result.get("log_file")
+                })
+
+        except asyncio.CancelledError:
+            venv.status = "cancelled"
+            venv.output = "Build was cancelled"
+            await websocket.send_json({
+                "type": "cancelled",
+                "message": "Build was cancelled"
+            })
+        except Exception as e:
+            logger.error(f"Venv build execution failed: {e}")
+            venv.status = "failed"
+            venv.output = f"Build failed: {str(e)}"
+            await websocket.send_json({
+                "type": "error",
+                "message": str(e)
+            })
+        finally:
+            venv.completed_at = datetime.utcnow()
+            db.commit()
+
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected during venv build {build_id}")
+        if venv and venv.status == "building":
+            venv.status = "failed"
+            venv.output = "Build interrupted - WebSocket disconnected"
+            venv.completed_at = datetime.utcnow()
+            db.commit()
+    except Exception as e:
+        logger.error(f"WebSocket error during venv build: {e}")
+        await websocket.send_json({"type": "error", "message": str(e)})
+    finally:
+        db.close()
+
+
+async def _execute_jupyter_venv_build(
+    websocket: WebSocket,
+    venv,  # JupyterVenv model
+    db: Session
+) -> Dict[str, Any]:
+    """
+    Execute Jupyter venv build
+
+    Creates a virtualenv on JuiceFS and installs packages.
+    Uses --system-site-packages to inherit PyTorch from the base image.
+    """
+    import platform
+    from pathlib import Path
+    from datetime import datetime
+
+    # Detect architecture
+    arch = platform.machine()
+    if arch == "aarch64":
+        arch_dir = "arm64"
+    else:
+        arch_dir = "amd64"
+
+    # Venv path on JuiceFS (custom venvs go in ~/venvs/custom/)
+    venvs_base = Path("/home/thinkube/venvs/custom")
+    venv_path = venvs_base / venv.name
+
+    # Create log directory
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_base_dir = Path("/tmp/thinkube-venvs")
+    app_log_dir = log_base_dir / venv.name
+    app_log_dir.mkdir(parents=True, exist_ok=True)
+
+    debug_log_file = app_log_dir / f"build-{timestamp}.log"
+
+    process = None
+    debug_file = None
+
+    try:
+        # Ensure base directory exists
+        venvs_base.mkdir(parents=True, exist_ok=True)
+
+        # Open debug log file
+        debug_file = open(debug_log_file, "w")
+        debug_file.write(f"=== THINKUBE VENV BUILD LOG ===\n")
+        debug_file.write(f"Venv ID: {venv.id}\n")
+        debug_file.write(f"Name: {venv.name}\n")
+        debug_file.write(f"Architecture: {arch_dir}\n")
+        debug_file.write(f"Started at: {datetime.now()}\n")
+        debug_file.write(f"Venv path: {venv_path}\n")
+        debug_file.write(f"Packages: {len(venv.packages)}\n")
+        debug_file.write(f"\n=== CREATING VENV ===\n")
+        debug_file.flush()
+
+        # Step 1: Create virtualenv with system site packages
+        await websocket.send_json({
+            "type": "log",
+            "message": f"Creating virtualenv at {venv_path}..."
+        })
+
+        create_cmd = ["python3", "-m", "venv", "--system-site-packages", str(venv_path)]
+        logger.info(f"Creating venv: {' '.join(create_cmd)}")
+
+        process = await asyncio.create_subprocess_exec(
+            *create_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT
+        )
+
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+            line_text = line.decode('utf-8', errors='ignore').rstrip()
+            if debug_file:
+                debug_file.write(f"{line_text}\n")
+                debug_file.flush()
+            await websocket.send_json({"type": "log", "message": line_text})
+
+        return_code = await process.wait()
+        if return_code != 0:
+            if debug_file:
+                debug_file.write(f"\n\n=== VENV CREATION FAILED ===\n")
+            return {"return_code": return_code, "log_file": str(debug_log_file)}
+
+        await websocket.send_json({
+            "type": "log",
+            "message": "Virtualenv created successfully"
+        })
+
+        # Step 2: Upgrade pip
+        if debug_file:
+            debug_file.write(f"\n=== UPGRADING PIP ===\n")
+            debug_file.flush()
+
+        await websocket.send_json({
+            "type": "log",
+            "message": "Upgrading pip..."
+        })
+
+        pip_path = venv_path / "bin" / "pip"
+        upgrade_cmd = [str(pip_path), "install", "--upgrade", "pip"]
+
+        process = await asyncio.create_subprocess_exec(
+            *upgrade_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT
+        )
+
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+            line_text = line.decode('utf-8', errors='ignore').rstrip()
+            if debug_file:
+                debug_file.write(f"{line_text}\n")
+                debug_file.flush()
+            await websocket.send_json({"type": "log", "message": line_text})
+
+        return_code = await process.wait()
+        if return_code != 0:
+            if debug_file:
+                debug_file.write(f"\n\n=== PIP UPGRADE FAILED ===\n")
+            return {"return_code": return_code, "log_file": str(debug_log_file)}
+
+        # Step 3: Install packages
+        if debug_file:
+            debug_file.write(f"\n=== INSTALLING PACKAGES ===\n")
+            debug_file.flush()
+
+        await websocket.send_json({
+            "type": "log",
+            "message": f"Installing {len(venv.packages)} packages..."
+        })
+
+        # Filter out special installs (git URLs, --no-deps, etc.)
+        regular_packages = [p for p in venv.packages if not p.startswith("git+") and "--" not in p]
+        special_packages = [p for p in venv.packages if p.startswith("git+") or "--" in p]
+
+        # Install regular packages
+        if regular_packages:
+            install_cmd = [str(pip_path), "install"] + regular_packages
+
+            process = await asyncio.create_subprocess_exec(
+                *install_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT
+            )
+
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    break
+                line_text = line.decode('utf-8', errors='ignore').rstrip()
+                if debug_file:
+                    debug_file.write(f"{line_text}\n")
+                    debug_file.flush()
+                await websocket.send_json({"type": "log", "message": line_text})
+
+            return_code = await process.wait()
+            if return_code != 0:
+                if debug_file:
+                    debug_file.write(f"\n\n=== PACKAGE INSTALLATION FAILED ===\n")
+                return {"return_code": return_code, "log_file": str(debug_log_file)}
+
+        # Install special packages (one by one to handle --no-deps etc.)
+        for special_pkg in special_packages:
+            await websocket.send_json({
+                "type": "log",
+                "message": f"Installing special package: {special_pkg}"
+            })
+
+            # Parse the package spec (e.g., "openlit --no-deps")
+            parts = special_pkg.split()
+            install_cmd = [str(pip_path), "install"] + parts
+
+            process = await asyncio.create_subprocess_exec(
+                *install_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT
+            )
+
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    break
+                line_text = line.decode('utf-8', errors='ignore').rstrip()
+                if debug_file:
+                    debug_file.write(f"{line_text}\n")
+                    debug_file.flush()
+                await websocket.send_json({"type": "log", "message": line_text})
+
+            return_code = await process.wait()
+            if return_code != 0:
+                await websocket.send_json({
+                    "type": "log",
+                    "message": f"Warning: Special package {parts[0]} failed, continuing..."
+                })
+                if debug_file:
+                    debug_file.write(f"Warning: Special package {parts[0]} failed with code {return_code}\n")
+
+        # Step 4: Register as Jupyter kernel
+        if debug_file:
+            debug_file.write(f"\n=== REGISTERING JUPYTER KERNEL ===\n")
+            debug_file.flush()
+
+        await websocket.send_json({
+            "type": "log",
+            "message": "Registering Jupyter kernel..."
+        })
+
+        python_path = venv_path / "bin" / "python"
+        kernel_cmd = [
+            str(python_path), "-m", "ipykernel", "install",
+            "--user",
+            f"--name={venv.name}",
+            f"--display-name={venv.name} (custom)"
+        ]
+
+        process = await asyncio.create_subprocess_exec(
+            *kernel_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT
+        )
+
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+            line_text = line.decode('utf-8', errors='ignore').rstrip()
+            if debug_file:
+                debug_file.write(f"{line_text}\n")
+                debug_file.flush()
+            await websocket.send_json({"type": "log", "message": line_text})
+
+        return_code = await process.wait()
+        if return_code != 0:
+            await websocket.send_json({
+                "type": "log",
+                "message": "Warning: Kernel registration failed, venv is still usable"
+            })
+
+        # Success
+        if debug_file:
+            debug_file.write(f"\n\n=== BUILD COMPLETED SUCCESSFULLY ===\n")
+            debug_file.write(f"Venv path: {venv_path}\n")
+            debug_file.write(f"Finished at: {datetime.now()}\n")
+
+        await websocket.send_json({
+            "type": "log",
+            "message": f"Venv '{venv.name}' built successfully at {venv_path}"
+        })
+
+        return {
+            "return_code": 0,
+            "venv_path": str(venv_path),
+            "architecture": arch_dir,
+            "log_file": str(debug_log_file)
+        }
+
+    except Exception as e:
+        logger.error(f"Error executing venv build: {e}")
+        if debug_file:
+            debug_file.write(f"\n\n=== EXECUTION ERROR ===\n")
+            debug_file.write(f"Error: {str(e)}\n")
+        await websocket.send_json({
+            "type": "error",
+            "message": f"Execution error: {str(e)}"
+        })
+        return {"return_code": 1, "log_file": str(debug_log_file)}
+    finally:
+        if debug_file:
+            debug_file.close()
+        if process and process.returncode is None:
+            process.terminate()
+            await process.wait()
