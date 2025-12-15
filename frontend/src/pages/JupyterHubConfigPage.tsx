@@ -1,19 +1,13 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Loader2, AlertCircle, CheckCircle2, Info, AlertTriangle } from 'lucide-react'
+import { Loader2, AlertCircle, CheckCircle2, Info, Plus, Trash2, Play, Package } from 'lucide-react'
 import { TkPageWrapper } from 'thinkube-style/components/utilities'
 import { TkCard, TkCardHeader, TkCardContent, TkCardTitle, TkCardDescription } from 'thinkube-style/components/cards-data'
 import { TkButton, TkLoadingButton } from 'thinkube-style/components/buttons-badges'
-import { TkCheckbox } from 'thinkube-style/components/forms-inputs'
 import { TkSelect, TkSelectTrigger, TkSelectContent, TkSelectItem, TkSelectValue } from 'thinkube-style/components/forms-inputs'
-import { TkLabel } from 'thinkube-style/components/forms-inputs'
-import { TkErrorAlert, TkSuccessAlert, TkWarningAlert, TkInfoAlert } from 'thinkube-style/components/feedback'
+import { TkLabel, TkInput } from 'thinkube-style/components/forms-inputs'
+import { TkErrorAlert, TkSuccessAlert, TkInfoAlert } from 'thinkube-style/components/feedback'
+import { TkBadge } from 'thinkube-style/components/buttons-badges'
 import api from '../lib/axios'
-
-interface JupyterImage {
-  name: string
-  display_name: string
-  description: string
-}
 
 interface ClusterNode {
   name: string
@@ -25,12 +19,27 @@ interface ClusterNode {
 }
 
 interface JupyterHubConfig {
-  hidden_images: string[]
-  default_image: string
   default_node: string | null
   default_cpu_cores: number | null
   default_memory_gb: number | null
   default_gpu_count: number | null
+}
+
+interface VenvTemplate {
+  id: string
+  name: string
+  description: string
+  package_count: number
+}
+
+interface JupyterVenv {
+  id: string
+  name: string
+  packages: string[]
+  status: string
+  is_template: boolean
+  created_at: string
+  created_by: string
 }
 
 interface NodeCapacity {
@@ -45,16 +54,20 @@ export default function JupyterHubConfigPage() {
   const [error, setError] = useState<string | null>(null)
   const [saveSuccess, setSaveSuccess] = useState(false)
 
-  const [availableImages, setAvailableImages] = useState<JupyterImage[]>([])
   const [clusterNodes, setClusterNodes] = useState<ClusterNode[]>([])
   const [config, setConfig] = useState<JupyterHubConfig>({
-    hidden_images: [],
-    default_image: '',
     default_node: null,
     default_cpu_cores: null,
     default_memory_gb: null,
     default_gpu_count: null
   })
+
+  // Venv state
+  const [venvTemplates, setVenvTemplates] = useState<VenvTemplate[]>([])
+  const [venvs, setVenvs] = useState<JupyterVenv[]>([])
+  const [newVenvName, setNewVenvName] = useState('')
+  const [newVenvTemplate, setNewVenvTemplate] = useState('')
+  const [creatingVenv, setCreatingVenv] = useState(false)
 
   // Calculate selected node capacity
   const selectedNodeCapacity = useMemo<NodeCapacity | null>(() => {
@@ -85,9 +98,7 @@ export default function JupyterHubConfigPage() {
 
   // Validate configuration
   const isValid = useMemo(() => {
-    return config.default_image &&
-           config.default_node &&
-           !config.hidden_images.includes(config.default_image)
+    return config.default_node !== null
   }, [config])
 
   // Parse memory string to GB
@@ -118,13 +129,18 @@ export default function JupyterHubConfigPage() {
       }))
       setClusterNodes(parsedNodes)
 
-      // Load available images
-      const imagesResponse = await api.get<JupyterImage[]>('/images/jupyter')
-      setAvailableImages(imagesResponse.data)
-
       // Load current configuration
       const configResponse = await api.get<JupyterHubConfig>('/jupyterhub/config')
       setConfig(configResponse.data)
+
+      // Load venv templates
+      const templatesResponse = await api.get<{ templates: VenvTemplate[] }>('/jupyter-venvs/templates')
+      setVenvTemplates(templatesResponse.data.templates)
+
+      // Load existing venvs
+      const venvsResponse = await api.get<{ venvs: JupyterVenv[], total: number }>('/jupyter-venvs')
+      setVenvs(venvsResponse.data.venvs)
+
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to load configuration')
       console.error('Error loading JupyterHub config:', err)
@@ -152,38 +168,6 @@ export default function JupyterHubConfigPage() {
       console.error('Error saving JupyterHub config:', err)
     } finally {
       setSaving(false)
-    }
-  }
-
-  // Toggle image visibility (checked = hidden)
-  function toggleImageVisibility(imageName: string) {
-    setConfig(prev => {
-      const isCurrentlyHidden = prev.hidden_images.includes(imageName)
-      const newHiddenImages = isCurrentlyHidden
-        ? prev.hidden_images.filter(name => name !== imageName)
-        : [...prev.hidden_images, imageName]
-
-      // If hiding the default image, clear it
-      let newDefaultImage = prev.default_image
-      if (!isCurrentlyHidden && prev.default_image === imageName) {
-        const visibleImages = availableImages.filter(
-          img => !newHiddenImages.includes(img.name)
-        )
-        newDefaultImage = visibleImages.length > 0 ? visibleImages[0].name : ''
-      }
-
-      return {
-        ...prev,
-        hidden_images: newHiddenImages,
-        default_image: newDefaultImage
-      }
-    })
-  }
-
-  // Set default image
-  function setDefaultImage(imageName: string) {
-    if (!config.hidden_images.includes(imageName)) {
-      setConfig(prev => ({ ...prev, default_image: imageName }))
     }
   }
 
@@ -220,6 +204,63 @@ export default function JupyterHubConfigPage() {
     })
   }
 
+  // Create new venv
+  async function createVenv() {
+    if (!newVenvName || !newVenvTemplate) return
+
+    setCreatingVenv(true)
+    setError(null)
+
+    try {
+      await api.post('/jupyter-venvs', {
+        name: newVenvName,
+        parent_template: newVenvTemplate
+      })
+
+      // Refresh venv list
+      const venvsResponse = await api.get<{ venvs: JupyterVenv[], total: number }>('/jupyter-venvs')
+      setVenvs(venvsResponse.data.venvs)
+
+      // Clear form
+      setNewVenvName('')
+      setNewVenvTemplate('')
+
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to create venv')
+    } finally {
+      setCreatingVenv(false)
+    }
+  }
+
+  // Delete venv
+  async function deleteVenv(venvId: string) {
+    if (!confirm('Are you sure you want to delete this venv?')) return
+
+    try {
+      await api.delete(`/jupyter-venvs/${venvId}`)
+
+      // Refresh venv list
+      const venvsResponse = await api.get<{ venvs: JupyterVenv[], total: number }>('/jupyter-venvs')
+      setVenvs(venvsResponse.data.venvs)
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to delete venv')
+    }
+  }
+
+  // Get status badge variant
+  function getStatusBadge(status: string) {
+    switch (status) {
+      case 'success':
+        return <TkBadge variant="success">{status}</TkBadge>
+      case 'building':
+        return <TkBadge variant="warning">{status}</TkBadge>
+      case 'failed':
+        return <TkBadge variant="destructive">{status}</TkBadge>
+      default:
+        return <TkBadge variant="secondary">{status}</TkBadge>
+    }
+  }
+
   // Load config on mount
   useEffect(() => {
     loadConfig()
@@ -227,7 +268,7 @@ export default function JupyterHubConfigPage() {
 
   return (
     <TkPageWrapper
-      title="JupyterHub Configuration"
+      title="JupyterHub Config"
       description="Configure default JupyterHub settings for users"
     >
       {/* Loading State */}
@@ -256,56 +297,102 @@ export default function JupyterHubConfigPage() {
       {/* Configuration Form */}
       {!loading && (
         <div className="space-y-6"> {/* @allowed-inline */}
-          {/* Image Selection Section */}
+
+          {/* Jupyter Kernels / Venvs Section */}
           <TkCard>
             <TkCardHeader>
-              <TkCardTitle>Image Selection</TkCardTitle>
+              <TkCardTitle>Jupyter Kernels (Venvs)</TkCardTitle>
               <TkCardDescription>
-                Choose which Jupyter images are available to users and set the default
+                Create and manage Python virtual environments that appear as kernels in JupyterLab.
+                Each venv is based on a template (fine-tuning or agent-dev).
               </TkCardDescription>
             </TkCardHeader>
             <TkCardContent>
-              {availableImages.length === 0 ? (
-                <TkWarningAlert>
-                  <AlertTriangle className="h-6 w-6" />
-                  <span>No Jupyter images found</span>
-                </TkWarningAlert>
+              {/* Create new venv form */}
+              <div className="flex gap-4 mb-6"> {/* @allowed-inline */}
+                <div className="flex-1">
+                  <TkLabel htmlFor="venv-name">Venv Name</TkLabel>
+                  <TkInput
+                    id="venv-name"
+                    placeholder="my-custom-venv"
+                    value={newVenvName}
+                    onChange={(e) => setNewVenvName(e.target.value)}
+                  />
+                </div>
+                <div className="flex-1">
+                  <TkLabel htmlFor="venv-template">Base Template</TkLabel>
+                  <TkSelect
+                    value={newVenvTemplate}
+                    onValueChange={setNewVenvTemplate}
+                  >
+                    <TkSelectTrigger id="venv-template">
+                      <TkSelectValue placeholder="Select template" />
+                    </TkSelectTrigger>
+                    <TkSelectContent>
+                      {venvTemplates.map((template) => (
+                        <TkSelectItem key={template.id} value={template.id}>
+                          {template.name} ({template.package_count} packages)
+                        </TkSelectItem>
+                      ))}
+                    </TkSelectContent>
+                  </TkSelect>
+                </div>
+                <div className="flex items-end">
+                  <TkLoadingButton
+                    onClick={createVenv}
+                    disabled={!newVenvName || !newVenvTemplate || creatingVenv}
+                    loading={creatingVenv}
+                  >
+                    <Plus className="h-4 w-4 mr-2" />
+                    Create Venv
+                  </TkLoadingButton>
+                </div>
+              </div>
+
+              {/* Template info */}
+              <TkInfoAlert className="mb-4">
+                <Info className="h-5 w-5" />
+                <div>
+                  <strong>Templates:</strong>
+                  <ul className="list-disc ml-6 mt-1">
+                    <li><strong>fine-tuning</strong>: Base ML + bitsandbytes, peft, trl, Unsloth for model fine-tuning</li>
+                    <li><strong>agent-dev</strong>: Base ML + LangChain, CrewAI, AG2, LangGraph for AI agents</li>
+                  </ul>
+                </div>
+              </TkInfoAlert>
+
+              {/* Existing venvs */}
+              {venvs.length === 0 ? (
+                <TkInfoAlert>
+                  <Package className="h-5 w-5" />
+                  <span>No custom venvs created yet. Create one above or use the built-in templates.</span>
+                </TkInfoAlert>
               ) : (
                 <div className="space-y-3"> {/* @allowed-inline */}
-                  {availableImages.map((image) => {
-                    const isHidden = config.hidden_images.includes(image.name)
-                    const isDefault = config.default_image === image.name
-
-                    return (
-                      <TkCard key={image.name} variant={isDefault ? 'default' : 'secondary'}>
-                        <TkCardContent standalone>
-                          <div className="flex items-center gap-4"> {/* @allowed-inline */}
-                            <TkCheckbox
-                              id={`hide-${image.name}`}
-                              checked={isHidden}
-                              onCheckedChange={() => toggleImageVisibility(image.name)}
-                            />
-                            <label
-                              htmlFor={`hide-${image.name}`}
-                              className="flex-1 cursor-pointer"
-                            >
-                              <div className="font-medium">{image.display_name}</div>
-                              <div className="text-sm text-muted-foreground">{image.description}</div>
-                              <div className="text-xs text-muted-foreground font-mono">{image.name}</div>
-                            </label>
+                  {venvs.map((venv) => (
+                    <TkCard key={venv.id} variant="secondary">
+                      <TkCardContent standalone>
+                        <div className="flex items-center justify-between"> {/* @allowed-inline */}
+                          <div>
+                            <div className="font-medium">{venv.name}</div>
+                            <div className="text-sm text-muted-foreground">
+                              {venv.packages.length} packages | Created by {venv.created_by}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {getStatusBadge(venv.status)}
                             <TkButton
-                              onClick={() => setDefaultImage(image.name)}
-                              disabled={isHidden}
-                              variant={isDefault ? 'default' : 'ghost'}
+                              variant="ghost"
                               size="sm"
+                              onClick={() => deleteVenv(venv.id)}
                             >
-                              {isDefault ? '⭐ Default' : 'Set Default'}
+                              <Trash2 className="h-4 w-4" />
                             </TkButton>
                           </div>
-                        </TkCardContent>
-                      </TkCard>
-                    )
-                  })}
+                        </div>
+                      </TkCardContent>
+                    </TkCard>
+                  ))}
                 </div>
               )}
             </TkCardContent>
