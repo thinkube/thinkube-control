@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from 'react'
-import { Loader2, AlertCircle, CheckCircle2, Info, Plus, Trash2, Play, Package } from 'lucide-react'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { Loader2, AlertCircle, CheckCircle2, Info, Plus, Trash2, Play, Package, Edit2 } from 'lucide-react'
 import { TkPageWrapper } from 'thinkube-style/components/utilities'
 import { TkCard, TkCardHeader, TkCardContent, TkCardTitle, TkCardDescription } from 'thinkube-style/components/cards-data'
 import { TkButton, TkLoadingButton } from 'thinkube-style/components/buttons-badges'
@@ -8,6 +8,8 @@ import { TkLabel, TkInput } from 'thinkube-style/components/forms-inputs'
 import { TkErrorAlert, TkSuccessAlert, TkInfoAlert } from 'thinkube-style/components/feedback'
 import { TkBadge } from 'thinkube-style/components/buttons-badges'
 import api from '../lib/axios'
+import BuildExecutor, { BuildExecutorRef } from '../components/BuildExecutor'
+import { EditPackagesModal } from '../components/EditPackagesModal'
 
 interface ClusterNode {
   name: string
@@ -68,6 +70,14 @@ export default function JupyterHubConfigPage() {
   const [newVenvName, setNewVenvName] = useState('')
   const [newVenvTemplate, setNewVenvTemplate] = useState('')
   const [creatingVenv, setCreatingVenv] = useState(false)
+
+  // Build state
+  const buildExecutorRef = useRef<BuildExecutorRef>(null)
+  const [selectedVenvName, setSelectedVenvName] = useState('')
+
+  // Edit packages modal state
+  const [editPackagesOpen, setEditPackagesOpen] = useState(false)
+  const [editingVenv, setEditingVenv] = useState<JupyterVenv | null>(null)
 
   // Calculate selected node capacity
   const selectedNodeCapacity = useMemo<NodeCapacity | null>(() => {
@@ -247,6 +257,41 @@ export default function JupyterHubConfigPage() {
     }
   }
 
+  // Build venv - initiates WebSocket build
+  async function buildVenv(venvId: string) {
+    const venv = venvs.find(v => v.id === venvId)
+    if (!venv) return
+
+    try {
+      setSelectedVenvName(venv.name)
+      const response = await api.post(`/jupyter-venvs/${venvId}/build`)
+
+      // Start WebSocket connection for build output
+      if (response.data.websocket_url) {
+        buildExecutorRef.current?.startExecution(`/api/v1${response.data.websocket_url}`)
+      } else if (response.data.build_id) {
+        buildExecutorRef.current?.startExecution(`/api/v1/ws/jupyter-venvs/build/${response.data.build_id}`)
+      }
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to start build')
+    }
+  }
+
+  // Open edit packages modal
+  function openEditPackages(venv: JupyterVenv) {
+    setEditingVenv(venv)
+    setEditPackagesOpen(true)
+  }
+
+  // Save packages
+  async function savePackages(venvId: string, packages: string[]) {
+    await api.put(`/jupyter-venvs/${venvId}/packages`, { packages })
+
+    // Refresh venv list to get updated package count
+    const venvsResponse = await api.get<{ venvs: JupyterVenv[], total: number }>('/jupyter-venvs')
+    setVenvs(venvsResponse.data.venvs)
+  }
+
   // Get status badge variant
   function getStatusBadge(status: string) {
     switch (status) {
@@ -384,7 +429,26 @@ export default function JupyterHubConfigPage() {
                             <TkButton
                               variant="ghost"
                               size="sm"
+                              onClick={() => openEditPackages(venv)}
+                              title="Edit packages"
+                            >
+                              <Edit2 className="h-4 w-4" />
+                            </TkButton>
+                            <TkButton
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => buildVenv(venv.id)}
+                              title="Build venv"
+                              disabled={venv.status === 'building'}
+                            >
+                              <Play className="h-4 w-4" />
+                            </TkButton>
+                            <TkButton
+                              variant="ghost"
+                              size="sm"
                               onClick={() => deleteVenv(venv.id)}
+                              title="Delete venv"
+                              className="text-destructive"
                             >
                               <Trash2 className="h-4 w-4" />
                             </TkButton>
@@ -518,6 +582,22 @@ export default function JupyterHubConfigPage() {
           </div>
         </div>
       )}
+
+      {/* Build Executor for WebSocket streaming */}
+      <BuildExecutor
+        ref={buildExecutorRef}
+        title={`Building ${selectedVenvName}`}
+        successMessage={`Venv "${selectedVenvName}" built successfully! It will appear as a kernel in JupyterLab.`}
+      />
+
+      {/* Edit Packages Modal */}
+      <EditPackagesModal
+        open={editPackagesOpen}
+        onOpenChange={setEditPackagesOpen}
+        venv={editingVenv}
+        onSave={savePackages}
+        onBuild={buildVenv}
+      />
     </TkPageWrapper>
   )
 }
