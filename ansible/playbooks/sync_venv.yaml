@@ -1,0 +1,79 @@
+---
+# ansible/playbooks/sync_venv.yaml
+# Description:
+#   Syncs a custom venv from the build node to all other GPU nodes using rsync.
+#   Called by thinkube-control backend after successful venv build.
+#
+# Usage:
+#   ansible-playbook -i /path/to/inventory.yaml sync_venv.yaml \
+#     -e source_node=tkspark \
+#     -e venv_name=my-custom-venv
+#
+# Variables:
+#   - source_node: Node where venv was built (hostname from inventory)
+#   - venv_name: Name of the venv to sync (directory name under custom/)
+#
+# Requirements:
+#   - SSH access between GPU nodes (already configured for Ansible)
+#   - rsync installed on all GPU nodes
+
+- name: Sync custom venv to all GPU nodes
+  hosts: baremetal_gpus
+  gather_facts: true
+  vars:
+    venvs_base_path: /var/lib/jupyterhub-venvs
+    custom_venvs_path: "{{ venvs_base_path }}/custom"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - source_node is defined
+          - venv_name is defined
+        fail_msg: "Required variables source_node and venv_name must be provided"
+
+    - name: Check if this is the source node
+      ansible.builtin.set_fact:
+        is_source_node: "{{ inventory_hostname == source_node }}"
+
+    - name: Debug node info
+      ansible.builtin.debug:
+        msg: "Node {{ inventory_hostname }} - is_source_node: {{ is_source_node }}"
+
+    # Ensure custom venvs directory exists on all nodes
+    - name: Create custom venvs directory
+      ansible.builtin.file:
+        path: "{{ custom_venvs_path }}"
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+      become: true
+
+    # Get source node IP for rsync
+    - name: Get source node IP
+      ansible.builtin.set_fact:
+        source_ip: "{{ hostvars[source_node]['ansible_host'] }}"
+      when: not is_source_node
+
+    # Sync from source node to this node
+    - name: Sync venv from source node
+      ansible.posix.synchronize:
+        src: "{{ custom_venvs_path }}/{{ venv_name }}/"
+        dest: "{{ custom_venvs_path }}/{{ venv_name }}/"
+        mode: pull
+        archive: true
+        compress: true
+        delete: true
+      delegate_to: "{{ inventory_hostname }}"
+      become: true
+      when: not is_source_node
+
+    - name: Display sync result
+      ansible.builtin.debug:
+        msg: >-
+          {% if is_source_node %}
+          Source node - venv '{{ venv_name }}' is already present
+          {% else %}
+          Synced venv '{{ venv_name }}' from {{ source_node }} ({{ source_ip }})
+          {% endif %}

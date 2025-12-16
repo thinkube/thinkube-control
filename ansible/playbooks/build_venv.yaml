@@ -1,0 +1,174 @@
+---
+# ansible/playbooks/build_venv.yaml
+# Description:
+#   Builds a custom venv on a GPU node using a Kubernetes Job.
+#   The Job runs directly on the GPU node with hostPath mount for fast I/O.
+#   After successful build, triggers sync to all other GPU nodes.
+#
+# Usage:
+#   ansible-playbook -i /path/to/inventory.yaml build_venv.yaml \
+#     -e venv_name=my-custom-venv \
+#     -e packages='["numpy", "pandas", "scikit-learn"]'
+#
+# Variables:
+#   - venv_name: Name of the venv to create
+#   - packages: JSON list of packages to install
+#   - target_node: (optional) Specific node to build on (uses first GPU node if not specified)
+#
+# Requirements:
+#   - kubectl access to cluster
+#   - Harbor registry accessible
+
+- name: Build custom venv on GPU node
+  hosts: k8s_control_plane
+  gather_facts: true
+  vars:
+    venvs_host_path: /var/lib/jupyterhub-venvs
+    custom_venvs_subpath: custom
+    job_namespace: jupyterhub
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - venv_name is defined
+          - packages is defined
+        fail_msg: "Required variables venv_name and packages must be provided"
+
+    - name: Parse packages if string
+      ansible.builtin.set_fact:
+        package_list: "{{ packages if packages is sequence and packages is not string else packages | from_json }}"
+
+    - name: Get first GPU node if target_node not specified
+      ansible.builtin.set_fact:
+        build_node: "{{ target_node | default(groups['baremetal_gpus'][0]) }}"
+
+    - name: Create build Job
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: "venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}"
+            namespace: "{{ job_namespace }}"
+            labels:
+              app: jupyter-venv-builder
+              venv-name: "{{ venv_name }}"
+          spec:
+            ttlSecondsAfterFinished: 3600
+            backoffLimit: 0
+            template:
+              spec:
+                nodeSelector:
+                  kubernetes.io/hostname: "{{ build_node }}"
+                restartPolicy: Never
+                containers:
+                  - name: builder
+                    image: "{{ harbor_registry }}/library/tk-jupyter-base:latest"
+                    imagePullPolicy: Always
+                    command:
+                      - bash
+                      - -c
+                      - |
+                        set -e
+                        echo "=== Building venv: {{ venv_name }} ==="
+                        echo "Target directory: {{ venvs_host_path }}/{{ custom_venvs_subpath }}/{{ venv_name }}"
+
+                        VENV_PATH="{{ venvs_host_path }}/{{ custom_venvs_subpath }}/{{ venv_name }}"
+                        mkdir -p "{{ venvs_host_path }}/{{ custom_venvs_subpath }}"
+
+                        # Remove existing venv if present
+                        rm -rf "$VENV_PATH" 2>/dev/null || true
+
+                        # Create venv with system site packages (inherits PyTorch)
+                        echo "Creating virtualenv..."
+                        python3 -m venv --system-site-packages "$VENV_PATH"
+
+                        # Upgrade pip
+                        echo "Upgrading pip..."
+                        "$VENV_PATH/bin/pip" install --upgrade pip
+
+                        # Install packages
+                        echo "Installing packages..."
+                        "$VENV_PATH/bin/pip" install {{ package_list | join(' ') }}
+
+                        # Install ipykernel for Jupyter integration
+                        echo "Installing ipykernel..."
+                        "$VENV_PATH/bin/pip" install ipykernel
+
+                        # Write architecture marker for multi-arch support
+                        ARCH=$(uname -m)
+                        if [ "$ARCH" = "aarch64" ]; then
+                          ARCH_NAME="arm64"
+                        elif [ "$ARCH" = "x86_64" ]; then
+                          ARCH_NAME="amd64"
+                        else
+                          ARCH_NAME="$ARCH"
+                        fi
+                        echo "$ARCH_NAME" > "$VENV_PATH/.arch"
+                        echo "Architecture marker written: $ARCH_NAME"
+
+                        echo "=== Build completed successfully ==="
+                        ls -la "$VENV_PATH/bin/"
+                    volumeMounts:
+                      - name: venvs
+                        mountPath: "{{ venvs_host_path }}"
+                    resources:
+                      limits:
+                        cpu: "4"
+                        memory: "8Gi"
+                      requests:
+                        cpu: "1"
+                        memory: "2Gi"
+                volumes:
+                  - name: venvs
+                    hostPath:
+                      path: "{{ venvs_host_path }}"
+                      type: DirectoryOrCreate
+      register: job_result
+
+    - name: Wait for Job to complete
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: batch/v1
+        kind: Job
+        namespace: "{{ job_namespace }}"
+        name: "venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}"
+      register: job_status
+      until: >
+        (job_status.resources[0].status.succeeded | default(0) > 0) or
+        (job_status.resources[0].status.failed | default(0) > 0)
+      retries: 60
+      delay: 10
+
+    - name: Check if Job succeeded
+      ansible.builtin.fail:
+        msg: "Venv build job failed. Check logs with: kubectl logs -n {{ job_namespace }} job/venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}"
+      when: job_status.resources[0].status.failed | default(0) > 0
+
+    - name: Get Job logs
+      ansible.builtin.command: >
+        kubectl logs -n {{ job_namespace }} job/venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}
+      register: job_logs
+
+    - name: Display build logs
+      ansible.builtin.debug:
+        var: job_logs.stdout_lines
+
+    - name: Clean up completed Job
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        api_version: batch/v1
+        kind: Job
+        namespace: "{{ job_namespace }}"
+        name: "venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}"
+
+    # Sync to other GPU nodes
+    - name: Sync venv to all GPU nodes
+      ansible.builtin.include_tasks: sync_venv_tasks.yaml
+      vars:
+        source_node: "{{ build_node }}"
+      when: groups['baremetal_gpus'] | length > 1

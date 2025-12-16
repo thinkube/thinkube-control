@@ -1,20 +1,30 @@
-"""API endpoints for Jupyter virtualenv management"""
+"""API endpoints for Jupyter virtualenv management
+
+Uses Kubernetes Jobs via Ansible playbook for venv builds on GPU nodes.
+Venvs are stored on local hostPath (/var/lib/jupyterhub-venvs) for fast I/O.
+After build, venvs are synced to other GPU nodes via rsync.
+"""
 
 import os
+import json
 import logging
+import asyncio
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 from pathlib import Path
+import tempfile
+import yaml
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, Query, Body, BackgroundTasks
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.core.api_tokens import get_current_user_dual_auth
-from app.db.session import get_db
+from app.db.session import get_db, SessionLocal
 from app.models.jupyter_venvs import JupyterVenv
+from app.services.ansible_environment import ansible_env
 
 logger = logging.getLogger(__name__)
 
@@ -159,7 +169,8 @@ class BuildResponse(BaseModel):
     build_id: str
     status: str
     message: str
-    websocket_url: str
+    poll_url: str
+    warning: Optional[str] = None
 
 
 # API Endpoints
@@ -316,10 +327,20 @@ def get_jupyter_venv(
 async def build_jupyter_venv(
     venv_id: UUID,
     request: BuildVenvRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user_dual_auth)
 ):
-    """Start building a Jupyter venv"""
+    """Start building a Jupyter venv using Kubernetes Job on GPU node.
+
+    The build runs as a K8s Job on a GPU node with hostPath volume mount.
+    This provides fast I/O (local NVMe/SSD) instead of network storage.
+
+    After successful build, the venv is synced to other GPU nodes via rsync.
+
+    WARNING: Build may take 5-15 minutes. Poll the status endpoint for updates.
+    There is no streaming output during pip install.
+    """
     venv = db.query(JupyterVenv).filter_by(id=venv_id).first()
 
     if not venv:
@@ -334,18 +355,21 @@ async def build_jupyter_venv(
         raise HTTPException(status_code=400, detail="Venv already built. Use force=true to rebuild.")
 
     # Reset status for new build
-    venv.status = "pending"
+    venv.status = "building"
     venv.output = None
-    venv.started_at = None
+    venv.started_at = datetime.now(timezone.utc)
     venv.completed_at = None
     db.commit()
 
-    # WebSocket will handle the actual build
+    # Start build in background using Ansible playbook
+    background_tasks.add_task(_execute_venv_build, str(venv.id))
+
     return BuildResponse(
         build_id=str(venv.id),
-        status="pending",
-        message="Build queued for execution",
-        websocket_url=f"/ws/jupyter-venvs/build/{venv.id}"
+        status="building",
+        message="Build started on GPU node",
+        poll_url=f"/jupyter-venvs/{venv.id}",
+        warning="Build may take 5-15 minutes. The process may appear idle during package installation. Poll the status endpoint for updates."
     )
 
 
@@ -471,3 +495,172 @@ async def update_venv_packages(
     db.commit()
 
     return {"message": "Packages updated successfully", "packages": venv.packages}
+
+
+# Background task for venv build
+async def _execute_venv_build(venv_id: str) -> None:
+    """Execute venv build using Ansible playbook.
+
+    This runs as a background task and:
+    1. Runs Ansible playbook that creates K8s Job on GPU node
+    2. The Job builds venv to local hostPath
+    3. After success, syncs to other GPU nodes via rsync
+    4. Updates database with status
+    """
+    db = SessionLocal()
+
+    try:
+        venv = db.query(JupyterVenv).filter_by(id=venv_id).first()
+        if not venv:
+            logger.error(f"Venv {venv_id} not found")
+            return
+
+        logger.info(f"Starting venv build for {venv.name}")
+
+        try:
+            result = await _run_ansible_build(venv)
+
+            if result["success"]:
+                venv.status = "success"
+                venv.output = result.get("output", "Build completed successfully")
+                venv.venv_path = f"/var/lib/jupyterhub-venvs/custom/{venv.name}"
+                venv.architecture = result.get("architecture", "unknown")
+                logger.info(f"Venv build succeeded for {venv.name}")
+            else:
+                venv.status = "failed"
+                venv.output = result.get("error", "Build failed")
+                logger.error(f"Venv build failed for {venv.name}: {result.get('error')}")
+
+        except Exception as e:
+            logger.error(f"Venv build error for {venv.name}: {e}")
+            venv.status = "failed"
+            venv.output = f"Build error: {str(e)}"
+
+        finally:
+            venv.completed_at = datetime.now(timezone.utc)
+            db.commit()
+
+    finally:
+        db.close()
+
+
+async def _run_ansible_build(venv) -> Dict[str, Any]:
+    """Run Ansible playbook to build venv via K8s Job.
+
+    Returns:
+        Dict with success, output/error, and architecture
+    """
+    # Playbook path
+    playbook_path = Path("/home/thinkube/thinkube-control/ansible/playbooks/build_venv.yaml")
+
+    if not playbook_path.exists():
+        return {"success": False, "error": f"Playbook not found: {playbook_path}"}
+
+    # Prepare variables
+    extra_vars = {
+        "venv_name": venv.name,
+        "packages": json.dumps(venv.packages),  # JSON string for Ansible
+    }
+
+    # Add auth variables
+    extra_vars = ansible_env.prepare_auth_vars(extra_vars)
+
+    # Add kubeconfig path
+    kubeconfig = os.environ.get("KUBECONFIG", "/home/thinkube/.kube/config")
+    extra_vars["kubeconfig"] = kubeconfig
+
+    # Add harbor registry
+    domain_name = os.environ.get("DOMAIN_NAME", "cmxela.com")
+    extra_vars["harbor_registry"] = f"registry.{domain_name}"
+
+    # Create temporary vars file
+    temp_vars_fd, temp_vars_path = tempfile.mkstemp(suffix=".yml", prefix="venv-vars-")
+
+    try:
+        with os.fdopen(temp_vars_fd, "w") as f:
+            yaml.dump(extra_vars, f)
+    except:
+        os.close(temp_vars_fd)
+        raise
+
+    # Build ansible command
+    inventory_path = ansible_env.get_inventory_path()
+    cmd = [
+        "ansible-playbook",
+        "-i", str(inventory_path),
+        str(playbook_path),
+        "-e", f"@{temp_vars_path}",
+        "-v",
+    ]
+
+    # Get environment
+    env = ansible_env.get_environment(context="template")
+
+    # Create log file
+    log_dir = Path("/tmp/thinkube-venvs") / venv.name
+    log_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_file = log_dir / f"build-{timestamp}.log"
+
+    try:
+        logger.info(f"Running: {' '.join(cmd)}")
+
+        with open(log_file, "w") as f:
+            f.write(f"=== VENV BUILD LOG ===\n")
+            f.write(f"Venv: {venv.name}\n")
+            f.write(f"Started: {datetime.now()}\n")
+            f.write(f"Packages: {len(venv.packages)}\n")
+            f.write(f"\n=== ANSIBLE OUTPUT ===\n")
+
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=env,
+            )
+
+            # Read output
+            output_lines = []
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    break
+                line_text = line.decode("utf-8", errors="replace").rstrip()
+                output_lines.append(line_text)
+                f.write(f"{line_text}\n")
+                f.flush()
+
+            return_code = await process.wait()
+
+            f.write(f"\n=== COMPLETED ===\n")
+            f.write(f"Return code: {return_code}\n")
+            f.write(f"Finished: {datetime.now()}\n")
+
+        if return_code == 0:
+            # Try to detect architecture from output
+            architecture = "unknown"
+            for line in output_lines:
+                if "Architecture marker written:" in line:
+                    architecture = line.split(":")[-1].strip()
+                    break
+
+            return {
+                "success": True,
+                "output": f"Build completed. Log: {log_file}",
+                "architecture": architecture,
+            }
+        else:
+            return {
+                "success": False,
+                "error": f"Build failed with return code {return_code}. Log: {log_file}",
+            }
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+    finally:
+        # Clean up temp file
+        try:
+            os.unlink(temp_vars_path)
+        except:
+            pass

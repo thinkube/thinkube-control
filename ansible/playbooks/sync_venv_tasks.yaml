@@ -1,0 +1,48 @@
+---
+# ansible/playbooks/sync_venv_tasks.yaml
+# Description:
+#   Tasks to sync a venv from source node to all other GPU nodes.
+#   Included by build_venv.yaml and can be used standalone.
+#
+# Required variables:
+#   - source_node: Node where venv was built
+#   - venv_name: Name of venv to sync
+#   - venvs_host_path: Base path for venvs (default: /var/lib/jupyterhub-venvs)
+#   - custom_venvs_subpath: Subpath for custom venvs (default: custom)
+
+- name: Get list of target GPU nodes (excluding source)
+  ansible.builtin.set_fact:
+    target_nodes: "{{ groups['baremetal_gpus'] | difference([source_node]) }}"
+
+- name: Display sync info
+  ansible.builtin.debug:
+    msg: "Syncing venv '{{ venv_name }}' from {{ source_node }} to {{ target_nodes | join(', ') }}"
+  when: target_nodes | length > 0
+
+- name: Get source node connection info
+  ansible.builtin.set_fact:
+    source_host: "{{ hostvars[source_node]['ansible_host'] }}"
+
+- name: Sync venv to each target node
+  delegate_to: "{{ item }}"
+  ansible.posix.synchronize:
+    src: "{{ venvs_host_path | default('/var/lib/jupyterhub-venvs') }}/{{ custom_venvs_subpath | default('custom') }}/{{ venv_name }}/"
+    dest: "{{ venvs_host_path | default('/var/lib/jupyterhub-venvs') }}/{{ custom_venvs_subpath | default('custom') }}/{{ venv_name }}/"
+    mode: pull
+    rsync_opts:
+      - "--archive"
+      - "--compress"
+      - "--delete"
+  become: true
+  loop: "{{ target_nodes }}"
+  when: target_nodes | length > 0
+
+- name: Sync complete
+  ansible.builtin.debug:
+    msg: "Venv '{{ venv_name }}' synced to all GPU nodes"
+  when: target_nodes | length > 0
+
+- name: No sync needed
+  ansible.builtin.debug:
+    msg: "Only one GPU node - no sync needed"
+  when: target_nodes | length == 0

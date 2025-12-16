@@ -1,14 +1,13 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
-import { Loader2, AlertCircle, CheckCircle2, Info, Plus, Trash2, Play, Package, Edit2 } from 'lucide-react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import { Loader2, AlertCircle, CheckCircle2, Info, Plus, Trash2, Play, Package, Edit2, Clock } from 'lucide-react'
 import { TkPageWrapper } from 'thinkube-style/components/utilities'
 import { TkCard, TkCardHeader, TkCardContent, TkCardTitle, TkCardDescription } from 'thinkube-style/components/cards-data'
 import { TkButton, TkLoadingButton } from 'thinkube-style/components/buttons-badges'
 import { TkSelect, TkSelectTrigger, TkSelectContent, TkSelectItem, TkSelectValue } from 'thinkube-style/components/forms-inputs'
 import { TkLabel, TkInput } from 'thinkube-style/components/forms-inputs'
-import { TkErrorAlert, TkSuccessAlert, TkInfoAlert } from 'thinkube-style/components/feedback'
+import { TkErrorAlert, TkSuccessAlert, TkInfoAlert, TkWarningAlert } from 'thinkube-style/components/feedback'
 import { TkBadge } from 'thinkube-style/components/buttons-badges'
 import api from '../lib/axios'
-import BuildExecutor, { BuildExecutorRef } from '../components/BuildExecutor'
 import { EditPackagesModal } from '../components/EditPackagesModal'
 
 interface ClusterNode {
@@ -42,6 +41,9 @@ interface JupyterVenv {
   is_template: boolean
   created_at: string
   created_by: string
+  architecture?: string
+  started_at?: string
+  completed_at?: string
 }
 
 interface NodeCapacity {
@@ -71,9 +73,10 @@ export default function JupyterHubConfigPage() {
   const [newVenvTemplate, setNewVenvTemplate] = useState('')
   const [creatingVenv, setCreatingVenv] = useState(false)
 
-  // Build state
-  const buildExecutorRef = useRef<BuildExecutorRef>(null)
-  const [selectedVenvName, setSelectedVenvName] = useState('')
+  // Build state - using polling instead of WebSocket
+  const [buildingVenvId, setBuildingVenvId] = useState<string | null>(null)
+  const [buildWarning, setBuildWarning] = useState<string | null>(null)
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   // Edit packages modal state
   const [editPackagesOpen, setEditPackagesOpen] = useState(false)
@@ -257,21 +260,86 @@ export default function JupyterHubConfigPage() {
     }
   }
 
-  // Build venv - initiates WebSocket build
+  // Polling function to check build status
+  const pollBuildStatus = useCallback(async (venvId: string) => {
+    try {
+      const response = await api.get<JupyterVenv>(`/jupyter-venvs/${venvId}`)
+      const venv = response.data
+
+      // Update venv in list
+      setVenvs(prev => prev.map(v => v.id === venvId ? venv : v))
+
+      // Check if build is complete
+      if (venv.status !== 'building') {
+        // Stop polling
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current)
+          pollIntervalRef.current = null
+        }
+        setBuildingVenvId(null)
+        setBuildWarning(null)
+
+        if (venv.status === 'success') {
+          setSaveSuccess(true)
+          setTimeout(() => setSaveSuccess(false), 5000)
+        } else if (venv.status === 'failed') {
+          setError(`Build failed for ${venv.name}. Check logs for details.`)
+        }
+      }
+    } catch (err: any) {
+      console.error('Error polling build status:', err)
+    }
+  }, [])
+
+  // Start polling when a build is in progress
+  useEffect(() => {
+    if (buildingVenvId) {
+      // Poll immediately
+      pollBuildStatus(buildingVenvId)
+
+      // Then poll every 10 seconds
+      pollIntervalRef.current = setInterval(() => {
+        pollBuildStatus(buildingVenvId)
+      }, 10000)
+
+      return () => {
+        if (pollIntervalRef.current) {
+          clearInterval(pollIntervalRef.current)
+          pollIntervalRef.current = null
+        }
+      }
+    }
+  }, [buildingVenvId, pollBuildStatus])
+
+  // Build venv - starts build and begins polling
   async function buildVenv(venvId: string) {
     const venv = venvs.find(v => v.id === venvId)
     if (!venv) return
 
+    // Show confirmation with warning
+    const confirmed = confirm(
+      `Build venv "${venv.name}"?\n\n` +
+      `⚠️ WARNING: This may take 5-15 minutes.\n\n` +
+      `The build process runs on a GPU node and installs all packages. ` +
+      `The page may appear idle during this time - this is normal.\n\n` +
+      `Click OK to start the build.`
+    )
+    if (!confirmed) return
+
     try {
-      setSelectedVenvName(venv.name)
       const response = await api.post(`/jupyter-venvs/${venvId}/build`)
 
-      // Start WebSocket connection for build output
-      if (response.data.websocket_url) {
-        buildExecutorRef.current?.startExecution(`/api/v1${response.data.websocket_url}`)
-      } else if (response.data.build_id) {
-        buildExecutorRef.current?.startExecution(`/api/v1/ws/jupyter-venvs/build/${response.data.build_id}`)
+      // Update venv status immediately
+      setVenvs(prev => prev.map(v => v.id === venvId ? { ...v, status: 'building' } : v))
+
+      // Set warning message from response
+      if (response.data.warning) {
+        setBuildWarning(response.data.warning)
       }
+
+      // Start polling
+      setBuildingVenvId(venvId)
+
     } catch (err: any) {
       setError(err.response?.data?.detail || 'Failed to start build')
     }
@@ -337,6 +405,17 @@ export default function JupyterHubConfigPage() {
           <CheckCircle2 className="h-6 w-6" />
           <span>Configuration saved successfully</span>
         </TkSuccessAlert>
+      )}
+
+      {/* Build Warning Alert */}
+      {buildWarning && (
+        <TkWarningAlert className="mb-6">
+          <Clock className="h-6 w-6" />
+          <div>
+            <strong>Build in progress</strong>
+            <p className="text-sm mt-1">{buildWarning}</p>
+          </div>
+        </TkWarningAlert>
       )}
 
       {/* Configuration Form */}
@@ -419,18 +498,31 @@ export default function JupyterHubConfigPage() {
                       <TkCardContent standalone>
                         <div className="flex items-center justify-between"> {/* @allowed-inline */}
                           <div>
-                            <div className="font-medium">{venv.name}</div>
+                            <div className="font-medium flex items-center gap-2">
+                              {venv.name}
+                              {venv.architecture && (
+                                <span className="text-xs text-muted-foreground">({venv.architecture})</span>
+                              )}
+                            </div>
                             <div className="text-sm text-muted-foreground">
                               {venv.packages.length} packages | Created by {venv.created_by}
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
-                            {getStatusBadge(venv.status)}
+                            {venv.status === 'building' && buildingVenvId === venv.id ? (
+                              <div className="flex items-center gap-2">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                <TkBadge variant="warning">building...</TkBadge>
+                              </div>
+                            ) : (
+                              getStatusBadge(venv.status)
+                            )}
                             <TkButton
                               variant="ghost"
                               size="sm"
                               onClick={() => openEditPackages(venv)}
                               title="Edit packages"
+                              disabled={venv.status === 'building'}
                             >
                               <Edit2 className="h-4 w-4" />
                             </TkButton>
@@ -449,6 +541,7 @@ export default function JupyterHubConfigPage() {
                               onClick={() => deleteVenv(venv.id)}
                               title="Delete venv"
                               className="text-destructive"
+                              disabled={venv.status === 'building'}
                             >
                               <Trash2 className="h-4 w-4" />
                             </TkButton>
@@ -582,13 +675,6 @@ export default function JupyterHubConfigPage() {
           </div>
         </div>
       )}
-
-      {/* Build Executor for WebSocket streaming */}
-      <BuildExecutor
-        ref={buildExecutorRef}
-        title={`Building ${selectedVenvName}`}
-        successMessage={`Venv "${selectedVenvName}" built successfully! It will appear as a kernel in JupyterLab.`}
-      />
 
       {/* Edit Packages Modal */}
       <EditPackagesModal
