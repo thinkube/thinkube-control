@@ -29,20 +29,20 @@ AVAILABLE_MODELS = [
         "task": "text-generation"
     },
     {
-        "id": "unsloth/gpt-oss-20b",
-        "name": "GPT-OSS 20B (Unsloth MXFP4)",
-        "size": "~14GB",
-        "quantization": "MXFP4",
-        "description": "Unsloth's GPT-OSS 20B in MXFP4 format (OpenAI's native quantization). For inference only - cannot train.",
+        "id": "unsloth/Qwen3-30B-A3B",
+        "name": "Qwen3 30B-A3B (Unsloth)",
+        "size": "~60GB",
+        "quantization": "BF16",
+        "description": "Qwen3 30B MoE model (3B active params) for QLoRA fine-tuning. Supports GGUF export to Ollama.",
         "server_type": ["unsloth"],
         "task": "text-generation"
     },
     {
-        "id": "unsloth/gpt-oss-20b-bnb-4bit",
-        "name": "GPT-OSS 20B (Unsloth BNB-4bit)",
-        "size": "~14GB",
-        "quantization": "BNB-4bit",
-        "description": "Unsloth's pre-converted GPT-OSS 20B with BitsAndBytes 4-bit quantization. Use this for QLoRA fine-tuning.",
+        "id": "unsloth/Llama-3.3-70B-Instruct",
+        "name": "Llama 3.3 70B Instruct (Unsloth)",
+        "size": "~140GB",
+        "quantization": "BF16",
+        "description": "Meta Llama 3.3 70B for QLoRA fine-tuning. Supports GGUF export to Ollama.",
         "server_type": ["unsloth"],
         "task": "text-generation"
     },
