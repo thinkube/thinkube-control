@@ -302,7 +302,7 @@ async def export_secrets_to_notebooks(
 
         return {
             "message": f"Exported {len(secrets)} secrets to notebooks",
-            "path": "/home/jovyan/thinkube/notebooks/.secrets.env",
+            "path": "/home/thinkube/thinkube/notebooks/.secrets.env",
             "secrets_count": len(secrets)
         }
 

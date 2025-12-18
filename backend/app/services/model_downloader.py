@@ -484,7 +484,34 @@ def refresh_mlflow_token():
     os.environ['MLFLOW_TRACKING_TOKEN'] = token_response.json()['access_token']
     return True
 
-# Get initial MLflow authentication token
+model_id = '{safe_model_id}'
+model_task = '{safe_model_task}'
+model_name = model_id.replace('/', '-')
+
+print(f'Model: {{model_id}}', flush=True)
+print(f'Registry name: {{model_name}}', flush=True)
+
+# ============================================================
+# PHASE 1: Download from HuggingFace (no MLflow auth needed)
+# ============================================================
+# Download to persistent staging area on JuiceFS (survives pod restarts)
+staging_base = '/mnt/juicefs/.staging'
+os.makedirs(staging_base, exist_ok=True)
+staging_model_path = f'{{staging_base}}/{{model_name}}'
+
+print(f'Downloading model from HuggingFace to staging: {{staging_model_path}}', flush=True)
+print(f'Note: Files persist across pod restarts, resume_download=True will skip existing files', flush=True)
+
+snapshot_download(
+    repo_id=model_id,
+    local_dir=staging_model_path,
+    resume_download=True
+)
+print(f'✓ Model downloaded to staging area', flush=True)
+
+# ============================================================
+# PHASE 2: Register in MLflow (authenticate NOW, after download)
+# ============================================================
 print('Authenticating with MLflow...', flush=True)
 refresh_mlflow_token()
 print('✓ MLflow authentication successful', flush=True)
@@ -492,13 +519,6 @@ print('✓ MLflow authentication successful', flush=True)
 # Get MLflow URI from environment
 mlflow_uri = os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow.mlflow.svc.cluster.local:5000')
 mlflow.set_tracking_uri(mlflow_uri)
-
-model_id = '{safe_model_id}'
-model_task = '{safe_model_task}'
-model_name = model_id.replace('/', '-')
-
-print(f'Model: {{model_id}}', flush=True)
-print(f'Registry name: {{model_name}}', flush=True)
 
 # Configure S3 client for JuiceFS Gateway
 s3_client = boto3.client(
@@ -518,11 +538,9 @@ try:
     try:
         experiment = mlflow.get_experiment_by_name(experiment_name)
         if experiment is None:
-            # Experiment doesn't exist, create it
             experiment_id = mlflow.create_experiment(experiment_name)
             print(f'✓ Created experiment "{{experiment_name}}"', flush=True)
         elif experiment.lifecycle_stage == 'deleted':
-            # Experiment is deleted, restore it
             print(f'Note: Experiment "{{experiment_name}}" is deleted, restoring it', flush=True)
             client.restore_experiment(experiment.experiment_id)
             experiment_id = experiment.experiment_id
@@ -544,33 +562,10 @@ try:
         print(f'Run ID: {{run_id}}', flush=True)
         print(f'Artifact URI: {{artifact_uri}}', flush=True)
 
-        # CRITICAL: Extract S3 path from artifact_uri
-        # artifact_uri format: s3://mlflow/artifacts/{{run_id}}/artifacts
-        # We need: artifacts/{{run_id}}/artifacts/model for S3 upload
+        # Extract S3 path from artifact_uri
         s3_base_path = artifact_uri.replace('s3://mlflow/', '')
         s3_artifact_prefix = f'{{s3_base_path}}/model'
         print(f'S3 upload prefix: {{s3_artifact_prefix}}', flush=True)
-
-        # Download to persistent staging area on JuiceFS (survives pod restarts)
-        # This is OUTSIDE MLflow's artifact tree so it won't interfere with registration
-        staging_base = '/mnt/juicefs/.staging'
-        os.makedirs(staging_base, exist_ok=True)
-        staging_model_path = f'{{staging_base}}/{{model_name}}'
-
-        print(f'Downloading model from HuggingFace to staging: {{staging_model_path}}', flush=True)
-        print(f'Note: Files persist across pod restarts, resume_download=True will skip existing files', flush=True)
-
-        snapshot_download(
-            repo_id=model_id,
-            local_dir=staging_model_path,
-            resume_download=True
-        )
-        print(f'✓ Model downloaded to staging area', flush=True)
-
-        # Refresh token after long download (tokens expire after ~5-60 minutes)
-        print('Refreshing MLflow authentication token...', flush=True)
-        refresh_mlflow_token()
-        print('✓ Token refreshed', flush=True)
 
         # Log model metadata
         mlflow.log_params({{
@@ -1130,7 +1125,7 @@ description = '{safe_description}'
 username = '{safe_username}'
 
 # Construct full path to model in staging area
-# JupyterHub saves to: /home/jovyan/thinkube/mlflow/.staging/{source_path}/
+# JupyterHub saves to: /home/thinkube/thinkube/mlflow/.staging/{source_path}/
 # This maps to: /mnt/juicefs/.staging/{source_path}/
 # Same volume used by mirroring workflow - no additional PVCs needed
 model_source_path = f'/mnt/juicefs/.staging/{{source_path}}'

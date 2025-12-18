@@ -574,7 +574,7 @@ async def register_finetuned_model(
     from the user's JuiceFS storage to MLflow. Returns immediately with job_id.
 
     The model should be saved in HuggingFace format (merged weights) at:
-    /home/jovyan/thinkube/models/{source_path}/
+    /home/thinkube/thinkube/models/{source_path}/
     """
     try:
         # Check for existing job for this model name
