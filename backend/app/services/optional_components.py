@@ -215,6 +215,19 @@ class OptionalComponentService:
                 "test": "18_test.yaml",
                 "uninstall": "19_rollback.yaml"
             }
+        },
+        "ollama": {
+            "display_name": "Ollama",
+            "description": "Fast local LLM inference server with GPU acceleration (MIT)",
+            "category": "ai",
+            "icon": "/icons/tk_ai.svg",
+            "requirements": ["harbor"],
+            "namespace": "ollama",
+            "playbooks": {
+                "install": "00_install.yaml",
+                "test": "18_test.yaml",
+                "uninstall": "19_rollback.yaml"
+            }
         }
     }
     
