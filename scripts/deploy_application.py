@@ -852,8 +852,8 @@ data:
         services_content = services_template.render(**template_vars)
         (k8s_dir / 'services.yaml').write_text(services_content)
 
-        # 6. Generate ingress.yaml using Python generator
-        # Import the generate_ingress function
+        # 6. Generate HTTPRoute (ingress.yaml) using Python generator
+        # Import the generate_ingress function (generates HTTPRoute via Gateway API)
         sys.path.insert(0, str(template_dir))
         from generate_ingress import generate_ingress
         ingress_config = generate_ingress(
@@ -863,7 +863,7 @@ data:
             self.thinkube_config
         )
         if ingress_config:
-            ingress_content = "# Generated ingress configuration\n---\n" + yaml.dump(ingress_config, default_flow_style=False, sort_keys=False)
+            ingress_content = "# Generated HTTPRoute configuration (Gateway API)\n---\n" + yaml.dump(ingress_config, default_flow_style=False, sort_keys=False)
             (k8s_dir / 'ingress.yaml').write_text(ingress_content)
 
         # 7. Generate paused-backend.yaml from template

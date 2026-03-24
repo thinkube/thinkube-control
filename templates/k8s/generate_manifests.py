@@ -237,12 +237,12 @@ def main():
             resources['files'].append(f"{container['name']}-service.yaml")
             print(f"Generated: {service_file}")
     
-    # Generate ingress
+    # Generate HTTPRoute (via generate_ingress for backward compatibility)
     ingress = generate_ingress(project_name, k8s_namespace, domain_name, thinkube_spec)
     if ingress:
         ingress_file = output_path / 'ingress.yaml'
         with open(ingress_file, 'w') as f:
-            f.write("# Generated ingress configuration\n")
+            f.write("# Generated HTTPRoute configuration (Gateway API)\n")
             f.write("---\n")
             yaml.dump(ingress, f, default_flow_style=False, sort_keys=False)
         resources['files'].append('ingress.yaml')
