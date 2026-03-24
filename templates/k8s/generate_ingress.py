@@ -43,7 +43,6 @@ def generate_ingress(project_name, k8s_namespace, domain_name, thinkube_spec):
                 'app.kubernetes.io/managed-by': 'argocd'
             },
             'annotations': {
-                'cert-manager.io/cluster-issuer': 'letsencrypt-prod',
                 'nginx.ingress.kubernetes.io/ssl-redirect': 'true',
                 'nginx.ingress.kubernetes.io/default-backend': 'paused-backend',
                 'nginx.ingress.kubernetes.io/custom-http-errors': '404,503'

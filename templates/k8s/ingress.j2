@@ -11,7 +11,6 @@ metadata:
     app.kubernetes.io/name: {{ project_name }}
     app.kubernetes.io/managed-by: argocd
   annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     {%- set ns = namespace(has_large_uploads=false) -%}
     {%- for container in thinkube_spec.spec.containers -%}
