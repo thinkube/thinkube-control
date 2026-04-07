@@ -228,6 +228,19 @@ class OptionalComponentService:
                 "test": "18_test.yaml",
                 "uninstall": "19_rollback.yaml"
             }
+        },
+        "langflow": {
+            "display_name": "Langflow",
+            "description": "Low-code AI workflow builder for RAG pipelines and LLM applications (MIT)",
+            "category": "ai",
+            "icon": "/icons/tk_ai.svg",
+            "requirements": ["keycloak", "postgresql"],
+            "namespace": "langflow",
+            "playbooks": {
+                "install": "00_install.yaml",
+                "test": "18_test.yaml",
+                "uninstall": "19_rollback.yaml"
+            }
         }
     }
     
