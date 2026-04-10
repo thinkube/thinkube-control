@@ -255,31 +255,34 @@
       "task": "feature-extraction"
     },
     {
-      "id": "Qwen/Qwen3.5-4B-Instruct-GGUF",
-      "name": "Qwen 3.5 4B Instruct (GGUF/Ollama)",
+      "id": "unsloth/Qwen3.5-4B-GGUF",
+      "name": "Qwen 3.5 4B (GGUF/Ollama)",
       "size": "~2.5GB",
       "quantization": "Q4_K_M",
-      "description": "Qwen 3.5 4B for structured extraction (NER/POS). 201 languages. Apache 2.0.",
+      "description": "Qwen 3.5 4B for structured extraction (NER/POS). 262K context, 201 languages. Apache 2.0.",
       "server_type": ["ollama"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "allow_patterns": ["*Q4_K_M.gguf", "README.md"]
     },
     {
-      "id": "Qwen/Qwen3.5-32B-Instruct-GGUF",
-      "name": "Qwen 3.5 32B Instruct (GGUF/Ollama)",
-      "size": "~18GB",
-      "quantization": "Q4_K_M",
-      "description": "Qwen 3.5 32B for translation. 201 languages, MoE architecture. Apache 2.0.",
-      "server_type": ["ollama"],
-      "task": "text-generation"
-    },
-    {
-      "id": "google/gemma-4-27b-it-GGUF",
-      "name": "Gemma 4 27B Instruct (GGUF/Ollama)",
+      "id": "unsloth/Qwen3.5-27B-GGUF",
+      "name": "Qwen 3.5 27B (GGUF/Ollama)",
       "size": "~16GB",
       "quantization": "Q4_K_M",
-      "description": "Google Gemma 4 27B instruction-tuned. 256K context. Strong multilingual. Gemma license.",
+      "description": "Qwen 3.5 27B dense model for translation. 262K context, 201 languages. Apache 2.0.",
       "server_type": ["ollama"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "allow_patterns": ["*Q4_K_M.gguf", "README.md"]
+    },
+    {
+      "id": "unsloth/gemma-4-26B-A4B-it-GGUF",
+      "name": "Gemma 4 26B-A4B Instruct (GGUF/Ollama)",
+      "size": "~10GB",
+      "quantization": "Q4_K_M",
+      "description": "Google Gemma 4 26B MoE (4B active). 256K context. 140+ languages. Gemma license.",
+      "server_type": ["ollama"],
+      "task": "text-generation",
+      "allow_patterns": ["*Q4_K_M.gguf", "README.md"]
     }
   ]
 }

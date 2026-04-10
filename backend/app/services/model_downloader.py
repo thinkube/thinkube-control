@@ -217,6 +217,7 @@ class ModelDownloaderService:
         # Escape for safe use in Python script
         safe_model_id = model_id.replace("'", "\\'")
         safe_model_task = model_task.replace("'", "\\'")
+        allow_patterns = model_info.get("allow_patterns", None)
 
         # Create Hera workflow
         with Workflow(
@@ -309,10 +310,12 @@ staging_model_path = f'{{staging_base}}/{{model_name}}'
 print(f'Downloading model from HuggingFace to staging: {{staging_model_path}}', flush=True)
 print(f'Note: Files persist across pod restarts, resume_download=True will skip existing files', flush=True)
 
+allow_patterns = {repr(allow_patterns)}
 snapshot_download(
     repo_id=model_id,
     local_dir=staging_model_path,
-    resume_download=True
+    resume_download=True,
+    **({{'allow_patterns': allow_patterns}} if allow_patterns else {{}})
 )
 print(f'✓ Model downloaded to staging area', flush=True)
 
