@@ -27,6 +27,31 @@ _MODEL_CATALOG_URL = "https://raw.githubusercontent.com/thinkube/thinkube-metada
 _MODEL_CATALOG_CACHE: Optional[List[Dict]] = None
 _MODEL_CATALOG_CACHE_TIME: float = 0
 _MODEL_CATALOG_TTL: float = 300  # 5 minutes
+_PERSISTENT_CACHE_DIR = Path(os.getenv("THINKUBE_CONTROL_HOME", "/home/thinkube-control")) / "cache"
+
+
+def _save_persistent_cache(filename: str, data: dict) -> None:
+    """Save fetched catalog to persistent storage so it survives pod restarts"""
+    try:
+        _PERSISTENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_path = _PERSISTENT_CACHE_DIR / filename
+        with open(cache_path, "w") as f:
+            json.dump(data, f)
+        logger.debug(f"Saved persistent cache: {cache_path}")
+    except Exception as e:
+        logger.warning(f"Failed to save persistent cache {filename}: {e}")
+
+
+def _load_persistent_cache(filename: str) -> Optional[dict]:
+    """Load catalog from persistent storage"""
+    cache_path = _PERSISTENT_CACHE_DIR / filename
+    if cache_path.exists():
+        try:
+            with open(cache_path) as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to load persistent cache {filename}: {e}")
+    return None
 
 
 def _load_bundled_models() -> List[Dict]:
@@ -42,7 +67,7 @@ def _load_bundled_models() -> List[Dict]:
 def get_model_catalog() -> List[Dict]:
     """
     Get the model catalog, fetching from thinkube-metadata if cache expired.
-    Falls back to bundled copy if fetch fails.
+    Fallback chain: memory cache → fetch → stale memory → persistent cache → bundled copy.
     """
     global _MODEL_CATALOG_CACHE, _MODEL_CATALOG_CACHE_TIME
 
@@ -58,15 +83,26 @@ def get_model_catalog() -> List[Dict]:
             models = data.get("models", [])
             _MODEL_CATALOG_CACHE = models
             _MODEL_CATALOG_CACHE_TIME = now
+            _save_persistent_cache("models.json", data)
             logger.info(f"Fetched model catalog from thinkube-metadata: {len(models)} models")
             return models
     except Exception as e:
         logger.warning(f"Failed to fetch model catalog from thinkube-metadata: {e}")
 
-    # Fallback to cached value if available
+    # Fallback to stale memory cache
     if _MODEL_CATALOG_CACHE is not None:
         logger.info("Using stale cached model catalog")
         return _MODEL_CATALOG_CACHE
+
+    # Fallback to persistent cache on shared storage
+    persistent = _load_persistent_cache("models.json")
+    if persistent:
+        models = persistent.get("models", [])
+        if models:
+            _MODEL_CATALOG_CACHE = models
+            _MODEL_CATALOG_CACHE_TIME = now
+            logger.info(f"Using persistent cached model catalog: {len(models)} models")
+            return _MODEL_CATALOG_CACHE
 
     # Final fallback to bundled copy
     models = _load_bundled_models()
@@ -407,29 +443,54 @@ try:
 
         # Create and upload MLflow metadata
         print(f'Creating MLflow metadata...', flush=True)
-        temp_mlmodel_dir = tempfile.mkdtemp()
-        mlflow.transformers.save_model(
-            transformers_model=staging_model_path,
-            path=temp_mlmodel_dir,
-            task=model_task
-        )
+        is_gguf = any(f.endswith('.gguf') for f in os.listdir(staging_model_path) if os.path.isfile(os.path.join(staging_model_path, f)))
 
-        # Upload metadata files via S3
-        metadata_count = 0
-        for metadata_file in ['MLmodel', 'requirements.txt', 'conda.yaml', 'python_env.yaml']:
-            metadata_path = os.path.join(temp_mlmodel_dir, metadata_file)
-            if os.path.exists(metadata_path):
-                s3_key = f'{{s3_artifact_prefix}}/{{metadata_file}}'
-                with open(metadata_path, 'rb') as f:
-                    s3_client.put_object(
-                        Bucket=s3_bucket,
-                        Key=s3_key,
-                        Body=f
-                    )
-                metadata_count += 1
+        if is_gguf:
+            # GGUF models are standalone binaries — generate minimal metadata
+            import yaml
+            gguf_files = [f for f in os.listdir(staging_model_path) if f.endswith('.gguf')]
+            mlmodel_content = {{
+                'flavors': {{
+                    'gguf': {{
+                        'model_files': gguf_files,
+                        'format': 'gguf',
+                        'task': model_task,
+                    }}
+                }},
+                'model_id': model_id,
+            }}
+            mlmodel_yaml = yaml.dump(mlmodel_content, default_flow_style=False)
+            s3_client.put_object(
+                Bucket=s3_bucket,
+                Key=f'{{s3_artifact_prefix}}/MLmodel',
+                Body=mlmodel_yaml.encode()
+            )
+            print(f'✓ Uploaded GGUF metadata ({{len(gguf_files)}} gguf files)', flush=True)
+        else:
+            # Transformers models — generate full metadata
+            temp_mlmodel_dir = tempfile.mkdtemp()
+            mlflow.transformers.save_model(
+                transformers_model=staging_model_path,
+                path=temp_mlmodel_dir,
+                task=model_task
+            )
 
-        shutil.rmtree(temp_mlmodel_dir)
-        print(f'✓ Uploaded {{metadata_count}} metadata files', flush=True)
+            # Upload metadata files via S3
+            metadata_count = 0
+            for metadata_file in ['MLmodel', 'requirements.txt', 'conda.yaml', 'python_env.yaml']:
+                metadata_path = os.path.join(temp_mlmodel_dir, metadata_file)
+                if os.path.exists(metadata_path):
+                    s3_key = f'{{s3_artifact_prefix}}/{{metadata_file}}'
+                    with open(metadata_path, 'rb') as f:
+                        s3_client.put_object(
+                            Bucket=s3_bucket,
+                            Key=s3_key,
+                            Body=f
+                        )
+                    metadata_count += 1
+
+            shutil.rmtree(temp_mlmodel_dir)
+            print(f'✓ Uploaded {{metadata_count}} metadata files', flush=True)
 
         # Verify artifacts are accessible via MLflow client
         print(f'Verifying artifacts in MLflow...', flush=True)
@@ -1061,29 +1122,55 @@ try:
 
         # Create and upload MLflow metadata
         print(f'Creating MLflow metadata...', flush=True)
-        temp_mlmodel_dir = tempfile.mkdtemp()
-        mlflow.transformers.save_model(
-            transformers_model=model_source_path,
-            path=temp_mlmodel_dir,
-            task=model_task
-        )
+        is_gguf = any(f.endswith('.gguf') for f in os.listdir(model_source_path) if os.path.isfile(os.path.join(model_source_path, f)))
 
-        # Upload metadata files via S3
-        metadata_count = 0
-        for metadata_file in ['MLmodel', 'requirements.txt', 'conda.yaml', 'python_env.yaml']:
-            metadata_path = os.path.join(temp_mlmodel_dir, metadata_file)
-            if os.path.exists(metadata_path):
-                s3_key = f'{{s3_artifact_prefix}}/{{metadata_file}}'
-                with open(metadata_path, 'rb') as f:
-                    s3_client.put_object(
-                        Bucket=s3_bucket,
-                        Key=s3_key,
-                        Body=f
-                    )
-                metadata_count += 1
+        if is_gguf:
+            # GGUF models are standalone binaries — generate minimal metadata
+            import yaml
+            gguf_files = [f for f in os.listdir(model_source_path) if f.endswith('.gguf')]
+            mlmodel_content = {{
+                'flavors': {{
+                    'gguf': {{
+                        'model_files': gguf_files,
+                        'format': 'gguf',
+                        'task': model_task,
+                    }}
+                }},
+                'model_id': name,
+                'base_model': base_model,
+            }}
+            mlmodel_yaml = yaml.dump(mlmodel_content, default_flow_style=False)
+            s3_client.put_object(
+                Bucket=s3_bucket,
+                Key=f'{{s3_artifact_prefix}}/MLmodel',
+                Body=mlmodel_yaml.encode()
+            )
+            print(f'✓ Uploaded GGUF metadata ({{len(gguf_files)}} gguf files)', flush=True)
+        else:
+            # Transformers models — generate full metadata
+            temp_mlmodel_dir = tempfile.mkdtemp()
+            mlflow.transformers.save_model(
+                transformers_model=model_source_path,
+                path=temp_mlmodel_dir,
+                task=model_task
+            )
 
-        shutil.rmtree(temp_mlmodel_dir)
-        print(f'✓ Uploaded {{metadata_count}} metadata files', flush=True)
+            # Upload metadata files via S3
+            metadata_count = 0
+            for metadata_file in ['MLmodel', 'requirements.txt', 'conda.yaml', 'python_env.yaml']:
+                metadata_path = os.path.join(temp_mlmodel_dir, metadata_file)
+                if os.path.exists(metadata_path):
+                    s3_key = f'{{s3_artifact_prefix}}/{{metadata_file}}'
+                    with open(metadata_path, 'rb') as f:
+                        s3_client.put_object(
+                            Bucket=s3_bucket,
+                            Key=s3_key,
+                            Body=f
+                        )
+                    metadata_count += 1
+
+            shutil.rmtree(temp_mlmodel_dir)
+            print(f'✓ Uploaded {{metadata_count}} metadata files', flush=True)
 
         # Verify artifacts are accessible via MLflow client
         print(f'Verifying artifacts in MLflow...', flush=True)

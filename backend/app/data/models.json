@@ -257,7 +257,7 @@
     {
       "id": "unsloth/Qwen3.5-4B-GGUF",
       "name": "Qwen 3.5 4B (GGUF/Ollama)",
-      "size": "~2.5GB",
+      "size": "2.74GB",
       "quantization": "Q4_K_M",
       "description": "Qwen 3.5 4B for structured extraction (NER/POS). 262K context, 201 languages. Apache 2.0.",
       "server_type": ["ollama"],
@@ -267,7 +267,7 @@
     {
       "id": "unsloth/Qwen3.5-27B-GGUF",
       "name": "Qwen 3.5 27B (GGUF/Ollama)",
-      "size": "~16GB",
+      "size": "16.7GB",
       "quantization": "Q4_K_M",
       "description": "Qwen 3.5 27B dense model for translation. 262K context, 201 languages. Apache 2.0.",
       "server_type": ["ollama"],
@@ -277,7 +277,7 @@
     {
       "id": "unsloth/gemma-4-26B-A4B-it-GGUF",
       "name": "Gemma 4 26B-A4B Instruct (GGUF/Ollama)",
-      "size": "~10GB",
+      "size": "16.9GB",
       "quantization": "Q4_K_M",
       "description": "Google Gemma 4 26B MoE (4B active). 256K context. 140+ languages. Gemma license.",
       "server_type": ["ollama"],

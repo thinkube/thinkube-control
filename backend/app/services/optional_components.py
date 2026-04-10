@@ -21,6 +21,31 @@ _COMPONENTS_CATALOG_URL = "https://raw.githubusercontent.com/thinkube/thinkube-m
 _COMPONENTS_CATALOG_CACHE: Optional[Dict[str, Any]] = None
 _COMPONENTS_CATALOG_CACHE_TIME: float = 0
 _COMPONENTS_CATALOG_TTL: float = 300  # 5 minutes
+_PERSISTENT_CACHE_DIR = Path(os.getenv("THINKUBE_CONTROL_HOME", "/home/thinkube-control")) / "cache"
+
+
+def _save_persistent_cache(filename: str, data: dict) -> None:
+    """Save fetched catalog to persistent storage so it survives pod restarts"""
+    try:
+        _PERSISTENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_path = _PERSISTENT_CACHE_DIR / filename
+        with open(cache_path, "w") as f:
+            json.dump(data, f)
+        logger.debug(f"Saved persistent cache: {cache_path}")
+    except Exception as e:
+        logger.warning(f"Failed to save persistent cache {filename}: {e}")
+
+
+def _load_persistent_cache(filename: str) -> Optional[dict]:
+    """Load catalog from persistent storage"""
+    cache_path = _PERSISTENT_CACHE_DIR / filename
+    if cache_path.exists():
+        try:
+            with open(cache_path) as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to load persistent cache {filename}: {e}")
+    return None
 
 
 def _load_bundled_components() -> Dict[str, Any]:
@@ -36,7 +61,7 @@ def _load_bundled_components() -> Dict[str, Any]:
 def get_components_catalog() -> Dict[str, Any]:
     """
     Get the components catalog, fetching from thinkube-metadata if cache expired.
-    Falls back to bundled copy if fetch fails.
+    Fallback chain: memory cache → fetch → stale memory → persistent cache → bundled copy.
     """
     global _COMPONENTS_CATALOG_CACHE, _COMPONENTS_CATALOG_CACHE_TIME
 
@@ -52,15 +77,26 @@ def get_components_catalog() -> Dict[str, Any]:
             components = data.get("components", {})
             _COMPONENTS_CATALOG_CACHE = components
             _COMPONENTS_CATALOG_CACHE_TIME = now
+            _save_persistent_cache("optional_components.json", data)
             logger.info(f"Fetched components catalog from thinkube-metadata: {len(components)} components")
             return components
     except Exception as e:
         logger.warning(f"Failed to fetch components catalog from thinkube-metadata: {e}")
 
-    # Fallback to cached value if available
+    # Fallback to stale memory cache
     if _COMPONENTS_CATALOG_CACHE is not None:
         logger.info("Using stale cached components catalog")
         return _COMPONENTS_CATALOG_CACHE
+
+    # Fallback to persistent cache on shared storage
+    persistent = _load_persistent_cache("optional_components.json")
+    if persistent:
+        components = persistent.get("components", {})
+        if components:
+            _COMPONENTS_CATALOG_CACHE = components
+            _COMPONENTS_CATALOG_CACHE_TIME = now
+            logger.info(f"Using persistent cached components catalog: {len(components)} components")
+            return _COMPONENTS_CATALOG_CACHE
 
     # Final fallback to bundled copy
     components = _load_bundled_components()
