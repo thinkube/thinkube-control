@@ -2,8 +2,10 @@
 Service for managing optional Thinkube components
 """
 
+import json
 import logging
 import os
+import time
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 from datetime import datetime
@@ -14,236 +16,69 @@ from kubernetes.client.rest import ApiException
 
 logger = logging.getLogger(__name__)
 
+# Component catalog: fetched from thinkube-metadata at runtime, cached in memory
+_COMPONENTS_CATALOG_URL = "https://raw.githubusercontent.com/thinkube/thinkube-metadata/main/optional_components.json"
+_COMPONENTS_CATALOG_CACHE: Optional[Dict[str, Any]] = None
+_COMPONENTS_CATALOG_CACHE_TIME: float = 0
+_COMPONENTS_CATALOG_TTL: float = 300  # 5 minutes
+
+
+def _load_bundled_components() -> Dict[str, Any]:
+    """Load bundled optional_components.json fallback shipped with thinkube-control"""
+    bundled = Path(__file__).parent.parent / "data" / "optional_components.json"
+    if bundled.exists():
+        with open(bundled) as f:
+            data = json.load(f)
+            return data.get("components", {})
+    return {}
+
+
+def get_components_catalog() -> Dict[str, Any]:
+    """
+    Get the components catalog, fetching from thinkube-metadata if cache expired.
+    Falls back to bundled copy if fetch fails.
+    """
+    global _COMPONENTS_CATALOG_CACHE, _COMPONENTS_CATALOG_CACHE_TIME
+
+    now = time.time()
+    if _COMPONENTS_CATALOG_CACHE is not None and (now - _COMPONENTS_CATALOG_CACHE_TIME) < _COMPONENTS_CATALOG_TTL:
+        return _COMPONENTS_CATALOG_CACHE
+
+    try:
+        import urllib.request
+        req = urllib.request.Request(_COMPONENTS_CATALOG_URL, headers={"User-Agent": "thinkube-control"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+            components = data.get("components", {})
+            _COMPONENTS_CATALOG_CACHE = components
+            _COMPONENTS_CATALOG_CACHE_TIME = now
+            logger.info(f"Fetched components catalog from thinkube-metadata: {len(components)} components")
+            return components
+    except Exception as e:
+        logger.warning(f"Failed to fetch components catalog from thinkube-metadata: {e}")
+
+    # Fallback to cached value if available
+    if _COMPONENTS_CATALOG_CACHE is not None:
+        logger.info("Using stale cached components catalog")
+        return _COMPONENTS_CATALOG_CACHE
+
+    # Final fallback to bundled copy
+    components = _load_bundled_components()
+    if components:
+        _COMPONENTS_CATALOG_CACHE = components
+        _COMPONENTS_CATALOG_CACHE_TIME = now
+        logger.info(f"Using bundled components catalog fallback: {len(components)} components")
+    else:
+        logger.error("No components catalog available (fetch failed, no cache, no bundled copy)")
+        _COMPONENTS_CATALOG_CACHE = {}
+        _COMPONENTS_CATALOG_CACHE_TIME = now
+
+    return _COMPONENTS_CATALOG_CACHE
+
 
 class OptionalComponentService:
     """Manage installation and status of optional Thinkube components"""
-    
-    # Hardcoded component definitions for simplicity and maintainability
-    COMPONENTS = {
-        "prometheus": {
-            "display_name": "Prometheus",
-            "description": "Metrics collection and storage for cluster monitoring",
-            "category": "monitoring",
-            "icon": "/icons/tk_observability.svg",
-            "requirements": [],
-            "namespace": "monitoring",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        },
-        "perses": {
-            "display_name": "Perses",
-            "description": "Dashboard visualization and metrics exploration platform",
-            "category": "monitoring",
-            "icon": "/icons/tk_observability.svg",
-            "requirements": ["keycloak", "prometheus"],
-            "namespace": "perses",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        },
-        "opensearch": {
-            "display_name": "OpenSearch",
-            "description": "Distributed search and analytics engine with log aggregation",
-            "category": "data",
-            "icon": "/icons/tk_data.svg",
-            "requirements": [],
-            "namespace": "opensearch",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        },
-        "pgadmin": {
-            "display_name": "PgAdmin",
-            "description": "Web-based PostgreSQL database administration tool",
-            "category": "data",
-            "icon": "/icons/tk_data.svg",
-            "requirements": ["postgresql", "keycloak"],
-            "namespace": "pgadmin",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        },
-        "qdrant": {
-            "display_name": "Qdrant",
-            "description": "High-performance vector database for AI applications",
-            "category": "ai",
-            "icon": "/icons/tk_vector.svg",
-            "requirements": [],
-            "namespace": "qdrant",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        },
-        "knative": {
-            "display_name": "Knative",
-            "description": "Kubernetes-based platform for deploying serverless workloads",
-            "category": "infrastructure",
-            "icon": "/icons/tk_devops.svg",
-            "requirements": [],
-            "namespace": "knative-serving",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        },
-        "weaviate": {
-            "display_name": "Weaviate",
-            "description": "Open-source vector database with GraphQL interface for AI applications (BSD-3)",
-            "category": "ai",
-            "icon": "/icons/tk_vector.svg",
-            "requirements": ["harbor"],
-            "namespace": "weaviate",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        },
-        "chroma": {
-            "display_name": "Chroma",
-            "description": "Open-source embedding database for AI applications (Apache 2.0)",
-            "category": "ai",
-            "icon": "/icons/tk_vector.svg",
-            "requirements": ["harbor"],
-            "namespace": "chroma",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        },
-        "litellm": {
-            "display_name": "LiteLLM",
-            "description": "Unified LLM API proxy with load balancing, cost tracking, and rate limiting",
-            "category": "ai",
-            "icon": "/icons/tk_ai.svg",
-            "requirements": ["harbor", "keycloak", "postgresql", "seaweedfs"],
-            "namespace": "litellm",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        },
-        "valkey": {
-            "display_name": "Valkey",
-            "description": "High-performance in-memory data store, Redis-compatible (BSD-3)",
-            "category": "data",
-            "icon": "/icons/tk_data.svg",
-            "requirements": [],
-            "namespace": "valkey",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        },
-        "argilla": {
-            "display_name": "Argilla",
-            "description": "NLP/LLM data annotation and curation platform for AI model training (Apache 2.0)",
-            "category": "ai",
-            "icon": "/icons/tk_design.svg",
-            "requirements": ["harbor", "keycloak", "opensearch", "valkey"],
-            "namespace": "argilla",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        },
-        # CVAT - Excluded for v0.1.0 (ARM64 release) - x86_64 only upstream images
-        # "cvat": {
-        #     "display_name": "CVAT",
-        #     "description": "Computer vision annotation tool for image and video labeling (MIT)",
-        #     "category": "ai",
-        #     "icon": "/icons/tk_design.svg",
-        #     "requirements": ["harbor", "keycloak", "postgresql", "clickhouse"],
-        #     "namespace": "cvat",
-        #     "playbooks": {
-        #         "install": "00_install.yaml",
-        #         "test": "18_test.yaml",
-        #         "uninstall": "19_rollback.yaml"
-        #     }
-        # },
-        "clickhouse": {
-            "display_name": "ClickHouse",
-            "description": "Real-time analytics database for OLAP workloads (Apache 2.0)",
-            "category": "data",
-            "icon": "/icons/tk_data.svg",
-            "requirements": [],
-            "namespace": "clickhouse",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        },
-        "nats": {
-            "display_name": "NATS",
-            "description": "Real-time messaging system with JetStream for pub/sub and event-driven AI (Apache 2.0)",
-            "category": "infrastructure",
-            "icon": "/icons/tk_devops.svg",
-            "requirements": [],
-            "namespace": "nats",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        },
-        "langfuse": {
-            "display_name": "Langfuse",
-            "description": "LLM observability platform for tracing and monitoring AI applications (MIT)",
-            "category": "ai",
-            "icon": "/icons/tk_observability.svg",
-            "requirements": ["postgresql", "keycloak", "clickhouse", "valkey"],
-            "namespace": "langfuse",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        },
-        "ollama": {
-            "display_name": "Ollama",
-            "description": "Fast local LLM inference server with GPU acceleration (MIT)",
-            "category": "ai",
-            "icon": "/icons/tk_ai.svg",
-            "requirements": ["harbor"],
-            "namespace": "ollama",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        },
-        "langflow": {
-            "display_name": "Langflow",
-            "description": "Low-code AI workflow builder for RAG pipelines and LLM applications (MIT)",
-            "category": "ai",
-            "icon": "/icons/tk_ai.svg",
-            "requirements": ["keycloak", "postgresql"],
-            "namespace": "langflow",
-            "playbooks": {
-                "install": "00_install.yaml",
-                "test": "18_test.yaml",
-                "uninstall": "19_rollback.yaml"
-            }
-        }
-    }
-    
+
     def __init__(self, db: Session = None):
         """Initialize the optional component service"""
         self.db = db
@@ -274,7 +109,8 @@ class OptionalComponentService:
         """
         components = []
         
-        for name, info in self.COMPONENTS.items():
+        catalog = get_components_catalog()
+        for name, info in catalog.items():
             component = {
                 **info,
                 "name": name,
@@ -296,10 +132,11 @@ class OptionalComponentService:
         Returns:
             Component information or None if not found
         """
-        if component_name not in self.COMPONENTS:
+        catalog = get_components_catalog()
+        if component_name not in catalog:
             return None
-            
-        info = self.COMPONENTS[component_name]
+
+        info = catalog[component_name]
         return {
             **info,
             "name": component_name,
@@ -323,8 +160,9 @@ class OptionalComponentService:
             return False
             
         try:
-            namespace = self.COMPONENTS[component_name]["namespace"]
-            
+            catalog = get_components_catalog()
+            namespace = catalog[component_name]["namespace"]
+
             # Method 1: Check for the old fixed-name ConfigMap (for existing components)
             try:
                 configmap = self.core_v1.read_namespaced_config_map(
@@ -425,8 +263,9 @@ class OptionalComponentService:
 
         # Look up actual namespace from component definition
         # (component name might differ from namespace name, e.g. prometheus -> monitoring)
-        if service_name in self.COMPONENTS:
-            namespace = self.COMPONENTS[service_name]["namespace"]
+        catalog = get_components_catalog()
+        if service_name in catalog:
+            namespace = catalog[service_name]["namespace"]
         else:
             # Fallback: assume service name = namespace name
             namespace = service_name
@@ -460,8 +299,9 @@ class OptionalComponentService:
         if not self.core_v1:
             return {"status": "unknown", "message": "Kubernetes API not available"}
             
-        namespace = self.COMPONENTS[component_name]["namespace"]
-        
+        catalog = get_components_catalog()
+        namespace = catalog[component_name]["namespace"]
+
         try:
             # Check namespace
             ns = self.core_v1.read_namespace(namespace)
@@ -525,10 +365,11 @@ class OptionalComponentService:
         Returns:
             Full path to the playbook or None if not found
         """
-        if component_name not in self.COMPONENTS:
+        catalog = get_components_catalog()
+        if component_name not in catalog:
             return None
-            
-        component = self.COMPONENTS[component_name]
+
+        component = catalog[component_name]
         playbook_name = component["playbooks"].get(playbook_type)
         
         if not playbook_name:
@@ -547,13 +388,14 @@ class OptionalComponentService:
         Returns:
             Validation result with status and messages
         """
-        if component_name not in self.COMPONENTS:
+        catalog = get_components_catalog()
+        if component_name not in catalog:
             return {
                 "valid": False,
                 "error": f"Component '{component_name}' not found"
             }
-            
-        component = self.COMPONENTS[component_name]
+
+        component = catalog[component_name]
         
         # Check if already installed
         if self._check_if_installed(component_name):

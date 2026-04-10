@@ -1,0 +1,214 @@
+{
+  "version": "1.0.0",
+  "description": "Thinkube optional components — installable services",
+  "components": {
+    "prometheus": {
+      "display_name": "Prometheus",
+      "description": "Metrics collection and storage for cluster monitoring",
+      "category": "monitoring",
+      "icon": "/icons/tk_observability.svg",
+      "requirements": [],
+      "namespace": "monitoring",
+      "playbooks": {
+        "install": "00_install.yaml",
+        "test": "18_test.yaml",
+        "uninstall": "19_rollback.yaml"
+      }
+    },
+    "perses": {
+      "display_name": "Perses",
+      "description": "Dashboard visualization and metrics exploration platform",
+      "category": "monitoring",
+      "icon": "/icons/tk_observability.svg",
+      "requirements": ["keycloak", "prometheus"],
+      "namespace": "perses",
+      "playbooks": {
+        "install": "00_install.yaml",
+        "test": "18_test.yaml",
+        "uninstall": "19_rollback.yaml"
+      }
+    },
+    "opensearch": {
+      "display_name": "OpenSearch",
+      "description": "Distributed search and analytics engine with log aggregation",
+      "category": "data",
+      "icon": "/icons/tk_data.svg",
+      "requirements": [],
+      "namespace": "opensearch",
+      "playbooks": {
+        "install": "00_install.yaml",
+        "test": "18_test.yaml",
+        "uninstall": "19_rollback.yaml"
+      }
+    },
+    "pgadmin": {
+      "display_name": "PgAdmin",
+      "description": "Web-based PostgreSQL database administration tool",
+      "category": "data",
+      "icon": "/icons/tk_data.svg",
+      "requirements": ["postgresql", "keycloak"],
+      "namespace": "pgadmin",
+      "playbooks": {
+        "install": "00_install.yaml",
+        "test": "18_test.yaml",
+        "uninstall": "19_rollback.yaml"
+      }
+    },
+    "qdrant": {
+      "display_name": "Qdrant",
+      "description": "High-performance vector database for AI applications",
+      "category": "ai",
+      "icon": "/icons/tk_vector.svg",
+      "requirements": [],
+      "namespace": "qdrant",
+      "playbooks": {
+        "install": "00_install.yaml",
+        "test": "18_test.yaml",
+        "uninstall": "19_rollback.yaml"
+      }
+    },
+    "knative": {
+      "display_name": "Knative",
+      "description": "Kubernetes-based platform for deploying serverless workloads",
+      "category": "infrastructure",
+      "icon": "/icons/tk_devops.svg",
+      "requirements": [],
+      "namespace": "knative-serving",
+      "playbooks": {
+        "install": "00_install.yaml",
+        "test": "18_test.yaml",
+        "uninstall": "19_rollback.yaml"
+      }
+    },
+    "weaviate": {
+      "display_name": "Weaviate",
+      "description": "Open-source vector database with GraphQL interface for AI applications (BSD-3)",
+      "category": "ai",
+      "icon": "/icons/tk_vector.svg",
+      "requirements": ["harbor"],
+      "namespace": "weaviate",
+      "playbooks": {
+        "install": "00_install.yaml",
+        "test": "18_test.yaml",
+        "uninstall": "19_rollback.yaml"
+      }
+    },
+    "chroma": {
+      "display_name": "Chroma",
+      "description": "Open-source embedding database for AI applications (Apache 2.0)",
+      "category": "ai",
+      "icon": "/icons/tk_vector.svg",
+      "requirements": ["harbor"],
+      "namespace": "chroma",
+      "playbooks": {
+        "install": "00_install.yaml",
+        "test": "18_test.yaml",
+        "uninstall": "19_rollback.yaml"
+      }
+    },
+    "litellm": {
+      "display_name": "LiteLLM",
+      "description": "Unified LLM API proxy with load balancing, cost tracking, and rate limiting",
+      "category": "ai",
+      "icon": "/icons/tk_ai.svg",
+      "requirements": ["harbor", "keycloak", "postgresql", "seaweedfs"],
+      "namespace": "litellm",
+      "playbooks": {
+        "install": "00_install.yaml",
+        "test": "18_test.yaml",
+        "uninstall": "19_rollback.yaml"
+      }
+    },
+    "valkey": {
+      "display_name": "Valkey",
+      "description": "High-performance in-memory data store, Redis-compatible (BSD-3)",
+      "category": "data",
+      "icon": "/icons/tk_data.svg",
+      "requirements": [],
+      "namespace": "valkey",
+      "playbooks": {
+        "install": "00_install.yaml",
+        "test": "18_test.yaml",
+        "uninstall": "19_rollback.yaml"
+      }
+    },
+    "argilla": {
+      "display_name": "Argilla",
+      "description": "NLP/LLM data annotation and curation platform for AI model training (Apache 2.0)",
+      "category": "ai",
+      "icon": "/icons/tk_design.svg",
+      "requirements": ["harbor", "keycloak", "opensearch", "valkey"],
+      "namespace": "argilla",
+      "playbooks": {
+        "install": "00_install.yaml",
+        "test": "18_test.yaml",
+        "uninstall": "19_rollback.yaml"
+      }
+    },
+    "clickhouse": {
+      "display_name": "ClickHouse",
+      "description": "Real-time analytics database for OLAP workloads (Apache 2.0)",
+      "category": "data",
+      "icon": "/icons/tk_data.svg",
+      "requirements": [],
+      "namespace": "clickhouse",
+      "playbooks": {
+        "install": "00_install.yaml",
+        "test": "18_test.yaml",
+        "uninstall": "19_rollback.yaml"
+      }
+    },
+    "nats": {
+      "display_name": "NATS",
+      "description": "Real-time messaging system with JetStream for pub/sub and event-driven AI (Apache 2.0)",
+      "category": "infrastructure",
+      "icon": "/icons/tk_devops.svg",
+      "requirements": [],
+      "namespace": "nats",
+      "playbooks": {
+        "install": "00_install.yaml",
+        "test": "18_test.yaml",
+        "uninstall": "19_rollback.yaml"
+      }
+    },
+    "langfuse": {
+      "display_name": "Langfuse",
+      "description": "LLM observability platform for tracing and monitoring AI applications (MIT)",
+      "category": "ai",
+      "icon": "/icons/tk_observability.svg",
+      "requirements": ["postgresql", "keycloak", "clickhouse", "valkey"],
+      "namespace": "langfuse",
+      "playbooks": {
+        "install": "00_install.yaml",
+        "test": "18_test.yaml",
+        "uninstall": "19_rollback.yaml"
+      }
+    },
+    "ollama": {
+      "display_name": "Ollama",
+      "description": "Fast local LLM inference server with GPU acceleration (MIT)",
+      "category": "ai",
+      "icon": "/icons/tk_ai.svg",
+      "requirements": ["harbor"],
+      "namespace": "ollama",
+      "playbooks": {
+        "install": "00_install.yaml",
+        "test": "18_test.yaml",
+        "uninstall": "19_rollback.yaml"
+      }
+    },
+    "langflow": {
+      "display_name": "Langflow",
+      "description": "Low-code AI workflow builder for RAG pipelines and LLM applications (MIT)",
+      "category": "ai",
+      "icon": "/icons/tk_ai.svg",
+      "requirements": ["keycloak", "postgresql"],
+      "namespace": "langflow",
+      "playbooks": {
+        "install": "00_install.yaml",
+        "test": "18_test.yaml",
+        "uninstall": "19_rollback.yaml"
+      }
+    }
+  }
+}

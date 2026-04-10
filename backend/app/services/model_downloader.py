@@ -5,9 +5,14 @@ Manages HuggingFace model downloads to JuiceFS using Argo Workflows via Hera.
 """
 
 import os
+import json
 import logging
+import time
 from typing import List, Dict, Optional
 from datetime import datetime
+from pathlib import Path
+
+import aiohttp
 
 from hera.workflows import Workflow, Container, models as hera_models, WorkflowsService
 from kubernetes import client, config
@@ -17,263 +22,64 @@ from mlflow.exceptions import RestException
 
 logger = logging.getLogger(__name__)
 
-# Hardcoded model catalog for v1 (matches tkt-tensorrt-llm manifest)
-AVAILABLE_MODELS = [
-    {
-        "id": "openai/gpt-oss-20b",
-        "name": "GPT-OSS 20B",
-        "size": "~20GB",
-        "quantization": "FP8",
-        "description": "OpenAI GPT-OSS 20B model optimized for TensorRT-LLM",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "unsloth/Qwen3-30B-A3B",
-        "name": "Qwen3 30B-A3B (Unsloth)",
-        "size": "~60GB",
-        "quantization": "BF16",
-        "description": "Qwen3 30B MoE model (3B active params) for QLoRA fine-tuning. Supports GGUF export to Ollama.",
-        "server_type": ["unsloth"],
-        "task": "text-generation"
-    },
-    {
-        "id": "unsloth/Llama-3.3-70B-Instruct",
-        "name": "Llama 3.3 70B Instruct (Unsloth)",
-        "size": "~140GB",
-        "quantization": "BF16",
-        "description": "Meta Llama 3.3 70B for QLoRA fine-tuning. Supports GGUF export to Ollama.",
-        "server_type": ["unsloth"],
-        "task": "text-generation"
-    },
-    {
-        "id": "openai/gpt-oss-120b",
-        "name": "GPT-OSS 120B",
-        "size": "~70GB",
-        "quantization": "FP4",
-        "description": "OpenAI GPT-OSS 120B model optimized for TensorRT-LLM",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "nvidia/Llama-3.1-8B-Instruct-FP8",
-        "name": "Llama 3.1 8B Instruct",
-        "size": "~8GB",
-        "quantization": "FP8",
-        "description": "Meta Llama 3.1 8B instruction-tuned model",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "nvidia/Llama-3.1-8B-Instruct-FP4",
-        "name": "Llama 3.1 8B Instruct",
-        "size": "~4GB",
-        "quantization": "FP4",
-        "description": "Meta Llama 3.1 8B instruction-tuned model",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "nvidia/Llama-3.3-70B-Instruct-FP4",
-        "name": "Llama 3.3 70B Instruct",
-        "size": "~35GB",
-        "quantization": "FP4",
-        "description": "Meta Llama 3.3 70B instruction-tuned model",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "nvidia/Qwen3-8B-FP8",
-        "name": "Qwen3 8B",
-        "size": "~8GB",
-        "quantization": "FP8",
-        "description": "Alibaba Qwen3 8B model",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "nvidia/Qwen3-8B-FP4",
-        "name": "Qwen3 8B",
-        "size": "~4GB",
-        "quantization": "FP4",
-        "description": "Alibaba Qwen3 8B model",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "nvidia/Qwen3-14B-FP8",
-        "name": "Qwen3 14B",
-        "size": "~14GB",
-        "quantization": "FP8",
-        "description": "Alibaba Qwen3 14B model",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "nvidia/Qwen3-14B-FP4",
-        "name": "Qwen3 14B",
-        "size": "~7GB",
-        "quantization": "FP4",
-        "description": "Alibaba Qwen3 14B model",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "nvidia/Qwen3-32B-FP4",
-        "name": "Qwen3 32B",
-        "size": "~16GB",
-        "quantization": "FP4",
-        "description": "Alibaba Qwen3 32B model",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "nvidia/Phi-4-multimodal-instruct-FP8",
-        "name": "Phi-4 Multimodal Instruct",
-        "size": "~6GB",
-        "quantization": "FP8",
-        "description": "Microsoft Phi-4 multimodal instruction-tuned model",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "nvidia/Phi-4-multimodal-instruct-FP4",
-        "name": "Phi-4 Multimodal Instruct",
-        "size": "~3GB",
-        "quantization": "FP4",
-        "description": "Microsoft Phi-4 multimodal instruction-tuned model",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "nvidia/Phi-4-reasoning-plus-FP8",
-        "name": "Phi-4 Reasoning Plus",
-        "size": "~6GB",
-        "quantization": "FP8",
-        "description": "Microsoft Phi-4 reasoning-focused model",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "nvidia/Phi-4-reasoning-plus-FP4",
-        "name": "Phi-4 Reasoning Plus",
-        "size": "~3GB",
-        "quantization": "FP4",
-        "description": "Microsoft Phi-4 reasoning-focused model",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "nvidia/Llama-3_3-Nemotron-Super-49B-v1_5-FP8",
-        "name": "Llama 3.3 Nemotron Super 49B",
-        "size": "~49GB",
-        "quantization": "FP8",
-        "description": "NVIDIA Nemotron variant of Llama 3.3",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "nvidia/Qwen3-30B-A3B-FP4",
-        "name": "Qwen3 30B-A3B",
-        "size": "~15GB",
-        "quantization": "FP4",
-        "description": "Alibaba Qwen3 30B-A3B model",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "nvidia/Qwen2.5-VL-7B-Instruct-FP8",
-        "name": "Qwen2.5 VL 7B Instruct",
-        "size": "~7GB",
-        "quantization": "FP8",
-        "description": "Alibaba Qwen2.5 Vision-Language model",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "nvidia/Qwen2.5-VL-7B-Instruct-FP4",
-        "name": "Qwen2.5 VL 7B Instruct",
-        "size": "~4GB",
-        "quantization": "FP4",
-        "description": "Alibaba Qwen2.5 Vision-Language model",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "nvidia/Llama-4-Scout-17B-16E-Instruct-FP4",
-        "name": "Llama 4 Scout 17B-16E Instruct",
-        "size": "~9GB",
-        "quantization": "FP4",
-        "description": "Meta Llama 4 Scout model",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    {
-        "id": "nvidia/Qwen3-235B-A22B-FP4",
-        "name": "Qwen3 235B-A22B",
-        "size": "~120GB",
-        "quantization": "FP4",
-        "description": "Alibaba Qwen3 235B-A22B large model",
-        "server_type": ["tensorrt-llm"],
-        "task": "text-generation"
-    },
-    # Text Embedding Models - General Purpose
-    {
-        "id": "nomic-ai/nomic-embed-text-v1.5",
-        "name": "Nomic Embed Text v1.5",
-        "size": "~550MB",
-        "quantization": "FP16",
-        "description": "Nomic's embedding model with 8192 token context and Matryoshka embedding support (256, 512, 768 dimensions). Apache 2.0 license.",
-        "server_type": ["text-embeddings"],
-        "task": "feature-extraction"
-    },
-    {
-        "id": "BAAI/bge-base-en-v1.5",
-        "name": "BGE Base English v1.5",
-        "size": "~440MB",
-        "quantization": "FP16",
-        "description": "BAAI's BGE base model. 768 dimensions, 512 token context. Top performer on MTEB benchmark. MIT license.",
-        "server_type": ["text-embeddings"],
-        "task": "feature-extraction"
-    },
-    {
-        "id": "BAAI/bge-large-en-v1.5",
-        "name": "BGE Large English v1.5",
-        "size": "~1.3GB",
-        "quantization": "FP16",
-        "description": "BAAI's BGE large model. 1024 dimensions, 512 token context. Higher quality than base. MIT license.",
-        "server_type": ["text-embeddings"],
-        "task": "feature-extraction"
-    },
-    {
-        "id": "Alibaba-NLP/gte-large-en-v1.5",
-        "name": "GTE Large English v1.5",
-        "size": "~1.6GB",
-        "quantization": "FP16",
-        "description": "Alibaba's GTE large model. 1024 dimensions, 8192 token context. State-of-the-art on MTEB. Apache 2.0 license.",
-        "server_type": ["text-embeddings"],
-        "task": "feature-extraction"
-    },
-    # Text Embedding Models - Code Specific
-    {
-        "id": "jinaai/jina-embeddings-v2-base-code",
-        "name": "Jina Code Embeddings v2",
-        "size": "~560MB",
-        "quantization": "FP16",
-        "description": "Jina's code embedding model. 768 dimensions, 8192 token context. Trained on code and documentation. Apache 2.0 license.",
-        "server_type": ["text-embeddings"],
-        "task": "feature-extraction"
-    },
-    {
-        "id": "jinaai/jina-embeddings-v3",
-        "name": "Jina Embeddings v3",
-        "size": "~2.3GB",
-        "quantization": "FP16",
-        "description": "Jina's latest multilingual model. 1024 dimensions, 8192 token context. Excellent for code and 89 languages. Apache 2.0 license.",
-        "server_type": ["text-embeddings"],
-        "task": "feature-extraction"
-    }
-]
+# Model catalog: fetched from thinkube-metadata at runtime, cached in memory
+_MODEL_CATALOG_URL = "https://raw.githubusercontent.com/thinkube/thinkube-metadata/main/models.json"
+_MODEL_CATALOG_CACHE: Optional[List[Dict]] = None
+_MODEL_CATALOG_CACHE_TIME: float = 0
+_MODEL_CATALOG_TTL: float = 300  # 5 minutes
+
+
+def _load_bundled_models() -> List[Dict]:
+    """Load bundled models.json fallback shipped with thinkube-control"""
+    bundled = Path(__file__).parent.parent / "data" / "models.json"
+    if bundled.exists():
+        with open(bundled) as f:
+            data = json.load(f)
+            return data.get("models", [])
+    return []
+
+
+def get_model_catalog() -> List[Dict]:
+    """
+    Get the model catalog, fetching from thinkube-metadata if cache expired.
+    Falls back to bundled copy if fetch fails.
+    """
+    global _MODEL_CATALOG_CACHE, _MODEL_CATALOG_CACHE_TIME
+
+    now = time.time()
+    if _MODEL_CATALOG_CACHE is not None and (now - _MODEL_CATALOG_CACHE_TIME) < _MODEL_CATALOG_TTL:
+        return _MODEL_CATALOG_CACHE
+
+    try:
+        import urllib.request
+        req = urllib.request.Request(_MODEL_CATALOG_URL, headers={"User-Agent": "thinkube-control"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+            models = data.get("models", [])
+            _MODEL_CATALOG_CACHE = models
+            _MODEL_CATALOG_CACHE_TIME = now
+            logger.info(f"Fetched model catalog from thinkube-metadata: {len(models)} models")
+            return models
+    except Exception as e:
+        logger.warning(f"Failed to fetch model catalog from thinkube-metadata: {e}")
+
+    # Fallback to cached value if available
+    if _MODEL_CATALOG_CACHE is not None:
+        logger.info("Using stale cached model catalog")
+        return _MODEL_CATALOG_CACHE
+
+    # Final fallback to bundled copy
+    models = _load_bundled_models()
+    if models:
+        _MODEL_CATALOG_CACHE = models
+        _MODEL_CATALOG_CACHE_TIME = now
+        logger.info(f"Using bundled model catalog fallback: {len(models)} models")
+    else:
+        logger.error("No model catalog available (fetch failed, no cache, no bundled copy)")
+        _MODEL_CATALOG_CACHE = []
+        _MODEL_CATALOG_CACHE_TIME = now
+
+    return _MODEL_CATALOG_CACHE
 
 
 class ModelDownloaderService:
@@ -325,7 +131,7 @@ class ModelDownloaderService:
         Returns:
             List of model dictionaries with metadata
         """
-        models = AVAILABLE_MODELS.copy()
+        models = get_model_catalog().copy()
 
         if include_finetuned:
             finetuned = self._get_finetuned_models()
@@ -353,7 +159,7 @@ class ModelDownloaderService:
                 ).all()
 
                 # Filter to only include fine-tuned models (not in AVAILABLE_MODELS)
-                hf_model_ids = {m["id"] for m in AVAILABLE_MODELS}
+                hf_model_ids = {m["id"] for m in get_model_catalog()}
                 finetuned_models = []
 
                 for job in succeeded_jobs:
@@ -401,7 +207,7 @@ class ModelDownloaderService:
             HuggingFace token is read from the 'huggingface-token' k8s secret in argo namespace
         """
         # Validate model exists in catalog and get task
-        model_info = next((m for m in AVAILABLE_MODELS if m["id"] == model_id), None)
+        model_info = next((m for m in get_model_catalog() if m["id"] == model_id), None)
         if not model_info:
             raise ValueError(f"Model '{model_id}' not found in catalog")
 
@@ -923,7 +729,7 @@ except Exception as e:
                 ).all()
 
                 # Build result dict - all models are False by default
-                results = {model["id"]: False for model in AVAILABLE_MODELS}
+                results = {model["id"]: False for model in get_model_catalog()}
 
                 # Mark models as True if they have a succeeded job
                 for job in succeeded_jobs:
