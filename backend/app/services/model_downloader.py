@@ -27,7 +27,7 @@ _MODEL_CATALOG_URL = "https://raw.githubusercontent.com/thinkube/thinkube-metada
 _MODEL_CATALOG_CACHE: Optional[List[Dict]] = None
 _MODEL_CATALOG_CACHE_TIME: float = 0
 _MODEL_CATALOG_TTL: float = 300  # 5 minutes
-_PERSISTENT_CACHE_DIR = Path(os.getenv("THINKUBE_CONTROL_HOME", "/home/thinkube-control")) / "cache"
+_PERSISTENT_CACHE_DIR = Path(os.getenv("THINKUBE_CACHE_DIR", "/home/thinkube/.cache/thinkube-control"))
 
 
 def _save_persistent_cache(filename: str, data: dict) -> None:
