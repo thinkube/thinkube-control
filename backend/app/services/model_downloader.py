@@ -239,6 +239,7 @@ class ModelDownloaderService:
                     max_duration="10m"
                 )
             ),
+            image_pull_secrets=[hera_models.LocalObjectReference(name="app-pull-secret")],
             volumes=[
                 hera_models.Volume(
                     name="juicefs-mlflow",
@@ -601,7 +602,6 @@ except Exception as e:
             Container(
                 name="download",
                 image=model_mirror_image,
-                image_pull_secrets=[hera_models.LocalObjectReference(name="app-pull-secret")],
                 command=["python", "-c"],
                 args=[download_script],
                 volume_mounts=[
@@ -863,6 +863,7 @@ except Exception as e:
                     max_duration="5m"
                 )
             ),
+            image_pull_secrets=[hera_models.LocalObjectReference(name="app-pull-secret")],
             volumes=[
                 hera_models.Volume(
                     name="juicefs-mlflow",
@@ -1223,7 +1224,6 @@ except Exception as e:
             Container(
                 name="register",
                 image=model_mirror_image,
-                image_pull_secrets=[hera_models.LocalObjectReference(name="app-pull-secret")],
                 command=["python", "-c"],
                 args=[register_script],
                 volume_mounts=[
