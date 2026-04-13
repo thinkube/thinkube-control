@@ -1595,7 +1595,7 @@ Install git hooks for automatic template processing:
         gitea_hostname = f"git.{self.domain}"
         org = "thinkube-deployments"
 
-        max_retries = 2
+        max_retries = 3
         for attempt in range(max_retries):
             # Initialize git repo if not already valid (Copier may create empty .git/hooks/)
             git_script = f"""
@@ -1612,9 +1612,15 @@ git remote add origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostna
 
 git add -A
 # Only commit if there are changes
+# --no-verify: skip pre-commit hook (designed for developer commits, not
+# automated deploys — Copier already ran in Phase 1B, and hooks add a
+# timing window for HEAD CAS races on the shared PVC)
 if ! git diff --cached --quiet; then
-  git commit -m 'Deploy {self.app_name} to {self.domain}'
+  git commit --no-verify -m 'Deploy {self.app_name} to {self.domain}'
 fi
+# Fetch remote refs before push to sync tracking refs without touching
+# the working tree (avoids stale refs/remotes/origin/main conflicts)
+git fetch origin 2>/dev/null || true
 git push -u origin main --force
 """
 
@@ -1631,19 +1637,35 @@ git push -u origin main --force
                 DeploymentLogger.success("Pushed changes to Gitea")
                 return
 
-            # Check for stale lock file (only recoverable error with unique repos)
+            # Recoverable errors — retry
+            recoverable = False
+
             if "index.lock" in stderr and "File exists" in stderr:
                 # Stale git lock file from crashed process (e.g., OOMKill)
                 DeploymentLogger.log(f"Removing stale git lock file (attempt {attempt + 1}/{max_retries})")
                 lock_file = Path(self.local_repo_path) / ".git" / "index.lock"
                 if lock_file.exists():
                     lock_file.unlink()
-                continue  # Retry push
-            else:
-                # Non-recoverable error
-                DeploymentLogger.error(f"Git operations failed")
-                DeploymentLogger.error(f"Error: {stderr}")
-                raise RuntimeError(f"Git operations failed: {stderr}")
+                recoverable = True
+
+            if "cannot lock ref" in stderr and "but expected" in stderr:
+                # HEAD compare-and-swap race on shared PVC (concurrent git access
+                # from code-server/VS Code git integration or other processes)
+                DeploymentLogger.log(f"Git ref race detected, retrying (attempt {attempt + 1}/{max_retries})")
+                recoverable = True
+
+            if "reference already exists" in stderr:
+                # Stale remote refs from previous repo lifecycle
+                DeploymentLogger.log(f"Stale remote ref detected, retrying (attempt {attempt + 1}/{max_retries})")
+                recoverable = True
+
+            if recoverable:
+                continue
+
+            # Non-recoverable error
+            DeploymentLogger.error(f"Git operations failed")
+            DeploymentLogger.error(f"Error: {stderr}")
+            raise RuntimeError(f"Git operations failed: {stderr}")
 
         # If we exhausted retries
         raise RuntimeError(f"Git push failed after {max_retries} attempts")
