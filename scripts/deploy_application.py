@@ -792,9 +792,11 @@ git reset --hard origin/main
         mlflow_username = self._decode_secret_data(mlflow_secret, 'username') if mlflow_secret else ''
         mlflow_password = self._decode_secret_data(mlflow_secret, 'password') if mlflow_secret else admin_password
 
-        # Get SeaweedFS credentials
+        # Get SeaweedFS S3 credentials (from seaweedfs-s3-credentials in seaweedfs namespace)
         seaweedfs_secret = self.secrets.get('seaweedfs')
-        seaweedfs_password = self._decode_secret_data(seaweedfs_secret, 's3_secret_key') if seaweedfs_secret else ''
+        seaweedfs_password = self._decode_secret_data(seaweedfs_secret, 'secret_key') if seaweedfs_secret else ''
+        seaweedfs_access_key = self._decode_secret_data(seaweedfs_secret, 'access_key') if seaweedfs_secret else ''
+        seaweedfs_endpoint = self._decode_secret_data(seaweedfs_secret, 'endpoint_internal') if seaweedfs_secret else ''
 
         template_vars = {
             'project_name': self.app_name,
@@ -810,6 +812,8 @@ git reset --hard origin/main
             'mlflow_username': mlflow_username,
             'mlflow_password': mlflow_password,
             'seaweedfs_password': seaweedfs_password,
+            'seaweedfs_access_key': seaweedfs_access_key,
+            'seaweedfs_endpoint': seaweedfs_endpoint,
         }
 
         # 1. Generate namespace.yaml
