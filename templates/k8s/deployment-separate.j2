@@ -153,11 +153,12 @@ spec:
                 secretKeyRef:
                   name: {{ project_name }}-mlflow-credentials
                   key: admin-password
-            - name: SEAWEEDFS_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ project_name }}-mlflow-credentials
-                  key: seaweedfs-password
+            - name: SEAWEEDFS_ENDPOINT
+              value: "{{ seaweedfs_endpoint }}"
+            - name: SEAWEEDFS_ACCESS_KEY
+              value: "{{ seaweedfs_access_key }}"
+            - name: SEAWEEDFS_SECRET_KEY
+              value: "{{ seaweedfs_password }}"
             # Container-specific environment variables (if defined)
             {% if container.environment is defined %}
             {% for env in container.environment %}
