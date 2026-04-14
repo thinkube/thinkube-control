@@ -30,6 +30,7 @@ import Templates from './pages/Templates';
 import ModelsPage from './pages/ModelsPage';
 import { HarborImages } from './pages/HarborImages';
 import { ImageMirrorDeployment } from './pages/ImageMirrorDeployment';
+import KnativeServicesPage from './pages/KnativeServicesPage';
 
 // Store
 import { useServicesStore } from './stores/useServicesStore';
@@ -65,6 +66,7 @@ const baseNavigationItems: TkNavItem[] = [
     children: [
       { id: "models", label: "AI Models", lucideIcon: Database, href: "/models" },
       { id: "templates", label: "Templates", lucideIcon: Layers, href: "/templates" },
+      { id: "knative-services", label: "Knative Services", lucideIcon: Cpu, href: "/knative-services" },
       { id: "harbor-images", label: "Harbor Images", lucideIcon: Container, href: "/harbor-images" },
       { id: "optional-components", label: "Optional Components", lucideIcon: Puzzle, href: "/optional-components" },
     ],
@@ -126,6 +128,7 @@ function AppContent() {
       'all-services': '/dashboard/all',
       models: '/models',
       templates: '/templates',
+      'knative-services': '/knative-services',
       'harbor-images': '/harbor-images',
       'optional-components': '/optional-components',
       'jupyterhub-config': '/jupyterhub-config',
@@ -155,6 +158,7 @@ function AppContent() {
     }
     if (path.startsWith('/models')) return 'models';
     if (path.startsWith('/templates')) return 'templates';
+    if (path.startsWith('/knative-services')) return 'knative-services';
     if (path.startsWith('/harbor-images')) return 'harbor-images';
     if (path.startsWith('/optional-components')) return 'optional-components';
     if (path.startsWith('/jupyterhub-config')) return 'jupyterhub-config';
@@ -178,6 +182,7 @@ function AppContent() {
     }
     if (path.startsWith('/models')) return 'AI Models';
     if (path.startsWith('/templates')) return 'Templates';
+    if (path.startsWith('/knative-services')) return 'Knative Services';
     if (path.startsWith('/harbor-images')) return 'Harbor Images';
     if (path.startsWith('/optional-components')) return 'Optional Components';
     if (path.startsWith('/jupyterhub-config')) return 'JupyterHub Config';
@@ -214,6 +219,7 @@ function AppContent() {
         <Route path="/optional-components" element={<OptionalComponentsPage />} />
         <Route path="/jupyterhub-config" element={<JupyterHubConfigPage />} />
         <Route path="/templates" element={<Templates />} />
+        <Route path="/knative-services" element={<KnativeServicesPage />} />
         <Route path="/harbor-images" element={<HarborImages />} />
         <Route path="/image-mirror/:source" element={<ImageMirrorDeployment />} />
       </Routes>
