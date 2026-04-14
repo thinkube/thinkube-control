@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent } from 'thinkube-style/components/cards-data';
 import api from '@/lib/axios';
-import { Activity, Gauge as GaugeIcon } from 'lucide-react';
+import { Gauge as GaugeIcon } from 'lucide-react';
 
 interface GPUMetrics {
+  monitoring_available: boolean;
   gpu_utilization: number;
   system_memory_used_gb: number;
   system_memory_total_gb: number;
@@ -11,6 +12,8 @@ interface GPUMetrics {
   gpu_temp: number;
   power_usage: number;
   cpu_percent: number;
+  total_gpus: number;
+  allocatable_gpus: number;
   timestamp: string;
 }
 
@@ -26,15 +29,14 @@ interface GaugeProps {
 function SemicircularGauge({ value, max, label, unit, size = 140 }: GaugeProps) {
   const percentage = Math.min((value / max) * 100, 100);
 
-  // Calculate color based on percentage
   const getColor = (pct: number) => {
-    if (pct < 50) return '#10b981'; // Green
-    if (pct < 75) return '#f59e0b'; // Amber
-    return '#ef4444'; // Red
+    if (pct < 50) return '#10b981';
+    if (pct < 75) return '#f59e0b';
+    return '#ef4444';
   };
 
   const radius = size / 2 - 10;
-  const circumference = Math.PI * radius; // Half circle
+  const circumference = Math.PI * radius;
   const offset = circumference - (percentage / 100) * circumference;
   const color = getColor(percentage);
 
@@ -42,7 +44,6 @@ function SemicircularGauge({ value, max, label, unit, size = 140 }: GaugeProps) 
     <div className="flex flex-col items-center">
       <div className="relative" style={{ width: size, height: size / 2 + 20 }}>
         <svg width={size} height={size / 2 + 20} className="transform">
-          {/* Background arc */}
           <path
             d={`M 10 ${size / 2} A ${radius} ${radius} 0 0 1 ${size - 10} ${size / 2}`}
             fill="none"
@@ -50,7 +51,6 @@ function SemicircularGauge({ value, max, label, unit, size = 140 }: GaugeProps) 
             strokeWidth="10"
             strokeLinecap="round"
           />
-          {/* Foreground arc */}
           <path
             d={`M 10 ${size / 2} A ${radius} ${radius} 0 0 1 ${size - 10} ${size / 2}`}
             fill="none"
@@ -62,7 +62,6 @@ function SemicircularGauge({ value, max, label, unit, size = 140 }: GaugeProps) 
             className="transition-all duration-500"
           />
         </svg>
-        {/* Center text */}
         <div className="absolute inset-0 flex flex-col items-center justify-center" style={{ top: '10px' }}>
           <div className="text-3xl font-bold" style={{ color }}>{value.toFixed(value >= 10 ? 0 : 1)}{unit}</div>
           <div className="text-xs text-muted-foreground mt-1">{label}</div>
@@ -75,16 +74,24 @@ function SemicircularGauge({ value, max, label, unit, size = 140 }: GaugeProps) 
 export function GPUMetricsCard() {
   const [metrics, setMetrics] = useState<GPUMetrics | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
 
   const fetchMetrics = async () => {
     try {
       const response = await api.get('/gpu/metrics');
-      setMetrics(response.data);
-      setError(null);
-    } catch (err: any) {
-      console.error('Failed to fetch GPU metrics:', err);
-      setError(err.response?.status === 503 ? 'GPU metrics unavailable' : 'Failed to load metrics');
+      const data = response.data;
+
+      if (data.monitoring_available === false) {
+        setUnavailable(true);
+        setLoading(false);
+        return;
+      }
+
+      setMetrics(data);
+      setUnavailable(false);
+    } catch {
+      // Silently fail — card just won't render
+      setUnavailable(true);
     } finally {
       setLoading(false);
     }
@@ -92,47 +99,14 @@ export function GPUMetricsCard() {
 
   useEffect(() => {
     fetchMetrics();
-
-    // Refresh every 5 seconds (backend caches for 5s, so no wasted requests)
     const interval = setInterval(fetchMetrics, 5000);
     return () => clearInterval(interval);
   }, []);
 
-  if (loading) {
-    return (
-      <TkCard>
-        <TkCardHeader>
-          <TkCardTitle className="flex items-center gap-2">
-            <Activity className="h-5 w-5" />
-            System Metrics
-          </TkCardTitle>
-        </TkCardHeader>
-        <TkCardContent>
-          <div className="flex items-center justify-center h-32">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-          </div>
-        </TkCardContent>
-      </TkCard>
-    );
-  }
-
-  if (error || !metrics) {
-    return (
-      <TkCard>
-        <TkCardHeader>
-          <TkCardTitle className="flex items-center gap-2">
-            <Activity className="h-5 w-5" />
-            System Metrics
-          </TkCardTitle>
-        </TkCardHeader>
-        <TkCardContent>
-          <div className="text-sm text-muted-foreground text-center py-8">
-            {error || 'No metrics available'}
-          </div>
-        </TkCardContent>
-      </TkCard>
-    );
-  }
+  // Don't render anything when monitoring is not available
+  if (unavailable) return null;
+  if (loading) return null;
+  if (!metrics) return null;
 
   return (
     <TkCard>
@@ -144,7 +118,6 @@ export function GPUMetricsCard() {
       </TkCardHeader>
       <TkCardContent>
         <div className="grid grid-cols-2 gap-6">
-          {/* System Memory Gauge */}
           <div className="flex flex-col items-center">
             <h3 className="text-sm font-medium mb-3">System Memory</h3>
             <SemicircularGauge
@@ -156,7 +129,6 @@ export function GPUMetricsCard() {
             />
           </div>
 
-          {/* GPU Utilization Gauge */}
           <div className="flex flex-col items-center">
             <h3 className="text-sm font-medium mb-3">GPU Utilization</h3>
             <SemicircularGauge
@@ -169,7 +141,6 @@ export function GPUMetricsCard() {
           </div>
         </div>
 
-        {/* Additional metrics */}
         <div className="grid grid-cols-3 gap-2 mt-4 pt-4 border-t">
           <div className="text-center">
             <div className="text-xs text-muted-foreground">GPU Temp</div>

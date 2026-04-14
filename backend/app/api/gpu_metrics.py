@@ -1,147 +1,135 @@
 """
-GPU and system metrics API endpoints
-Fetches metrics directly from NVIDIA DCGM Exporter and Kubernetes metrics-server
+GPU and system metrics API endpoints.
+
+Uses Prometheus (kube-prometheus + DCGM exporter) when available.
+Falls back to node-metrics DaemonSet for system memory/CPU.
+Returns {"available": false} when monitoring is not installed.
 """
-from fastapi import APIRouter, Depends, HTTPException
-from typing import Dict, Any, Optional
+from fastapi import APIRouter, Depends
+from typing import Dict, Any
 import httpx
-import re
 import time
+import logging
 from datetime import datetime
 from app.core.api_tokens import get_current_user_dual_auth
+from app.services.prometheus_client import PrometheusClient
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
-DCGM_EXPORTER_URL = "http://nvidia-dcgm-exporter.gpu-operator.svc.cluster.local:9400/metrics"
-METRICS_SERVER_TIMEOUT = 5.0
+NODE_METRICS_URL = "http://node-metrics.thinkube-control.svc.cluster.local:9100/metrics"
+NODE_METRICS_TIMEOUT = 5.0
 
-# Server-side cache: avoids hitting DCGM/node-metrics on every poll
+# Server-side cache
 _metrics_cache: Dict[str, Any] = {}
 _metrics_cache_time: float = 0
-_METRICS_CACHE_TTL: float = 5.0  # seconds
-
-
-def parse_prometheus_metrics(text: str) -> Dict[str, float]:
-    """Parse Prometheus text format into a dictionary of metrics"""
-    metrics = {}
-
-    for line in text.split('\n'):
-        # Skip comments and empty lines
-        if line.startswith('#') or not line.strip():
-            continue
-
-        # Parse metric line: metric_name{labels} value
-        match = re.match(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)\{.*?\}\s+([0-9.eE+-]+)', line)
-        if match:
-            metric_name = match.group(1)
-            value = float(match.group(2))
-
-            # Store first occurrence of each metric (single GPU system)
-            if metric_name not in metrics:
-                metrics[metric_name] = value
-
-    return metrics
-
-
-async def fetch_dcgm_metrics() -> Dict[str, float]:
-    """Fetch GPU metrics from DCGM exporter"""
-    try:
-        async with httpx.AsyncClient(timeout=METRICS_SERVER_TIMEOUT) as client:
-            response = await client.get(DCGM_EXPORTER_URL)
-            response.raise_for_status()
-            return parse_prometheus_metrics(response.text)
-    except httpx.HTTPError as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Failed to fetch GPU metrics: {str(e)}"
-        )
+_METRICS_CACHE_TTL: float = 5.0
 
 
 async def fetch_node_metrics() -> Dict[str, Any]:
-    """Fetch node and GPU metrics from node-metrics DaemonSet"""
+    """Fetch system memory and CPU from node-metrics DaemonSet."""
     try:
-        async with httpx.AsyncClient(timeout=METRICS_SERVER_TIMEOUT) as client:
-            response = await client.get("http://node-metrics.thinkube-control.svc.cluster.local:9100/metrics")
+        async with httpx.AsyncClient(timeout=NODE_METRICS_TIMEOUT) as client:
+            response = await client.get(NODE_METRICS_URL)
             response.raise_for_status()
             data = response.json()
-
             return {
-                'memory_bytes': data['memory_used_bytes'],
-                'memory_total_bytes': data['memory_total_bytes'],
-                'cpu_percent': data.get('cpu_percent', 0),
-                'gpu_utilization': data.get('gpu_utilization', 0),
-                'gpu_temp': data.get('gpu_temp', 0),
-                'gpu_power': data.get('gpu_power', 0),
-                'gpu_memory_used_mb': data.get('gpu_memory_used_mb', 0),
-                'gpu_memory_total_mb': data.get('gpu_memory_total_mb', 0)
+                "memory_bytes": data["memory_used_bytes"],
+                "memory_total_bytes": data["memory_total_bytes"],
+                "cpu_percent": data.get("cpu_percent", 0),
             }
-    except httpx.HTTPError as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Failed to fetch node metrics: {str(e)}"
-        )
+    except Exception as e:
+        logger.warning(f"node-metrics unavailable: {e}")
+        return {}
 
 
 @router.get("/gpu/metrics")
 async def get_gpu_metrics(
-    current_user: dict = Depends(get_current_user_dual_auth)
+    current_user: dict = Depends(get_current_user_dual_auth),
 ) -> Dict[str, Any]:
-    """
-    Get current GPU and system metrics
+    """Get current GPU and system metrics.
 
-    Returns:
-        - gpu_utilization: GPU compute utilization percentage (0-100)
-        - memory_bandwidth: Memory bandwidth utilization percentage (0-100)
-        - gpu_temp: GPU temperature in Celsius
-        - memory_temp: Memory temperature in Celsius
-        - power_usage: Current power draw in watts
-        - sm_clock: SM clock frequency in MHz
-        - system_memory_used_gb: System memory used in GB
-        - system_memory_total_gb: Total system memory in GB (128GB for DGX Spark)
-        - system_memory_percent: Memory usage percentage
-        - cpu_percent: CPU usage percentage
+    Returns monitoring_available=false when Prometheus is not installed.
+    GPU metrics come from Prometheus DCGM, system metrics from node-metrics.
     """
     global _metrics_cache, _metrics_cache_time
 
-    # Return cached data if still fresh
     now = time.monotonic()
     if _metrics_cache and (now - _metrics_cache_time) < _METRICS_CACHE_TTL:
         return _metrics_cache
 
-    # Fetch DCGM metrics (for memory bandwidth only)
-    dcgm = await fetch_dcgm_metrics()
+    # Check Prometheus availability
+    prom_available = PrometheusClient.is_available()
 
-    # Fetch node metrics (actual system memory and GPU stats from nvidia-smi)
+    if not prom_available:
+        result = {
+            "monitoring_available": False,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+        _metrics_cache = result
+        _metrics_cache_time = now
+        return result
+
+    # Fetch GPU metrics from Prometheus DCGM
+    gpu_data = await PrometheusClient.get_gpu_utilization()
+
+    # Fetch system memory/CPU from node-metrics DaemonSet
     node = await fetch_node_metrics()
 
-    # System memory (unified memory - shared by CPU and GPU)
-    system_memory_total_gb = node['memory_total_bytes'] / (1024 ** 3)
-    system_memory_used_gb = node['memory_bytes'] / (1024 ** 3)
-    system_memory_percent = (system_memory_used_gb / system_memory_total_gb) * 100
+    # System memory
+    system_memory_total_gb = 0.0
+    system_memory_used_gb = 0.0
+    system_memory_percent = 0.0
+    cpu_percent = 0.0
 
-    # CPU usage from node-metrics (/proc/stat)
-    cpu_percent = node.get('cpu_percent', 0.0)
+    if node:
+        total = node.get("memory_total_bytes", 0)
+        used = node.get("memory_bytes", 0)
+        if total > 0:
+            system_memory_total_gb = total / (1024 ** 3)
+            system_memory_used_gb = used / (1024 ** 3)
+            system_memory_percent = (system_memory_used_gb / system_memory_total_gb) * 100
+        cpu_percent = node.get("cpu_percent", 0.0)
+
+    # GPU capacity from kube-state-metrics
+    gpu_capacity = await PrometheusClient.get_gpu_capacity()
 
     result = {
-        # GPU metrics from nvidia-smi (via node-metrics)
-        "gpu_utilization": node['gpu_utilization'],
-        "memory_bandwidth": dcgm.get('DCGM_FI_DEV_MEM_COPY_UTIL', 0),  # Still from DCGM
-        "gpu_temp": node['gpu_temp'],
-        "memory_temp": dcgm.get('DCGM_FI_DEV_MEMORY_TEMP', 0),  # Still from DCGM
-        "power_usage": node['gpu_power'],
-        "sm_clock": dcgm.get('DCGM_FI_DEV_SM_CLOCK', 0),  # Still from DCGM
-
-        # System metrics (unified memory)
+        "monitoring_available": True,
+        # GPU metrics from DCGM via Prometheus
+        "gpu_utilization": gpu_data.get("gpu_utilization", 0) if gpu_data else 0,
+        "memory_bandwidth": gpu_data.get("memory_bandwidth", 0) if gpu_data else 0,
+        "gpu_temp": gpu_data.get("gpu_temp", 0) if gpu_data else 0,
+        "memory_temp": gpu_data.get("memory_temp", 0) if gpu_data else 0,
+        "power_usage": gpu_data.get("power_usage", 0) if gpu_data else 0,
+        "sm_clock": gpu_data.get("sm_clock", 0) if gpu_data else 0,
+        # GPU capacity from kube-state-metrics
+        "total_gpus": gpu_capacity.get("total_gpus", 0) if gpu_capacity else 0,
+        "allocatable_gpus": gpu_capacity.get("allocatable_gpus", 0) if gpu_capacity else 0,
+        # System metrics from node-metrics
         "system_memory_used_gb": round(system_memory_used_gb, 2),
         "system_memory_total_gb": round(system_memory_total_gb, 1),
         "system_memory_percent": round(system_memory_percent, 1),
         "cpu_percent": round(cpu_percent, 1),
-
         # Metadata
         "timestamp": datetime.utcnow().isoformat() + "Z",
-        "unified_memory": True,  # Indicates this is a unified memory system
+        "unified_memory": True,
     }
 
     _metrics_cache = result
     _metrics_cache_time = now
     return result
+
+
+@router.get("/gpu/monitoring-status")
+async def get_monitoring_status(
+    current_user: dict = Depends(get_current_user_dual_auth),
+) -> Dict[str, Any]:
+    """Check if Prometheus monitoring is available.
+
+    Lightweight endpoint for frontend to decide whether to show monitoring UI.
+    """
+    return {
+        "available": PrometheusClient.is_available(),
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+    }

@@ -32,6 +32,7 @@ from app.services import (
     DependencyManager,
     health_checker,
 )
+from app.services.prometheus_client import PrometheusClient
 from app.core.api_tokens import get_current_user_dual_auth
 
 
@@ -77,11 +78,15 @@ async def list_services(
             str(fav.service_id): fav.order_index or 0 for fav in favorites
         }
 
-    # Single K8s API call to get GPU usage across all namespaces
+    # Get GPU usage per namespace — prefer Prometheus, fall back to K8s API
     gpu_by_namespace = {}
     try:
-        k8s_manager = K8sServiceManager()
-        gpu_by_namespace = k8s_manager.get_all_gpu_usage()
+        prom_gpu = await PrometheusClient.get_gpu_usage_by_namespace()
+        if prom_gpu is not None:
+            gpu_by_namespace = prom_gpu
+        else:
+            k8s_manager = K8sServiceManager()
+            gpu_by_namespace = k8s_manager.get_all_gpu_usage()
     except Exception as e:
         logger.warning(f"Could not get GPU info: {e}")
 
