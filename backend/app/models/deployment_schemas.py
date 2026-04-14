@@ -132,3 +132,49 @@ class DeploymentListResponse(BaseModel):
                 "page_size": 20,
             }
         }
+
+
+# ==================== Stack Deployment Schemas ====================
+
+
+class StackTemplateEntry(BaseModel):
+    """A template entry within a stack manifest"""
+
+    name: str
+    repo: str
+    params: Optional[Dict[str, Any]] = None
+    env: Optional[Dict[str, str]] = None
+
+
+class StackDeployRequest(BaseModel):
+    """Request to deploy a ThinkubeStack"""
+
+    stack_yaml: str  # Raw YAML content of the stack manifest
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "stack_yaml": "apiVersion: thinkube.io/v1\nkind: ThinkubeStack\nmetadata:\n  name: my-stack\ntemplates:\n  - name: embeddings\n    repo: thinkube/tkt-text-embeddings\n"
+            }
+        }
+
+
+class StackTemplateStatus(BaseModel):
+    """Status of a single template within a stack deployment"""
+
+    name: str
+    repo: str
+    status: str  # pending, deploying, healthy, failed, skipped
+    deployment_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+class StackDeployResponse(BaseModel):
+    """Response for stack deployment"""
+
+    stack_id: str
+    stack_name: str
+    status: str  # pending, deploying, partially_deployed, healthy, failed
+    message: str
+    templates: List[StackTemplateStatus]
+    deploy_order: List[str]  # Topological order of template names

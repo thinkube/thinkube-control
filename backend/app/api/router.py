@@ -9,6 +9,8 @@ from app.api import (
     websocket_executor,
     websocket_harbor,
     templates,
+    stacks,
+    knative_services,
     debug,
     services,
     service_discovery_config,
@@ -35,6 +37,8 @@ api_router.include_router(cicd_postgres.router, prefix="/cicd", tags=["cicd"])
 api_router.include_router(cicd_sources.router, prefix="/cicd", tags=["cicd-sources"])
 api_router.include_router(tokens.router, prefix="/tokens", tags=["api-tokens"])
 api_router.include_router(templates.router, prefix="/templates", tags=["templates"])
+api_router.include_router(stacks.router, prefix="/stacks", tags=["stacks"])
+api_router.include_router(knative_services.router, tags=["knative-services"])
 api_router.include_router(
     service_discovery_config.router, prefix="/config", tags=["service-discovery-config"]
 )
