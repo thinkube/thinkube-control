@@ -14,25 +14,67 @@ from sqlalchemy.orm import Session
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
-from app.services.metadata_fetcher import fetch_merged_catalog
-
 logger = logging.getLogger(__name__)
 
-_BUNDLED_COMPONENTS = Path(__file__).parent.parent / "data" / "optional_components.json"
+# Component catalog: fetched from thinkube-metadata at runtime, cached in memory.
+# Components require local playbooks so only the platform catalog is used — no user merge.
+_COMPONENTS_CATALOG_URL = "https://raw.githubusercontent.com/thinkube/thinkube-metadata/main/optional_components.json"
+_COMPONENTS_CATALOG_CACHE: Optional[Dict[str, Any]] = None
+_COMPONENTS_CATALOG_CACHE_TIME: float = 0
+_COMPONENTS_CATALOG_TTL: float = 300  # 5 minutes
+
+
+def _load_bundled_components() -> Dict[str, Any]:
+    """Load bundled optional_components.json fallback shipped with thinkube-control"""
+    bundled = Path(__file__).parent.parent / "data" / "optional_components.json"
+    if bundled.exists():
+        with open(bundled) as f:
+            data = json.load(f)
+            return data.get("components", {})
+    return {}
 
 
 def get_components_catalog() -> Dict[str, Any]:
     """
-    Get the components catalog from platform + user metadata repos.
-    Fallback chain: memory cache → fetch → stale memory → persistent cache → bundled copy.
+    Get the components catalog, fetching from thinkube-metadata if cache expired.
+    Falls back to bundled copy if fetch fails.
     """
-    return fetch_merged_catalog(
-        catalog_name="optional_components",
-        file_name="optional_components.json",
-        extract_key="components",
-        bundled_path=_BUNDLED_COMPONENTS,
-        merge_strategy="dict",
-    )
+    global _COMPONENTS_CATALOG_CACHE, _COMPONENTS_CATALOG_CACHE_TIME
+
+    now = time.time()
+    if _COMPONENTS_CATALOG_CACHE is not None and (now - _COMPONENTS_CATALOG_CACHE_TIME) < _COMPONENTS_CATALOG_TTL:
+        return _COMPONENTS_CATALOG_CACHE
+
+    try:
+        import urllib.request
+        req = urllib.request.Request(_COMPONENTS_CATALOG_URL, headers={"User-Agent": "thinkube-control"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+            components = data.get("components", {})
+            _COMPONENTS_CATALOG_CACHE = components
+            _COMPONENTS_CATALOG_CACHE_TIME = now
+            logger.info(f"Fetched components catalog from thinkube-metadata: {len(components)} components")
+            return components
+    except Exception as e:
+        logger.warning(f"Failed to fetch components catalog from thinkube-metadata: {e}")
+
+    # Fallback to cached value if available
+    if _COMPONENTS_CATALOG_CACHE is not None:
+        logger.info("Using stale cached components catalog")
+        return _COMPONENTS_CATALOG_CACHE
+
+    # Final fallback to bundled copy
+    components = _load_bundled_components()
+    if components:
+        _COMPONENTS_CATALOG_CACHE = components
+        _COMPONENTS_CATALOG_CACHE_TIME = now
+        logger.info(f"Using bundled components catalog fallback: {len(components)} components")
+    else:
+        logger.error("No components catalog available (fetch failed, no cache, no bundled copy)")
+        _COMPONENTS_CATALOG_CACHE = {}
+        _COMPONENTS_CATALOG_CACHE_TIME = now
+
+    return _COMPONENTS_CATALOG_CACHE
 
 
 class OptionalComponentService:
