@@ -43,11 +43,29 @@ rules:
     - cronjobs
   verbs: ["get", "list", "watch"]
 
-# Networking
+# Networking (Gateway API + legacy Ingress for discovery)
 - apiGroups: ["networking.k8s.io"]
   resources:
     - ingresses
     - networkpolicies
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources:
+    - httproutes
+    - gateways
+  verbs: ["get", "list", "watch"]
+
+# Knative Serving (for Knative service management and dashboard)
+- apiGroups: ["serving.knative.dev"]
+  resources:
+    - services
+    - revisions
+    - routes
+    - configurations
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["autoscaling.internal.knative.dev"]
+  resources:
+    - podautoscalers
   verbs: ["get", "list", "watch"]
 
 # Autoscaling
