@@ -154,6 +154,8 @@ export const useServicesStore = create<ServicesState>((set, get) => ({
 
   // Actions
   fetchServices: async () => {
+    // Skip if already fetching (prevents duplicate calls from multiple components)
+    if (get().loading) return;
     set({ loading: true, error: null });
 
     try {

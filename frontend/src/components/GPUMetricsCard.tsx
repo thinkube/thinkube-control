@@ -93,8 +93,8 @@ export function GPUMetricsCard() {
   useEffect(() => {
     fetchMetrics();
 
-    // Refresh every 2 seconds
-    const interval = setInterval(fetchMetrics, 2000);
+    // Refresh every 5 seconds (backend caches for 5s, so no wasted requests)
+    const interval = setInterval(fetchMetrics, 5000);
     return () => clearInterval(interval);
   }, []);
 

@@ -141,6 +141,52 @@ class K8sServiceManager:
             logger.error(f"Failed to get namespace GPU usage: {e}")
             return None
     
+    def get_all_gpu_usage(self) -> Dict[str, Dict[str, Any]]:
+        """Get GPU usage across all namespaces in a single K8s API call.
+
+        Returns:
+            Dict mapping namespace -> {"total_gpus": int, "gpu_nodes": list}
+        """
+        try:
+            pods = self.core_v1.list_pod_for_all_namespaces()
+            gpu_by_namespace: Dict[str, Dict[str, Any]] = {}
+
+            for pod in pods.items:
+                pod_phase = pod.status.phase if pod.status else None
+                if pod_phase not in ['Running', 'Pending']:
+                    continue
+
+                # Skip ContainerStatusUnknown
+                if pod.status and pod.status.container_statuses:
+                    has_unknown = any(
+                        cs.state.waiting and cs.state.waiting.reason == 'ContainerStatusUnknown'
+                        for cs in pod.status.container_statuses
+                        if cs.state and cs.state.waiting
+                    )
+                    if has_unknown:
+                        continue
+
+                ns = pod.metadata.namespace
+                for container in pod.spec.containers:
+                    if container.resources and container.resources.limits:
+                        gpu_count = container.resources.limits.get("nvidia.com/gpu", 0)
+                        if gpu_count:
+                            if ns not in gpu_by_namespace:
+                                gpu_by_namespace[ns] = {"total_gpus": 0, "gpu_nodes": set()}
+                            gpu_by_namespace[ns]["total_gpus"] += int(gpu_count)
+                            if pod.spec.node_name:
+                                gpu_by_namespace[ns]["gpu_nodes"].add(pod.spec.node_name)
+
+            # Convert sets to lists for JSON serialization
+            for ns_info in gpu_by_namespace.values():
+                ns_info["gpu_nodes"] = list(ns_info["gpu_nodes"])
+
+            return gpu_by_namespace
+
+        except ApiException as e:
+            logger.error(f"Failed to get cluster-wide GPU usage: {e}")
+            return {}
+
     def get_deployment_status(
         self, namespace: str, name: str
     ) -> Optional[Dict[str, Any]]:

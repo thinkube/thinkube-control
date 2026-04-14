@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import Dict, Any, Optional
 import httpx
 import re
+import time
 from datetime import datetime
 from app.core.api_tokens import get_current_user_dual_auth
 
@@ -13,6 +14,11 @@ router = APIRouter()
 
 DCGM_EXPORTER_URL = "http://nvidia-dcgm-exporter.gpu-operator.svc.cluster.local:9400/metrics"
 METRICS_SERVER_TIMEOUT = 5.0
+
+# Server-side cache: avoids hitting DCGM/node-metrics on every poll
+_metrics_cache: Dict[str, Any] = {}
+_metrics_cache_time: float = 0
+_METRICS_CACHE_TTL: float = 5.0  # seconds
 
 
 def parse_prometheus_metrics(text: str) -> Dict[str, float]:
@@ -95,6 +101,13 @@ async def get_gpu_metrics(
         - system_memory_percent: Memory usage percentage
         - cpu_percent: CPU usage percentage
     """
+    global _metrics_cache, _metrics_cache_time
+
+    # Return cached data if still fresh
+    now = time.monotonic()
+    if _metrics_cache and (now - _metrics_cache_time) < _METRICS_CACHE_TTL:
+        return _metrics_cache
+
     # Fetch DCGM metrics (for memory bandwidth only)
     dcgm = await fetch_dcgm_metrics()
 
@@ -109,7 +122,7 @@ async def get_gpu_metrics(
     # CPU usage from node-metrics (/proc/stat)
     cpu_percent = node.get('cpu_percent', 0.0)
 
-    return {
+    result = {
         # GPU metrics from nvidia-smi (via node-metrics)
         "gpu_utilization": node['gpu_utilization'],
         "memory_bandwidth": dcgm.get('DCGM_FI_DEV_MEM_COPY_UTIL', 0),  # Still from DCGM
@@ -128,3 +141,7 @@ async def get_gpu_metrics(
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "unified_memory": True,  # Indicates this is a unified memory system
     }
+
+    _metrics_cache = result
+    _metrics_cache_time = now
+    return result

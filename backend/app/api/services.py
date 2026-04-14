@@ -77,12 +77,13 @@ async def list_services(
             str(fav.service_id): fav.order_index or 0 for fav in favorites
         }
 
-    # Initialize K8s manager for GPU info
-    k8s_manager = None
+    # Single K8s API call to get GPU usage across all namespaces
+    gpu_by_namespace = {}
     try:
         k8s_manager = K8sServiceManager()
+        gpu_by_namespace = k8s_manager.get_all_gpu_usage()
     except Exception as e:
-        logger.warning(f"Could not initialize K8s manager: {e}")
+        logger.warning(f"Could not get GPU info: {e}")
 
     # Convert to Pydantic schemas with latest health status
     service_responses = []
@@ -97,18 +98,13 @@ async def list_services(
         service_schema.latest_health = latest_health
         service_schema.can_be_disabled = service.type in ["optional", "user_app"]
         service_schema.is_favorite = str(service.id) in user_favorites
-        
-        # Get GPU info if this is a deployed application
-        if k8s_manager and service.namespace:
-            try:
-                # Get all deployments in the namespace and check GPU usage
-                gpu_info = k8s_manager.get_namespace_gpu_usage(service.namespace)
-                if gpu_info:
-                    service_schema.gpu_count = gpu_info.get("total_gpus", 0)
-                    service_schema.gpu_nodes = gpu_info.get("gpu_nodes", [])
-            except Exception as e:
-                logger.debug(f"Could not get GPU info for {service.name}: {e}")
-        
+
+        # Apply cached GPU info
+        if service.namespace and service.namespace in gpu_by_namespace:
+            gpu_info = gpu_by_namespace[service.namespace]
+            service_schema.gpu_count = gpu_info.get("total_gpus", 0)
+            service_schema.gpu_nodes = gpu_info.get("gpu_nodes", [])
+
         service_responses.append(service_schema)
 
     return ServiceList(services=service_responses, total=len(service_responses))
