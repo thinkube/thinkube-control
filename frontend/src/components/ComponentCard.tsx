@@ -19,7 +19,7 @@ import { TkBrandIcon } from "thinkube-style/components/brand-icons"
 interface Component {
   display_name: string
   description: string
-  icon: string
+  icon?: string
   is_installed?: boolean
   installed?: boolean  // Legacy support
   requirements?: string[]
@@ -63,7 +63,7 @@ export function ComponentCard({
         <div className="flex items-start gap-3">
           <div className="flex-shrink-0">
             <TkBrandIcon
-              icon={component.icon.replace('/icons/', '').replace('.svg', '')}
+              icon={(component.icon ?? '').replace('/icons/', '').replace('.svg', '')}
               alt={component.display_name}
               size={20}
             />

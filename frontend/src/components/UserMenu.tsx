@@ -20,7 +20,7 @@ export function UserMenu() {
       label: 'Account',
       items: [
         {
-          label: user.username || user.email || 'User',
+          label: user.preferred_username || user.email || 'User',
           icon: User,
           onClick: () => {}, // No action, just shows username
         },
@@ -42,7 +42,7 @@ export function UserMenu() {
       trigger={
         <TkButton variant="ghost">
           <User className="w-4 h-4" />
-          {user.username || user.email}
+          {user.preferred_username || user.email}
         </TkButton>
       }
       groups={menuGroups}

@@ -184,15 +184,16 @@ export default function ModelsPage() {
       </div>
 
       {/* Error Alert */}
-      {error && <TkErrorAlert title="Error" message={error} className="mb-6" />}
+      {error && <TkErrorAlert title="Error" className="mb-6">{error}</TkErrorAlert>}
 
       {/* MLflow Initialization Banner */}
       {checkingMlflow ? (
         <TkInfoAlert
           title="Checking MLflow status..."
-          message="Please wait while we verify MLflow initialization"
           className="mb-6"
-        />
+        >
+          Please wait while we verify MLflow initialization
+        </TkInfoAlert>
       ) : mlflowStatus?.needs_browser_login && (
         <TkCard className="mb-6 border-blue-500 bg-blue-50 dark:bg-blue-950">
           <TkCardContent className="pt-6">
@@ -227,9 +228,10 @@ export default function ModelsPage() {
       {activeDownloads.length > 0 && (
         <TkInfoAlert
           title={`${activeDownloads.length} mirror operation(s) in progress`}
-          message="Models are being mirrored in the background. The table will update automatically."
           className="mb-6"
-        />
+        >
+          Models are being mirrored in the background. The table will update automatically.
+        </TkInfoAlert>
       )}
 
       {/* Models Table */}

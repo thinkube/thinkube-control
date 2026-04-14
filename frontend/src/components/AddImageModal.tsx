@@ -101,26 +101,16 @@ export function AddImageModal({
         handleClose()
         navigate(`/harbor-images/mirror/${result.deployment_id}`)
       } else if (result.job) {
-        toast({
-          title: 'Success',
-          description: `Image added successfully! Mirror job started with ID: ${result.job.id}`,
-        })
+        toast.success(`Image added successfully! Mirror job started with ID: ${result.job.id}`)
       } else {
-        toast({
-          title: 'Success',
-          description: 'Image added to inventory successfully!',
-        })
+        toast.success('Image added to inventory successfully!')
       }
 
       onImageAdded?.(result)
       handleClose()
     } catch (error: any) {
       const errorMessage = error.response?.data?.detail || error.message || 'Failed to add image'
-      toast({
-        title: 'Error',
-        description: errorMessage,
-        variant: 'destructive',
-      })
+      toast.error(errorMessage)
     }
   }
 

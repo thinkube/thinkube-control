@@ -5,7 +5,7 @@ export interface HarborImage {
   id: string;
   name: string;
   tag: string;
-  category: 'core' | 'custom' | 'user';
+  category: 'system' | 'custom' | 'user';
   protected: boolean;
   vulnerable?: boolean;
   [key: string]: any;
@@ -14,7 +14,7 @@ export interface HarborImage {
 interface ImageStats {
   total: number;
   by_category: {
-    core: number;
+    system: number;
     custom: number;
     user: number;
   };
@@ -92,7 +92,7 @@ export const useHarborStore = create<HarborState>((set, get) => ({
   stats: {
     total: 0,
     by_category: {
-      core: 0,
+      system: 0,
       custom: 0,
       user: 0
     },
@@ -113,7 +113,7 @@ export const useHarborStore = create<HarborState>((set, get) => ({
   // Computed getters
   getCoreImages: () => {
     const { images } = get();
-    return images.filter(img => img.category === 'core');
+    return images.filter(img => img.category === 'system');
   },
 
   getCustomImages: () => {

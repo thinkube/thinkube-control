@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { useHarborStore } from '../stores/useHarborStore'
+import { useHarborStore, type HarborImage } from '../stores/useHarborStore'
 import axios from 'axios'
 import { TkButton } from 'thinkube-style/components/buttons-badges'
 import { TkBadge } from 'thinkube-style/components/buttons-badges'
@@ -30,23 +30,7 @@ import { ViewImageModal } from '../components/harbor/ViewImageModal'
 import { CreateCustomImageModal } from '../components/CreateCustomImageModal'
 import BuildExecutor from '../components/BuildExecutor'
 
-interface HarborImage {
-  id: string
-  name: string
-  repository?: string
-  tag: string
-  digest?: string
-  category: 'system' | 'user' | 'custom'
-  description?: string
-  mirror_date?: string
-  protected: boolean
-  is_base: boolean
-  source?: string
-  vulnerabilities?: {
-    critical: number
-    high: number
-  }
-}
+// HarborImage type imported from useHarborStore
 
 interface CustomImage {
   id: string
@@ -549,12 +533,12 @@ export function HarborImages() {
                               {image.protected && <Lock className="h-3 w-3 ml-1" />}
                             </TkBadge>
                             {image.source && (
-                              <TkBadge variant="outline" size="sm">
+                              <TkBadge variant="outline">
                                 {image.source}
                               </TkBadge>
                             )}
                             {image.is_base && (
-                              <TkBadge size="sm">
+                              <TkBadge>
                                 Base
                               </TkBadge>
                             )}
@@ -574,12 +558,12 @@ export function HarborImages() {
                           {image.vulnerabilities && Object.keys(image.vulnerabilities).length > 0 ? (
                             <div className="flex gap-1" /* @allowed-inline */>
                               {image.vulnerabilities.critical > 0 && (
-                                <TkBadge variant="destructive" size="sm">
+                                <TkBadge variant="destructive">
                                   {image.vulnerabilities.critical} critical
                                 </TkBadge>
                               )}
                               {image.vulnerabilities.high > 0 && (
-                                <TkBadge variant="warning" size="sm">
+                                <TkBadge variant="warning">
                                   {image.vulnerabilities.high} high
                                 </TkBadge>
                               )}
@@ -751,9 +735,9 @@ export function HarborImages() {
                   <TkCardContent>
                     <div className="flex items-center gap-2 mb-1" /* @allowed-inline */>
                       <h3 className="font-semibold text-lg">{image.name}</h3>
-                      {image.is_base && <TkBadge size="sm">Base</TkBadge>}
-                      <TkBadge variant="outline" size="sm">{image.scope}</TkBadge>
-                      <TkBadge variant={getStatusVariant(image.status)} size="sm">
+                      {image.is_base && <TkBadge>Base</TkBadge>}
+                      <TkBadge variant="outline">{image.scope}</TkBadge>
+                      <TkBadge variant={getStatusVariant(image.status)} >
                         {image.status}
                       </TkBadge>
                     </div>
@@ -813,8 +797,8 @@ export function HarborImages() {
                             <TkCardContent>
                               <div className="flex items-center gap-2" /* @allowed-inline */>
                                 <span className="font-medium">{child.name}</span>
-                                <TkBadge variant="outline" size="sm">{child.scope}</TkBadge>
-                                <TkBadge variant={getStatusVariant(child.status)} size="sm">
+                                <TkBadge variant="outline">{child.scope}</TkBadge>
+                                <TkBadge variant={getStatusVariant(child.status)} >
                                   {child.status}
                                 </TkBadge>
                               </div>
@@ -877,15 +861,15 @@ export function HarborImages() {
                           )}
                         </TkTableCell>
                         <TkTableCell>
-                          <TkBadge variant="outline" size="sm">{image.scope || 'general'}</TkBadge>
+                          <TkBadge variant="outline">{image.scope || 'general'}</TkBadge>
                         </TkTableCell>
                         <TkTableCell>
                           {image.is_base ? (
-                            <TkBadge size="sm">Base</TkBadge>
+                            <TkBadge>Base</TkBadge>
                           ) : image.parent_image_id ? (
-                            <TkBadge variant="secondary" size="sm">Extended</TkBadge>
+                            <TkBadge variant="secondary">Extended</TkBadge>
                           ) : (
-                            <TkBadge variant="outline" size="sm">Standard</TkBadge>
+                            <TkBadge variant="outline">Standard</TkBadge>
                           )}
                         </TkTableCell>
                         <TkTableCell>
@@ -1004,7 +988,7 @@ export function HarborImages() {
           </TkDialogHeader>
           <div>
             <p className="text-sm text-muted-foreground mb-2">Log file: {logsFilePath}</p>
-            <TkCodeBlock code={logsContent} language="log" maxHeight="400px" />
+            <TkCodeBlock maxHeight="400px">{logsContent}</TkCodeBlock>
           </div>
           <TkDialogFooter>
             <TkButton onClick={() => setShowLogsModal(false)}>Close</TkButton>

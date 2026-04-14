@@ -227,7 +227,7 @@ export default function SecretsPage() {
                         {secret.used_by_apps.length > 0 ? (
                           <div className="flex flex-wrap gap-1"> {/* @allowed-inline */}
                             {secret.used_by_apps.map((app) => (
-                              <TkBadge key={app} variant="default" size="sm">
+                              <TkBadge key={app} variant="default">
                                 {app}
                               </TkBadge>
                             ))}

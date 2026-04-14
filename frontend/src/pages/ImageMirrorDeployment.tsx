@@ -172,7 +172,7 @@ export function ImageMirrorDeployment() {
 
         <TkCardContent className="space-y-4">
           {deployment && (
-            <TkCard variant="outline">
+            <TkCard>
               <TkCardContent className="py-3">
                 <span className="text-sm font-medium">Status:</span>
                 {' '}

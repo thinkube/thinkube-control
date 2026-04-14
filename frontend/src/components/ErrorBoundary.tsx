@@ -49,13 +49,13 @@ class ErrorBoundary extends Component<Props, State> {
                 {this.state.error?.stack && (
                   <div>
                     <strong>Stack:</strong>
-                    <TkCodeBlock code={this.state.error.stack} language="text" />
+                    <TkCodeBlock>{this.state.error.stack}</TkCodeBlock>
                   </div>
                 )}
                 {this.state.errorInfo?.componentStack && (
                   <div>
                     <strong>Component Stack:</strong>
-                    <TkCodeBlock code={this.state.errorInfo.componentStack} language="text" />
+                    <TkCodeBlock>{this.state.errorInfo.componentStack}</TkCodeBlock>
                   </div>
                 )}
               </div>

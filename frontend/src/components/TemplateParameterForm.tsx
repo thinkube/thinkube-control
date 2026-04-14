@@ -79,7 +79,7 @@ export function TemplateParameterForm({
   })
   const [showOverwriteConfirm, setShowOverwriteConfirm] = useState(false)
   const [existingServiceInfo, setExistingServiceInfo] = useState<ExistingService | null>(null)
-  const nameCheckTimeout = useRef<NodeJS.Timeout | null>(null)
+  const nameCheckTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
   const prevModelValueRef = useRef<Record<string, string | number | boolean> | null>(null)
 
   // Group parameters by their group field

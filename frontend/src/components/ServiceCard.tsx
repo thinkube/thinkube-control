@@ -248,7 +248,7 @@ export function ServiceCard({
               <TkTooltip content={service.is_favorite ? 'Remove from favorites' : 'Add to favorites'}>
                 <TkButton
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   onClick={() => onToggleFavorite(service)}
                 >
                   <Star

@@ -36,7 +36,7 @@ interface ModelDownloadsState {
   downloads: DownloadStatus[];
   loading: boolean;
   error: string | null;
-  pollingInterval: NodeJS.Timeout | null;
+  pollingInterval: ReturnType<typeof setInterval> | null;
 
   // Computed getters
   getActiveDownloadsCount: () => number;

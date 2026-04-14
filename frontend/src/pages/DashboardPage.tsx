@@ -86,7 +86,7 @@ export default function DashboardPage() {
   const handleToggleFavorite = async (service: Service) => {
     try {
       await toggleFavorite(service);
-      toast.success(service.favorite ? 'Removed from favorites' : 'Added to favorites');
+      toast.success(service.is_favorite ? 'Removed from favorites' : 'Added to favorites');
     } catch (error) {
       toast.error('Failed to toggle favorite');
       console.error('Failed to toggle favorite:', error);
@@ -219,7 +219,7 @@ export default function DashboardPage() {
   if (error) {
     return (
       <div className="min-h-screen bg-background p-8"> {/* @allowed-inline */}
-        <TkCard variant="destructive">
+        <TkCard className="border-destructive">
           <TkCardHeader>
             <div className="flex items-center gap-3">
               <AlertCircle className="h-5 w-5" />

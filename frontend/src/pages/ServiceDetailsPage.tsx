@@ -31,10 +31,16 @@ import { HealthHistoryChart } from '@/components/HealthHistoryChart';
 
 // Type interfaces
 interface HealthData {
+  current_status: string;
   uptime_percentage: number;
   actual_checks: number;
   monitoring_coverage: number;
   health_history: any[];
+  total_checks: number;
+  failed_checks: number;
+  healthy_count: number;
+  unhealthy_count: number;
+  [key: string]: any;
 }
 
 interface Endpoint {
@@ -86,6 +92,9 @@ interface ServiceDetails {
   resource_usage?: ResourceUsage;
   pods_info?: PodInfo[];
   recent_actions?: RecentAction[];
+  namespace?: string;
+  endpoints?: Endpoint[];
+  [key: string]: any;
 }
 
 interface RecentAction {
@@ -601,7 +610,7 @@ export default function ServiceDetailsPage() {
               {endpoints.map((endpoint: Endpoint, index: number) => (
                 <div key={endpoint.id}>
                   {index > 0 && <TkSeparator />}
-                  <TkCard variant={endpoint.is_primary ? 'default' : 'outline'}>
+                  <TkCard>
                     <TkCardContent standalone>
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
@@ -658,15 +667,20 @@ export default function ServiceDetailsPage() {
             <div className="flex flex-wrap gap-2">
               {dependencies.map((dep) => {
                 // Determine badge variant based on health status and enabled state
-                let variant: 'default' | 'success' | 'destructive' | 'secondary' = 'default';
+                let badgeVariant: 'default' | 'success' | 'destructive' | 'secondary' = 'default';
+                let buttonVariant: 'default' | 'outline' | 'destructive' | 'secondary' = 'default';
                 if (!dep.enabled) {
-                  variant = 'destructive';
+                  badgeVariant = 'destructive';
+                  buttonVariant = 'destructive';
                 } else if (dep.health_status === 'healthy') {
-                  variant = 'success';
+                  badgeVariant = 'success';
+                  buttonVariant = 'outline';
                 } else if (dep.health_status === 'unhealthy' || dep.health_status === 'disabled') {
-                  variant = 'destructive';
+                  badgeVariant = 'destructive';
+                  buttonVariant = 'destructive';
                 } else if (dep.health_status === 'unknown') {
-                  variant = 'secondary';
+                  badgeVariant = 'secondary';
+                  buttonVariant = 'secondary';
                 }
 
                 const label = `${dep.name}${!dep.enabled ? ' (disabled)' : ''}${dep.enabled && dep.health_status ? ` (${dep.health_status})` : ''}`;
@@ -675,7 +689,7 @@ export default function ServiceDetailsPage() {
                 return dep.service_id ? (
                   <TkButton
                     key={dep.name}
-                    variant={variant}
+                    variant={buttonVariant}
                     size="sm"
                     onClick={() => navigate(`/services/${dep.service_id}`)}
                   >
@@ -684,7 +698,7 @@ export default function ServiceDetailsPage() {
                 ) : (
                   <TkBadge
                     key={dep.name}
-                    variant={variant}
+                    variant={badgeVariant}
                   >
                     {label}
                   </TkBadge>
@@ -767,7 +781,7 @@ export default function ServiceDetailsPage() {
                           <TkSeparator />
                           <h5 className="font-medium">Containers ({pod.containers.length})</h5>
                           {pod.containers.map((container) => (
-                            <TkCard key={container.name} variant="outline">
+                            <TkCard key={container.name}>
                               <TkCardContent standalone>
                                 <div className="flex items-center justify-between mb-2">
                                   <div>
@@ -835,7 +849,7 @@ export default function ServiceDetailsPage() {
           <TkCardContent>
             <div className="space-y-2">
               {recentActions.map((action) => (
-                <TkCard key={action.id} variant="outline">
+                <TkCard key={action.id}>
                   <TkCardContent standalone>
                     <div className="flex items-center justify-between text-sm">
                       <div className="flex items-center gap-2">

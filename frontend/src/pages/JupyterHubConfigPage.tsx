@@ -76,7 +76,7 @@ export default function JupyterHubConfigPage() {
   // Build state - using polling instead of WebSocket
   const [buildingVenvId, setBuildingVenvId] = useState<string | null>(null)
   const [buildWarning, setBuildWarning] = useState<string | null>(null)
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Edit packages modal state
   const [editPackagesOpen, setEditPackagesOpen] = useState(false)
@@ -494,7 +494,7 @@ export default function JupyterHubConfigPage() {
               ) : (
                 <div className="space-y-3"> {/* @allowed-inline */}
                   {venvs.map((venv) => (
-                    <TkCard key={venv.id} variant="secondary">
+                    <TkCard key={venv.id} className="bg-secondary/10">
                       <TkCardContent standalone>
                         <div className="flex items-center justify-between"> {/* @allowed-inline */}
                           <div>

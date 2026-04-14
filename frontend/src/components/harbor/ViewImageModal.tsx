@@ -19,7 +19,7 @@ interface HarborImage {
   id?: string
   name: string
   tag: string
-  category: "core" | "custom" | "user"
+  category: "system" | "custom" | "user"
   protected: boolean
   registry?: string
   repository?: string

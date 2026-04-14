@@ -63,7 +63,7 @@ export default function ApiTokensPage() {
       }
 
       const result = await createToken(tokenData)
-      setCreatedToken(result)
+      setCreatedToken({ token: result.token!, name: result.name, expires_at: result.expires_at })
       setNewToken({ name: '', expires_in_days: null })
       toast.success('Token created successfully')
     } catch (error) {

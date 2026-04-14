@@ -16,9 +16,12 @@ export interface Service {
   gpu_count?: number;
   gpu_nodes?: string[];
   component_version?: string;
+  namespace?: string;
   latest_health?: {
     status: string;
     checked_at: string;
+    pod_status?: string;
+    last_checked?: string;
   };
 }
 
@@ -28,7 +31,15 @@ interface ServiceDetails extends Service {
 }
 
 interface HealthData {
-  // Health history data
+  current_status: string;
+  uptime_percentage: number;
+  actual_checks: number;
+  monitoring_coverage: number;
+  health_history: any[];
+  total_checks: number;
+  failed_checks: number;
+  healthy_count: number;
+  unhealthy_count: number;
   [key: string]: any;
 }
 
