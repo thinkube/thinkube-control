@@ -123,6 +123,8 @@ spec:
             secretKeyRef:
               name: github-token
               key: token
+        - name: GITHUB_ORG
+          value: "{{ github_org }}"
         - name: HOME
           value: "/home/thinkube"
         - name: HARBOR_ROBOT_TOKEN

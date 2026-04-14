@@ -20,102 +20,26 @@ from kubernetes.client.rest import ApiException
 from mlflow.tracking import MlflowClient
 from mlflow.exceptions import RestException
 
+from app.services.metadata_fetcher import fetch_merged_catalog
+
 logger = logging.getLogger(__name__)
 
-# Model catalog: fetched from thinkube-metadata at runtime, cached in memory
-_MODEL_CATALOG_URL = "https://raw.githubusercontent.com/thinkube/thinkube-metadata/main/models.json"
-_MODEL_CATALOG_CACHE: Optional[List[Dict]] = None
-_MODEL_CATALOG_CACHE_TIME: float = 0
-_MODEL_CATALOG_TTL: float = 300  # 5 minutes
-_PERSISTENT_CACHE_DIR = Path(os.getenv("THINKUBE_CACHE_DIR", "/home/thinkube/.cache/thinkube-control"))
-
-
-def _save_persistent_cache(filename: str, data: dict) -> None:
-    """Save fetched catalog to persistent storage so it survives pod restarts"""
-    try:
-        _PERSISTENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        cache_path = _PERSISTENT_CACHE_DIR / filename
-        with open(cache_path, "w") as f:
-            json.dump(data, f)
-        logger.debug(f"Saved persistent cache: {cache_path}")
-    except Exception as e:
-        logger.warning(f"Failed to save persistent cache {filename}: {e}")
-
-
-def _load_persistent_cache(filename: str) -> Optional[dict]:
-    """Load catalog from persistent storage"""
-    cache_path = _PERSISTENT_CACHE_DIR / filename
-    if cache_path.exists():
-        try:
-            with open(cache_path) as f:
-                return json.load(f)
-        except Exception as e:
-            logger.warning(f"Failed to load persistent cache {filename}: {e}")
-    return None
-
-
-def _load_bundled_models() -> List[Dict]:
-    """Load bundled models.json fallback shipped with thinkube-control"""
-    bundled = Path(__file__).parent.parent / "data" / "models.json"
-    if bundled.exists():
-        with open(bundled) as f:
-            data = json.load(f)
-            return data.get("models", [])
-    return []
+_BUNDLED_MODELS = Path(__file__).parent.parent / "data" / "models.json"
 
 
 def get_model_catalog() -> List[Dict]:
     """
-    Get the model catalog, fetching from thinkube-metadata if cache expired.
+    Get the model catalog from platform + user metadata repos.
     Fallback chain: memory cache → fetch → stale memory → persistent cache → bundled copy.
     """
-    global _MODEL_CATALOG_CACHE, _MODEL_CATALOG_CACHE_TIME
-
-    now = time.time()
-    if _MODEL_CATALOG_CACHE is not None and (now - _MODEL_CATALOG_CACHE_TIME) < _MODEL_CATALOG_TTL:
-        return _MODEL_CATALOG_CACHE
-
-    try:
-        import urllib.request
-        req = urllib.request.Request(_MODEL_CATALOG_URL, headers={"User-Agent": "thinkube-control"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-            models = data.get("models", [])
-            _MODEL_CATALOG_CACHE = models
-            _MODEL_CATALOG_CACHE_TIME = now
-            _save_persistent_cache("models.json", data)
-            logger.info(f"Fetched model catalog from thinkube-metadata: {len(models)} models")
-            return models
-    except Exception as e:
-        logger.warning(f"Failed to fetch model catalog from thinkube-metadata: {e}")
-
-    # Fallback to stale memory cache
-    if _MODEL_CATALOG_CACHE is not None:
-        logger.info("Using stale cached model catalog")
-        return _MODEL_CATALOG_CACHE
-
-    # Fallback to persistent cache on shared storage
-    persistent = _load_persistent_cache("models.json")
-    if persistent:
-        models = persistent.get("models", [])
-        if models:
-            _MODEL_CATALOG_CACHE = models
-            _MODEL_CATALOG_CACHE_TIME = now
-            logger.info(f"Using persistent cached model catalog: {len(models)} models")
-            return _MODEL_CATALOG_CACHE
-
-    # Final fallback to bundled copy
-    models = _load_bundled_models()
-    if models:
-        _MODEL_CATALOG_CACHE = models
-        _MODEL_CATALOG_CACHE_TIME = now
-        logger.info(f"Using bundled model catalog fallback: {len(models)} models")
-    else:
-        logger.error("No model catalog available (fetch failed, no cache, no bundled copy)")
-        _MODEL_CATALOG_CACHE = []
-        _MODEL_CATALOG_CACHE_TIME = now
-
-    return _MODEL_CATALOG_CACHE
+    return fetch_merged_catalog(
+        catalog_name="models",
+        file_name="models.json",
+        extract_key="models",
+        bundled_path=_BUNDLED_MODELS,
+        merge_strategy="list",
+        dedup_key="id",
+    )
 
 
 class ModelDownloaderService:

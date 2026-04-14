@@ -51,6 +51,10 @@ class Settings(BaseSettings):
         db = values.get("POSTGRES_DB")
         return f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
+    # GitHub integration
+    GITHUB_TOKEN: str = ""
+    GITHUB_ORG: str = ""
+
     # Dashboard service URLs - configured via environment variables
     SEAWEEDFS_URL: str
     HARBOR_URL: str

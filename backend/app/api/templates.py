@@ -33,6 +33,7 @@ from pathlib import Path
 from app.services.background_executor import background_executor
 from app.services.dependency_manager import DependencyManager
 from app.services.model_downloader import ModelDownloaderService
+from app.services.metadata_fetcher import fetch_merged_catalog
 import yaml
 import aiohttp
 
@@ -116,24 +117,19 @@ async def list_available_templates(
     Dynamically discovers application templates from the thinkube-metadata repository.
     """
     try:
-        # Fetch repositories.json from GitHub (raw.githubusercontent.com)
-        metadata_url = "https://raw.githubusercontent.com/thinkube/thinkube-metadata/main/repositories.json"
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(metadata_url) as response:
-                if response.status != 200:
-                    logger.error(f"Failed to fetch repositories.json: {response.status}")
-                    raise HTTPException(
-                        status_code=500,
-                        detail="Failed to fetch template metadata from thinkube-metadata repository"
-                    )
-
-                # GitHub raw files return text/plain, so we need to explicitly allow JSON parsing
-                metadata = await response.json(content_type=None)
+        # Fetch repositories from platform + user metadata repos (merged, cached)
+        repositories = fetch_merged_catalog(
+            catalog_name="repositories",
+            file_name="repositories.json",
+            extract_key="repositories",
+            bundled_path=None,
+            merge_strategy="list",
+            dedup_key="name",
+        )
 
         # Filter for application_template type
         templates = []
-        for repo in metadata.get("repositories", []):
+        for repo in repositories:
             if repo.get("type") == "application_template":
                 templates.append({
                     "name": repo["name"],
@@ -145,8 +141,6 @@ async def list_available_templates(
         logger.info(f"Discovered {len(templates)} application templates")
         return {"templates": templates}
 
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Error listing templates: {e}")
         raise HTTPException(
@@ -184,8 +178,15 @@ async def get_template_metadata(
             f"https://raw.githubusercontent.com/{org}/{repo}/master/template.yaml",  # backward compat
         ]
 
+        # Always send GitHub token — it grants access to all repos the user can
+        # access (any org), not just GITHUB_ORG. Safe for public repos too.
+        github_token = os.environ.get("GITHUB_TOKEN", "")
+        headers = {}
+        if github_token:
+            headers["Authorization"] = f"token {github_token}"
+
         content = None
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(headers=headers) as session:
             for url in manifest_urls:
                 async with session.get(url) as response:
                     if response.status == 200:
