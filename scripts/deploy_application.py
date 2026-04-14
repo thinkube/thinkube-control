@@ -581,8 +581,11 @@ git reset --hard origin/main
         admin_password = self._decode_secret_data(self.secrets['admin'], 'admin-password')
         keycloak_url = f"https://auth.{self.domain}"
         keycloak_realm = self.params.get('keycloak_realm', 'thinkube')
-        client_id = self.namespace  # Match Ansible: keycloak_app_client_id = namespace
-        app_host = f"{self.app_name}.{self.domain}"
+        client_id = self.app_name  # Use app name, not namespace (Knative services share 'kn' namespace)
+        if self._is_knative():
+            app_host = f"{self.app_name}.kn.{self.domain}"
+        else:
+            app_host = f"{self.app_name}.{self.domain}"
 
         async with aiohttp.ClientSession() as session:
             # Step 1: Get Keycloak admin token
