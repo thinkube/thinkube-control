@@ -1,46 +1,39 @@
 #jinja2: lstrip_blocks: True, trim_blocks: True
-# Generated deployments for separate_pods mode
-# Each container gets its own deployment
-{% for container in thinkube_spec.spec.containers %}
+# Generated Knative Service for scale-to-zero workloads
+# Knative handles routing (*.kn.{{ domain_name }}), scaling, and lifecycle
+{% set deployment = thinkube_spec.spec.deployment | default({}) %}
+{% set container = thinkube_spec.spec.containers[0] %}
 ---
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: serving.knative.dev/v1
+kind: Service
 metadata:
-  name: {{ project_name }}-{{ container.name }}
+  name: {{ project_name }}
   namespace: {{ k8s_namespace }}
   labels:
     app.kubernetes.io/name: {{ project_name }}
-    app.kubernetes.io/component: {{ container.name }}
     app.kubernetes.io/managed-by: argocd
+  annotations:
+    networking.knative.dev/ingress.class: gateway-api.ingress.networking.knative.dev
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: {{ project_name }}
-      app.kubernetes.io/component: {{ container.name }}
-  {% if container.gpu is defined and container.gpu.count is defined %}
-  # Longer progress deadline for GPU workloads that may need to download large models
-  progressDeadlineSeconds: 3600  # 1 hour for model downloads
-  {% endif %}
   template:
     metadata:
-      labels:
-        app.kubernetes.io/name: {{ project_name }}
-        app.kubernetes.io/component: {{ container.name }}
+      annotations:
+        autoscaling.knative.dev/min-scale: "{{ deployment.minScale | default(0) }}"
+        autoscaling.knative.dev/max-scale: "{{ deployment.maxScale | default(5) }}"
     spec:
+      containerConcurrency: {{ deployment.containerConcurrency | default(0) }}
+      timeoutSeconds: {{ deployment.timeoutSeconds | default(300) }}
       imagePullSecrets:
         - name: app-pull-secret
 {% if container.gpu is defined and container.gpu.memory is defined %}
       affinity:
         nodeAffinity:
-          # Use preferred instead of required to support both discrete GPUs and unified memory systems
           preferredDuringSchedulingIgnoredDuringExecution:
           - weight: 100
             preference:
               matchExpressions:
               - key: nvidia.com/gpu.memory
                 operator: Gt
-                # Convert memory string to MB for comparison (e.g., "20Gi" -> 20480)
                 {% set memory_value = container.gpu.memory.replace('Gi', '') | int * 1024 %}
                 values: ["{{ memory_value }}"]
 {% endif %}
@@ -49,12 +42,10 @@ spec:
           image: {{ container_registry }}/thinkube/{{ project_name }}-{{ container.name }}:latest
           imagePullPolicy: Always
 {% if container.port is defined %}
-
           ports:
             - containerPort: {{ container.port }}
               protocol: TCP
-{%- endif %}
-
+{% endif %}
           {% if deployment_env_from is defined and deployment_env_from | length > 0 %}
           envFrom:
             {% for env_source in deployment_env_from %}
@@ -135,11 +126,11 @@ spec:
             - name: KEYCLOAK_CLIENT_SECRET
               value: ""
             - name: FRONTEND_URL
-              value: "https://{{ project_name }}.{{ domain_name }}"
+              value: "https://{{ project_name }}.kn.{{ domain_name }}"
             - name: APP_URL
-              value: "https://{{ project_name }}.{{ domain_name }}"
+              value: "https://{{ project_name }}.kn.{{ domain_name }}"
             - name: API_BASE_URL
-              value: "https://{{ project_name }}.{{ domain_name }}/api"
+              value: "https://{{ project_name }}.kn.{{ domain_name }}"
             # MLflow authentication and S3 access credentials
             - name: MLFLOW_KEYCLOAK_TOKEN_URL
               valueFrom:
@@ -198,7 +189,6 @@ spec:
             {% endfor %}
             {% endif %}
 {% if container.size is defined %}
-
           resources:
             {% if container.size == 'small' %}
             requests:
@@ -226,12 +216,9 @@ spec:
               memory: "4Gi"
               cpu: "1000m"
             limits:
-              # xlarge is for ML/AI workloads - 80Gi covers most LLM inference scenarios
-              # on unified memory systems (DGX Spark) where GPU+CPU share memory pool
               memory: "80Gi"
               cpu: "4000m"
             {% else %}
-            # Default to small if size is not recognized
             requests:
               memory: "128Mi"
               cpu: "100m"
@@ -239,91 +226,48 @@ spec:
               memory: "256Mi"
               cpu: "500m"
             {% endif %}
-{%- endif %}
+{% endif %}
 {% if container.gpu is defined and container.gpu.count is defined and container.gpu.memory is defined %}
 {% if container.size is not defined %}
-
           resources:
             requests:
               nvidia.com/gpu: {{ container.gpu.count }}
             limits:
               nvidia.com/gpu: {{ container.gpu.count }}
 {% else %}
-
             # GPU resources added to existing resources
               nvidia.com/gpu: {{ container.gpu.count }}
 {% endif %}
-{% elif container.gpu is defined %}
-          # ERROR: GPU configuration requires both 'count' and 'memory' fields
 {% endif %}
 {% if container.health is defined %}
-{% if container.gpu is defined %}
-          # Startup probe for initial model loading (first deployment)
-          startupProbe:
-            httpGet:
-              path: {{ container.health }}
-              port: {{ container.port | default(8080) }}
-            initialDelaySeconds: 30  # Give container time to start web server
-            periodSeconds: 10        # Check every 10 seconds
-            timeoutSeconds: 10
-            failureThreshold: 60      # 60 * 10 = 600 seconds (10 minutes) max for initial startup
-            successThreshold: 1
-
-          # Liveness probe starts after startup probe succeeds
-          livenessProbe:
-            httpGet:
-              path: {{ container.health }}
-              port: {{ container.port | default(8080) }}
-            initialDelaySeconds: 30  # After startup succeeds
-            periodSeconds: 30
-            timeoutSeconds: 10
-          
-          # Readiness probe for quick subsequent restarts (with cached models)
-          readinessProbe:
-            httpGet:
-              path: {{ container.health }}
-              port: {{ container.port | default(8080) }}
-            initialDelaySeconds: 10  # Quick check after startup succeeds
-            periodSeconds: 10
-            timeoutSeconds: 10
-{% else %}
-          # Standard probes for non-GPU containers
-
-          livenessProbe:
-            httpGet:
-              path: {{ container.health }}
-              port: {{ container.port | default(8080) }}
-            initialDelaySeconds: 30
-            periodSeconds: 10
           readinessProbe:
             httpGet:
               path: {{ container.health }}
               port: {{ container.port | default(8080) }}
             initialDelaySeconds: 5
             periodSeconds: 5
-{% endif %}
+            timeoutSeconds: 5
 {% endif %}
 {% if container.volume is defined %}
-
           volumeMounts:
             - name: app-storage
               mountPath: {{ container.volume }}
 {% elif container.gpu is defined and container.gpu.count is defined %}
-          # Auto-add MLflow model storage for GPU containers (JuiceFS)
           volumeMounts:
             - name: mlflow-models
               mountPath: /mlflow-models
-{%- endif %}
+{% endif %}
       {% if container.volume is defined %}
       volumes:
         - name: app-storage
           persistentVolumeClaim:
             claimName: {{ project_name }}-{{ container.name }}-storage
       {% elif container.gpu is defined and container.gpu.count is defined %}
-      # Auto-add MLflow model storage volume for GPU containers (JuiceFS)
       volumes:
         - name: mlflow-models
           persistentVolumeClaim:
             claimName: {{ project_name }}-{{ container.name }}-mlflow-models
       {% endif %}
-{% endfor %}
+  traffic:
+    - latestRevision: true
+      percent: 100

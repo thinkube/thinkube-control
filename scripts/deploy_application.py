@@ -748,13 +748,124 @@ git reset --hard origin/main
 
         return workflow_spec
 
+    def _resolve_dependencies(self):
+        """Resolve dependency URLs and inject them into thinkube_config.
+
+        For each dependency declared in spec.dependencies, looks up the running
+        service on the cluster and resolves its internal URL. The resolved URL
+        is stored as 'resolved_url' on the dependency dict so templates can
+        inject it as an environment variable.
+        """
+        dependencies = self.thinkube_config.get('spec', {}).get('dependencies', [])
+        if not dependencies:
+            return
+
+        DeploymentLogger.log(f"Resolving {len(dependencies)} dependencies")
+
+        for dep in dependencies:
+            dep_type = dep.get('type', '')
+            dep_name = dep.get('name', '')
+            dep_env = dep.get('env', '')
+
+            # Look for a Knative service matching the dependency type
+            # Convention: service name matches the dependency type, namespace matches the type
+            # First try: look for Knative service
+            resolved_url = self._find_knative_service_url(dep_type)
+
+            # Fallback: look for a regular k8s service
+            if not resolved_url:
+                resolved_url = self._find_k8s_service_url(dep_type)
+
+            if resolved_url:
+                dep['resolved_url'] = resolved_url
+                DeploymentLogger.log(f"  Resolved {dep_name} ({dep_type}) -> {dep_env}={resolved_url}")
+            else:
+                DeploymentLogger.error(f"  Dependency '{dep_name}' (type: {dep_type}) not found on cluster")
+                raise RuntimeError(
+                    f"Dependency '{dep_name}' (type: {dep_type}) is not deployed. "
+                    f"Deploy it first, then retry."
+                )
+
+    def _find_knative_service_url(self, dep_type: str) -> Optional[str]:
+        """Find a Knative service URL matching the dependency type.
+
+        Searches all namespaces for a Knative service whose name or namespace
+        matches the dependency type. Returns the internal cluster URL.
+        """
+        try:
+            result = subprocess.run(
+                ['kubectl', 'get', 'ksvc', '--all-namespaces', '-o', 'json'],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode != 0:
+                return None
+
+            data = json.loads(result.stdout)
+            for item in data.get('items', []):
+                name = item['metadata']['name']
+                namespace = item['metadata']['namespace']
+                # Match by service name or namespace containing the dep_type
+                if dep_type in name or dep_type in namespace:
+                    # Use the internal cluster URL from status
+                    status_url = item.get('status', {}).get('address', {}).get('url')
+                    if status_url:
+                        return status_url
+                    # Fallback: construct from name/namespace
+                    port = 80  # Knative services expose port 80 by default
+                    return f"http://{name}.{namespace}.svc.cluster.local"
+        except Exception as e:
+            DeploymentLogger.debug(f"Knative lookup failed for {dep_type}: {e}")
+        return None
+
+    def _find_k8s_service_url(self, dep_type: str) -> Optional[str]:
+        """Find a regular Kubernetes service URL matching the dependency type.
+
+        Searches all namespaces for a Service whose name or namespace
+        matches the dependency type. Returns the internal cluster URL.
+        """
+        try:
+            result = subprocess.run(
+                ['kubectl', 'get', 'svc', '--all-namespaces', '-o', 'json'],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode != 0:
+                return None
+
+            data = json.loads(result.stdout)
+            for item in data.get('items', []):
+                name = item['metadata']['name']
+                namespace = item['metadata']['namespace']
+                # Skip kubernetes system services
+                if namespace in ('kube-system', 'kube-public', 'default'):
+                    continue
+                # Match by name containing dep_type, in a namespace containing dep_type
+                if dep_type in name and dep_type in namespace:
+                    ports = item.get('spec', {}).get('ports', [])
+                    port = ports[0]['port'] if ports else 80
+                    return f"http://{name}.{namespace}.svc.cluster.local:{port}"
+            # Second pass: looser match — name contains dep_type in any namespace
+            for item in data.get('items', []):
+                name = item['metadata']['name']
+                namespace = item['metadata']['namespace']
+                if namespace in ('kube-system', 'kube-public', 'default'):
+                    continue
+                if dep_type in name:
+                    ports = item.get('spec', {}).get('ports', [])
+                    port = ports[0]['port'] if ports else 80
+                    return f"http://{name}.{namespace}.svc.cluster.local:{port}"
+        except Exception as e:
+            DeploymentLogger.debug(f"K8s service lookup failed for {dep_type}: {e}")
+        return None
+
     def generate_k8s_manifests(self):
         """Generate all Kubernetes manifests from thinkube.yaml specification.
 
         This mirrors the Ansible task: tasks/generate_k8s_manifests.yaml
         Generates: namespace, mlflow-secrets, app-metadata, deployments, services,
         ingress, paused-backend, postgresql (conditional), storage-pvc (conditional),
-        kustomization, argocd-postsync-hook, argocd-syncfail-hook
+        kustomization, argocd-postsync-hook, argocd-syncfail-hook.
+        For Knative deployments, generates knative-service.yaml instead of
+        deployments + services + ingress.
         """
         DeploymentLogger.log("Generating Kubernetes manifests from thinkube.yaml")
 
@@ -846,34 +957,50 @@ data:
 """
         (k8s_dir / 'app-metadata.yaml').write_text(app_metadata_content)
 
-        # 4. Generate deployments.yaml from deployment-separate.j2
-        deployment_template = env.get_template('deployment-separate.j2')
-        deployment_content = deployment_template.render(**template_vars)
-        (k8s_dir / 'deployments.yaml').write_text(deployment_content)
+        # Determine deployment type: "app" (default) or "knative"
+        deployment_config = self.thinkube_config.get('spec', {}).get('deployment', {})
+        deployment_type = deployment_config.get('type', 'app')
+        is_knative = deployment_type == 'knative'
 
-        # 5. Generate services.yaml from services-separate.j2
-        services_template = env.get_template('services-separate.j2')
-        services_content = services_template.render(**template_vars)
-        (k8s_dir / 'services.yaml').write_text(services_content)
+        # Resolve dependencies before rendering templates
+        self._resolve_dependencies()
 
-        # 6. Generate HTTPRoute (ingress.yaml) using Python generator
-        # Import the generate_ingress function (generates HTTPRoute via Gateway API)
-        sys.path.insert(0, str(template_dir))
-        from generate_ingress import generate_ingress
-        ingress_config = generate_ingress(
-            self.app_name,
-            self.namespace,
-            self.domain,
-            self.thinkube_config
-        )
-        if ingress_config:
-            ingress_content = "# Generated HTTPRoute configuration (Gateway API)\n---\n" + yaml.dump(ingress_config, default_flow_style=False, sort_keys=False)
-            (k8s_dir / 'ingress.yaml').write_text(ingress_content)
+        if is_knative:
+            # 4. Generate knative-service.yaml from knative-service.j2
+            DeploymentLogger.log(f"Generating Knative Service manifests (type: knative)")
+            knative_template = env.get_template('knative-service.j2')
+            knative_content = knative_template.render(**template_vars)
+            (k8s_dir / 'knative-service.yaml').write_text(knative_content)
+            # Knative manages its own routing via *.kn.{domain} — no HTTPRoute needed
+        else:
+            # 4. Generate deployments.yaml from deployment-separate.j2
+            deployment_template = env.get_template('deployment-separate.j2')
+            deployment_content = deployment_template.render(**template_vars)
+            (k8s_dir / 'deployments.yaml').write_text(deployment_content)
 
-        # 7. Generate paused-backend.yaml from template
-        paused_template = env.get_template('paused-backend.yaml.j2')
-        paused_content = paused_template.render(**template_vars)
-        (k8s_dir / 'paused-backend.yaml').write_text(paused_content)
+            # 5. Generate services.yaml from services-separate.j2
+            services_template = env.get_template('services-separate.j2')
+            services_content = services_template.render(**template_vars)
+            (k8s_dir / 'services.yaml').write_text(services_content)
+
+            # 6. Generate HTTPRoute (ingress.yaml) using Python generator
+            sys.path.insert(0, str(template_dir))
+            from generate_ingress import generate_ingress
+            ingress_config = generate_ingress(
+                self.app_name,
+                self.namespace,
+                self.domain,
+                self.thinkube_config
+            )
+            if ingress_config:
+                ingress_content = "# Generated HTTPRoute configuration (Gateway API)\n---\n" + yaml.dump(ingress_config, default_flow_style=False, sort_keys=False)
+                (k8s_dir / 'ingress.yaml').write_text(ingress_content)
+
+        # 7. Generate paused-backend.yaml from template (apps only)
+        if not is_knative:
+            paused_template = env.get_template('paused-backend.yaml.j2')
+            paused_content = paused_template.render(**template_vars)
+            (k8s_dir / 'paused-backend.yaml').write_text(paused_content)
 
         # 8. Generate postgresql.yaml (conditional)
         services = self.thinkube_config.get('spec', {}).get('services', [])
@@ -904,14 +1031,22 @@ data:
         (k8s_dir / 'build-workflow.yaml').write_text(workflow_content)
 
         # 11. Generate kustomization.yaml
-        kustomization_resources = [
-            'namespace.yaml',
-            'mlflow-secrets.yaml',
-            'app-metadata.yaml',
-            'deployments.yaml',
-            'services.yaml',
-            'ingress.yaml',
-        ]
+        if is_knative:
+            kustomization_resources = [
+                'namespace.yaml',
+                'mlflow-secrets.yaml',
+                'app-metadata.yaml',
+                'knative-service.yaml',
+            ]
+        else:
+            kustomization_resources = [
+                'namespace.yaml',
+                'mlflow-secrets.yaml',
+                'app-metadata.yaml',
+                'deployments.yaml',
+                'services.yaml',
+                'ingress.yaml',
+            ]
         if has_database:
             kustomization_resources.append('postgresql.yaml')
         if needs_storage:

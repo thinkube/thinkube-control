@@ -17,6 +17,11 @@ def generate_ingress(project_name, k8s_namespace, domain_name, thinkube_spec):
     with existing imports, but now generates Gateway API HTTPRoute resources.
     """
 
+    # Knative services manage their own routing via *.kn.{domain}
+    deployment_config = thinkube_spec.get('spec', {}).get('deployment', {})
+    if deployment_config.get('type') == 'knative':
+        return None  # Knative handles its own HTTPRoute
+
     # Check if we need routing (routes defined or containers with ports)
     routes = thinkube_spec.get('spec', {}).get('routes', [])
     containers = thinkube_spec.get('spec', {}).get('containers', [])
