@@ -96,6 +96,10 @@ class ApplicationDeployer:
 
     # ==================== PHASE 1: Setup & Validation ====================
 
+    def _is_knative(self) -> bool:
+        """Check if current deployment is a Knative service."""
+        return self.thinkube_config.get('spec', {}).get('deployment', {}).get('type') == 'knative'
+
     async def phase1_setup(self):
         """Phase 1: Validate parameters, create namespace, and run Copier."""
         DeploymentLogger.phase(1, "Setup & Validation")
@@ -107,9 +111,6 @@ class ApplicationDeployer:
                 raise ValueError(f"Required parameter '{param}' is missing")
 
         DeploymentLogger.log(f"Deploying {self.app_name} to namespace {self.namespace}")
-
-        # Create namespace
-        await self.create_namespace()
 
         DeploymentLogger.success("Phase 1 complete")
 
@@ -2279,6 +2280,16 @@ LIMIT 5;"
             DeploymentLogger.debug(" Starting Phase 2")
             await self.phase2_gather_resources()
             DeploymentLogger.debug(" Phase 2 complete")
+
+            # After parsing thinkube.yaml, override namespace for Knative services
+            # All Knative services deploy to the shared 'kn' namespace so URLs
+            # become {name}.kn.{domain} matching the *.kn.{domain} gateway listener
+            if self._is_knative():
+                self.namespace = 'kn'
+                DeploymentLogger.log(f"Knative service — using shared namespace: {self.namespace}")
+
+            # Create namespace (idempotent — skips if it already exists)
+            await self.create_namespace()
 
             DeploymentLogger.debug(" Starting Phase 3")
             await self.phase3_create_resources()
