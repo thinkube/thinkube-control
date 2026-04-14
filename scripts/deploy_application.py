@@ -66,7 +66,8 @@ class ApplicationDeployer:
         self.admin_username = params['admin_username']
         self.template_url = params['template_url']
         # Inside container: /home/thinkube is mounted from host's /home/{ansible_user}/shared-code
-        self.local_repo_path = f"/home/thinkube/{self.app_name}"
+        # Apps are stored under apps/ subdirectory for clean organization
+        self.local_repo_path = f"/home/thinkube/apps/{self.app_name}"
 
         # Unique Gitea repository name: {app_name}-{deployment_id}
         # This prevents conflicts and database corruption
@@ -199,6 +200,9 @@ git reset --hard origin/main
     async def run_copier(self):
         """Run Copier to process the template (in thread pool to keep event loop responsive)."""
         DeploymentLogger.log(f"Processing template: {self.template_url}")
+
+        # Ensure apps/ directory exists
+        Path(self.local_repo_path).parent.mkdir(parents=True, exist_ok=True)
 
         # Build copier command with all template parameters
         # container_registry is critical for Dockerfile base images
@@ -369,6 +373,11 @@ git reset --hard origin/main
         try:
             with open(config_path, 'r') as f:
                 self.thinkube_config = yaml.safe_load(f)
+            # Inject metadata.name from deploy-time app name
+            # thinkube.yaml doesn't contain the name — the platform provides it
+            if 'metadata' not in self.thinkube_config:
+                self.thinkube_config['metadata'] = {}
+            self.thinkube_config['metadata']['name'] = self.app_name
             DeploymentLogger.log("Parsed thinkube.yaml configuration")
         except Exception as e:
             DeploymentLogger.error(f"Failed to parse thinkube.yaml: {e}")
@@ -914,6 +923,19 @@ git reset --hard origin/main
         seaweedfs_access_key = self._decode_secret_data(seaweedfs_secret, 'access_key') if seaweedfs_secret else ''
         seaweedfs_endpoint = self._decode_secret_data(seaweedfs_secret, 'endpoint_internal') if seaweedfs_secret else ''
 
+        # Build manifest_params from self.params — these are template-specific
+        # parameters (e.g., model_id) that should be injected as env vars
+        standard_params = {
+            'app_name', 'template_url', 'deployment_namespace',
+            'domain_name', 'admin_username', 'github_token',
+            'namespace', 'k8s_namespace', 'container_registry',
+            'registry_subdomain', 'project_name',
+        }
+        manifest_params = {
+            k: v for k, v in self.params.items()
+            if k not in standard_params and v
+        }
+
         template_vars = {
             'project_name': self.app_name,
             'k8s_namespace': self.namespace,
@@ -922,6 +944,7 @@ git reset --hard origin/main
             'admin_username': self.admin_username,
             'admin_password': admin_password,
             'thinkube_spec': self.thinkube_config,
+            'manifest_params': manifest_params,
             'mlflow_keycloak_token_url': mlflow_keycloak_token_url,
             'mlflow_keycloak_client_id': mlflow_keycloak_client_id,
             'mlflow_client_secret': mlflow_client_secret,

@@ -44,7 +44,7 @@ spec:
             path: config.json
     - name: shared-code
       hostPath:
-        path: /home/{{ system_username }}/shared-code/{{ project_name }}
+        path: /home/{{ system_username }}/shared-code/apps/{{ project_name }}
         type: Directory
     - name: cicd-pipeline-scripts
       configMap:
@@ -410,6 +410,7 @@ spec:
           - "--context=/workspace/{{ "{{" }}inputs.parameters.context_path{{ "}}" }}"
           - "--destination={{ container_registry }}/thinkube/{{ project_name }}-{{ "{{" }}inputs.parameters.container_name{{ "}}" }}:{{ "{{" }}workflow.parameters.image_tag{{ "}}" }}"
           - "--destination={{ container_registry }}/thinkube/{{ project_name }}-{{ "{{" }}inputs.parameters.container_name{{ "}}" }}:latest"
+          - "--build-arg=CONTAINER_REGISTRY={{ container_registry }}"
           - "--cache=true"
           - "--cache-ttl=24h"
         volumeMounts:

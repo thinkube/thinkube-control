@@ -114,7 +114,22 @@ spec:
             {% endif %}
             {% endfor %}
             {% endif %}
+            # Manifest parameters (from deploy-time input, e.g. model_id)
+            {% if manifest_params is defined %}
+            {% for param_name, param_value in manifest_params.items() %}
+            - name: {{ param_name | upper }}
+              value: "{{ param_value }}"
+            {% endfor %}
+            {% endif %}
             # Platform-wide environment variables
+            - name: APP_NAME
+              value: "{{ project_name }}"
+            - name: APP_TITLE
+              value: "{{ project_name | replace('-', ' ') | title }}"
+            - name: DOMAIN_NAME
+              value: "{{ domain_name }}"
+            - name: CONTAINER_REGISTRY
+              value: "{{ container_registry }}"
             - name: KEYCLOAK_URL
               value: "https://auth.{{ domain_name }}"
             - name: KEYCLOAK_BASE_URL
