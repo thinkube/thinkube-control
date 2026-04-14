@@ -726,8 +726,12 @@ git reset --hard origin/main
         template = env.from_string(template_content)
 
         # Get required variables
-        system_username = self.params.get('system_username', 'thinkube')
-        master_node_name = self.params.get('master_node_name', 'tkspark')
+        system_username = self.params.get('system_username') or os.environ.get('SYSTEM_USERNAME')
+        if not system_username:
+            raise ValueError("system_username not in params and SYSTEM_USERNAME env var not set")
+        master_node_name = self.params.get('master_node_name') or os.environ.get('MASTER_NODE_NAME')
+        if not master_node_name:
+            raise ValueError("master_node_name not in params and MASTER_NODE_NAME env var not set")
         admin_password = self._decode_secret_data(self.secrets['admin'], 'admin-password')
 
         # Render template with all required variables (matching Ansible)
@@ -1024,8 +1028,12 @@ data:
 
         # 10. Generate build-workflow.yaml
         workflow_template = env.get_template('build-workflow.j2')
-        system_username = self.params.get('system_username', 'thinkube')
-        master_node_name = self.params.get('master_node_name', 'tkspark')
+        system_username = self.params.get('system_username') or os.environ.get('SYSTEM_USERNAME')
+        if not system_username:
+            raise ValueError("system_username not in params and SYSTEM_USERNAME env var not set")
+        master_node_name = self.params.get('master_node_name') or os.environ.get('MASTER_NODE_NAME')
+        if not master_node_name:
+            raise ValueError("master_node_name not in params and MASTER_NODE_NAME env var not set")
         workflow_vars = {**template_vars, 'system_username': system_username, 'master_node_name': master_node_name}
         workflow_content = workflow_template.render(**workflow_vars)
         (k8s_dir / 'build-workflow.yaml').write_text(workflow_content)
