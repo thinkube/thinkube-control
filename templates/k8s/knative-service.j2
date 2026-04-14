@@ -1,6 +1,6 @@
 #jinja2: lstrip_blocks: True, trim_blocks: True
 # Generated Knative Service for scale-to-zero workloads
-# Knative handles routing (*.kn.{{ domain_name }}), scaling, and lifecycle
+# Knative handles scaling and lifecycle; DomainMapping provides external routing
 {% set deployment = thinkube_spec.spec.deployment | default({}) %}
 {% set container = thinkube_spec.spec.containers[0] %}
 ---
@@ -126,11 +126,11 @@ spec:
             - name: KEYCLOAK_CLIENT_SECRET
               value: ""
             - name: FRONTEND_URL
-              value: "https://{{ project_name }}.kn.{{ domain_name }}"
+              value: "https://{{ project_name }}.{{ domain_name }}"
             - name: APP_URL
-              value: "https://{{ project_name }}.kn.{{ domain_name }}"
+              value: "https://{{ project_name }}.{{ domain_name }}"
             - name: API_BASE_URL
-              value: "https://{{ project_name }}.kn.{{ domain_name }}"
+              value: "https://{{ project_name }}.{{ domain_name }}"
             # MLflow authentication and S3 access credentials
             - name: MLFLOW_KEYCLOAK_TOKEN_URL
               valueFrom:

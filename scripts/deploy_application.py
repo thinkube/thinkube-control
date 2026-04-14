@@ -582,10 +582,7 @@ git reset --hard origin/main
         keycloak_url = f"https://auth.{self.domain}"
         keycloak_realm = self.params.get('keycloak_realm', 'thinkube')
         client_id = self.app_name  # Use app name, not namespace (Knative services share 'kn' namespace)
-        if self._is_knative():
-            app_host = f"{self.app_name}.kn.{self.domain}"
-        else:
-            app_host = f"{self.app_name}.{self.domain}"
+        app_host = f"{self.app_name}.{self.domain}"
 
         async with aiohttp.ClientSession() as session:
             # Step 1: Get Keycloak admin token
@@ -979,7 +976,11 @@ data:
             knative_template = env.get_template('knative-service.j2')
             knative_content = knative_template.render(**template_vars)
             (k8s_dir / 'knative-service.yaml').write_text(knative_content)
-            # Knative manages its own routing via *.kn.{domain} — no HTTPRoute needed
+
+            # Generate DomainMapping for {name}.{domain} → Knative Service
+            domain_mapping_template = env.get_template('domain-mapping.j2')
+            domain_mapping_content = domain_mapping_template.render(**template_vars)
+            (k8s_dir / 'domain-mapping.yaml').write_text(domain_mapping_content)
         else:
             # 4. Generate deployments.yaml from deployment-separate.j2
             deployment_template = env.get_template('deployment-separate.j2')
@@ -991,18 +992,10 @@ data:
             services_content = services_template.render(**template_vars)
             (k8s_dir / 'services.yaml').write_text(services_content)
 
-            # 6. Generate HTTPRoute (ingress.yaml) using Python generator
-            sys.path.insert(0, str(template_dir))
-            from generate_ingress import generate_ingress
-            ingress_config = generate_ingress(
-                self.app_name,
-                self.namespace,
-                self.domain,
-                self.thinkube_config
-            )
-            if ingress_config:
-                ingress_content = "# Generated HTTPRoute configuration (Gateway API)\n---\n" + yaml.dump(ingress_config, default_flow_style=False, sort_keys=False)
-                (k8s_dir / 'ingress.yaml').write_text(ingress_content)
+            # 6. Generate HTTPRoute (ingress.yaml) from httproute.j2
+            httproute_template = env.get_template('httproute.j2')
+            httproute_content = httproute_template.render(**template_vars)
+            (k8s_dir / 'ingress.yaml').write_text(httproute_content)
 
         # 7. Generate paused-backend.yaml from template (apps only)
         if not is_knative:
@@ -1049,6 +1042,7 @@ data:
                 'mlflow-secrets.yaml',
                 'app-metadata.yaml',
                 'knative-service.yaml',
+                'domain-mapping.yaml',
             ]
         else:
             kustomization_resources = [
@@ -2285,8 +2279,8 @@ LIMIT 5;"
             DeploymentLogger.debug(" Phase 2 complete")
 
             # After parsing thinkube.yaml, override namespace for Knative services
-            # All Knative services deploy to the shared 'kn' namespace so URLs
-            # become {name}.kn.{domain} matching the *.kn.{domain} gateway listener
+            # All Knative services deploy to the shared 'kn' namespace;
+            # DomainMapping provides {name}.{domain} routing through the main gateway
             if self._is_knative():
                 self.namespace = 'kn'
                 DeploymentLogger.log(f"Knative service — using shared namespace: {self.namespace}")

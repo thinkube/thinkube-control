@@ -108,7 +108,7 @@ Ansible config at `ansible.cfg` points roles to `/home/thinkube-control/ansible/
 
 ### Templates (`templates/`)
 
-- **`k8s/`** -- Jinja2 templates for generating Kubernetes manifests: deployments (single/separate), services, ingress, build workflows, storage PVCs, MLflow secrets. Python generators (`generate_manifests.py`, `generate_ingress.py`) produce final YAML from `thinkube.yaml` specs.
+- **`k8s/`** -- Jinja2 templates for generating Kubernetes manifests: deployments (single/separate), services, HTTPRoute, Knative services, DomainMapping, build workflows, storage PVCs, MLflow secrets.
 - **`service-configmap.yaml.j2`** -- Service discovery configuration template.
 
 ### K8s Manifests (`k8s/`)

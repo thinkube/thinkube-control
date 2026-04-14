@@ -137,7 +137,7 @@ async def list_knative_services(
         for item in result.get("items", []):
             # Skip test/system namespaces
             ns = item.get("metadata", {}).get("namespace", "")
-            if ns in ("kn", "knative-serving", "knative-eventing"):
+            if ns in ("knative-serving", "knative-eventing"):
                 continue
 
             info = _parse_knative_service(item)

@@ -1,0 +1,17 @@
+#jinja2: lstrip_blocks: True, trim_blocks: True
+# Generated DomainMapping for Knative services
+# Maps {{ project_name }}.{{ domain_name }} to the Knative Service
+---
+apiVersion: serving.knative.dev/v1beta1
+kind: DomainMapping
+metadata:
+  name: {{ project_name }}.{{ domain_name }}
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/managed-by: argocd
+spec:
+  ref:
+    name: {{ project_name }}
+    kind: Service
+    apiVersion: serving.knative.dev/v1

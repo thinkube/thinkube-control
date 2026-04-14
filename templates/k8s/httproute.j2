@@ -1,0 +1,44 @@
+#jinja2: lstrip_blocks: True, trim_blocks: True
+# Generated HTTPRoute configuration (Gateway API)
+# Routes traffic through thinkube-gateway in gateway-system namespace
+{% set routes = thinkube_spec.spec.routes | default([]) %}
+{% set containers_with_ports = thinkube_spec.spec.containers | selectattr('port', 'defined') | list %}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ project_name }}
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/managed-by: argocd
+spec:
+  parentRefs:
+    - name: thinkube-gateway
+      namespace: gateway-system
+      sectionName: https
+  hostnames:
+    - "{{ project_name }}.{{ domain_name }}"
+  rules:
+{% if routes %}
+  {% for route in routes %}
+    {% set container = thinkube_spec.spec.containers | selectattr('name', 'equalto', route.to) | first %}
+    {% if container is defined and container.port is defined %}
+    - matches:
+        - path:
+            type: PathPrefix
+            value: "{{ route.path }}"
+      backendRefs:
+        - name: {{ container.name }}
+          port: {{ container.port }}
+    {% endif %}
+  {% endfor %}
+{% elif containers_with_ports %}
+    - matches:
+        - path:
+            type: PathPrefix
+            value: "/"
+      backendRefs:
+        - name: {{ containers_with_ports[0].name }}
+          port: {{ containers_with_ports[0].port }}
+{% endif %}
