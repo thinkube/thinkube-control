@@ -136,6 +136,8 @@ async def list_available_templates(
                     "description": repo.get("description", ""),
                     "url": repo.get("github_url", ""),
                     "org": repo.get("org", "thinkube"),
+                    "deployment_type": repo.get("deployment_type", "app"),
+                    "source": repo.get("_source", "platform"),
                 })
 
         logger.info(f"Discovered {len(templates)} application templates")

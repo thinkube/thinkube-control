@@ -46,6 +46,8 @@ interface AvailableTemplate {
   description: string
   url: string
   org: string
+  deployment_type: 'app' | 'knative'
+  source: 'platform' | 'user'
 }
 
 export default function Templates() {
@@ -460,10 +462,21 @@ export default function Templates() {
             {availableTemplates.map((template) => (
               <TkCard key={template.name} className="flex flex-col h-full">
                 <TkCardHeader>
-                  <TkCardTitle>{template.name.replace('tkt-', '').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</TkCardTitle>
+                  <div className="flex items-center justify-between gap-2">
+                    <TkCardTitle>{template.name.replace('tkt-', '').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</TkCardTitle>
+                    <div className="flex gap-1 shrink-0">
+                      <TkBadge variant={template.deployment_type === 'knative' ? 'secondary' : 'outline'}>
+                        {template.deployment_type === 'knative' ? 'Knative' : 'App'}
+                      </TkBadge>
+                      {template.source === 'user' && (
+                        <TkBadge variant="default">User</TkBadge>
+                      )}
+                    </div>
+                  </div>
                 </TkCardHeader>
                 <TkCardContent className="flex-1">
                   <p className="text-sm opacity-80">{template.description}</p>
+                  <p className="text-xs opacity-50 mt-2">{template.org}</p>
                 </TkCardContent>
                 <TkCardFooter className="flex justify-end">
                   <TkButton

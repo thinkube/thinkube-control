@@ -158,6 +158,11 @@ def fetch_merged_catalog(
     platform_data = _fetch_json(platform_url)
     platform_items = platform_data.get(extract_key, [] if merge_strategy == "list" else {}) if platform_data else None
 
+    # Tag platform items with source
+    if platform_items is not None and merge_strategy == "list":
+        for item in platform_items:
+            item.setdefault("_source", "platform")
+
     # Fetch user catalog (private, with auth)
     user_items = None
     if github_org and github_token:
@@ -166,6 +171,10 @@ def fetch_merged_catalog(
         user_data = _fetch_json(user_url, token=github_token)
         if user_data:
             user_items = user_data.get(extract_key, [] if merge_strategy == "list" else {})
+            # Tag user items with source
+            if merge_strategy == "list":
+                for item in user_items:
+                    item.setdefault("_source", "user")
             logger.info(
                 f"Fetched {catalog_name} from user metadata ({github_org}/{user_repo}): "
                 f"{len(user_items)} entries"
