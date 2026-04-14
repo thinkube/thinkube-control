@@ -83,11 +83,11 @@ spec:
               - name: build_path
                 value: "{{ container.build | replace('./', '') }}"
               - name: test_enabled
-                value: "{{ container.test.enabled | default(true) | lower }}"
+                value: "{% if container.test is defined %}{{ container.test.enabled | default(true) | lower }}{% else %}true{% endif %}"
               - name: test_command
-                value: "{{ container.test.command | default('') }}"
+                value: "{% if container.test is defined %}{{ container.test.command | default('') }}{% endif %}"
               - name: test_image
-                value: "{% if container.test.image is defined %}{% if '/' in container.test.image %}{{ container.test.image }}{% else %}{{ container_registry }}/library/{{ container.test.image }}{% endif %}{% else %}{{ container_registry }}/library/test-runner:latest{% endif %}"
+                value: "{% if container.test is defined and container.test.image is defined %}{% if '/' in container.test.image %}{{ container.test.image }}{% else %}{{ container_registry }}/library/{{ container.test.image }}{% endif %}{% else %}{{ container_registry }}/library/test-runner:latest{% endif %}"
               - name: pipeline_id
                 value: "{{ "{{" }}tasks.create-pipeline.outputs.parameters.pipeline_id{{ "}}" }}"
         
