@@ -699,3 +699,64 @@ async def download_debug_log(
 
     # Return the file
     return FileResponse(path=str(log_file), filename=filename, media_type="text/plain")
+
+
+@router.post(
+    "/apps/{app_name}/regenerate-manifests",
+    operation_id="regenerate_app_manifests",
+)
+async def regenerate_app_manifests(
+    app_name: str,
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """
+    Regenerate k8s/ manifests for a deployed app from its current thinkube.yaml.
+
+    Called by the pre-commit hook in code-server when a developer modifies
+    thinkube.yaml in an already-deployed app. Reads the current thinkube.yaml,
+    fetches cluster secrets, and regenerates all k8s/ manifest files.
+
+    Returns a dict of {filename: content} for each generated manifest.
+    The pre-commit hook writes these files and stages them for commit.
+    """
+    from app.services.manifest_generator import ManifestGenerator
+
+    domain_name = _extract_domain_from_url()
+
+    # Validate the app exists
+    app_path = Path(f"/home/thinkube/apps/{app_name}")
+    if not app_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"App '{app_name}' not found at {app_path}"
+        )
+
+    thinkube_yaml = app_path / "thinkube.yaml"
+    if not thinkube_yaml.exists():
+        raise HTTPException(
+            status_code=400,
+            detail=f"App '{app_name}' has no thinkube.yaml"
+        )
+
+    try:
+        generator = ManifestGenerator(app_name=app_name, domain=domain_name)
+        generated_files = generator.regenerate()
+
+        return {
+            "app_name": app_name,
+            "files_generated": list(generated_files.keys()),
+            "file_count": len(generated_files),
+            "manifests": generated_files,
+        }
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to regenerate manifests for {app_name}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to regenerate manifests: {str(e)}"
+        )

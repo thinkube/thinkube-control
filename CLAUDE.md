@@ -92,19 +92,18 @@ Keycloak OAuth2/OIDC flow. See `AUTHENTICATION.md` for full details. Key pattern
 
 ### Ansible (`ansible/`)
 
-Roles used by the backend at runtime to deploy templates into Kubernetes:
+Minimal Ansible roles still used at runtime:
 
-- **`roles/container_deployment/`** -- Core deployment roles: `repo` (Gitea repo management), `deployment` (K8s manifests), `argocd` (ArgoCD app creation), `image_mirror` (Harbor image mirroring), `git_push`, `webhook_argocd`, `cleanup`.
+- **`roles/container_deployment/image_mirror/`** -- Harbor image mirroring (used by `mirror-image.yaml` playbook).
 - **`roles/keycloak/`** -- Keycloak client/user/realm configuration for deployed apps.
 - **`roles/gitea/`** -- Gitea repository management.
 - **`roles/common/`** -- Shared utilities.
 
-Ansible config at `ansible.cfg` points roles to `/home/thinkube-control/ansible/roles` (runtime mount path). Inventory is generated at deploy time and never committed.
+Template deployment is handled entirely by `scripts/deploy_application.py` (Python), not Ansible. The old Ansible deployment playbook and its roles have been removed.
 
 ### Playbooks (`playbooks/`)
 
-- **`deploy-application.yaml`** -- Main playbook for deploying template applications (called by backend via WebSocket executor).
-- **`mirror-image.yaml`** -- Harbor image mirroring playbook.
+- **`mirror-image.yaml`** -- Harbor image mirroring playbook (the only remaining playbook).
 
 ### Templates (`templates/`)
 

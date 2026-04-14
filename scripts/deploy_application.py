@@ -1476,163 +1476,191 @@ fi
                 DeploymentLogger.log(f"Migration generation: {stderr.strip()}")
 
     async def setup_git_hooks(self):
-        """Setup git hooks for template processing (matches Ansible setup_git_hooks.yaml)."""
+        """Setup git hooks for thinkube.yaml manifest regeneration."""
         hooks_dir = Path(self.local_repo_path) / '.git' / 'hooks'
         hooks_dir.mkdir(parents=True, exist_ok=True)
+        git_hooks_dir = Path(self.local_repo_path) / '.git-hooks'
+        git_hooks_dir.mkdir(parents=True, exist_ok=True)
 
-        # Pre-commit hook for Copier template processing
-        pre_commit_content = '''#!/bin/bash
-# Pre-commit hook to automatically process Copier templates
+        control_url = f"https://control.{self.domain}"
 
-set -e
+        # Pre-commit hook — regenerates k8s/ manifests when thinkube.yaml changes
+        pre_commit_content = f'''#!/bin/bash
+# Git pre-commit hook to regenerate k8s/ manifests when thinkube.yaml changes
+# AUTO-GENERATED - DO NOT EDIT
 
-# Check if any .jinja files were modified
-if ! git diff --cached --name-only | grep -q '\\.jinja$'; then
-  exit 0
+GREEN='\\033[0;32m'
+YELLOW='\\033[1;33m'
+RED='\\033[0;31m'
+NC='\\033[0m'
+
+APP_NAME="{self.app_name}"
+DOMAIN_NAME="{self.domain}"
+CONTROL_URL="{control_url}"
+
+# Check if thinkube.yaml has been modified in this commit
+if ! git diff --cached --name-only | grep -q '^thinkube\\.yaml$'; then
+    exit 0
 fi
 
-echo "Processing Copier templates..."
+echo -e "${{YELLOW}}Pre-commit hook: thinkube.yaml changed, regenerating k8s/ manifests...${{NC}}"
 
-if [ ! -f .copier-answers.yml ]; then
-  echo "ERROR: .copier-answers.yml not found."
-  exit 1
-fi
-
-if command -v copier >/dev/null 2>&1; then
-  copier recopy --defaults --overwrite --quiet .
+# Get auth token
+TOKEN_FILE="$HOME/.thinkube/api-token"
+if [ -f "$TOKEN_FILE" ]; then
+    API_TOKEN=$(cat "$TOKEN_FILE")
 else
-  echo "ERROR: Copier not installed."
-  exit 1
+    API_TOKEN="${{THINKUBE_API_TOKEN:-}}"
 fi
 
-for jinja_file in $(git diff --cached --name-only | grep '\\.jinja$'); do
-  yaml_file="${jinja_file%.jinja}"
-  if [ -f "$yaml_file" ]; then
-    git add "$yaml_file"
-    echo "Added generated file: $yaml_file"
-  fi
-done
-
-echo "Template processing complete!"
-'''
-
-        # Commit-msg hook
-        commit_msg_content = '''#!/bin/bash
-# Append note if templates were processed
-
-COMMIT_MSG_FILE=$1
-
-if git diff --cached --name-only | grep -q '\\.yaml$' && git diff --cached --name-only | grep -q '\\.jinja$'; then
-  echo "" >> "$COMMIT_MSG_FILE"
-  echo "[Templates processed by git hook]" >> "$COMMIT_MSG_FILE"
+if [ -z "$API_TOKEN" ]; then
+    echo -e "${{RED}}ERROR: No API token found.${{NC}}"
+    echo "Set THINKUBE_API_TOKEN or create $TOKEN_FILE"
+    echo "You can generate an API token at ${{CONTROL_URL}}/api-tokens"
+    exit 1
 fi
+
+# Call thinkube-control API to regenerate manifests
+RESPONSE=$(curl -s -w "\\n%{{http_code}}" \\
+    -X POST \\
+    -H "Authorization: Bearer ${{API_TOKEN}}" \\
+    -H "Content-Type: application/json" \\
+    "${{CONTROL_URL}}/api/v1/templates/apps/${{APP_NAME}}/regenerate-manifests" \\
+    2>&1)
+
+HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+BODY=$(echo "$RESPONSE" | sed '$d')
+
+if [ "$HTTP_CODE" != "200" ]; then
+    echo -e "${{RED}}ERROR: Failed to regenerate manifests (HTTP ${{HTTP_CODE}})${{NC}}"
+    echo "$BODY"
+    echo ""
+    echo "You can still commit without manifest regeneration by using:"
+    echo "  git commit --no-verify"
+    exit 1
+fi
+
+# Stage the regenerated k8s/ files
+if [ -d "k8s" ]; then
+    git add k8s/
+    echo -e "${{GREEN}}k8s/ manifests regenerated and staged for commit.${{NC}}"
+fi
+
+exit 0
 '''
 
-        # Write hooks
-        pre_commit_path = hooks_dir / 'pre-commit'
-        with open(pre_commit_path, 'w') as f:
-            f.write(pre_commit_content)
-        pre_commit_path.chmod(0o755)
-
-        commit_msg_path = hooks_dir / 'commit-msg'
-        with open(commit_msg_path, 'w') as f:
-            f.write(commit_msg_content)
-        commit_msg_path.chmod(0o755)
+        # Write pre-commit hook to both locations
+        for hook_path in [hooks_dir / 'pre-commit', git_hooks_dir / 'pre-commit']:
+            with open(hook_path, 'w') as f:
+                f.write(pre_commit_content)
+            hook_path.chmod(0o755)
 
         # Create install-hooks.sh
         install_hooks_content = '''#!/bin/bash
 # Reinstall git hooks if needed
 echo "Installing git hooks..."
 mkdir -p .git/hooks
-cp .git-hooks/pre-commit .git/hooks/pre-commit 2>/dev/null || true
-chmod +x .git/hooks/pre-commit 2>/dev/null || true
+cp .git-hooks/pre-commit .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
 echo "Git hooks installed!"
+echo "When you modify thinkube.yaml and commit, k8s/ manifests are automatically regenerated."
 '''
         install_hooks_path = Path(self.local_repo_path) / 'install-hooks.sh'
         with open(install_hooks_path, 'w') as f:
             f.write(install_hooks_content)
         install_hooks_path.chmod(0o755)
 
-        # Create reprocess-templates.sh
-        reprocess_content = f'''#!/bin/bash
-# Script to manually reprocess templates
+        # Create regenerate-manifests.sh
+        regen_content = f'''#!/bin/bash
+# Manually regenerate k8s/ manifests from thinkube.yaml
+# AUTO-GENERATED - DO NOT EDIT
+
+APP_NAME="{self.app_name}"
 DOMAIN_NAME="{self.domain}"
-NAMESPACE="{self.namespace}"
+CONTROL_URL="{control_url}"
 
-echo "Processing all templates for domain: $DOMAIN_NAME"
-for template in $(find . -name "*.jinja" 2>/dev/null); do
-    output="${{template%.jinja}}"
-    echo "Processing $template -> $output"
-    sed -e "s|{{{{ domain_name }}}}|${{DOMAIN_NAME}}|g" \\
-        -e "s|{{{{ namespace }}}}|${{NAMESPACE}}|g" \\
-        "$template" > "$output"
-done
-echo "Templates processed!"
+TOKEN_FILE="$HOME/.thinkube/api-token"
+if [ -f "$TOKEN_FILE" ]; then
+    API_TOKEN=$(cat "$TOKEN_FILE")
+else
+    API_TOKEN="${{THINKUBE_API_TOKEN:-}}"
+fi
+
+if [ -z "$API_TOKEN" ]; then
+    echo "ERROR: No API token found."
+    echo "Set THINKUBE_API_TOKEN or create $TOKEN_FILE"
+    exit 1
+fi
+
+echo "Regenerating k8s/ manifests for ${{APP_NAME}}..."
+
+RESPONSE=$(curl -s -w "\\n%{{http_code}}" \\
+    -X POST \\
+    -H "Authorization: Bearer ${{API_TOKEN}}" \\
+    -H "Content-Type: application/json" \\
+    "${{CONTROL_URL}}/api/v1/templates/apps/${{APP_NAME}}/regenerate-manifests")
+
+HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+BODY=$(echo "$RESPONSE" | sed '$d')
+
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "Manifests regenerated successfully."
+    echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f\\"Files: {{', '.join(d['files_generated'])}}\\")" 2>/dev/null || true
+else
+    echo "ERROR: Failed (HTTP ${{HTTP_CODE}})"
+    echo "$BODY"
+    exit 1
+fi
 '''
-        reprocess_path = Path(self.local_repo_path) / 'reprocess-templates.sh'
-        with open(reprocess_path, 'w') as f:
-            f.write(reprocess_content)
-        reprocess_path.chmod(0o755)
-
-        # Create prepare-for-github.sh
-        prepare_github_content = '''#!/bin/bash
-# Script to prepare repository for pushing to GitHub
-echo "Preparing repository for GitHub contribution..."
-
-for template in $(find . -name "*.yaml.jinja" 2>/dev/null); do
-    processed="${template%.jinja}"
-    if [ -f "$processed" ]; then
-        echo "Removing processed file: $processed"
-        rm "$processed"
-    fi
-done
-
-echo "Repository is ready for GitHub contribution"
-'''
-        prepare_github_path = Path(self.local_repo_path) / 'prepare-for-github.sh'
-        with open(prepare_github_path, 'w') as f:
-            f.write(prepare_github_content)
-        prepare_github_path.chmod(0o755)
+        regen_path = Path(self.local_repo_path) / 'regenerate-manifests.sh'
+        with open(regen_path, 'w') as f:
+            f.write(regen_content)
+        regen_path.chmod(0o755)
 
         # Create DEVELOPMENT.md
-        development_md_content = f'''# Development Workflow
+        development_md_content = '''# Development Workflow
 
 This repository is hosted on Gitea for local development with Thinkube.
 
-## Initial Setup
-
-Install git hooks for automatic template processing:
-```bash
-./install-hooks.sh
-```
-
 ## Making Changes
 
-1. **Edit templates** (`.yaml.jinja` files), not processed files
-2. **Commit your changes** - templates are automatically processed!
-   ```bash
-   git add .
-   git commit -m "Update deployment configuration"
-   ```
-
-## Manual Template Processing
-
+Edit your code and commit as normal:
 ```bash
-./reprocess-templates.sh
+git add .
+git commit -m "Your changes"
+git push
 ```
 
-## Contributing to GitHub
+Pushing to Gitea triggers a build and deploy automatically.
 
-1. **Prepare for GitHub** (removes processed files):
-   ```bash
-   ./prepare-for-github.sh
-   ```
+## Changing App Configuration
 
-2. **Push to GitHub** and create PR
+If you modify `thinkube.yaml` (add containers, change routes, add services):
+
+1. Edit `thinkube.yaml`
+2. Commit — the pre-commit hook automatically regenerates `k8s/` manifests
+3. Push — the build picks up the new configuration
+
+To manually regenerate manifests without committing:
+```bash
+./regenerate-manifests.sh
+```
+
+## Publishing as a Template
+
+To share your app as a reusable template, use the "Publish as Template"
+feature in the Thinkube Control UI. Your code is already template-ready —
+no transformation needed.
 '''
         dev_md_path = Path(self.local_repo_path) / 'DEVELOPMENT.md'
         with open(dev_md_path, 'w') as f:
             f.write(development_md_content)
+
+        # Clean up obsolete scripts from previous deployments
+        for obsolete in ['reprocess-templates.sh', 'prepare-for-github.sh']:
+            obsolete_path = Path(self.local_repo_path) / obsolete
+            if obsolete_path.exists():
+                obsolete_path.unlink()
 
         DeploymentLogger.log("Setup git hooks and helper scripts")
 
