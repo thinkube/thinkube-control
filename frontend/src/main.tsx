@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { TkAppLayout, type TkNavItem } from 'thinkube-style';
-import { LayoutDashboard, Boxes, Layers, Container, Puzzle, Shield, Sliders, Lock, Key, Star, Grid2X2, Server, Code, BarChart3, Database, Cpu, FileText, Box } from 'lucide-react';
+import { LayoutDashboard, Boxes, Layers, Container, Puzzle, Shield, Sliders, Lock, Key, Star, Grid2X2, Server, Code, BarChart3, Database, Cpu, FileText, Box, Zap } from 'lucide-react';
 import { Toaster } from 'sonner';
 import './globals.css';
 import 'thinkube-style/styles.css';
@@ -56,6 +56,7 @@ const baseNavigationItems: TkNavItem[] = [
     children: [
       { id: "favorites", label: "Favorites", lucideIcon: Star, href: "/dashboard/favorites" },
       { id: "all-services", label: "All Services", lucideIcon: Grid2X2, href: "/dashboard/all" },
+      { id: "knative-services", label: "Knative Services", lucideIcon: Zap, href: "/knative-services" },
     ],
   },
   {
@@ -66,7 +67,6 @@ const baseNavigationItems: TkNavItem[] = [
     children: [
       { id: "models", label: "AI Models", lucideIcon: Database, href: "/models" },
       { id: "templates", label: "Templates", lucideIcon: Layers, href: "/templates" },
-      { id: "knative-services", label: "Knative Services", lucideIcon: Cpu, href: "/knative-services" },
       { id: "harbor-images", label: "Harbor Images", lucideIcon: Container, href: "/harbor-images" },
       { id: "optional-components", label: "Optional Components", lucideIcon: Puzzle, href: "/optional-components" },
     ],
