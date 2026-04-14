@@ -196,34 +196,124 @@ def create_app() -> FastAPI:
             add_default_prompts=True,
             # Include all operations (will be automatically classified)
             include_operations=[
-                # Services management - will become resources
-                "list_services_minimal",  # Resource
-                "get_service_details",    # Resource
-                "toggle_service",         # Tool
-                "restart_service",        # Tool
-                # Templates and deployments
-                "list_templates",         # Resource
-                "get_template_metadata",  # Resource
-                "deploy_template",        # Tool
-                "list_deployments",       # Resource
-                "get_deployment_status",  # Resource
-                "get_deployment_logs",    # Resource
-                # Dashboards
-                "list_dashboards",        # Resource
-                # Harbor image registry
-                "list_harbor_images",     # Resource
-                "get_harbor_image",       # Resource
-                "register_harbor_image",  # Tool
-                "remirror_harbor_image",  # Tool
-                "bulk_mirror_images",     # Tool
-                # Optional components
+                # === Auth & Tokens ===
+                "get_user_info",               # Resource
+                "list_tokens",                 # Resource
+                "verify_current_token",        # Resource
+                "create_token",                # Tool
+                "delete_token",                # Tool
+
+                # === Services ===
+                "list_services_minimal",       # Resource
+                "get_service_details",         # Resource
+                "get_service_health_history",  # Resource
+                "get_service_dependencies",    # Resource
+                "describe_pod",                # Resource
+                "get_container_logs",          # Resource
+                "toggle_service",              # Tool
+                "restart_service",             # Tool
+                "trigger_health_check",        # Tool
+                "sync_services",               # Tool
+
+                # === Dashboards ===
+                "list_dashboards",             # Resource
+                "get_dashboard_categories",    # Resource
+                "get_dashboard",               # Resource
+
+                # === Templates & Deployments ===
+                "list_templates",              # Resource
+                "get_template_metadata",       # Resource
+                "list_deployments",            # Resource
+                "get_deployment_status",       # Resource
+                "get_deployment_logs",         # Resource
+                "get_deployment_debug_logs",   # Resource
+                "download_debug_log",          # Resource
+                "deploy_template",             # Tool
+                "cancel_deployment",           # Tool
+
+                # === Harbor Images ===
+                "list_harbor_images",          # Resource
+                "get_harbor_image",            # Resource
+                "get_image_statistics",        # Resource
+                "list_harbor_jobs",            # Resource
+                "get_harbor_job_status",       # Resource
+                "list_harbor_projects",        # Resource
+                "check_harbor_health",         # Resource
+                "register_harbor_image",       # Tool
+                "remirror_harbor_image",       # Tool
+                "bulk_mirror_images",          # Tool
+                "delete_image",                # Tool
+
+                # === Secrets ===
+                "list_secrets",                # Resource
+                "get_secret",                  # Resource
+                "get_secret_apps",             # Resource
+                "create_secret",               # Tool
+                "update_secret",               # Tool
+                "delete_secret",               # Tool
+
+                # === Custom Images ===
+                "list_custom_images",          # Resource
+                "get_custom_image",            # Resource
+                "get_base_registry",           # Resource
+                "get_image_dockerfile",        # Resource
+                "get_build_logs",              # Resource
+                "download_build_log",          # Resource
+                "create_custom_image",         # Tool
+                "build_custom_image",          # Tool
+                "delete_custom_image",         # Tool
+
+                # === Models ===
+                "get_model_catalog",           # Resource
+                "list_mirror_jobs",            # Resource
+                "get_mirror_status",           # Resource
+                "check_mlflow_status",         # Resource
+                "submit_model_mirror",         # Tool
+                "cancel_model_mirror",         # Tool
+                "reset_mirror_job",            # Tool
+                "delete_model",                # Tool
+                "register_finetuned_model",    # Tool
+
+                # === Jupyter Venvs ===
+                "list_jupyter_venvs",          # Resource
+                "get_jupyter_venv",            # Resource
+                "get_venv_templates",          # Resource
+                "get_venv_template_details",   # Resource
+                "get_venv_build_logs",         # Resource
+                "download_venv_build_log",     # Resource
+                "create_jupyter_venv",         # Tool
+                "build_jupyter_venv",          # Tool
+                "delete_jupyter_venv",         # Tool
+
+                # === JupyterHub Config ===
+                "get_jupyterhub_config",       # Resource
+
+                # === Optional Components ===
                 "list_optional_components",    # Resource
                 "get_component_info",          # Resource
+                "get_component_status",        # Resource
                 "install_optional_component",  # Tool
                 "uninstall_optional_component", # Tool
-                "get_component_status",        # Resource
-                # Auth
-                "get_user_info",          # Resource
+
+                # === Knative ===
+                "list_knative_services",       # Resource
+                "get_knative_service",         # Resource
+
+                # === Cluster & GPU ===
+                "get_cluster_resources",       # Resource
+                "get_gpu_metrics",             # Resource
+
+                # === CI/CD ===
+                "list_pipelines",              # Resource
+                "get_pipeline",                # Resource
+                "get_metrics",                 # Resource
+                "list_applications",           # Resource
+
+                # === Debug ===
+                "resolve_hostname",            # Resource
+                "test_connectivity",           # Resource
+                "get_environment",             # Resource
+                "test_ssh",                    # Resource
             ]
         )
 

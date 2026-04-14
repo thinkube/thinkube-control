@@ -41,20 +41,82 @@ class EndpointClassifier:
 
     # Known operation IDs that should be resources
     RESOURCE_OPERATION_IDS = {
+        # Auth
+        "get_user_info",
+        "list_tokens",
+        "verify_current_token",
+        # Services
         "list_services_minimal",
         "get_service_details",
+        "get_service_health_history",
+        "get_service_dependencies",
+        "describe_pod",
+        "get_container_logs",
+        # Dashboards
+        "list_dashboards",
+        "get_dashboard_categories",
+        "get_dashboard",
+        # Templates
         "list_templates",
         "get_template_metadata",
         "list_deployments",
         "get_deployment_status",
         "get_deployment_logs",
-        "list_dashboards",
+        "get_deployment_debug_logs",
+        "download_debug_log",
+        # Harbor images
         "list_harbor_images",
         "get_harbor_image",
+        "get_image_statistics",
+        "list_harbor_jobs",
+        "get_harbor_job_status",
+        "list_harbor_projects",
+        "check_harbor_health",
+        # Secrets
+        "list_secrets",
+        "get_secret",
+        "get_secret_apps",
+        # Custom images
+        "list_custom_images",
+        "get_custom_image",
+        "get_base_registry",
+        "get_image_dockerfile",
+        "get_build_logs",
+        "download_build_log",
+        # Models
+        "get_model_catalog",
+        "list_mirror_jobs",
+        "get_mirror_status",
+        "check_mlflow_status",
+        # Jupyter venvs
+        "list_jupyter_venvs",
+        "get_jupyter_venv",
+        "get_venv_templates",
+        "get_venv_template_details",
+        "get_venv_build_logs",
+        "download_venv_build_log",
+        # JupyterHub
+        "get_jupyterhub_config",
+        # Optional components
         "list_optional_components",
         "get_component_info",
         "get_component_status",
-        "get_user_info",
+        # Knative
+        "list_knative_services",
+        "get_knative_service",
+        # Cluster
+        "get_cluster_resources",
+        "get_gpu_metrics",
+        # CI/CD
+        "list_pipelines",
+        "get_pipeline",
+        "get_metrics",
+        "list_applications",
+        # Debug
+        "resolve_hostname",
+        "test_connectivity",
+        "get_environment",
+        "test_ssh",
     }
 
     def __init__(

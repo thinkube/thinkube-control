@@ -625,7 +625,7 @@ def sync_with_harbor(
 
 # Mirror Job Management
 
-@router.get("/jobs")
+@router.get("/jobs", operation_id="list_harbor_jobs")
 def list_mirror_jobs(
     status: Optional[str] = Query(None, description="Filter by job status"),
     job_type: Optional[str] = Query(None, description="Filter by job type"),
@@ -657,7 +657,7 @@ def list_mirror_jobs(
     }
 
 
-@router.get("/jobs/{job_id}")
+@router.get("/jobs/{job_id}", operation_id="get_harbor_job_status")
 def get_job_status(
     job_id: UUID,
     db: Session = Depends(get_db),
