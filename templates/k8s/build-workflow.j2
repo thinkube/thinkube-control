@@ -83,7 +83,7 @@ spec:
               - name: build_path
                 value: "{{ container.build | replace('./', '') }}"
               - name: test_enabled
-                value: "{% if container.test is defined %}{{ container.test.enabled | default(true) | lower }}{% else %}true{% endif %}"
+                value: "{% if container.test is defined %}{{ container.test.enabled | default(true) | lower }}{% else %}false{% endif %}"
               - name: test_command
                 value: "{% if container.test is defined %}{{ container.test.command | default('') }}{% endif %}"
               - name: test_image
