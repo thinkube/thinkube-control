@@ -3,7 +3,7 @@ import { TkCard, TkCardHeader, TkCardTitle, TkCardContent, TkCardFooter } from '
 import { TkBadge } from 'thinkube-style/components/buttons-badges'
 import { TkButton } from 'thinkube-style/components/buttons-badges'
 import { TkPageWrapper } from 'thinkube-style/components/utilities'
-import { Loader2, RefreshCw, Zap, ZapOff, ExternalLink, Trash2 } from 'lucide-react'
+import { Loader2, RefreshCw, Zap, ZapOff, ExternalLink } from 'lucide-react'
 import { useKnativeServicesStore, type KnativeService } from '../stores/useKnativeServicesStore'
 
 function StatusBadge({ status, replicas }: { status: string; replicas: number }) {
@@ -34,7 +34,7 @@ function formatTime(isoString: string | null) {
   return `${diffDays}d ago`
 }
 
-function KnativeServiceCard({ service, onDelete }: { service: KnativeService; onDelete: (ns: string, name: string) => void }) {
+function KnativeServiceCard({ service }: { service: KnativeService }) {
   const isActive = service.status === 'Ready' && service.current_replicas > 0
   const isScaledToZero = service.status === 'Ready' && service.current_replicas === 0
   const borderClass = service.status === 'NotReady'
@@ -109,8 +109,8 @@ function KnativeServiceCard({ service, onDelete }: { service: KnativeService; on
         </div>
       </TkCardContent>
 
-      <TkCardFooter className="flex gap-2 pt-3">
-        {service.url && (
+      {service.url && (
+        <TkCardFooter className="pt-3">
           <TkButton
             size="sm"
             variant="default"
@@ -122,25 +122,14 @@ function KnativeServiceCard({ service, onDelete }: { service: KnativeService; on
               Open
             </a>
           </TkButton>
-        )}
-        <TkButton
-          size="sm"
-          variant="destructive"
-          onClick={() => {
-            if (confirm(`Delete Knative service "${service.name}" from namespace "${service.namespace}"?`)) {
-              onDelete(service.namespace, service.name)
-            }
-          }}
-        >
-          <Trash2 className="h-4 w-4" />
-        </TkButton>
-      </TkCardFooter>
+        </TkCardFooter>
+      )}
     </TkCard>
   )
 }
 
 export default function KnativeServicesPage() {
-  const { services, loading, error, fetchServices, deleteService } = useKnativeServicesStore()
+  const { services, loading, error, fetchServices } = useKnativeServicesStore()
 
   useEffect(() => {
     fetchServices()
@@ -239,7 +228,6 @@ export default function KnativeServicesPage() {
             <KnativeServiceCard
               key={`${service.namespace}/${service.name}`}
               service={service}
-              onDelete={deleteService}
             />
           ))}
         </div>
