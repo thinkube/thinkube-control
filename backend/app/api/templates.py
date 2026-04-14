@@ -34,6 +34,7 @@ from app.services.background_executor import background_executor
 from app.services.dependency_manager import DependencyManager
 from app.services.model_downloader import ModelDownloaderService
 from app.services.metadata_fetcher import fetch_merged_catalog
+from typing import List as TypingList
 import yaml
 import aiohttp
 
@@ -699,6 +700,111 @@ async def download_debug_log(
 
     # Return the file
     return FileResponse(path=str(log_file), filename=filename, media_type="text/plain")
+
+
+class PublishTemplateRequest(BaseModel):
+    """Request to publish an app as a template."""
+    app_name: str
+    template_name: str
+    description: str
+    tags: TypingList[str] = []
+    private: bool = True
+
+
+@router.get("/apps", operation_id="list_deployed_apps")
+async def list_deployed_apps(
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """
+    List deployed apps in /home/thinkube/apps/ that can be published as templates.
+
+    Returns apps that have a thinkube.yaml or manifest.yaml file.
+    """
+    apps_dir = Path("/home/thinkube/apps")
+    if not apps_dir.exists():
+        return {"apps": []}
+
+    apps = []
+    for app_path in sorted(apps_dir.iterdir()):
+        if not app_path.is_dir():
+            continue
+
+        has_thinkube = (app_path / "thinkube.yaml").exists()
+        has_manifest = (app_path / "manifest.yaml").exists()
+
+        if not has_thinkube and not has_manifest:
+            continue
+
+        app_info = {
+            "name": app_path.name,
+            "path": str(app_path),
+            "has_thinkube_yaml": has_thinkube,
+            "has_manifest_yaml": has_manifest,
+        }
+
+        # Read thinkube.yaml for metadata if available
+        if has_thinkube:
+            try:
+                with open(app_path / "thinkube.yaml") as f:
+                    config = yaml.safe_load(f)
+                app_info["description"] = config.get("metadata", {}).get("description", "")
+                app_info["deployment_type"] = config.get("spec", {}).get("type", "app")
+            except Exception:
+                pass
+
+        apps.append(app_info)
+
+    return {"apps": apps}
+
+
+@router.post("/publish", operation_id="publish_template")
+async def publish_template(
+    request: PublishTemplateRequest,
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """
+    Publish a deployed app as a reusable template to the user's GitHub org.
+
+    Copies app source (excluding .git, k8s/, etc.) to a new GitHub repo,
+    and registers it in the user's metadata repo so it appears in the catalog.
+    """
+    from app.services.github_publisher import GitHubPublisher
+
+    try:
+        publisher = GitHubPublisher()
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e),
+        )
+
+    try:
+        result = await publisher.publish_app_as_template(
+            app_name=request.app_name,
+            template_name=request.template_name,
+            description=request.description,
+            tags=request.tags,
+            private=request.private,
+        )
+
+        return {
+            "status": "success",
+            "message": f"Published '{request.app_name}' as template '{request.template_name}'",
+            **result,
+        }
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        logger.error(f"Failed to publish template: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error publishing template: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to publish template: {str(e)}",
+        )
 
 
 @router.post(

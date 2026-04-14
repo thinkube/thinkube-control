@@ -1,14 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Upload, ExternalLink, Check } from 'lucide-react'
 import { TkButton } from 'thinkube-style/components/buttons-badges'
 import { TkBadge } from 'thinkube-style/components/buttons-badges'
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent, TkCardFooter } from 'thinkube-style/components/cards-data'
 import { TkInput } from 'thinkube-style/components/forms-inputs'
-import { TkInfoAlert, TkErrorAlert } from 'thinkube-style/components/feedback'
+import { TkInfoAlert, TkErrorAlert, TkSuccessAlert } from 'thinkube-style/components/feedback'
 import { TkPageWrapper } from 'thinkube-style/components/utilities'
+import { TkDialogRoot, TkDialogContent, TkDialogHeader, TkDialogTitle, TkDialogFooter } from 'thinkube-style/components/modals-overlays'
 import { TemplateParameterForm } from '../components/TemplateParameterForm'
-import { PlaybookExecutor } from '../components/PlaybookExecutor'
+import { PlaybookExecutor, type PlaybookExecutorHandle } from '../components/PlaybookExecutor'
 import api from '../lib/axios'
 
 interface TemplateInfo {
@@ -23,23 +24,23 @@ interface TemplateMetadata {
   }
   parameters: Array<{
     name: string
-    type: string
-    default?: any
+    type: 'str' | 'int' | 'bool' | 'choice'
+    default?: string | number | boolean
     description?: string
     required?: boolean
+    placeholder?: string
+    pattern?: string
+    minLength?: number
+    maxLength?: number
+    min?: number
+    max?: number
+    choices?: string[]
+    group?: string
+    order?: number
   }>
 }
 
-interface DeployConfig {
-  project_name: string
-  project_description: string
-  _overwrite_confirmed?: boolean
-  [key: string]: any
-}
-
-interface PlaybookExecutorHandle {
-  startExecution: (wsPath: string) => void
-}
+type DeployConfig = Record<string, string | number | boolean>
 
 interface AvailableTemplate {
   name: string
@@ -48,6 +49,15 @@ interface AvailableTemplate {
   org: string
   deployment_type: 'app' | 'knative'
   source: 'platform' | 'user'
+}
+
+interface DeployedApp {
+  name: string
+  path: string
+  has_thinkube_yaml: boolean
+  has_manifest_yaml: boolean
+  description?: string
+  deployment_type?: string
 }
 
 export default function Templates() {
@@ -68,7 +78,19 @@ export default function Templates() {
     project_description: ''
   })
 
-  const playbookExecutorRef = useRef<PlaybookExecutorHandle>(null)
+  // Publish as Template state
+  const [deployedApps, setDeployedApps] = useState<DeployedApp[]>([])
+  const [loadingApps, setLoadingApps] = useState(false)
+  const [showPublishDialog, setShowPublishDialog] = useState(false)
+  const [publishApp, setPublishApp] = useState<DeployedApp | null>(null)
+  const [publishTemplateName, setPublishTemplateName] = useState('')
+  const [publishDescription, setPublishDescription] = useState('')
+  const [publishTags, setPublishTags] = useState('')
+  const [publishPrivate, setPublishPrivate] = useState(true)
+  const [isPublishing, setIsPublishing] = useState(false)
+  const [publishResult, setPublishResult] = useState<{ status: string; repo_url?: string; message?: string } | null>(null)
+
+  const playbookExecutorRef = useRef<PlaybookExecutorHandle>(null!)
   const isLoadingRef = useRef(false) // Prevent concurrent loads
 
   // Compute domain name
@@ -80,7 +102,7 @@ export default function Templates() {
   const isValidConfig =
     templateMetadata &&
     deployConfig.project_name &&
-    /^[a-z][a-z0-9-]*$/.test(deployConfig.project_name)
+    /^[a-z][a-z0-9-]*$/.test(String(deployConfig.project_name))
 
   const isValidUrl = (url: string): boolean => {
     try {
@@ -186,6 +208,79 @@ export default function Templates() {
 
     fetchTemplates()
   }, [])
+
+  // Fetch deployed apps
+  useEffect(() => {
+    const fetchDeployedApps = async () => {
+      setLoadingApps(true)
+      try {
+        const token = localStorage.getItem('access_token')
+        const response = await api.get('/templates/apps', {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+        if (response.data?.apps) {
+          setDeployedApps(response.data.apps)
+        }
+      } catch (error) {
+        console.error('Failed to fetch deployed apps:', error)
+      } finally {
+        setLoadingApps(false)
+      }
+    }
+    fetchDeployedApps()
+  }, [])
+
+  // Open publish dialog for an app
+  const openPublishDialog = (app: DeployedApp) => {
+    setPublishApp(app)
+    setPublishTemplateName(app.name)
+    setPublishDescription(app.description || '')
+    setPublishTags('')
+    setPublishPrivate(true)
+    setPublishResult(null)
+    setShowPublishDialog(true)
+  }
+
+  // Handle publish
+  const handlePublish = async () => {
+    if (!publishApp || !publishTemplateName) return
+    setIsPublishing(true)
+    setPublishResult(null)
+
+    try {
+      const token = localStorage.getItem('access_token')
+      const response = await api.post('/templates/publish', {
+        app_name: publishApp.name,
+        template_name: publishTemplateName,
+        description: publishDescription,
+        tags: publishTags.split(',').map(t => t.trim()).filter(Boolean),
+        private: publishPrivate,
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+
+      setPublishResult({
+        status: 'success',
+        repo_url: response.data.repo_url,
+        message: response.data.message,
+      })
+
+      // Refresh template list since a new one was published
+      const templatesResponse = await api.get('/templates/list', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (templatesResponse.data?.templates) {
+        setAvailableTemplates(templatesResponse.data.templates)
+      }
+    } catch (error: any) {
+      setPublishResult({
+        status: 'error',
+        message: error.response?.data?.detail || error.message,
+      })
+    } finally {
+      setIsPublishing(false)
+    }
+  }
 
   // Check for deploy parameter on mount
   useEffect(() => {
@@ -435,6 +530,148 @@ export default function Templates() {
           </TkCardFooter>
         </TkCard>
       )}
+
+      {/* Your Deployed Apps */}
+      {deployedApps.length > 0 && (
+        <div className="mb-8">
+          <h2 className="text-2xl font-bold mb-4">
+            Your Apps
+          </h2>
+          <p className="text-sm opacity-70 mb-4">
+            Publish a deployed app as a reusable template to your GitHub organization.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {deployedApps.map((app) => (
+              <TkCard key={app.name} className="flex flex-col h-full">
+                <TkCardHeader>
+                  <div className="flex items-center justify-between gap-2">
+                    <TkCardTitle>{app.name}</TkCardTitle>
+                    <TkBadge variant={app.deployment_type === 'knative' ? 'secondary' : 'outline'}>
+                      {app.deployment_type === 'knative' ? 'Knative' : 'App'}
+                    </TkBadge>
+                  </div>
+                </TkCardHeader>
+                <TkCardContent className="flex-1">
+                  <p className="text-sm opacity-80">{app.description || 'No description'}</p>
+                </TkCardContent>
+                <TkCardFooter className="flex justify-end">
+                  <TkButton
+                    variant="outline"
+                    size="sm"
+                    onClick={() => openPublishDialog(app)}
+                  >
+                    <Upload className="h-4 w-4 mr-1" />
+                    Publish as Template
+                  </TkButton>
+                </TkCardFooter>
+              </TkCard>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Publish Dialog */}
+      <TkDialogRoot open={showPublishDialog} onOpenChange={setShowPublishDialog}>
+        <TkDialogContent className="max-w-lg">
+          <TkDialogHeader>
+            <TkDialogTitle>Publish as Template</TkDialogTitle>
+          </TkDialogHeader>
+
+          <div className="space-y-4 py-4">
+            {publishResult?.status === 'success' ? (
+              <TkSuccessAlert title="Published">
+                <p>{publishResult.message}</p>
+                {publishResult.repo_url && (
+                  <a
+                    href={publishResult.repo_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-primary hover:underline mt-2"
+                  >
+                    View on GitHub <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
+              </TkSuccessAlert>
+            ) : publishResult?.status === 'error' ? (
+              <TkErrorAlert title="Publish Failed">
+                <p>{publishResult.message}</p>
+              </TkErrorAlert>
+            ) : null}
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Source App</label>
+              <TkInput value={publishApp?.name || ''} disabled />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Template Name</label>
+              <TkInput
+                value={publishTemplateName}
+                onChange={(e) => setPublishTemplateName(e.target.value)}
+                placeholder="my-template"
+                disabled={isPublishing || publishResult?.status === 'success'}
+              />
+              <p className="text-xs opacity-60">
+                GitHub repository name. Use lowercase with hyphens.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Description</label>
+              <TkInput
+                value={publishDescription}
+                onChange={(e) => setPublishDescription(e.target.value)}
+                placeholder="A brief description of what this template does"
+                disabled={isPublishing || publishResult?.status === 'success'}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Tags</label>
+              <TkInput
+                value={publishTags}
+                onChange={(e) => setPublishTags(e.target.value)}
+                placeholder="webapp, ai, custom (comma-separated)"
+                disabled={isPublishing || publishResult?.status === 'success'}
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="publish-private"
+                checked={publishPrivate}
+                onChange={(e) => setPublishPrivate(e.target.checked)}
+                disabled={isPublishing || publishResult?.status === 'success'}
+                className="rounded"
+              />
+              <label htmlFor="publish-private" className="text-sm">
+                Private repository
+              </label>
+            </div>
+          </div>
+
+          <TkDialogFooter>
+            <TkButton
+              variant="ghost"
+              onClick={() => setShowPublishDialog(false)}
+            >
+              {publishResult?.status === 'success' ? 'Close' : 'Cancel'}
+            </TkButton>
+            {publishResult?.status !== 'success' && (
+              <TkButton
+                variant="default"
+                disabled={!publishTemplateName || isPublishing}
+                onClick={handlePublish}
+              >
+                {isPublishing && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                {isPublishing ? 'Publishing...' : 'Publish'}
+              </TkButton>
+            )}
+          </TkDialogFooter>
+        </TkDialogContent>
+      </TkDialogRoot>
 
       {/* Available Templates */}
       <div className="mb-4">
