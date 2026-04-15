@@ -23,7 +23,7 @@ NODE_METRICS_TIMEOUT = 5.0
 # Server-side cache
 _metrics_cache: Dict[str, Any] = {}
 _metrics_cache_time: float = 0
-_METRICS_CACHE_TTL: float = 5.0
+_METRICS_CACHE_TTL: float = 2.0
 
 
 async def fetch_node_metrics() -> Dict[str, Any]:
