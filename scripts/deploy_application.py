@@ -261,7 +261,6 @@ git reset --hard origin/main
             self.get_wildcard_cert(),
             self.get_harbor_credentials(),
             self.get_admin_credentials(),
-            self.get_cicd_api_token(),
             self.get_mlflow_credentials(),
             self.get_seaweedfs_credentials(),
             self.get_argocd_credentials(),
@@ -314,16 +313,6 @@ git reset --hard origin/main
             DeploymentLogger.log("Retrieved admin credentials")
         except ApiException as e:
             DeploymentLogger.error(f"Failed to get admin credentials: {e}")
-            raise
-
-    async def get_cicd_api_token(self):
-        """Fetch CI/CD API token."""
-        try:
-            secret = await self.k8s_core.read_namespaced_secret('cicd-monitoring-token', 'thinkube-control')
-            self.secrets['cicd_token'] = secret
-            DeploymentLogger.log("Retrieved CI/CD API token")
-        except ApiException as e:
-            DeploymentLogger.error(f"Failed to get CI/CD token: {e}")
             raise
 
     async def get_mlflow_credentials(self):
@@ -445,7 +434,6 @@ git reset --hard origin/main
         await asyncio.gather(
             self.create_tls_secret(),
             self.create_harbor_secret(),
-            self.create_cicd_secrets(),
             self.create_mlflow_config(),
             self.create_app_metadata(),
             self.manage_databases(),
@@ -526,28 +514,6 @@ git reset --hard origin/main
                 DeploymentLogger.log(f"app-pull-secret already exists in {self.namespace}")
             else:
                 raise
-
-    async def create_cicd_secrets(self):
-        """Create CI/CD token secrets in both argo and app namespaces."""
-        cicd_token = self._decode_secret_data(self.secrets['cicd_token'], 'token')
-
-        secret = client.V1Secret(
-            metadata=client.V1ObjectMeta(name=f'{self.app_name}-cicd-token'),
-            string_data={'token': cicd_token}
-        )
-
-        for ns in ['argo', self.namespace]:
-            secret.metadata.namespace = ns
-            try:
-                await self.k8s_core.create_namespaced_secret(ns, secret)
-                DeploymentLogger.log(f"Created CI/CD secret in {ns}")
-            except ApiException as e:
-                if e.status == 409:
-                    # Update existing secret with fresh token
-                    await self.k8s_core.replace_namespaced_secret(f'{self.app_name}-cicd-token', ns, secret)
-                    DeploymentLogger.log(f"Updated CI/CD secret in {ns}")
-                else:
-                    raise
 
     async def create_mlflow_config(self):
         """Create MLflow configuration secret in target namespace."""
@@ -1112,90 +1078,12 @@ spec:
   template:
     spec:
       restartPolicy: Never
-      serviceAccountName: default
       containers:
       - name: report-deployment
-        image: {container_registry}/library/ci-utils:latest
-        imagePullPolicy: Always
+        image: busybox:latest
         command: ["/bin/sh", "-c"]
         args:
-          - |
-            set -e
-
-            # Get the image tag from the current deployment using Kubernetes API
-            K8S_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-            K8S_CERT=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-
-            # Get deployment info from Kubernetes API
-            DEPLOYMENT_JSON=$(curl -s --cacert $K8S_CERT \\
-              -H "Authorization: Bearer $K8S_TOKEN" \\
-              "https://kubernetes.default.svc/apis/apps/v1/namespaces/{self.namespace}/deployments")
-
-            # Extract image tag from first deployment
-            if command -v jq >/dev/null 2>&1; then
-              IMAGE_TAG=$(echo "$DEPLOYMENT_JSON" | jq -r '.items[0].spec.template.spec.containers[0].image' | cut -d: -f2)
-            else
-              IMAGE_TAG=$(echo "$DEPLOYMENT_JSON" | grep -o '"image":"[^"]*"' | head -1 | sed 's/"image":"//' | sed 's/".*//' | cut -d: -f2)
-            fi
-
-            if [ -z "$IMAGE_TAG" ]; then
-              echo "Could not determine image tag from deployment"
-              exit 0
-            fi
-
-            echo "Current deployment tag (workflow UID): $IMAGE_TAG"
-
-            # Get the pipeline by workflow UID
-            echo "Fetching pipeline for {self.app_name} with workflow UID: $IMAGE_TAG"
-
-            PIPELINE_RESPONSE=$(curl -s -X GET \\
-              "https://control.{self.domain}/api/v1/cicd/pipelines?app_name={self.app_name}&workflow_uid=${{IMAGE_TAG}}&limit=1" \\
-              -H "Authorization: Bearer ${{CICD_TOKEN}}")
-
-            echo "API Response: $PIPELINE_RESPONSE"
-
-            # Extract pipeline ID
-            PIPELINE_ID=$(echo "$PIPELINE_RESPONSE" | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
-
-            if [ -z "$PIPELINE_ID" ]; then
-              echo "No pipeline found for {self.app_name} with workflow UID: $IMAGE_TAG"
-              exit 0
-            fi
-
-            echo "Found pipeline: $PIPELINE_ID"
-
-            # Create deployment_completed stage
-            STAGE_DATA='{{"stageName": "deployment_completed", "component": "argocd", "appName": "{self.app_name}", "namespace": "{self.namespace}", "adapterVersion": "0.1.0"}}'
-
-            echo "Creating deployment_completed stage..."
-
-            STAGE_RESPONSE=$(curl -s -X POST \\
-              "https://control.{self.domain}/api/v1/cicd/pipelines/${{PIPELINE_ID}}/stages/argocd" \\
-              -H "Authorization: Bearer ${{CICD_TOKEN}}" \\
-              -H "Content-Type: application/json" \\
-              -d "$STAGE_DATA")
-
-            echo "Stage creation response: $STAGE_RESPONSE"
-
-            # Mark the entire pipeline as SUCCEEDED
-            echo "Marking pipeline as SUCCEEDED..."
-
-            PIPELINE_UPDATE_DATA='{{"status": "SUCCEEDED", "completedAt": '$(date +%s)'}}'
-
-            PIPELINE_UPDATE_RESPONSE=$(curl -s -X PATCH \\
-              "https://control.{self.domain}/api/v1/cicd/pipelines/${{PIPELINE_ID}}" \\
-              -H "Authorization: Bearer ${{CICD_TOKEN}}" \\
-              -H "Content-Type: application/json" \\
-              -d "$PIPELINE_UPDATE_DATA")
-
-            echo "Pipeline update response: $PIPELINE_UPDATE_RESPONSE"
-            echo "Deployment completed successfully"
-        env:
-        - name: CICD_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: {self.app_name}-cicd-token
-              key: token
+          - echo "Deployment of {self.app_name} completed successfully at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 """
         (k8s_dir / 'argocd-postsync-hook.yaml').write_text(postsync_content)
 
@@ -1213,90 +1101,12 @@ spec:
   template:
     spec:
       restartPolicy: Never
-      serviceAccountName: default
       containers:
       - name: report-deployment-failure
-        image: {container_registry}/library/ci-utils:latest
-        imagePullPolicy: Always
+        image: busybox:latest
         command: ["/bin/sh", "-c"]
         args:
-          - |
-            set -e
-
-            # Get the image tag from the current deployment using Kubernetes API
-            K8S_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
-            K8S_CERT=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-
-            # Get deployment info from Kubernetes API
-            DEPLOYMENT_JSON=$(curl -s --cacert $K8S_CERT \\
-              -H "Authorization: Bearer $K8S_TOKEN" \\
-              "https://kubernetes.default.svc/apis/apps/v1/namespaces/{self.namespace}/deployments")
-
-            # Extract image tag from first deployment
-            if command -v jq >/dev/null 2>&1; then
-              IMAGE_TAG=$(echo "$DEPLOYMENT_JSON" | jq -r '.items[0].spec.template.spec.containers[0].image' | cut -d: -f2)
-            else
-              IMAGE_TAG=$(echo "$DEPLOYMENT_JSON" | grep -o '"image":"[^"]*"' | head -1 | sed 's/"image":"//' | sed 's/".*//' | cut -d: -f2)
-            fi
-
-            if [ -z "$IMAGE_TAG" ]; then
-              echo "Could not determine image tag from deployment"
-              IMAGE_TAG="unknown"
-            fi
-
-            echo "Failed deployment tag (workflow UID): $IMAGE_TAG"
-
-            # Get the pipeline by workflow UID
-            echo "Fetching pipeline for {self.app_name} with workflow UID: $IMAGE_TAG"
-
-            PIPELINE_RESPONSE=$(curl -s -X GET \\
-              "https://control.{self.domain}/api/v1/cicd/pipelines?app_name={self.app_name}&workflow_uid=${{IMAGE_TAG}}&limit=1" \\
-              -H "Authorization: Bearer ${{CICD_TOKEN}}")
-
-            echo "API Response: $PIPELINE_RESPONSE"
-
-            # Extract pipeline ID
-            PIPELINE_ID=$(echo "$PIPELINE_RESPONSE" | grep -o '"id":"[^"]*' | head -1 | cut -d'"' -f4)
-
-            if [ -z "$PIPELINE_ID" ]; then
-              echo "ERROR: No pipeline found for {self.app_name} with workflow UID: $IMAGE_TAG"
-              exit 1
-            fi
-
-            echo "Found pipeline: $PIPELINE_ID"
-
-            # Create deployment_failed stage
-            STAGE_DATA='{{"stageName": "deployment_failed", "component": "argocd", "appName": "{self.app_name}", "namespace": "{self.namespace}", "adapterVersion": "0.1.0", "status": "FAILED"}}'
-
-            echo "Creating deployment_failed stage..."
-
-            STAGE_RESPONSE=$(curl -s -X POST \\
-              "https://control.{self.domain}/api/v1/cicd/pipelines/${{PIPELINE_ID}}/stages/argocd" \\
-              -H "Authorization: Bearer ${{CICD_TOKEN}}" \\
-              -H "Content-Type: application/json" \\
-              -d "$STAGE_DATA")
-
-            echo "Stage creation response: $STAGE_RESPONSE"
-
-            # Mark the entire pipeline as FAILED
-            echo "Marking pipeline as FAILED..."
-
-            PIPELINE_UPDATE_DATA='{{"status": "FAILED", "completedAt": '$(date +%s)'}}'
-
-            PIPELINE_UPDATE_RESPONSE=$(curl -s -X PATCH \\
-              "https://control.{self.domain}/api/v1/cicd/pipelines/${{PIPELINE_ID}}" \\
-              -H "Authorization: Bearer ${{CICD_TOKEN}}" \\
-              -H "Content-Type: application/json" \\
-              -d "$PIPELINE_UPDATE_DATA")
-
-            echo "Pipeline update response: $PIPELINE_UPDATE_RESPONSE"
-            echo "Deployment failure reported successfully"
-        env:
-        - name: CICD_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: {self.app_name}-cicd-token
-              key: token
+          - echo "Deployment of {self.app_name} FAILED at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 """
         (k8s_dir / 'argocd-syncfail-hook.yaml').write_text(syncfail_content)
 
@@ -1995,11 +1805,10 @@ git push -u origin main --force
     # ==================== PHASE 5: Service Discovery ====================
 
     async def phase5_deploy(self):
-        """Phase 5: CI/CD monitoring and service discovery."""
-        DeploymentLogger.phase(5, "Service Discovery & Monitoring")
+        """Phase 5: Service discovery."""
+        DeploymentLogger.phase(5, "Service Discovery")
 
         # ArgoCD app was already created in Phase 4 (before git push)
-        await self.configure_cicd_monitoring()
         await self.setup_service_discovery()
 
         DeploymentLogger.success("Phase 5 complete - application deployed")
@@ -2125,46 +1934,21 @@ git push -u origin main --force
                 # Other errors should fail the deployment
                 raise
 
-    async def configure_cicd_monitoring(self):
-        """Register repository with CI/CD monitoring API (matches Ansible)."""
-        # CI/CD monitoring webhook is optional
-        if not self.thinkube_config.get('cicd', {}).get('enable_monitoring', True):
-            DeploymentLogger.log("CI/CD monitoring disabled, skipping")
-            return
-
-        cicd_token = self._decode_secret_data(self.secrets['cicd_token'], 'token')
-        control_url = f"https://control.{self.domain}/api/v1/cicd/repositories"
-
-        async with aiohttp.ClientSession() as session:
-            headers = {
-                'Authorization': f'Bearer {cicd_token}',
-                'Content-Type': 'application/json'
-            }
-
-            body = {
-                'repository_url': f"https://git.{self.domain}/thinkube-deployments/{self.app_name}",
-                'repository_name': self.app_name,
-                'active': True
-            }
-
-            async with session.post(control_url, headers=headers, json=body, ssl=False) as resp:
-                if resp.status in [200, 201]:
-                    DeploymentLogger.success(f"Registered {self.app_name} with CI/CD monitoring")
-                elif resp.status == 409:
-                    DeploymentLogger.log("Repository already registered with CI/CD monitoring")
-                else:
-                    error_text = await resp.text()
-                    DeploymentLogger.error(f"Failed to register with CI/CD monitoring: {resp.status} - {error_text}")
-
     async def setup_service_discovery(self):
-        """Setup service discovery via thinkube-control API (matches Ansible)."""
-        cicd_token = self._decode_secret_data(self.secrets['cicd_token'], 'token')
+        """Setup service discovery via thinkube-control API."""
+        # Use MCP default token for API authentication
+        try:
+            mcp_secret = await self.k8s_core.read_namespaced_secret('mcp-default-token', 'thinkube-control')
+            api_token = self._decode_secret_data(mcp_secret, 'token')
+        except ApiException:
+            DeploymentLogger.error("MCP default token not found, skipping service discovery")
+            return
         control_base = f"https://control.{self.domain}"
         app_host = f"{self.app_name}.{self.domain}"
 
         async with aiohttp.ClientSession() as session:
             headers = {
-                'Authorization': f'Bearer {cicd_token}',
+                'Authorization': f'Bearer {api_token}',
                 'Content-Type': 'application/json'
             }
 

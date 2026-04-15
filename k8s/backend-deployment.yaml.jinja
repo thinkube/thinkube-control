@@ -43,15 +43,6 @@ spec:
           value: '["https://{{ control_subdomain }}.{{ domain_name }}"]'
         - name: DOMAIN_NAME
           value: "{{ domain_name }}"
-        # CI/CD monitoring token for MCP internal authentication
-        - name: CICD_MONITORING_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: cicd-monitoring-token
-              key: token
-        # Domain configuration for podman registry
-        - name: DOMAIN_NAME
-          value: "{{ domain_name }}"
         # Dashboard service URLs - only deployed services
         - name: SEAWEEDFS_URL
           value: "https://seaweedfs.{{ domain_name }}"

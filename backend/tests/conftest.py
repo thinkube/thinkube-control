@@ -11,7 +11,6 @@ from sqlalchemy.pool import StaticPool
 
 from app import create_app
 from app.db.session import Base, get_db
-from app.db.cicd_session import get_cicd_db
 from app.core.config import settings
 
 # Use the real PostgreSQL database for testing
@@ -55,36 +54,6 @@ def test_db() -> Generator[Session, None, None]:
 
 
 @pytest.fixture(scope="function")
-def test_cicd_db() -> Generator[Session, None, None]:
-    """Create a test CI/CD database session for the cicd_monitoring database.
-
-    This is a separate database used exclusively for:
-    - CI/CD pipeline tracking
-    - Build events and logs
-    - Pipeline metrics
-
-    Note: This database is completely independent from the main thinkube_control database.
-    """
-    # Use CI/CD monitoring TEST database
-    cicd_test_db_name = f"{settings.CICD_DB_NAME}_test"
-    cicd_url = f"postgresql://{settings.POSTGRES_USER}:{settings.POSTGRES_PASSWORD}@{settings.POSTGRES_HOST}:{settings.POSTGRES_PORT}/{cicd_test_db_name}"
-    engine = create_engine(cicd_url, pool_pre_ping=True, pool_size=5)
-    TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-    # Create tables if needed
-    from app.models.cicd import Base as CICDBase
-
-    CICDBase.metadata.create_all(bind=engine)
-
-    db = TestingSessionLocal()
-    yield db
-
-    # Cleanup - rollback any changes made during the test
-    db.rollback()
-    db.close()
-
-
-@pytest.fixture(scope="function")
 def app():
     """Create a fresh FastAPI app instance for each test."""
     return create_app()
@@ -92,15 +61,7 @@ def app():
 
 @pytest.fixture(scope="function")
 def client(app, test_db: Session) -> Generator[TestClient, None, None]:
-    """Create a test client with overridden database dependency.
-
-    This fixture provides a test client with the main database (thinkube_control)
-    dependency overridden. For CI/CD endpoints, you must additionally override
-    the get_cicd_db dependency in your test.
-
-    Example for CI/CD tests:
-        client.app.dependency_overrides[get_cicd_db] = lambda: test_cicd_db
-    """
+    """Create a test client with overridden database dependency."""
 
     def override_get_db():
         try:

@@ -3,8 +3,7 @@ from fastapi import APIRouter
 from app.api import (
     auth,
     dashboards,
-    cicd_postgres,
-    cicd_sources,
+    cicd,
     tokens,
     websocket_executor,
     websocket_harbor,
@@ -33,8 +32,7 @@ api_router = APIRouter()
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(dashboards.router, prefix="/dashboards", tags=["dashboards"])
 api_router.include_router(services.router, prefix="/services", tags=["services"])
-api_router.include_router(cicd_postgres.router, prefix="/cicd", tags=["cicd"])
-api_router.include_router(cicd_sources.router, prefix="/cicd", tags=["cicd-sources"])
+api_router.include_router(cicd.router, prefix="/cicd", tags=["cicd"])
 api_router.include_router(tokens.router, prefix="/tokens", tags=["api-tokens"])
 api_router.include_router(templates.router, prefix="/templates", tags=["templates"])
 api_router.include_router(stacks.router, prefix="/stacks", tags=["stacks"])

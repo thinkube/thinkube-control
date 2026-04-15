@@ -10,11 +10,9 @@ from fastapi_mcp_extended import ExtendedFastApiMCP
 from app.core.config import settings
 from app.api.router import api_router
 from app.db.session import Base, get_engine, SessionLocal
-from app.db.cicd_session import get_cicd_engine
 
 # Import models to ensure they're registered with Base
 from app.core.api_tokens import APIToken
-from app.models.cicd import Pipeline, PipelineStage, PipelineMetric
 from app.models.services import Service, ServiceHealth, ServiceAction, ServiceEndpoint
 from app.models.favorites import UserFavorite
 from app.models.container_images import ContainerImage, ImageMirrorJob
@@ -57,13 +55,6 @@ async def app_lifespan(app: FastAPI):
                 logger.info("Added order_index column to user_favorites table")
     except Exception as e:
         logger.warning(f"Could not add order_index column: {e}")
-
-    # Create tables in CI/CD monitoring database
-    # Note: The tables already exist from our PostgreSQL setup,
-    # but this ensures they're created if missing
-    from app.models.cicd import Base as CICDBase
-
-    CICDBase.metadata.create_all(bind=get_cicd_engine())
 
     # Initialize services in database
     try:
@@ -302,12 +293,6 @@ def create_app() -> FastAPI:
                 # === Cluster & GPU ===
                 "get_cluster_resources",       # Resource
                 "get_gpu_metrics",             # Resource
-
-                # === CI/CD ===
-                "list_pipelines",              # Resource
-                "get_pipeline",                # Resource
-                "get_metrics",                 # Resource
-                "list_applications",           # Resource
 
                 # === Debug ===
                 "resolve_hostname",            # Resource

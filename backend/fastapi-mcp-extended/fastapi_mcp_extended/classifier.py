@@ -107,11 +107,6 @@ class EndpointClassifier:
         # Cluster
         "get_cluster_resources",
         "get_gpu_metrics",
-        # CI/CD
-        "list_pipelines",
-        "get_pipeline",
-        "get_metrics",
-        "list_applications",
         # Debug
         "resolve_hostname",
         "test_connectivity",

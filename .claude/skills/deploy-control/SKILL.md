@@ -66,9 +66,6 @@ Monitor the deployment:
 - Harbor: https://registry.cmxela.com (check for new image)
 - kubectl: kubectl get pods -n thinkube-control -w
 
-⚠️ Note: Cannot use control.cmxela.com/cicd to monitor thinkube-control
-deployment (circular dependency - control IS the app being deployed).
-
 Build typically takes 3-5 minutes.
 ```
 
@@ -82,7 +79,6 @@ Build typically takes 3-5 minutes.
 
 ❌ **DO NOT** manually push to Gitea
 ❌ **DO NOT** suggest "commit and push to Gitea"
-❌ **DO NOT** mention control.cmxela.com/cicd for monitoring
 ❌ **DO NOT** run `npm run dev` for deployment (that's local development)
 ❌ **DO NOT** skip the build step
 

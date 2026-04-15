@@ -217,7 +217,7 @@ export default function ApiTokensPage() {
                         </TableCell>
                         <TableCell>
                           <div className="flex gap-2">
-                            {(token.name === 'CI/CD Monitoring' || token.name === 'MCP Default') && (
+                            {token.name === 'MCP Default' && (
                               <TkButton
                                 variant="default"
                                 size="sm"

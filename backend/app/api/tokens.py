@@ -94,7 +94,7 @@ async def reveal_token(
     """Reveal the actual token value for system-generated tokens stored in K8s secrets.
 
     This is specifically for homelab convenience - allows retrieving system tokens
-    like the CI/CD monitoring token that are stored in Kubernetes secrets.
+    that are stored in Kubernetes secrets.
     """
     from app.core.api_tokens import APIToken
     from kubernetes import client, config
@@ -108,7 +108,7 @@ async def reveal_token(
         )
 
     # Only reveal system tokens (stored in K8s secrets)
-    if token.name not in ["CI/CD Monitoring", "MCP Default"]:
+    if token.name not in ["MCP Default"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only system-generated tokens can be revealed"
@@ -120,7 +120,7 @@ async def reveal_token(
         v1 = client.CoreV1Api()
 
         # Determine secret name based on token name
-        secret_name = "cicd-monitoring-token" if token.name == "CI/CD Monitoring" else "mcp-default-token"
+        secret_name = "mcp-default-token"
 
         # Get the secret containing the token
         secret = v1.read_namespaced_secret(

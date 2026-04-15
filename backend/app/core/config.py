@@ -32,9 +32,6 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str
     POSTGRES_DB: str = "thinkube_control"  # Main database for auth/tokens
 
-    # CI/CD monitoring database
-    CICD_DB_NAME: str = "cicd_monitoring"
-
     # Allow DATABASE_URL to be overridden by environment
     DATABASE_URL: Optional[str] = None
 

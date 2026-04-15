@@ -67,9 +67,9 @@ FastAPI application using the factory pattern (`create_app()` in `app/__init__.p
 
 - **`app/api/`** -- API route handlers. Each file is a router module (auth, services, templates, harbor_images, etc.) aggregated in `router.py`. Includes WebSocket endpoints for real-time execution streaming (`websocket_executor.py`, `websocket_harbor.py`).
 - **`app/services/`** -- Business logic layer. Key services: `K8sServiceManager` (Kubernetes operations), `ServiceDiscovery` (discovers cluster services), `HealthCheckService` (background health monitoring), `BackgroundExecutor` (async task execution), `HarborClient` (Harbor registry API), `ModelDownloader` (AI model management).
-- **`app/models/`** -- SQLAlchemy ORM models and Pydantic schemas. Models cover services, CI/CD pipelines, container images, deployments, favorites, Jupyter venvs.
+- **`app/models/`** -- SQLAlchemy ORM models and Pydantic schemas. Models cover services, container images, deployments, favorites, Jupyter venvs.
 - **`app/core/`** -- Configuration (`config.py` uses pydantic-settings), security/auth (`security.py`), API token management.
-- **`app/db/`** -- Database session management. Uses two separate PostgreSQL databases: main (`thinkube_control`) for app data and `cicd_monitoring` for CI/CD pipelines. `init_services.py`/`init_images.py`/`init_venvs.py` seed initial data on startup.
+- **`app/db/`** -- Database session management. Uses PostgreSQL (`thinkube_control`) for app data. `init_services.py`/`init_images.py`/`init_venvs.py` seed initial data on startup.
 - **`fastapi-mcp-extended/`** -- Custom MCP (Model Context Protocol) server integration. Exposes API endpoints as MCP resources and tools at `/mcp`.
 
 Configuration is driven entirely by environment variables (see `app/core/config.py` for required vars). Auth is Keycloak OAuth2/OIDC.
@@ -120,7 +120,7 @@ This repo is a Copier template (`copier.yaml`). Variables like `domain_name`, `n
 
 ## Key Patterns
 
-- **Dual database**: Main app DB (`thinkube_control`) and CI/CD DB (`cicd_monitoring`) with separate SQLAlchemy engines and sessions.
+- **Single database**: Main app DB (`thinkube_control`) with SQLAlchemy ORM. CI/CD data is queried directly from Kubernetes (Argo Workflows).
 - **WebSocket execution**: Template deployments and image mirroring stream output via WebSocket to the frontend (`websocket_executor.py`). Frontend components `PlaybookExecutor` and `BuildExecutor` consume these streams.
 - **Background tasks**: Lifespan-managed background tasks for health checks (every service, periodic) and service discovery (every 5 minutes).
 - **MLflow injection**: All deployed applications automatically receive MLflow auth credentials as environment variables.
