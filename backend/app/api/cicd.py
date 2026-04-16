@@ -224,6 +224,40 @@ async def get_pipeline(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _resolve_pod_name(core_v1, pod_name_or_node_id: str, workflow_name: str) -> str:
+    """Resolve a pod name from either a direct pod name or an Argo node ID.
+
+    For single-step workflows the node ID equals the pod name.  For DAG
+    workflows the node ID (e.g. ``wf-abc-123``) differs from the actual pod
+    name (e.g. ``wf-abc-step-name-123``).  When a direct lookup fails we
+    search for the pod by its ``workflows.argoproj.io/node-id`` annotation.
+    """
+    # Try direct lookup first (works for single-step workflows)
+    try:
+        pod = core_v1.read_namespaced_pod(name=pod_name_or_node_id, namespace=ARGO_NAMESPACE)
+        pod_labels = pod.metadata.labels or {}
+        if pod_labels.get("workflows.argoproj.io/workflow") == workflow_name:
+            return pod_name_or_node_id
+    except ApiException as e:
+        if e.status != 404:
+            raise
+
+    # Fallback: find pod by node-id annotation within the workflow
+    pods = core_v1.list_namespaced_pod(
+        namespace=ARGO_NAMESPACE,
+        label_selector=f"workflows.argoproj.io/workflow={workflow_name}",
+    )
+    for p in pods.items:
+        annotations = p.metadata.annotations or {}
+        if annotations.get("workflows.argoproj.io/node-id") == pod_name_or_node_id:
+            return p.metadata.name
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"Pod for node {pod_name_or_node_id} not found. It may have been garbage collected.",
+    )
+
+
 @router.get("/pipelines/{workflow_name}/logs/{pod_name}")
 async def get_step_logs(
     workflow_name: str,
@@ -234,33 +268,19 @@ async def get_step_logs(
     """Get logs for a specific workflow step (pod).
 
     Returns the build/test output for the given step, which is especially
-    useful for diagnosing failed builds.
+    useful for diagnosing failed builds.  The *pod_name* parameter may be
+    either a literal Kubernetes pod name or an Argo Workflow node ID — the
+    endpoint resolves the actual pod automatically.
     """
     try:
         _, core_v1 = _get_k8s_clients()
 
-        # Verify the pod belongs to the requested workflow
-        try:
-            pod = core_v1.read_namespaced_pod(name=pod_name, namespace=ARGO_NAMESPACE)
-        except ApiException as e:
-            if e.status == 404:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Pod {pod_name} not found. It may have been garbage collected.",
-                )
-            raise
-
-        pod_labels = pod.metadata.labels or {}
-        pod_workflow = pod_labels.get("workflows.argoproj.io/workflow", "")
-        if pod_workflow != workflow_name:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Pod {pod_name} does not belong to workflow {workflow_name}",
-            )
+        # Resolve the actual pod name (handles node-id → pod-name for DAG workflows)
+        actual_pod_name = _resolve_pod_name(core_v1, pod_name, workflow_name)
 
         # Get logs from the main container
         logs = core_v1.read_namespaced_pod_log(
-            name=pod_name,
+            name=actual_pod_name,
             namespace=ARGO_NAMESPACE,
             container="main",
             tail_lines=tail_lines,
@@ -268,7 +288,7 @@ async def get_step_logs(
 
         return {
             "workflowName": workflow_name,
-            "podName": pod_name,
+            "podName": actual_pod_name,
             "logs": logs,
             "tailLines": tail_lines,
         }
