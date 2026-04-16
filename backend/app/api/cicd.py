@@ -25,6 +25,7 @@ PHASE_TO_STATUS = {
 }
 
 ARGO_NAMESPACE = "argo"
+ARGOCD_NAMESPACE = "argocd"
 
 
 def _get_k8s_clients():
@@ -33,7 +34,7 @@ def _get_k8s_clients():
         config.load_incluster_config()
     except config.ConfigException:
         config.load_kube_config()
-    return client.CustomObjectsApi(), client.CoreV1Api()
+    return client.CustomObjectsApi(), client.CoreV1Api(), client.AppsV1Api()
 
 
 def _parse_iso_to_epoch(iso_str: Optional[str]) -> Optional[float]:
@@ -114,7 +115,7 @@ def _workflow_to_pipeline(wf: dict) -> dict:
 async def cicd_health():
     """Health check for CI/CD API."""
     try:
-        custom_api, _ = _get_k8s_clients()
+        custom_api, _, _ = _get_k8s_clients()
         # Quick check: list 1 workflow
         custom_api.list_namespaced_custom_object(
             group="argoproj.io",
@@ -142,7 +143,7 @@ async def list_pipelines(
     thinkube.io/app-name label (only real build workflows have it).
     """
     try:
-        custom_api, _ = _get_k8s_clients()
+        custom_api, _, _ = _get_k8s_clients()
 
         # Build label selector - thinkube.io/app-name excludes webhook-build triggers
         selectors = ["thinkube.io/app-name"]
@@ -195,14 +196,161 @@ async def list_pipelines(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _get_argocd_deploy_stages(
+    custom_api, core_v1, apps_v1, app_name: str, target_namespace: str, after_epoch: Optional[float]
+) -> list:
+    """Query ArgoCD Application and its Deployment rollout to build deploy stages.
+
+    Returns a list of stage dicts for each Deployment managed by the ArgoCD app,
+    with status reflecting the rollout health and timing from the last sync.
+    """
+    stages = []
+    try:
+        argocd_app = custom_api.get_namespaced_custom_object(
+            group="argoproj.io",
+            version="v1alpha1",
+            namespace=ARGOCD_NAMESPACE,
+            plural="applications",
+            name=app_name,
+        )
+    except ApiException:
+        return stages
+
+    op_state = argocd_app.get("status", {}).get("operationState", {})
+    sync_started = _parse_iso_to_epoch(op_state.get("startedAt"))
+    sync_finished = _parse_iso_to_epoch(op_state.get("finishedAt"))
+    sync_phase = op_state.get("phase", "")
+
+    # Only include deploy stages that are related to this build
+    # (sync must have started after the workflow started)
+    if after_epoch and sync_started and sync_started < after_epoch:
+        return stages
+
+    # Map ArgoCD sync phase to our status
+    argocd_status_map = {
+        "Succeeded": "SUCCEEDED",
+        "Running": "RUNNING",
+        "Failed": "FAILED",
+        "Error": "FAILED",
+    }
+
+    # Add a stage for the ArgoCD sync itself
+    sync_duration = None
+    if sync_started and sync_finished:
+        sync_duration = sync_finished - sync_started
+
+    stages.append({
+        "id": f"argocd-sync-{app_name}",
+        "stageName": "argocd-sync",
+        "component": "argocd",
+        "status": argocd_status_map.get(sync_phase, "PENDING"),
+        "startedAt": sync_started,
+        "completedAt": sync_finished,
+        "duration": sync_duration,
+        "errorMessage": op_state.get("message") if sync_phase in ("Failed", "Error") else None,
+        "podName": None,
+        "details": {"type": "argocd"},
+    })
+
+    # Add a stage for each Deployment rollout in the target namespace
+    if not target_namespace:
+        return stages
+
+    try:
+        deployments = apps_v1.list_namespaced_deployment(
+            namespace=target_namespace,
+            label_selector=f"app.kubernetes.io/instance={app_name}",
+        )
+        # Fallback: if no label match, try getting deployments from ArgoCD resources
+        if not deployments.items:
+            resources = argocd_app.get("status", {}).get("resources", [])
+            deploy_names = [
+                r["name"] for r in resources
+                if r.get("kind") == "Deployment" and r.get("group", "") == "apps"
+            ]
+            for dname in deploy_names:
+                try:
+                    dep = apps_v1.read_namespaced_deployment(name=dname, namespace=target_namespace)
+                    deployments.items.append(dep)
+                except ApiException:
+                    pass
+    except ApiException:
+        return stages
+
+    for dep in deployments.items:
+        dep_name = dep.metadata.name
+        dep_status = dep.status
+
+        # Determine rollout status from conditions
+        rollout_status = "RUNNING"
+        error_msg = None
+        rollout_finished = None
+
+        ready = dep_status.ready_replicas or 0
+        desired = dep.spec.replicas or 1
+        updated = dep_status.updated_replicas or 0
+
+        if updated >= desired and ready >= desired:
+            rollout_status = "SUCCEEDED"
+        elif dep_status.conditions:
+            for cond in dep_status.conditions:
+                if cond.type == "Progressing" and cond.status == "False":
+                    rollout_status = "FAILED"
+                    error_msg = cond.message
+                    break
+
+        # Use the newest pod's start time as rollout start, ready time as end
+        rollout_started = sync_finished  # rollout starts after sync
+        if rollout_status == "SUCCEEDED" and dep_status.conditions:
+            for cond in dep_status.conditions:
+                if cond.type == "Available" and cond.status == "True" and cond.last_transition_time:
+                    rollout_finished = cond.last_transition_time.timestamp()
+
+        rollout_duration = None
+        if rollout_started and rollout_finished:
+            rollout_duration = rollout_finished - rollout_started
+
+        # Find the current pod name for log access
+        pod_name = None
+        try:
+            pods = core_v1.list_namespaced_pod(
+                namespace=target_namespace,
+                label_selector=f"app={dep_name}",
+                limit=1,
+            )
+            if pods.items:
+                pod_name = pods.items[0].metadata.name
+        except ApiException:
+            pass
+
+        stages.append({
+            "id": f"deploy-{dep_name}",
+            "stageName": f"deploy-{dep_name.split('-', 2)[-1] if '-' in dep_name else dep_name}",
+            "component": "deployment",
+            "status": rollout_status,
+            "startedAt": rollout_started,
+            "completedAt": rollout_finished,
+            "duration": rollout_duration,
+            "errorMessage": error_msg,
+            "podName": pod_name,
+            "details": {"type": "deployment", "namespace": target_namespace},
+        })
+
+    return stages
+
+
 @router.get("/pipelines/{workflow_name}")
 async def get_pipeline(
     workflow_name: str,
     current_user: dict = Depends(get_current_user_dual_auth),
 ):
-    """Get detailed pipeline info for a specific Argo Workflow, including stages."""
+    """Get detailed pipeline info for a specific Argo Workflow, including stages.
+
+    Enriches build stages with ArgoCD deployment stages when the workflow
+    has ``thinkube.io/app-name`` and ``thinkube.io/namespace`` labels.
+    """
     try:
-        custom_api, _ = _get_k8s_clients()
+        custom_api, core_v1, apps_v1 = _get_k8s_clients()
 
         wf = custom_api.get_namespaced_custom_object(
             group="argoproj.io",
@@ -212,7 +360,20 @@ async def get_pipeline(
             name=workflow_name,
         )
 
-        return _workflow_to_pipeline(wf)
+        pipeline = _workflow_to_pipeline(wf)
+
+        # Enrich with ArgoCD deploy stages
+        app_name = pipeline.get("appName")
+        target_ns = pipeline.get("namespace")
+        if app_name:
+            deploy_stages = _get_argocd_deploy_stages(
+                custom_api, core_v1, apps_v1,
+                app_name, target_ns, pipeline.get("startedAt"),
+            )
+            pipeline["stages"].extend(deploy_stages)
+            pipeline["stageCount"] = len(pipeline["stages"])
+
+        return pipeline
 
     except ApiException as e:
         if e.status == 404:
@@ -262,33 +423,54 @@ def _resolve_pod_name(core_v1, pod_name_or_node_id: str, workflow_name: str) -> 
 async def get_step_logs(
     workflow_name: str,
     pod_name: str,
+    namespace: Optional[str] = Query(None, description="Pod namespace (defaults to argo)"),
+    container: Optional[str] = Query(None, description="Container name (defaults to main for argo, auto-detected for deployments)"),
     tail_lines: Optional[int] = Query(500, ge=1, le=10000, description="Number of log lines"),
     current_user: dict = Depends(get_current_user_dual_auth),
 ):
-    """Get logs for a specific workflow step (pod).
+    """Get logs for a specific workflow step or deployment pod.
 
-    Returns the build/test output for the given step, which is especially
-    useful for diagnosing failed builds.  The *pod_name* parameter may be
-    either a literal Kubernetes pod name or an Argo Workflow node ID — the
-    endpoint resolves the actual pod automatically.
+    The *pod_name* parameter may be a literal Kubernetes pod name or an Argo
+    Workflow node ID — the endpoint resolves the actual pod automatically.
+    For deployment pods, pass the ``namespace`` query parameter.
     """
     try:
-        _, core_v1 = _get_k8s_clients()
+        _, core_v1, _ = _get_k8s_clients()
 
-        # Resolve the actual pod name (handles node-id → pod-name for DAG workflows)
-        actual_pod_name = _resolve_pod_name(core_v1, pod_name, workflow_name)
+        target_namespace = namespace or ARGO_NAMESPACE
+        actual_pod_name = pod_name
+        target_container = container
 
-        # Get logs from the main container
+        if target_namespace == ARGO_NAMESPACE:
+            # Argo build pod — resolve node-id to pod name
+            actual_pod_name = _resolve_pod_name(core_v1, pod_name, workflow_name)
+            if not target_container:
+                target_container = "main"
+        else:
+            # Deployment pod — verify it exists; auto-detect first container
+            try:
+                pod = core_v1.read_namespaced_pod(name=pod_name, namespace=target_namespace)
+                if not target_container and pod.spec.containers:
+                    target_container = pod.spec.containers[0].name
+            except ApiException as e:
+                if e.status == 404:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Pod {pod_name} not found in namespace {target_namespace}.",
+                    )
+                raise
+
         logs = core_v1.read_namespaced_pod_log(
             name=actual_pod_name,
-            namespace=ARGO_NAMESPACE,
-            container="main",
+            namespace=target_namespace,
+            container=target_container,
             tail_lines=tail_lines,
         )
 
         return {
             "workflowName": workflow_name,
             "podName": actual_pod_name,
+            "namespace": target_namespace,
             "logs": logs,
             "tailLines": tail_lines,
         }
