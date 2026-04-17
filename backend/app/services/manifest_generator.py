@@ -9,18 +9,31 @@ import base64
 import json
 import logging
 import os
-import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import jinja2
 import yaml
+from kubernetes import client, config
+from kubernetes.client.rest import ApiException
 
 logger = logging.getLogger(__name__)
 
 # Path to the J2 templates used by the deployment system
 # In the backend pod, thinkube-control is mounted at /home/thinkube-control/
 TEMPLATES_DIR = Path("/home/thinkube-control/templates/k8s")
+
+
+def _get_k8s_client():
+    """Load in-cluster config and return a CoreV1Api client."""
+    config.load_incluster_config()
+    return client.CoreV1Api()
+
+
+def _get_custom_objects_client():
+    """Load in-cluster config and return a CustomObjectsApi client."""
+    config.load_incluster_config()
+    return client.CustomObjectsApi()
 
 
 class ManifestGenerator:
@@ -33,21 +46,35 @@ class ManifestGenerator:
         self.local_repo_path = f"/home/thinkube/apps/{self.app_name}"
         self.thinkube_config = {}
         self.secrets = {}
+        self._core_v1 = None
+        self._custom_objects = None
+
+    @property
+    def core_v1(self):
+        if self._core_v1 is None:
+            self._core_v1 = _get_k8s_client()
+        return self._core_v1
+
+    @property
+    def custom_objects(self):
+        if self._custom_objects is None:
+            self._custom_objects = _get_custom_objects_client()
+        return self._custom_objects
 
     def _read_secret(self, namespace: str, name: str) -> dict:
-        """Read a K8s secret using kubectl."""
-        result = subprocess.run(
-            ['kubectl', 'get', 'secret', name, '-n', namespace, '-o', 'json'],
-            capture_output=True, text=True, timeout=30
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to read secret {namespace}/{name}: {result.stderr}")
-        return json.loads(result.stdout)
+        """Read a K8s secret."""
+        try:
+            secret = self.core_v1.read_namespaced_secret(name, namespace)
+            return secret.to_dict()
+        except ApiException as e:
+            raise RuntimeError(f"Failed to read secret {namespace}/{name}: {e.reason}")
 
     def _decode_secret(self, secret: dict, key: str) -> str:
         """Decode a base64 secret value."""
         encoded = secret.get('data', {}).get(key, '')
         if encoded:
+            if isinstance(encoded, bytes):
+                return encoded.decode('utf-8')
             return base64.b64decode(encoded).decode('utf-8')
         return ''
 
@@ -104,18 +131,16 @@ class ManifestGenerator:
     def _find_knative_service_url(self, dep_type: str) -> Optional[str]:
         """Find a Knative service URL matching the dependency type."""
         try:
-            result = subprocess.run(
-                ['kubectl', 'get', 'ksvc', '--all-namespaces', '-o', 'json'],
-                capture_output=True, text=True, timeout=30
-            )
-            if result.returncode != 0:
-                return None
-            data = json.loads(result.stdout)
-            for item in data.get('items', []):
+            items = self.custom_objects.list_cluster_custom_object(
+                group="serving.knative.dev",
+                version="v1",
+                plural="services",
+            ).get('items', [])
+            for item in items:
                 name = item['metadata']['name']
                 namespace = item['metadata']['namespace']
                 if dep_type in name or dep_type in namespace:
-                    status_url = item.get('status', {}).get('address', {}).get('url')
+                    status_url = (item.get('status', {}).get('address', {}) or {}).get('url')
                     if status_url:
                         return status_url
                     return f"http://{name}.{namespace}.svc.cluster.local"
@@ -126,30 +151,27 @@ class ManifestGenerator:
     def _find_k8s_service_url(self, dep_type: str) -> Optional[str]:
         """Find a regular K8s service URL matching the dependency type."""
         try:
-            result = subprocess.run(
-                ['kubectl', 'get', 'svc', '--all-namespaces', '-o', 'json'],
-                capture_output=True, text=True, timeout=30
-            )
-            if result.returncode != 0:
-                return None
-            data = json.loads(result.stdout)
-            for item in data.get('items', []):
-                name = item['metadata']['name']
-                namespace = item['metadata']['namespace']
-                if namespace in ('kube-system', 'kube-public', 'default'):
+            svc_list = self.core_v1.list_service_for_all_namespaces()
+            skip_ns = {'kube-system', 'kube-public', 'default'}
+            # First pass: match both name and namespace
+            for svc in svc_list.items:
+                name = svc.metadata.name
+                namespace = svc.metadata.namespace
+                if namespace in skip_ns:
                     continue
                 if dep_type in name and dep_type in namespace:
-                    ports = item.get('spec', {}).get('ports', [])
-                    port = ports[0]['port'] if ports else 80
+                    ports = svc.spec.ports or []
+                    port = ports[0].port if ports else 80
                     return f"http://{name}.{namespace}.svc.cluster.local:{port}"
-            for item in data.get('items', []):
-                name = item['metadata']['name']
-                namespace = item['metadata']['namespace']
-                if namespace in ('kube-system', 'kube-public', 'default'):
+            # Second pass: match name only
+            for svc in svc_list.items:
+                name = svc.metadata.name
+                namespace = svc.metadata.namespace
+                if namespace in skip_ns:
                     continue
                 if dep_type in name:
-                    ports = item.get('spec', {}).get('ports', [])
-                    port = ports[0]['port'] if ports else 80
+                    ports = svc.spec.ports or []
+                    port = ports[0].port if ports else 80
                     return f"http://{name}.{namespace}.svc.cluster.local:{port}"
         except Exception:
             pass
@@ -339,22 +361,15 @@ images:
         provided at deploy time and should be preserved during regeneration.
         """
         try:
-            result = subprocess.run(
-                ['kubectl', 'get', 'configmap', f'{self.app_name}-metadata',
-                 '-n', self.namespace, '-o', 'json'],
-                capture_output=True, text=True, timeout=30
+            cm = self.core_v1.read_namespaced_config_map(
+                f'{self.app_name}-metadata', self.namespace
             )
-            if result.returncode != 0:
-                logger.warning(f"Could not read app-metadata ConfigMap: {result.stderr}")
-                return {}
-
-            cm = json.loads(result.stdout)
-            data = cm.get('data', {})
-
-            # The configmap stores app_name and containers — manifest_params
-            # are stored as individual keys. Filter out known non-param keys.
+            data = cm.data or {}
             known_keys = {'app_name', 'containers'}
             return {k: v for k, v in data.items() if k not in known_keys}
+        except ApiException as e:
+            logger.warning(f"Could not read app-metadata ConfigMap: {e.reason}")
+            return {}
         except Exception as e:
             logger.warning(f"Could not read manifest params: {e}")
             return {}
