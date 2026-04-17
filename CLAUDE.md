@@ -53,9 +53,9 @@ cd frontend && npm run preview
 
 Changes must follow this exact sequence:
 
-1. Edit files in this repo (`/home/thinkube/thinkube-platform/thinkube-control/`)
+1. Edit files in this repo (`/home/thinkube/thinkube-platform/core/thinkube-control/`)
 2. Commit and push to GitHub (`git push origin main`)
-3. Deploy: `cd /home/thinkube/thinkube-platform/thinkube && ./scripts/tk_ansible ansible/40_thinkube/core/thinkube-control/12_deploy_dev.yaml`
+3. Deploy: `cd /home/thinkube/thinkube-platform/core/thinkube && ./scripts/tk_ansible ansible/40_thinkube/core/thinkube-control/12_deploy_dev.yaml`
 
 Copier syncs from GitHub to the runtime location (`/home/thinkube/thinkube-control/`), then a webhook triggers the Argo Workflow build and ArgoCD deploys automatically. Do not manually copy files to the runtime location or edit files there directly.
 

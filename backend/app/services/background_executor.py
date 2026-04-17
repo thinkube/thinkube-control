@@ -172,10 +172,10 @@ class BackgroundExecutor:
         
         # The playbook path is relative to the thinkube repository root
         # Both code-server and backend now mount shared-code at /home/thinkube
-        # so paths are consistent: /home/thinkube/thinkube-platform/thinkube
+        # so paths are consistent: /home/thinkube/thinkube-platform/core/thinkube
 
         # Primary path: thinkube repo in shared-code
-        thinkube_path = Path("/home/thinkube/thinkube-platform/thinkube")
+        thinkube_path = Path("/home/thinkube/thinkube-platform/core/thinkube")
         full_playbook_path = thinkube_path / playbook_path
         
         if not full_playbook_path.exists():

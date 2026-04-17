@@ -57,7 +57,7 @@ class AnsibleEnvironment:
         """
         if context == "optional":
             # ONLY thinkube-platform roles for optional components
-            return "/home/thinkube/thinkube-platform/thinkube/ansible/roles"
+            return "/home/thinkube/thinkube-platform/core/thinkube/ansible/roles"
         else:
             # ONLY thinkube-control roles for templates (default)
             return str(self.thinkube_control_path / "ansible" / "roles")
