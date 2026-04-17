@@ -1166,6 +1166,7 @@ spec:
         # Sequential order: generate manifests → migrations → git hooks → repo → webhook → ArgoCD app → push
         await self.generate_migrations()
         await self.setup_git_hooks()
+        await self.ensure_api_token_file()
 
         # Generate k8s manifests from thinkube.yaml (mirrors Ansible generate_k8s_manifests.yaml)
         # Run in thread pool to avoid blocking the event loop
@@ -1468,6 +1469,23 @@ no transformation needed.
                 obsolete_path.unlink()
 
         DeploymentLogger.log("Setup git hooks and helper scripts")
+
+    async def ensure_api_token_file(self):
+        """Provision the API token file so git hooks can call thinkube-control API."""
+        token_dir = Path('/home/thinkube/.thinkube')
+        token_file = token_dir / 'api-token'
+        if token_file.exists():
+            return
+        try:
+            mcp_secret = await self.k8s_core.read_namespaced_secret('mcp-default-token', 'thinkube-control')
+            api_token = self._decode_secret_data(mcp_secret, 'token')
+            token_dir.mkdir(parents=True, exist_ok=True)
+            token_file.write_text(api_token)
+            token_file.chmod(0o600)
+            DeploymentLogger.log("Provisioned API token for git hooks")
+        except ApiException:
+            DeploymentLogger.error("MCP token not found — git hooks for thinkube.yaml regeneration will not work")
+
 
     async def configure_webhook(self):
         """Configure Gitea webhook (idempotent - cleans up duplicates).
