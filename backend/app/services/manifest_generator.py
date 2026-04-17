@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Path to the J2 templates used by the deployment system
 # In the backend pod, thinkube-control is mounted at /home/thinkube-control/
-TEMPLATES_DIR = Path("/home/thinkube-control/templates/k8s")
+TEMPLATES_DIR = Path("/home/thinkube/thinkube-control/templates/k8s")
 
 
 def _get_k8s_client():
