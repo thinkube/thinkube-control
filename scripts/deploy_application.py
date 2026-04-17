@@ -556,7 +556,7 @@ git reset --hard origin/main
         admin_password = self._decode_secret_data(self.secrets['admin'], 'admin-password')
         keycloak_url = f"https://auth.{self.domain}"
         keycloak_realm = self.params.get('keycloak_realm', 'thinkube')
-        client_id = self.app_name  # Use app name, not namespace (Knative services share 'kn' namespace)
+        client_id = self.app_name
         app_host = f"{self.app_name}.{self.domain}"
 
         async with aiohttp.ClientSession() as session:
@@ -2112,13 +2112,6 @@ LIMIT 5;"
             DeploymentLogger.debug(" Starting Phase 2")
             await self.phase2_gather_resources()
             DeploymentLogger.debug(" Phase 2 complete")
-
-            # After parsing thinkube.yaml, override namespace for Knative services
-            # All Knative services deploy to the shared 'kn' namespace;
-            # DomainMapping provides {name}.{domain} routing through the main gateway
-            if self._is_knative():
-                self.namespace = 'kn'
-                DeploymentLogger.log(f"Knative service — using shared namespace: {self.namespace}")
 
             # Create namespace (idempotent — skips if it already exists)
             await self.create_namespace()
