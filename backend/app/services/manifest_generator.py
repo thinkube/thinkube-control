@@ -266,8 +266,6 @@ data:
 
         if is_knative:
             generated_files['knative-service.yaml'] = env.get_template('knative-service.j2').render(**template_vars)
-            domain_mapping_tmpl = env.get_template('domain-mapping.j2')
-            generated_files['domain-mapping.yaml'] = domain_mapping_tmpl.render(**template_vars)
         else:
             generated_files['deployments.yaml'] = env.get_template('deployment-separate.j2').render(**template_vars)
             generated_files['services.yaml'] = env.get_template('services-separate.j2').render(**template_vars)
@@ -294,7 +292,7 @@ data:
         if is_knative:
             kustomization_resources = [
                 'namespace.yaml', 'mlflow-secrets.yaml', 'app-metadata.yaml',
-                'knative-service.yaml', 'domain-mapping.yaml',
+                'knative-service.yaml',
             ]
         else:
             kustomization_resources = [

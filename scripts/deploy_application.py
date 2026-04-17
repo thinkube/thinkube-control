@@ -966,10 +966,6 @@ data:
             knative_content = knative_template.render(**template_vars)
             (k8s_dir / 'knative-service.yaml').write_text(knative_content)
 
-            # Generate DomainMapping for {name}.{domain} → Knative Service
-            domain_mapping_template = env.get_template('domain-mapping.j2')
-            domain_mapping_content = domain_mapping_template.render(**template_vars)
-            (k8s_dir / 'domain-mapping.yaml').write_text(domain_mapping_content)
         else:
             # 4. Generate deployments.yaml from deployment-separate.j2
             deployment_template = env.get_template('deployment-separate.j2')
@@ -1031,7 +1027,6 @@ data:
                 'mlflow-secrets.yaml',
                 'app-metadata.yaml',
                 'knative-service.yaml',
-                'domain-mapping.yaml',
             ]
         else:
             kustomization_resources = [
