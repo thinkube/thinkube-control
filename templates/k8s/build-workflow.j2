@@ -15,7 +15,7 @@ metadata:
     thinkube.io/app-name: {{ project_name }}
     thinkube.io/namespace: {{ k8s_namespace }}
 spec:
-  entrypoint: build-pipeline
+  entrypoint: ci-cd-pipeline
 
   # Force workflows to run on control plane node where shared-code is available
   nodeSelector:
@@ -46,7 +46,7 @@ spec:
         type: Directory
 
   templates:
-    - name: build-pipeline
+    - name: ci-cd-pipeline
       dag:
         tasks:
 {% for container in thinkube_spec.spec.containers %}
