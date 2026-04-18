@@ -56,6 +56,31 @@ async def app_lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Could not add order_index column: {e}")
 
+    # Add architectures_built column to jupyter_venvs if it doesn't exist
+    try:
+        from sqlalchemy import text
+
+        with get_engine().connect() as conn:
+            result = conn.execute(
+                text(
+                    """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name='jupyter_venvs' AND column_name='architectures_built'
+            """
+                )
+            )
+            if not result.fetchone():
+                conn.execute(
+                    text(
+                        "ALTER TABLE jupyter_venvs ADD COLUMN architectures_built JSON"
+                    )
+                )
+                conn.commit()
+                logger.info("Added architectures_built column to jupyter_venvs table")
+    except Exception as e:
+        logger.warning(f"Could not add architectures_built column: {e}")
+
     # Initialize services in database
     try:
         from app.db.init_services import init_services

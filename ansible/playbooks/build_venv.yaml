@@ -1,25 +1,26 @@
 ---
 # ansible/playbooks/build_venv.yaml
 # Description:
-#   Builds a custom venv on a GPU node using a Kubernetes Job.
-#   The Job runs directly on the GPU node with hostPath mount for fast I/O.
-#   After successful build, triggers sync to all other GPU nodes.
+#   Builds a custom venv for ALL architectures present in the cluster.
+#   For each architecture, finds a GPU node and creates a K8s Job.
+#   Venvs are stored at <base>/custom/<venv_name>/<arch>/ so
+#   arm64 and amd64 builds coexist.
 #
 # Usage:
 #   ansible-playbook -i /path/to/inventory.yaml build_venv.yaml \
 #     -e venv_name=my-custom-venv \
 #     -e packages='["numpy", "pandas", "scikit-learn"]'
 #
+# Optional:
+#   -e target_architecture=arm64    # Build only for one architecture
+#
 # Variables:
 #   - venv_name: Name of the venv to create
 #   - packages: JSON list of packages to install
-#   - target_node: (optional) Specific node to build on (uses first GPU node if not specified)
-#
-# Requirements:
-#   - kubectl access to cluster
-#   - Harbor registry accessible
+#   - kubeconfig: Path to kubeconfig file
+#   - harbor_registry: Container registry hostname
 
-- name: Build custom venv on GPU node
+- name: Build custom venv for all cluster architectures
   hosts: k8s_control_plane
   gather_facts: true
   vars:
@@ -39,205 +40,63 @@
       ansible.builtin.set_fact:
         package_list: "{{ packages if packages is sequence and packages is not string else packages | from_json }}"
 
-    - name: Get target architecture
-      ansible.builtin.set_fact:
-        target_arch: "{{ target_architecture | default('') }}"
-
-    - name: Get first GPU node matching architecture if target_node not specified
-      ansible.builtin.set_fact:
-        build_node: >-
-          {%- if target_node is defined -%}
-            {{ target_node }}
-          {%- elif target_arch != '' -%}
-            {%- set ns = namespace(found='') -%}
-            {%- for node in groups['baremetal_gpus'] -%}
-              {%- set node_arch = hostvars[node].get('node_architecture', hostvars[node].get('ansible_architecture', '')) -%}
-              {%- set normalized = 'arm64' if node_arch in ['aarch64', 'arm64'] else ('amd64' if node_arch in ['x86_64', 'amd64'] else node_arch) -%}
-              {%- if normalized == target_arch and ns.found == '' -%}
-                {%- set ns.found = node -%}
-              {%- endif -%}
-            {%- endfor -%}
-            {{ ns.found if ns.found != '' else groups['baremetal_gpus'][0] }}
-          {%- else -%}
-            {{ groups['baremetal_gpus'][0] }}
-          {%- endif -%}
-
-    - name: Create build Job
-      kubernetes.core.k8s:
-        kubeconfig: "{{ kubeconfig }}"
-        state: present
-      delegate_to: localhost
-        definition:
-          apiVersion: batch/v1
-          kind: Job
-          metadata:
-            name: "venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}"
-            namespace: "{{ job_namespace }}"
-            labels:
-              app: jupyter-venv-builder
-              venv-name: "{{ venv_name }}"
-          spec:
-            ttlSecondsAfterFinished: 3600
-            backoffLimit: 0
-            template:
-              spec:
-                nodeSelector:
-                  kubernetes.io/hostname: "{{ build_node }}"
-                restartPolicy: Never
-                containers:
-                  - name: builder
-                    image: "{{ harbor_registry }}/library/tk-jupyter-base:latest"
-                    imagePullPolicy: Always
-                    command:
-                      - bash
-                      - -c
-                      - |
-                        set -e
-                        echo "=== Building venv: {{ venv_name }} ==="
-                        echo "Target directory: {{ venvs_host_path }}/{{ custom_venvs_subpath }}/{{ venv_name }}"
-
-                        VENV_PATH="{{ venvs_host_path }}/{{ custom_venvs_subpath }}/{{ venv_name }}"
-                        mkdir -p "{{ venvs_host_path }}/{{ custom_venvs_subpath }}"
-
-                        # Remove existing venv if present
-                        rm -rf "$VENV_PATH" 2>/dev/null || true
-
-                        # Create venv with system site packages (inherits PyTorch)
-                        echo "Creating virtualenv..."
-                        python3 -m venv --system-site-packages "$VENV_PATH"
-
-                        # Upgrade pip
-                        echo "Upgrading pip..."
-                        "$VENV_PATH/bin/pip" install --upgrade pip
-
-                        # Install packages
-                        echo "Installing packages..."
-                        "$VENV_PATH/bin/pip" install {{ package_list | join(' ') }}
-
-                        # Install ipykernel for Jupyter integration
-                        echo "Installing ipykernel..."
-                        "$VENV_PATH/bin/pip" install ipykernel
-
-                        # Write architecture marker for multi-arch support
-                        ARCH=$(uname -m)
-                        if [ "$ARCH" = "aarch64" ]; then
-                          ARCH_NAME="arm64"
-                        elif [ "$ARCH" = "x86_64" ]; then
-                          ARCH_NAME="amd64"
-                        else
-                          ARCH_NAME="$ARCH"
-                        fi
-                        echo "$ARCH_NAME" > "$VENV_PATH/.arch"
-                        echo "Architecture marker written: $ARCH_NAME"
-
-                        echo "=== Build completed successfully ==="
-                        ls -la "$VENV_PATH/bin/"
-                    volumeMounts:
-                      - name: venvs
-                        mountPath: "{{ venvs_host_path }}"
-                    resources:
-                      limits:
-                        cpu: "4"
-                        memory: "8Gi"
-                      requests:
-                        cpu: "1"
-                        memory: "2Gi"
-                volumes:
-                  - name: venvs
-                    hostPath:
-                      path: "{{ venvs_host_path }}"
-                      type: DirectoryOrCreate
-      register: job_result
-
-    - name: Wait for Job to complete
-      kubernetes.core.k8s_info:
-        kubeconfig: "{{ kubeconfig }}"
-        api_version: batch/v1
-        kind: Job
-        namespace: "{{ job_namespace }}"
-        name: "venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}"
-      delegate_to: localhost
-      register: job_status
-      until: >
-        (job_status.resources[0].status.succeeded | default(0) > 0) or
-        (job_status.resources[0].status.failed | default(0) > 0)
-      retries: 60
-      delay: 10
-
-    - name: Check if Job succeeded
-      ansible.builtin.fail:
-        msg: "Venv build job failed. Check logs with: kubectl logs -n {{ job_namespace }} job/venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}"
-      when: job_status.resources[0].status.failed | default(0) > 0
-
-    - name: Get Job logs
-      ansible.builtin.command: >
-        kubectl --kubeconfig {{ kubeconfig }} logs -n {{ job_namespace }} job/venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}
-      delegate_to: localhost
-      register: job_logs
-
-    - name: Display build logs
-      ansible.builtin.debug:
-        var: job_logs.stdout_lines
-
-    - name: Clean up completed Job
-      kubernetes.core.k8s:
-        kubeconfig: "{{ kubeconfig }}"
-        state: absent
-        api_version: batch/v1
-        kind: Job
-        namespace: "{{ job_namespace }}"
-        name: "venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}"
-      delegate_to: localhost
-
-    - name: Detect build node architecture from cluster
+    - name: Detect cluster architectures from GPU nodes
       ansible.builtin.shell: |
-        kubectl --kubeconfig {{ kubeconfig }} get node {{ build_node }} -o jsonpath='{.metadata.labels.kubernetes\.io/arch}'
+        kubectl --kubeconfig {{ kubeconfig }} get nodes -l nvidia.com/gpu.present=true -o jsonpath='{range .items[*]}{.metadata.labels.kubernetes\.io/arch}{"\n"}{end}' 2>/dev/null || \
+        kubectl --kubeconfig {{ kubeconfig }} get nodes -o jsonpath='{range .items[*]}{.metadata.labels.kubernetes\.io/arch}{"\n"}{end}'
       delegate_to: localhost
-      register: build_node_arch_result
+      register: cluster_arch_result
       changed_when: false
 
-    - name: Set build node architecture
+    - name: Build unique architecture list
       ansible.builtin.set_fact:
-        build_node_arch: "{{ target_arch if target_arch != '' else build_node_arch_result.stdout }}"
+        cluster_architectures: "{{ cluster_arch_result.stdout_lines | unique | sort }}"
 
-    # Sync to other GPU nodes of the same architecture
-    - name: Sync venv to matching GPU nodes
-      ansible.builtin.include_tasks: sync_venv_tasks.yaml
-      vars:
-        source_node: "{{ build_node }}"
-        filter_architecture: "{{ build_node_arch }}"
-      when: groups['baremetal_gpus'] | length > 1
-
-    # If multi-arch cluster, also build on a GPU node of the other architecture
-    - name: Check for other architectures with GPU nodes
+    - name: Filter to single architecture if requested
       ansible.builtin.set_fact:
-        other_arch_gpu_nodes: >-
-          {%- set ns = namespace(nodes=[]) -%}
-          {%- for node in groups['baremetal_gpus'] -%}
-            {%- set node_arch = hostvars[node].get('node_architecture', hostvars[node].get('ansible_architecture', '')) -%}
-            {%- set normalized = 'arm64' if node_arch in ['aarch64', 'arm64'] else ('amd64' if node_arch in ['x86_64', 'amd64'] else node_arch) -%}
-            {%- if normalized != build_node_arch and node != build_node -%}
-              {%- set ns.nodes = ns.nodes + [{'node': node, 'arch': normalized}] -%}
+        build_architectures: "{{ [target_architecture] if target_architecture is defined and target_architecture != '' else cluster_architectures }}"
+
+    - name: Display build plan
+      ansible.builtin.debug:
+        msg: "Building venv '{{ venv_name }}' for architectures: {{ build_architectures | join(', ') }}"
+
+    - name: Select one GPU node per architecture
+      ansible.builtin.shell: |
+        kubectl --kubeconfig {{ kubeconfig }} get nodes \
+          -l kubernetes.io/arch={{ item }} \
+          -o jsonpath='{.items[0].metadata.name}'
+      delegate_to: localhost
+      register: arch_node_results
+      loop: "{{ build_architectures }}"
+      changed_when: false
+
+    - name: Build architecture-to-node mapping
+      ansible.builtin.set_fact:
+        arch_builds: >-
+          {%- set builds = [] -%}
+          {%- for result in arch_node_results.results -%}
+            {%- if result.stdout != '' -%}
+              {%- set _ = builds.append({'arch': result.item, 'node': result.stdout}) -%}
             {%- endif -%}
           {%- endfor -%}
-          {{ ns.nodes }}
-      when: build_for_all_architectures | default(false) | bool
+          {{ builds }}
 
-    - name: Display other architecture GPU nodes
+    - name: Display build targets
       ansible.builtin.debug:
-        msg: "Will also build venv on {{ other_arch_gpu_nodes | map(attribute='node') | join(', ') }} for cross-arch support"
-      when:
-        - build_for_all_architectures | default(false) | bool
-        - other_arch_gpu_nodes | length > 0
+        msg: "{{ item.arch }}: building on node {{ item.node }}"
+      loop: "{{ arch_builds }}"
+      loop_control:
+        label: "{{ item.arch }}"
 
-    - name: Build venv on other architecture GPU nodes
+    - name: Build venv for each architecture
       ansible.builtin.include_tasks: build_venv_on_node.yaml
       vars:
         target_build_node: "{{ item.node }}"
         target_build_arch: "{{ item.arch }}"
-      loop: "{{ other_arch_gpu_nodes }}"
+      loop: "{{ arch_builds }}"
       loop_control:
-        label: "{{ item.node }} ({{ item.arch }})"
-      when:
-        - build_for_all_architectures | default(false) | bool
-        - other_arch_gpu_nodes | length > 0
+        label: "{{ item.arch }} on {{ item.node }}"
+
+    - name: Report completed architectures
+      ansible.builtin.debug:
+        msg: "Venv '{{ venv_name }}' built for: {{ arch_builds | map(attribute='arch') | join(', ') }}"

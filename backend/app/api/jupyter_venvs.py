@@ -524,8 +524,10 @@ async def _execute_venv_build(venv_id: str) -> None:
                 venv.status = "success"
                 venv.output = result.get("output", "Build completed successfully")
                 venv.venv_path = f"/var/lib/jupyterhub-venvs/custom/{venv.name}"
-                venv.architecture = result.get("architecture", "unknown")
-                logger.info(f"Venv build succeeded for {venv.name}")
+                archs = result.get("architectures", [])
+                venv.architectures_built = archs
+                venv.architecture = archs[0] if archs else result.get("architecture", "unknown")
+                logger.info(f"Venv build succeeded for {venv.name} (architectures: {archs})")
             else:
                 venv.status = "failed"
                 venv.output = result.get("error", "Build failed")
@@ -637,17 +639,18 @@ async def _run_ansible_build(venv) -> Dict[str, Any]:
             f.write(f"Finished: {datetime.now()}\n")
 
         if return_code == 0:
-            # Try to detect architecture from output
-            architecture = "unknown"
+            architectures = []
             for line in output_lines:
                 if "Architecture marker written:" in line:
-                    architecture = line.split(":")[-1].strip()
-                    break
+                    arch = line.split(":")[-1].strip()
+                    if arch and arch not in architectures:
+                        architectures.append(arch)
 
             return {
                 "success": True,
                 "output": f"Build completed. Log: {log_file}",
-                "architecture": architecture,
+                "architectures": sorted(architectures),
+                "architecture": architectures[0] if architectures else "unknown",
             }
         else:
             return {

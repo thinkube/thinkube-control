@@ -32,8 +32,9 @@ class JupyterVenv(Base):
     parent_template_id = Column(UUID(as_uuid=True), ForeignKey('jupyter_venvs.id'), nullable=True)
 
     # Location
-    venv_path = Column(Text, nullable=True)  # Full path on JuiceFS (e.g., /home/thinkube/venvs/custom/my-env)
-    architecture = Column(String(20), nullable=True)  # arm64, amd64
+    venv_path = Column(Text, nullable=True)  # Base path (e.g., /var/lib/jupyterhub-venvs/custom/my-env)
+    architecture = Column(String(20), nullable=True)  # Deprecated: single arch string
+    architectures_built = Column(JSON, nullable=True, default=list)  # ["arm64", "amd64"]
 
     # Timestamps
     created_at = Column(
@@ -60,6 +61,7 @@ class JupyterVenv(Base):
             "parent_template_id": str(self.parent_template_id) if self.parent_template_id else None,
             "venv_path": self.venv_path,
             "architecture": self.architecture,
+            "architectures_built": self.architectures_built or [],
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,

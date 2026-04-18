@@ -197,6 +197,13 @@ async def _run_arch_rebuild(
         step += 1
 
     if all_ok:
+        # Rebuild existing venvs for the new architecture
+        await websocket.send_json(
+            {"type": "task", "task_name": f"Rebuild Jupyter venvs for {new_arch}", "task_number": step}
+        )
+        venv_ok = await _rebuild_venvs_for_arch(websocket, new_arch, extra_vars, step)
+        step += 1
+
         await websocket.send_json(
             {"type": "task", "task_name": f"Uncordon {hostname}", "task_number": step}
         )
@@ -207,6 +214,95 @@ async def _run_arch_rebuild(
         await websocket.send_json({"type": "ok", "message": f"Node {hostname} uncordoned and ready"})
 
     return all_ok
+
+
+async def _rebuild_venvs_for_arch(
+    websocket: WebSocket,
+    new_arch: str,
+    extra_vars: Dict[str, Any],
+    step: int,
+) -> bool:
+    """Rebuild all successful venvs for a newly added architecture."""
+    from app.db.session import SessionLocal
+    from app.models.jupyter_venvs import JupyterVenv
+
+    db = SessionLocal()()
+    try:
+        venvs = db.query(JupyterVenv).filter(
+            JupyterVenv.status == "success",
+            JupyterVenv.is_template == False,
+        ).all()
+
+        if not venvs:
+            await websocket.send_json(
+                {"type": "ok", "message": "No existing venvs to rebuild"}
+            )
+            return True
+
+        needs_rebuild = []
+        for v in venvs:
+            built = v.architectures_built or []
+            if new_arch not in built:
+                needs_rebuild.append(v)
+
+        if not needs_rebuild:
+            await websocket.send_json(
+                {"type": "ok", "message": f"All venvs already built for {new_arch}"}
+            )
+            return True
+
+        await websocket.send_json(
+            {"type": "ok", "message": f"Rebuilding {len(needs_rebuild)} venv(s) for {new_arch}: {', '.join(v.name for v in needs_rebuild)}"}
+        )
+
+        import json as _json
+        playbook_path = Path("/home/thinkube/thinkube-control/ansible/playbooks/build_venv.yaml")
+        all_ok = True
+
+        for v in needs_rebuild:
+            venv_vars = {
+                **extra_vars,
+                "venv_name": v.name,
+                "packages": _json.dumps(v.packages),
+                "target_architecture": new_arch,
+                "kubeconfig": os.environ.get("KUBECONFIG", "/home/thinkube/.kube/config"),
+                "harbor_registry": f"registry.{os.environ.get('DOMAIN_NAME', 'cmxela.com')}",
+            }
+
+            ok = await _stream_playbook(
+                websocket=websocket,
+                playbook_path=playbook_path,
+                extra_vars=venv_vars,
+                step_name=f"Build venv '{v.name}' for {new_arch}",
+                step_number=step,
+            )
+
+            if ok:
+                built = list(v.architectures_built or [])
+                if new_arch not in built:
+                    built.append(new_arch)
+                    built.sort()
+                v.architectures_built = built
+                db.commit()
+                await websocket.send_json(
+                    {"type": "ok", "message": f"Venv '{v.name}' built for {new_arch}"}
+                )
+            else:
+                await websocket.send_json(
+                    {"type": "error", "message": f"Venv '{v.name}' failed to build for {new_arch} — continuing with others"}
+                )
+                all_ok = False
+
+        return all_ok
+
+    except Exception as e:
+        logger.error(f"Venv rebuild error: {e}", exc_info=True)
+        await websocket.send_json(
+            {"type": "error", "message": f"Venv rebuild error: {e}"}
+        )
+        return False
+    finally:
+        db.close()
 
 
 @router.get("/list")

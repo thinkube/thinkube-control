@@ -52,8 +52,8 @@
 - name: Sync venv to each target node
   delegate_to: "{{ item }}"
   ansible.posix.synchronize:
-    src: "{{ venvs_host_path | default('/var/lib/jupyterhub-venvs') }}/{{ custom_venvs_subpath | default('custom') }}/{{ venv_name }}/"
-    dest: "{{ venvs_host_path | default('/var/lib/jupyterhub-venvs') }}/{{ custom_venvs_subpath | default('custom') }}/{{ venv_name }}/"
+    src: "{{ venvs_host_path | default('/var/lib/jupyterhub-venvs') }}/{{ custom_venvs_subpath | default('custom') }}/{{ venv_name }}/{{ effective_filter_arch }}/"
+    dest: "{{ venvs_host_path | default('/var/lib/jupyterhub-venvs') }}/{{ custom_venvs_subpath | default('custom') }}/{{ venv_name }}/{{ effective_filter_arch }}/"
     mode: pull
     rsync_opts:
       - "--archive"
