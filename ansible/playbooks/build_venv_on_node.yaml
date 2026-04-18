@@ -156,3 +156,52 @@
     source_node: "{{ target_build_node }}"
     filter_architecture: "{{ target_build_arch }}"
   when: groups['baremetal_gpus'] | length > 1
+
+- name: "Find running Jupyter pods for {{ target_build_arch }}"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ kubeconfig }}"
+    api_version: v1
+    kind: Pod
+    namespace: jupyterhub
+    label_selectors:
+      - "component=singleuser-server"
+    field_selectors:
+      - "status.phase=Running"
+  delegate_to: localhost
+  register: running_jupyter_pods
+
+- name: "Filter Jupyter pods on {{ target_build_arch }} nodes"
+  ansible.builtin.set_fact:
+    matching_jupyter_pods: >-
+      {%- set pods = [] -%}
+      {%- for pod in running_jupyter_pods.resources -%}
+        {%- set node_name = pod.spec.nodeName -%}
+        {%- for node in all_nodes.resources -%}
+          {%- if node.metadata.name == node_name and node.metadata.labels['kubernetes.io/arch'] == target_build_arch -%}
+            {%- set _ = pods.append(pod.metadata.name) -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ pods }}
+  when: running_jupyter_pods.resources | length > 0
+
+- name: "Register kernel in running Jupyter pod {{ item }}"
+  kubernetes.core.k8s_exec:
+    kubeconfig: "{{ kubeconfig }}"
+    namespace: jupyterhub
+    pod: "{{ item }}"
+    container: notebook
+    command: >-
+      /home/thinkube/venvs/custom/{{ venv_name }}/{{ target_build_arch }}/bin/python
+      -m ipykernel install
+      --prefix=/home/thinkube/venvs
+      --name={{ venv_name }}
+      --display-name={{ venv_name }} (custom, {{ target_build_arch }})
+  delegate_to: localhost
+  loop: "{{ matching_jupyter_pods | default([]) }}"
+  ignore_errors: true
+  when: matching_jupyter_pods | default([]) | length > 0
+
+- name: "Report kernel registration for {{ target_build_arch }}"
+  ansible.builtin.debug:
+    msg: "Registered kernel '{{ venv_name }}' in {{ matching_jupyter_pods | default([]) | length }} running Jupyter pod(s)"
