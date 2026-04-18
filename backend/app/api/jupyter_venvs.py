@@ -507,7 +507,7 @@ async def _execute_venv_build(venv_id: str) -> None:
     3. After success, syncs to other GPU nodes via rsync
     4. Updates database with status
     """
-    db = SessionLocal()
+    db = SessionLocal()()
 
     try:
         venv = db.query(JupyterVenv).filter_by(id=venv_id).first()
