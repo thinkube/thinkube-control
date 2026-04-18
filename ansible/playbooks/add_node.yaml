@@ -1,0 +1,135 @@
+---
+# Fallback playbook for adding a single worker node to the cluster.
+# Normally, the backend runs the full 20_join_workers.yaml from thinkube
+# with --limit. This playbook is a lightweight alternative when that
+# playbook is unavailable.
+#
+# Usage:
+#   ansible-playbook -i inventory.yaml add_node.yaml --limit <hostname> -v
+
+- name: Prepare worker node
+  hosts: k8s_workers
+  become: true
+  vars:
+    k8s_channel: "1.35-classic/stable"
+  tasks:
+    - name: Check OS version
+      ansible.builtin.shell: |
+        . /etc/os-release
+        echo "$ID $VERSION_ID"
+      register: os_check
+      changed_when: false
+
+    - name: Validate Ubuntu 24.04
+      ansible.builtin.assert:
+        that: "'ubuntu 24.04' in os_check.stdout"
+        fail_msg: "Node must run Ubuntu 24.04 (got: {{ os_check.stdout }})"
+
+    - name: Configure UFW - set default forward policy
+      ansible.builtin.lineinfile:
+        path: /etc/default/ufw
+        regexp: '^DEFAULT_FORWARD_POLICY='
+        line: 'DEFAULT_FORWARD_POLICY="ACCEPT"'
+
+    - name: Configure UFW - allow kubelet API
+      community.general.ufw:
+        rule: allow
+        port: "10250"
+        proto: tcp
+
+    - name: Configure UFW - allow Cilium health
+      community.general.ufw:
+        rule: allow
+        port: "4240"
+        proto: tcp
+
+    - name: Configure UFW - allow Cilium VXLAN
+      community.general.ufw:
+        rule: allow
+        port: "8472"
+        proto: udp
+
+    - name: Enable UFW
+      community.general.ufw:
+        state: enabled
+
+    - name: Install k8s snap
+      ansible.builtin.command:
+        cmd: "snap install k8s --channel {{ k8s_channel }} --classic"
+      register: snap_install
+      changed_when: "'already installed' not in snap_install.stderr"
+      failed_when: snap_install.rc != 0 and 'already installed' not in snap_install.stderr
+
+    - name: Create kubectl wrapper
+      ansible.builtin.copy:
+        dest: "/home/{{ system_username }}/.local/bin/kubectl"
+        content: |
+          #!/bin/bash
+          exec k8s kubectl "$@"
+        mode: "0755"
+        owner: "{{ system_username }}"
+
+    - name: Create helm wrapper
+      ansible.builtin.copy:
+        dest: "/home/{{ system_username }}/.local/bin/helm"
+        content: |
+          #!/bin/bash
+          exec k8s helm "$@"
+        mode: "0755"
+        owner: "{{ system_username }}"
+
+- name: Join worker to cluster
+  hosts: k8s_workers
+  become: true
+  serial: 1
+  vars:
+    control_plane_host: "{{ groups['k8s_control_plane'][0] }}"
+  tasks:
+    - name: Check if already joined
+      ansible.builtin.command: k8s status
+      register: k8s_status
+      changed_when: false
+      failed_when: false
+
+    - name: Get join token from control plane
+      ansible.builtin.command:
+        cmd: "k8s get-join-token {{ inventory_hostname }} --worker"
+      register: join_token
+      delegate_to: "{{ control_plane_host }}"
+      when: k8s_status.rc != 0
+
+    - name: Join the cluster
+      ansible.builtin.command:
+        cmd: "k8s join-cluster {{ join_token.stdout }}"
+      when: k8s_status.rc != 0
+
+    - name: Wait for node to appear in cluster
+      ansible.builtin.command:
+        cmd: "k8s kubectl get node {{ inventory_hostname }}"
+      register: node_check
+      delegate_to: "{{ control_plane_host }}"
+      until: node_check.rc == 0
+      retries: 30
+      delay: 10
+
+    - name: Wait for node to be Ready
+      ansible.builtin.shell: |
+        k8s kubectl get node {{ inventory_hostname }} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+      register: ready_check
+      delegate_to: "{{ control_plane_host }}"
+      until: "'True' in ready_check.stdout"
+      retries: 60
+      delay: 10
+
+- name: Verify cluster status
+  hosts: "{{ groups['k8s_control_plane'][0] }}"
+  become: true
+  tasks:
+    - name: Get all cluster nodes
+      ansible.builtin.command: k8s kubectl get nodes -o wide
+      register: cluster_nodes
+      changed_when: false
+
+    - name: Display cluster status
+      ansible.builtin.debug:
+        var: cluster_nodes.stdout_lines

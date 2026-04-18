@@ -31,6 +31,7 @@ import ModelsPage from './pages/ModelsPage';
 import { HarborImages } from './pages/HarborImages';
 import { ImageMirrorDeployment } from './pages/ImageMirrorDeployment';
 import KnativeServicesPage from './pages/KnativeServicesPage';
+import NodesPage from './pages/NodesPage';
 
 // Store
 import { useServicesStore } from './stores/useServicesStore';
@@ -69,6 +70,7 @@ const baseNavigationItems: TkNavItem[] = [
       { id: "templates", label: "Templates", lucideIcon: Layers, href: "/templates" },
       { id: "harbor-images", label: "Harbor Images", lucideIcon: Container, href: "/harbor-images" },
       { id: "optional-components", label: "Optional Components", lucideIcon: Puzzle, href: "/optional-components" },
+      { id: "nodes", label: "Cluster Nodes", lucideIcon: Server, href: "/nodes" },
     ],
   },
   {
@@ -131,6 +133,7 @@ function AppContent() {
       'knative-services': '/knative-services',
       'harbor-images': '/harbor-images',
       'optional-components': '/optional-components',
+      'nodes': '/nodes',
       'jupyterhub-config': '/jupyterhub-config',
       secrets: '/secrets',
       'api-tokens': '/tokens',
@@ -161,6 +164,7 @@ function AppContent() {
     if (path.startsWith('/knative-services')) return 'knative-services';
     if (path.startsWith('/harbor-images')) return 'harbor-images';
     if (path.startsWith('/optional-components')) return 'optional-components';
+    if (path.startsWith('/nodes')) return 'nodes';
     if (path.startsWith('/jupyterhub-config')) return 'jupyterhub-config';
     if (path.startsWith('/secrets')) return 'secrets';
     if (path.startsWith('/tokens')) return 'api-tokens';
@@ -185,6 +189,7 @@ function AppContent() {
     if (path.startsWith('/knative-services')) return 'Knative Services';
     if (path.startsWith('/harbor-images')) return 'Harbor Images';
     if (path.startsWith('/optional-components')) return 'Optional Components';
+    if (path.startsWith('/nodes')) return 'Cluster Nodes';
     if (path.startsWith('/jupyterhub-config')) return 'JupyterHub Config';
     if (path.startsWith('/secrets')) return 'Secrets';
     if (path.startsWith('/tokens')) return 'API Tokens';
@@ -220,6 +225,7 @@ function AppContent() {
         <Route path="/jupyterhub-config" element={<JupyterHubConfigPage />} />
         <Route path="/templates" element={<Templates />} />
         <Route path="/knative-services" element={<KnativeServicesPage />} />
+        <Route path="/nodes" element={<NodesPage />} />
         <Route path="/harbor-images" element={<HarborImages />} />
         <Route path="/image-mirror/:source" element={<ImageMirrorDeployment />} />
       </Routes>
