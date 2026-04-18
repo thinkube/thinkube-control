@@ -198,7 +198,7 @@ spec:
           - name: dockerfile_path
           - name: context_path
       container:
-        image: {{ container_registry }}/library/kaniko-executor:v1.24.0
+        image: {{ container_registry }}/library/kaniko-executor:latest
         args:
           - "--dockerfile=/workspace/{{ "{{" }}inputs.parameters.dockerfile_path{{ "}}" }}"
           - "--context=/workspace/{{ "{{" }}inputs.parameters.context_path{{ "}}" }}"
@@ -236,7 +236,7 @@ spec:
             - name: workspace
               mountPath: /workspace
       container:
-        image: {{ container_registry }}/library/kaniko-executor:v1.24.0
+        image: {{ container_registry }}/library/kaniko-executor:latest
         args:
           - "--dockerfile=/workspace/{{ "{{" }}inputs.parameters.dockerfile_path{{ "}}" }}"
           - "--context=/workspace/{{ "{{" }}inputs.parameters.context_path{{ "}}" }}"

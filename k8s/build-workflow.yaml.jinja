@@ -139,7 +139,7 @@ spec:
       parameters:
       - name: image-tag
     container:
-      image: {{ container_registry }}/library/kaniko-executor:v1.24.0
+      image: {{ container_registry }}/library/kaniko-executor:latest
       args:
       - --dockerfile=/workspace/backend/Dockerfile
       - --context=/workspace/backend
@@ -169,7 +169,7 @@ spec:
       parameters:
       - name: image-tag
     container:
-      image: {{ container_registry }}/library/kaniko-executor:v1.24.0
+      image: {{ container_registry }}/library/kaniko-executor:latest
       args:
       - --dockerfile=/workspace/frontend/Dockerfile
       - --context=/workspace/frontend
@@ -215,7 +215,7 @@ spec:
           - name: workspace
             mountPath: /workspace
     container:
-      image: {{ container_registry }}/library/kaniko-executor:v1.24.0
+      image: {{ container_registry }}/library/kaniko-executor:latest
       args:
       - --dockerfile=/workspace/{% raw %}{{inputs.parameters.dockerfile}}{% endraw %}
       - --context=/workspace/{% raw %}{{inputs.parameters.context}}{% endraw %}
