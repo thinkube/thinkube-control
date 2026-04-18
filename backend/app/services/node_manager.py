@@ -258,12 +258,13 @@ echo '}'
         children = all_section["children"]
         network_mode = all_section.get("vars", {}).get("network_mode", "overlay")
 
-        normalized_arch = "arm64" if architecture.lower() in ("aarch64", "arm64") else "x86_64"
+        # Inventory arch groups use OS convention (x86_64/arm64)
+        inv_arch_group = "arm64" if architecture.lower() in ("aarch64", "arm64") else "x86_64"
 
         host_def = {
             "ansible_host": zerotier_ip if network_mode == "overlay" and zerotier_ip else ip,
             "lan_ip": lan_ip or ip,
-            "arch": normalized_arch,
+            "arch": inv_arch_group,
             "zerotier_enabled": network_mode == "overlay",
             "configure_gpu_passthrough": False,
         }
@@ -274,7 +275,7 @@ echo '}'
         children["baremetal"]["hosts"][hostname] = host_def
         children["baremetal"]["children"]["headless"]["hosts"][hostname] = {}
 
-        arch_group = normalized_arch  # x86_64 or arm64
+        arch_group = inv_arch_group
         if arch_group not in children["arch"]["children"]:
             children["arch"]["children"][arch_group] = {"hosts": {}}
         children["arch"]["children"][arch_group]["hosts"][hostname] = {}
@@ -339,6 +340,26 @@ echo '}'
 
         self.write_inventory(inventory)
         logger.info(f"Removed node {hostname} from inventory")
+
+    async def cordon_node(self, node_name: str) -> Tuple[bool, str]:
+        """Cordon a node to prevent new pod scheduling."""
+        try:
+            v1 = client.CoreV1Api()
+            body = {"spec": {"unschedulable": True}}
+            v1.patch_node(node_name, body)
+            return True, f"Node {node_name} cordoned"
+        except Exception as e:
+            return False, f"Cordon failed: {str(e)}"
+
+    async def uncordon_node(self, node_name: str) -> Tuple[bool, str]:
+        """Uncordon a node to allow pod scheduling."""
+        try:
+            v1 = client.CoreV1Api()
+            body = {"spec": {"unschedulable": False}}
+            v1.patch_node(node_name, body)
+            return True, f"Node {node_name} uncordoned"
+        except Exception as e:
+            return False, f"Uncordon failed: {str(e)}"
 
     async def drain_node(self, node_name: str) -> Tuple[bool, str]:
         """Drain a kubernetes node (cordon + evict pods)."""

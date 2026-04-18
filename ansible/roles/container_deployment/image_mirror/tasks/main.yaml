@@ -168,9 +168,12 @@
 
     - name: Add each platform to manifest
       ansible.builtin.command: >
-        podman manifest add --all {{ destination_image }} docker://{{ source_image }}
+        podman manifest add --os linux --arch {{ item | regex_replace('linux/', '') }}
+        {{ destination_image }} docker://{{ source_image }}
+      loop: "{{ build_platforms }}"
       register: manifest_add
       changed_when: manifest_add.rc == 0
+      failed_when: manifest_add.rc != 0
 
     - name: Push manifest list to destination registry
       ansible.builtin.command: >

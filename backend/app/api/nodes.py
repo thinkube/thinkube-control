@@ -6,7 +6,7 @@ import os
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, WebSocket
 from pydantic import BaseModel
@@ -18,6 +18,11 @@ from app.services.node_manager import node_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/nodes", tags=["nodes"])
+
+HARBOR_IMAGES_DIR = Path(
+    "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
+    "40_thinkube/core/harbor-images"
+)
 
 
 class DiscoverRequest(BaseModel):
@@ -39,6 +44,169 @@ class AddNodeRequest(BaseModel):
 class RemoveNodeRequest(BaseModel):
     hostname: str
     drain: bool = True
+
+
+async def _stream_playbook(
+    websocket: WebSocket,
+    playbook_path: Path,
+    extra_vars: Dict[str, Any],
+    step_name: str,
+    step_number: int,
+    limit: Optional[str] = None,
+) -> bool:
+    """Stream an Ansible playbook execution over WebSocket. Returns True on success."""
+    await websocket.send_json(
+        {"type": "task", "task_name": step_name, "task_number": step_number}
+    )
+
+    if not playbook_path.exists():
+        await websocket.send_json(
+            {"type": "error", "message": f"Playbook not found: {playbook_path}"}
+        )
+        return False
+
+    temp_vars_fd, temp_vars_path = tempfile.mkstemp(
+        suffix=".yml", prefix="ansible-vars-"
+    )
+    try:
+        with os.fdopen(temp_vars_fd, "w") as f:
+            yaml.dump(extra_vars, f)
+    except Exception:
+        os.close(temp_vars_fd)
+        raise
+
+    try:
+        inventory_path = ansible_env.get_inventory_path()
+        cmd = [
+            "stdbuf", "-oL", "-eL",
+            "ansible-playbook",
+            "-i", str(inventory_path),
+            str(playbook_path),
+            "-e", f"@{temp_vars_path}",
+            "-v",
+        ]
+        if limit:
+            cmd.extend(["--limit", limit])
+
+        env = ansible_env.get_environment(context="optional")
+
+        logger.info(f"Running playbook: {' '.join(cmd)}")
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=env,
+            cwd=str(playbook_path.parent),
+            bufsize=0,
+        )
+
+        current_task = "Initializing"
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+
+            line_text = line.decode("utf-8", errors="replace").rstrip()
+            if not line_text:
+                continue
+
+            if "TASK [" in line_text:
+                task_start = line_text.find("TASK [") + 6
+                task_end = line_text.find("]", task_start)
+                if task_end > task_start:
+                    current_task = line_text[task_start:task_end]
+                    await websocket.send_json(
+                        {"type": "task", "task_name": current_task}
+                    )
+            elif line_text.startswith("ok:"):
+                await websocket.send_json(
+                    {"type": "ok", "message": line_text, "task": current_task}
+                )
+            elif line_text.startswith("changed:"):
+                await websocket.send_json(
+                    {"type": "changed", "message": line_text, "task": current_task}
+                )
+            elif line_text.startswith("fatal:") or line_text.startswith("failed:"):
+                await websocket.send_json(
+                    {"type": "failed", "message": line_text, "task": current_task}
+                )
+            elif "PLAY RECAP" in line_text:
+                await websocket.send_json(
+                    {"type": "output", "message": line_text}
+                )
+            else:
+                await websocket.send_json(
+                    {"type": "output", "message": line_text}
+                )
+
+        await process.wait()
+        return process.returncode == 0
+
+    finally:
+        try:
+            os.unlink(temp_vars_path)
+        except OSError:
+            pass
+
+
+async def _run_arch_rebuild(
+    websocket: WebSocket,
+    hostname: str,
+    new_arch: str,
+    extra_vars: Dict[str, Any],
+) -> bool:
+    """Cordon node, rebuild all images for the new architecture, uncordon on success."""
+    # Cordon the new node to prevent scheduling until images are ready
+    await websocket.send_json(
+        {"type": "task", "task_name": f"Cordon {hostname} (preventing scheduling until images are rebuilt)", "task_number": 5}
+    )
+    success, msg = await node_manager.cordon_node(hostname)
+    if not success:
+        await websocket.send_json({"type": "error", "message": f"Failed to cordon node: {msg}"})
+        return False
+    await websocket.send_json({"type": "ok", "message": f"Node {hostname} cordoned"})
+
+    rebuild_playbooks = [
+        (HARBOR_IMAGES_DIR / "14_build_base_images.yaml", "Rebuild base images (multi-arch)"),
+        (HARBOR_IMAGES_DIR / "15_build_jupyter_images.yaml", "Rebuild Jupyter image (multi-arch)"),
+        (HARBOR_IMAGES_DIR / "13_mirror_public_images.yaml", "Re-mirror public images (multi-arch)"),
+    ]
+
+    step = 6
+    all_ok = True
+    for playbook_path, description in rebuild_playbooks:
+        await websocket.send_json(
+            {"type": "ok", "message": f"Starting: {description}"}
+        )
+        ok = await _stream_playbook(
+            websocket=websocket,
+            playbook_path=playbook_path,
+            extra_vars=extra_vars,
+            step_name=description,
+            step_number=step,
+        )
+        if not ok:
+            await websocket.send_json(
+                {"type": "error", "message": f"Failed: {description}. Node remains cordoned."}
+            )
+            all_ok = False
+            break
+        await websocket.send_json(
+            {"type": "ok", "message": f"Completed: {description}"}
+        )
+        step += 1
+
+    if all_ok:
+        await websocket.send_json(
+            {"type": "task", "task_name": f"Uncordon {hostname}", "task_number": step}
+        )
+        success, msg = await node_manager.uncordon_node(hostname)
+        if not success:
+            await websocket.send_json({"type": "error", "message": f"Failed to uncordon: {msg}"})
+            return False
+        await websocket.send_json({"type": "ok", "message": f"Node {hostname} uncordoned and ready"})
+
+    return all_ok
 
 
 @router.get("/list")
@@ -166,24 +334,12 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
         await websocket.send_json({"type": "ok", "message": "Inventory is valid"})
 
         # Step 3: Run the join worker playbook
-        await websocket.send_json(
-            {"type": "task", "task_name": "Join node to cluster", "task_number": 3}
-        )
-
         playbook_path = Path(
             "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
             "40_thinkube/core/infrastructure/k8s/20_join_workers.yaml"
         )
-
         if not playbook_path.exists():
             playbook_path = ansible_env.get_playbook_path("add_node.yaml")
-
-        if not playbook_path.exists():
-            await websocket.send_json(
-                {"type": "error", "message": f"Join playbook not found: {playbook_path}"}
-            )
-            await websocket.close()
-            return
 
         extra_vars = {}
         try:
@@ -193,127 +349,68 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
             await websocket.close()
             return
 
-        temp_vars_fd, temp_vars_path = tempfile.mkstemp(
-            suffix=".yml", prefix="ansible-node-vars-"
+        join_ok = await _stream_playbook(
+            websocket=websocket,
+            playbook_path=playbook_path,
+            extra_vars=extra_vars,
+            step_name="Join node to cluster",
+            step_number=3,
+            limit=hostname,
         )
-        try:
-            with os.fdopen(temp_vars_fd, "w") as f:
-                yaml.dump(extra_vars, f)
-        except Exception:
-            os.close(temp_vars_fd)
-            raise
 
-        try:
-            inventory_path = ansible_env.get_inventory_path()
-            cmd = [
-                "stdbuf", "-oL", "-eL",
-                "ansible-playbook",
-                "-i", str(inventory_path),
-                str(playbook_path),
-                "-e", f"@{temp_vars_path}",
-                "--limit", hostname,
-                "-v",
-            ]
-
-            env = ansible_env.get_environment(context="optional")
-
-            logger.info(f"Running node join: {' '.join(cmd)}")
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                env=env,
-                cwd=str(playbook_path.parent),
-                bufsize=0,
+        if join_ok:
+            # Step 4: Check for new architecture
+            await websocket.send_json(
+                {"type": "task", "task_name": "Check for new architecture", "task_number": 4}
             )
+            normalized = "arm64" if architecture.lower() in ("aarch64", "arm64") else "amd64"
 
-            current_task = "Initializing"
-            while True:
-                line = await process.stdout.readline()
-                if not line:
-                    break
+            platform_result = node_manager.update_build_platforms()
+            architectures = node_manager.get_cluster_architectures()
+            new_arch_detected = platform_result.get("changed", False)
 
-                line_text = line.decode("utf-8", errors="replace").rstrip()
-                if not line_text:
-                    continue
-
-                if "TASK [" in line_text:
-                    task_start = line_text.find("TASK [") + 6
-                    task_end = line_text.find("]", task_start)
-                    if task_end > task_start:
-                        current_task = line_text[task_start:task_end]
-                        await websocket.send_json(
-                            {"type": "task", "task_name": current_task}
-                        )
-                elif line_text.startswith("ok:"):
-                    await websocket.send_json(
-                        {"type": "ok", "message": line_text, "task": current_task}
-                    )
-                elif line_text.startswith("changed:"):
-                    await websocket.send_json(
-                        {"type": "changed", "message": line_text, "task": current_task}
-                    )
-                elif line_text.startswith("fatal:") or line_text.startswith("failed:"):
-                    await websocket.send_json(
-                        {"type": "failed", "message": line_text, "task": current_task}
-                    )
-                elif "PLAY RECAP" in line_text:
-                    await websocket.send_json(
-                        {"type": "output", "message": line_text}
-                    )
-                else:
-                    await websocket.send_json(
-                        {"type": "output", "message": line_text}
-                    )
-
-            await process.wait()
-
-            if process.returncode == 0:
-                await websocket.send_json(
-                    {"type": "task", "task_name": "Check for new architecture", "task_number": 4}
-                )
-                normalized = "arm64" if architecture.lower() in ("aarch64", "arm64") else "amd64"
-
-                platform_result = node_manager.update_build_platforms()
-                architectures = node_manager.get_cluster_architectures()
-                new_arch_detected = platform_result.get("changed", False)
-
-                rebuild_actions = []
-                if new_arch_detected:
-                    rebuild_actions = node_manager.get_rebuild_actions(normalized)
-                    await websocket.send_json(
-                        {
-                            "type": "ok",
-                            "message": f"New architecture detected: {normalized}. "
-                            f"Updated build platforms to: {platform_result['platforms']}",
-                        }
-                    )
-
+            rebuild_ok = True
+            if new_arch_detected:
                 await websocket.send_json(
                     {
-                        "type": "complete",
-                        "success": True,
-                        "message": f"Node {hostname} successfully joined the cluster",
-                        "architectures": architectures,
-                        "new_architecture_detected": new_arch_detected,
-                        "node_architecture": normalized,
-                        "rebuild_actions": rebuild_actions,
-                    }
-                )
-            else:
-                await websocket.send_json(
-                    {
-                        "type": "complete",
-                        "success": False,
-                        "message": f"Node join failed (exit code {process.returncode})",
+                        "type": "ok",
+                        "message": f"New architecture detected: {normalized}. "
+                        f"Updated build platforms to: {platform_result['platforms']}. "
+                        f"Starting image rebuilds...",
                     }
                 )
 
-        finally:
-            try:
-                os.unlink(temp_vars_path)
-            except OSError:
-                pass
+                # Steps 5+: Cordon, rebuild images, uncordon
+                rebuild_ok = await _run_arch_rebuild(
+                    websocket=websocket,
+                    hostname=hostname,
+                    new_arch=normalized,
+                    extra_vars=extra_vars,
+                )
+
+            await websocket.send_json(
+                {
+                    "type": "complete",
+                    "success": True,
+                    "message": (
+                        f"Node {hostname} successfully joined the cluster"
+                        + (" and all images rebuilt for multi-arch" if new_arch_detected and rebuild_ok else "")
+                        + (". WARNING: Image rebuild failed — node is cordoned." if new_arch_detected and not rebuild_ok else "")
+                    ),
+                    "architectures": architectures,
+                    "new_architecture_detected": new_arch_detected,
+                    "node_architecture": normalized,
+                    "images_rebuilt": rebuild_ok if new_arch_detected else None,
+                }
+            )
+        else:
+            await websocket.send_json(
+                {
+                    "type": "complete",
+                    "success": False,
+                    "message": f"Node join failed",
+                }
+            )
 
     except Exception as e:
         logger.error(f"Node addition error: {e}", exc_info=True)

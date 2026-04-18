@@ -198,7 +198,7 @@ spec:
           - name: dockerfile_path
           - name: context_path
       container:
-        image: gcr.io/kaniko-project/executor:latest
+        image: {{ container_registry }}/library/kaniko-executor:v1.24.0
         args:
           - "--dockerfile=/workspace/{{ "{{" }}inputs.parameters.dockerfile_path{{ "}}" }}"
           - "--context=/workspace/{{ "{{" }}inputs.parameters.context_path{{ "}}" }}"
@@ -236,7 +236,7 @@ spec:
             - name: workspace
               mountPath: /workspace
       container:
-        image: gcr.io/kaniko-project/executor:latest
+        image: {{ container_registry }}/library/kaniko-executor:v1.24.0
         args:
           - "--dockerfile=/workspace/{{ "{{" }}inputs.parameters.dockerfile_path{{ "}}" }}"
           - "--context=/workspace/{{ "{{" }}inputs.parameters.context_path{{ "}}" }}"
@@ -251,14 +251,17 @@ spec:
           - name: workspace
             mountPath: /workspace
 
-    # Create multi-arch manifest list from per-arch images
+    # Create multi-arch manifest list from per-arch images using crane
     - name: create-manifest
       inputs:
         parameters:
           - name: container_name
       container:
-        image: {{ container_registry }}/library/ci-utils:latest
+        image: {{ container_registry }}/library/crane:latest
         command: ["/bin/sh", "-c"]
+        env:
+          - name: DOCKER_CONFIG
+            value: /kaniko/.docker
         args:
           - |
             set -e
@@ -268,25 +271,18 @@ spec:
             echo "Creating multi-arch manifest for ${IMAGE}:${TAG}"
 
             # Create manifest list from per-arch images
-            podman manifest create "${IMAGE}:${TAG}" \
+            crane index append --tag "${IMAGE}:${TAG}" \
 {% for arch in build_architectures %}
-              "${IMAGE}:${TAG}-{{ arch }}"{{ " \\" if not loop.last else "" }}
+              --manifest "${IMAGE}:${TAG}-{{ arch }}"{{ " \\" if not loop.last else "" }}
 {% endfor %}
 
-            # Push manifest
-            podman manifest push --tls-verify=true "${IMAGE}:${TAG}" "docker://${IMAGE}:${TAG}"
+            # Also tag as :latest
+            crane tag "${IMAGE}:${TAG}" latest
 
-            # Also create :latest manifest
-            podman manifest create "${IMAGE}:latest" \
-{% for arch in build_architectures %}
-              "${IMAGE}:${TAG}-{{ arch }}"{{ " \\" if not loop.last else "" }}
-{% endfor %}
-
-            podman manifest push --tls-verify=true "${IMAGE}:latest" "docker://${IMAGE}:latest"
             echo "Multi-arch manifest created and pushed"
         volumeMounts:
           - name: docker-config
-            mountPath: /run/containers/auth.json
+            mountPath: /kaniko/.docker
 {% endif %}
 
     # Helper template to check conditions

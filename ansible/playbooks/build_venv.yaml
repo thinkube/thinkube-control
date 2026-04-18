@@ -185,9 +185,15 @@
         namespace: "{{ job_namespace }}"
         name: "venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}"
 
-    - name: Get build node architecture
+    - name: Detect build node architecture from cluster
+      ansible.builtin.shell: |
+        kubectl get node {{ build_node }} -o jsonpath='{.metadata.labels.kubernetes\.io/arch}'
+      register: build_node_arch_result
+      changed_when: false
+
+    - name: Set build node architecture
       ansible.builtin.set_fact:
-        build_node_arch: "{{ target_arch if target_arch != '' else '' }}"
+        build_node_arch: "{{ target_arch if target_arch != '' else build_node_arch_result.stdout }}"
 
     # Sync to other GPU nodes of the same architecture
     - name: Sync venv to matching GPU nodes
@@ -196,3 +202,37 @@
         source_node: "{{ build_node }}"
         filter_architecture: "{{ build_node_arch }}"
       when: groups['baremetal_gpus'] | length > 1
+
+    # If multi-arch cluster, also build on a GPU node of the other architecture
+    - name: Check for other architectures with GPU nodes
+      ansible.builtin.set_fact:
+        other_arch_gpu_nodes: >-
+          {%- set ns = namespace(nodes=[]) -%}
+          {%- for node in groups['baremetal_gpus'] -%}
+            {%- set node_arch = hostvars[node].get('node_architecture', hostvars[node].get('ansible_architecture', '')) -%}
+            {%- set normalized = 'arm64' if node_arch in ['aarch64', 'arm64'] else ('amd64' if node_arch in ['x86_64', 'amd64'] else node_arch) -%}
+            {%- if normalized != build_node_arch and node != build_node -%}
+              {%- set ns.nodes = ns.nodes + [{'node': node, 'arch': normalized}] -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ ns.nodes }}
+      when: build_for_all_architectures | default(false) | bool
+
+    - name: Display other architecture GPU nodes
+      ansible.builtin.debug:
+        msg: "Will also build venv on {{ other_arch_gpu_nodes | map(attribute='node') | join(', ') }} for cross-arch support"
+      when:
+        - build_for_all_architectures | default(false) | bool
+        - other_arch_gpu_nodes | length > 0
+
+    - name: Build venv on other architecture GPU nodes
+      ansible.builtin.include_tasks: build_venv_on_node.yaml
+      vars:
+        target_build_node: "{{ item.node }}"
+        target_build_arch: "{{ item.arch }}"
+      loop: "{{ other_arch_gpu_nodes }}"
+      loop_control:
+        label: "{{ item.node }} ({{ item.arch }})"
+      when:
+        - build_for_all_architectures | default(false) | bool
+        - other_arch_gpu_nodes | length > 0

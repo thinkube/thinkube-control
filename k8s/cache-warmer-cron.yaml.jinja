@@ -22,6 +22,10 @@ spec:
     - name: docker-config
       secret:
         secretName: docker-config
+    - name: kaniko-cache
+      hostPath:
+        path: /home/{{ system_username }}/.cache/kaniko
+        type: DirectoryOrCreate
 {% if build_architectures is defined and build_architectures | length > 1 %}
     - name: workspace
       emptyDir: {}
@@ -116,13 +120,15 @@ spec:
         - name: image
         - name: target-arch
       container:
-        image: {{ container_registry }}/library/kaniko-warmer:latest
+        image: {{ container_registry }}/library/kaniko-warmer:v1.24.0
         args:
           - --cache-dir=/cache
           - --image={% raw %}{{inputs.parameters.image}}{% endraw %}
         volumeMounts:
         - name: docker-config
           mountPath: /kaniko/.docker
+        - name: kaniko-cache
+          mountPath: /cache
 {% endif %}
 
     - name: warm-image-cache
@@ -132,10 +138,12 @@ spec:
         parameters:
         - name: image
       container:
-        image: {{ container_registry }}/library/kaniko-warmer:latest
+        image: {{ container_registry }}/library/kaniko-warmer:v1.24.0
         args:
           - --cache-dir=/cache
           - --image={% raw %}{{inputs.parameters.image}}{% endraw %}
         volumeMounts:
         - name: docker-config
           mountPath: /kaniko/.docker
+        - name: kaniko-cache
+          mountPath: /cache

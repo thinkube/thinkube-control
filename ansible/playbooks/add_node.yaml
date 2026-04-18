@@ -1,11 +1,15 @@
 ---
-# Fallback playbook for adding a single worker node to the cluster.
-# Normally, the backend runs the full 20_join_workers.yaml from thinkube
-# with --limit. This playbook is a lightweight alternative when that
-# playbook is unavailable.
+# ansible/playbooks/add_node.yaml
+# Description:
+#   Add a worker node to the cluster with full bootstrap and validation.
+#   Handles: OS validation, firewall, k8s snap install, cluster join,
+#   node labeling (build-node, GPU), and architecture verification.
 #
 # Usage:
 #   ansible-playbook -i inventory.yaml add_node.yaml --limit <hostname> -v
+#
+# The backend prefers 20_join_workers.yaml from the thinkube repo when
+# available. This playbook serves as a self-contained alternative.
 
 - name: Prepare worker node
   hosts: k8s_workers
@@ -24,6 +28,14 @@
       ansible.builtin.assert:
         that: "'ubuntu 24.04' in os_check.stdout"
         fail_msg: "Node must run Ubuntu 24.04 (got: {{ os_check.stdout }})"
+
+    - name: Detect node architecture
+      ansible.builtin.set_fact:
+        node_k8s_arch: "{{ 'arm64' if ansible_architecture in ['aarch64', 'arm64'] else 'amd64' }}"
+
+    - name: Display detected architecture
+      ansible.builtin.debug:
+        msg: "Node architecture: {{ ansible_architecture }} (k8s: {{ node_k8s_arch }})"
 
     - name: Configure UFW - set default forward policy
       ansible.builtin.lineinfile:
@@ -59,6 +71,12 @@
       register: snap_install
       changed_when: "'already installed' not in snap_install.stderr"
       failed_when: snap_install.rc != 0 and 'already installed' not in snap_install.stderr
+
+    - name: Install podman for native image builds
+      ansible.builtin.apt:
+        name: podman
+        state: present
+        update_cache: yes
 
     - name: Create kubectl wrapper
       ansible.builtin.copy:
@@ -121,10 +139,42 @@
       retries: 60
       delay: 10
 
-- name: Verify cluster status
+- name: Label and verify node
   hosts: "{{ groups['k8s_control_plane'][0] }}"
   become: true
   tasks:
+    - name: Get target worker hostname
+      ansible.builtin.set_fact:
+        worker_host: "{{ groups['k8s_workers'] | intersect(ansible_play_hosts_all) | first }}"
+
+    - name: Label node as build node
+      ansible.builtin.command: >
+        k8s kubectl label node {{ worker_host }}
+        thinkube.io/build-node=true --overwrite
+
+    - name: Verify node architecture matches inventory
+      ansible.builtin.shell: |
+        k8s kubectl get node {{ worker_host }} -o jsonpath='{.metadata.labels.kubernetes\.io/arch}'
+      register: k8s_arch
+      changed_when: false
+
+    - name: Display architecture verification
+      ansible.builtin.debug:
+        msg: "Node {{ worker_host }} architecture from k8s: {{ k8s_arch.stdout }}"
+
+    - name: Check for NVIDIA GPU on node
+      ansible.builtin.shell: |
+        k8s kubectl get node {{ worker_host }} -o jsonpath='{.status.capacity.nvidia\.com/gpu}'
+      register: gpu_check
+      changed_when: false
+      failed_when: false
+
+    - name: Label GPU node
+      ansible.builtin.command: >
+        k8s kubectl label node {{ worker_host }}
+        thinkube.io/gpu=true --overwrite
+      when: gpu_check.stdout | default('0') | int > 0
+
     - name: Get all cluster nodes
       ansible.builtin.command: k8s kubectl get nodes -o wide
       register: cluster_nodes

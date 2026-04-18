@@ -17,22 +17,28 @@
   ansible.builtin.set_fact:
     all_target_nodes: "{{ groups['baremetal_gpus'] | difference([source_node]) }}"
 
+- name: Resolve effective filter architecture
+  ansible.builtin.set_fact:
+    effective_filter_arch: >-
+      {%- if filter_architecture is defined and filter_architecture != '' -%}
+        {{ filter_architecture }}
+      {%- else -%}
+        {%- set src_arch = hostvars[source_node].get('node_architecture', hostvars[source_node].get('ansible_architecture', '')) -%}
+        {{ 'arm64' if src_arch in ['aarch64', 'arm64'] else ('amd64' if src_arch in ['x86_64', 'amd64'] else src_arch) }}
+      {%- endif -%}
+
 - name: Filter target nodes by architecture
   ansible.builtin.set_fact:
     target_nodes: >-
-      {%- if filter_architecture is defined and filter_architecture != '' -%}
-        {%- set ns = namespace(nodes=[]) -%}
-        {%- for node in all_target_nodes -%}
-          {%- set node_arch = hostvars[node].get('node_architecture', hostvars[node].get('ansible_architecture', '')) -%}
-          {%- set normalized = 'arm64' if node_arch in ['aarch64', 'arm64'] else ('amd64' if node_arch in ['x86_64', 'amd64'] else node_arch) -%}
-          {%- if normalized == filter_architecture -%}
-            {%- set ns.nodes = ns.nodes + [node] -%}
-          {%- endif -%}
-        {%- endfor -%}
-        {{ ns.nodes }}
-      {%- else -%}
-        {{ all_target_nodes }}
-      {%- endif -%}
+      {%- set ns = namespace(nodes=[]) -%}
+      {%- for node in all_target_nodes -%}
+        {%- set node_arch = hostvars[node].get('node_architecture', hostvars[node].get('ansible_architecture', '')) -%}
+        {%- set normalized = 'arm64' if node_arch in ['aarch64', 'arm64'] else ('amd64' if node_arch in ['x86_64', 'amd64'] else node_arch) -%}
+        {%- if normalized == effective_filter_arch -%}
+          {%- set ns.nodes = ns.nodes + [node] -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ ns.nodes }}
 
 - name: Display sync info
   ansible.builtin.debug:
