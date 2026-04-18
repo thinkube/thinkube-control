@@ -327,7 +327,7 @@ export default function JupyterHubConfigPage() {
     if (!confirmed) return
 
     try {
-      const response = await api.post(`/jupyter-venvs/${venvId}/build`)
+      const response = await api.post(`/jupyter-venvs/${venvId}/build`, { force: false })
 
       // Update venv status immediately
       setVenvs(prev => prev.map(v => v.id === venvId ? { ...v, status: 'building' } : v))

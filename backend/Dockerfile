@@ -10,6 +10,10 @@ WORKDIR /app
 # Including: hera-workflows, kubernetes, kubernetes-asyncio
 # See: thinkube/ansible/.../base-images/python-base.Containerfile.j2
 
+# Install additional dependencies not in the base image
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
 # Copy and install fastapi-mcp-extended package
 COPY fastapi-mcp-extended /app/fastapi-mcp-extended
 RUN pip install --no-cache-dir /app/fastapi-mcp-extended
