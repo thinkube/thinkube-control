@@ -48,30 +48,37 @@
       delegate_to: localhost
       register: all_nodes
 
-    - name: Build unique architecture list from nodes
+    - name: Build architecture list and node mapping
       ansible.builtin.set_fact:
-        cluster_architectures: "{{ all_nodes.resources | map(attribute='metadata.labels') | map(attribute='kubernetes.io/arch') | unique | sort | list }}"
+        cluster_architectures: >-
+          {%- set archs = [] -%}
+          {%- for node in all_nodes.resources -%}
+            {%- set arch = node.metadata.labels['kubernetes.io/arch'] -%}
+            {%- if arch not in archs -%}
+              {%- set _ = archs.append(arch) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ archs | sort }}
+        arch_builds: >-
+          {%- set builds = [] -%}
+          {%- set seen = [] -%}
+          {%- for node in all_nodes.resources -%}
+            {%- set arch = node.metadata.labels['kubernetes.io/arch'] -%}
+            {%- if arch not in seen -%}
+              {%- set _ = seen.append(arch) -%}
+              {%- set _ = builds.append({'arch': arch, 'node': node.metadata.name}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ builds }}
 
     - name: Filter to single architecture if requested
       ansible.builtin.set_fact:
-        build_architectures: "{{ [target_architecture] if target_architecture is defined and target_architecture != '' else cluster_architectures }}"
+        arch_builds: "{{ arch_builds | selectattr('arch', 'equalto', target_architecture) | list }}"
+      when: target_architecture is defined and target_architecture != ''
 
     - name: Display build plan
       ansible.builtin.debug:
-        msg: "Building venv '{{ venv_name }}' for architectures: {{ build_architectures | join(', ') }}"
-
-    - name: Build architecture-to-node mapping
-      ansible.builtin.set_fact:
-        arch_builds: >-
-          {%- set builds = [] -%}
-          {%- for arch in build_architectures -%}
-            {%- for node in all_nodes.resources -%}
-              {%- if node.metadata.labels['kubernetes.io/arch'] == arch and builds | selectattr('arch', 'equalto', arch) | list | length == 0 -%}
-                {%- set _ = builds.append({'arch': arch, 'node': node.metadata.name}) -%}
-              {%- endif -%}
-            {%- endfor -%}
-          {%- endfor -%}
-          {{ builds }}
+        msg: "Building venv '{{ venv_name }}' for: {{ arch_builds | map(attribute='arch') | join(', ') }}"
 
     - name: Display build targets
       ansible.builtin.debug:
