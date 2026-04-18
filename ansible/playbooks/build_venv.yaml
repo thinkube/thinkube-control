@@ -40,17 +40,17 @@
       ansible.builtin.set_fact:
         package_list: "{{ packages if packages is sequence and packages is not string else packages | from_json }}"
 
-    - name: Detect cluster architectures from GPU nodes
-      ansible.builtin.shell: |
-        kubectl --kubeconfig {{ kubeconfig }} get nodes -l nvidia.com/gpu.present=true -o jsonpath='{range .items[*]}{.metadata.labels.kubernetes\.io/arch}{"\n"}{end}' 2>/dev/null || \
-        kubectl --kubeconfig {{ kubeconfig }} get nodes -o jsonpath='{range .items[*]}{.metadata.labels.kubernetes\.io/arch}{"\n"}{end}'
+    - name: Get all cluster nodes
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: v1
+        kind: Node
       delegate_to: localhost
-      register: cluster_arch_result
-      changed_when: false
+      register: all_nodes
 
-    - name: Build unique architecture list
+    - name: Build unique architecture list from nodes
       ansible.builtin.set_fact:
-        cluster_architectures: "{{ cluster_arch_result.stdout_lines | unique | sort }}"
+        cluster_architectures: "{{ all_nodes.resources | map(attribute='metadata.labels') | map(attribute='kubernetes.io/arch') | unique | sort | list }}"
 
     - name: Filter to single architecture if requested
       ansible.builtin.set_fact:
@@ -60,24 +60,16 @@
       ansible.builtin.debug:
         msg: "Building venv '{{ venv_name }}' for architectures: {{ build_architectures | join(', ') }}"
 
-    - name: Select one GPU node per architecture
-      ansible.builtin.shell: |
-        kubectl --kubeconfig {{ kubeconfig }} get nodes \
-          -l kubernetes.io/arch={{ item }} \
-          -o jsonpath='{.items[0].metadata.name}'
-      delegate_to: localhost
-      register: arch_node_results
-      loop: "{{ build_architectures }}"
-      changed_when: false
-
     - name: Build architecture-to-node mapping
       ansible.builtin.set_fact:
         arch_builds: >-
           {%- set builds = [] -%}
-          {%- for result in arch_node_results.results -%}
-            {%- if result.stdout != '' -%}
-              {%- set _ = builds.append({'arch': result.item, 'node': result.stdout}) -%}
-            {%- endif -%}
+          {%- for arch in build_architectures -%}
+            {%- for node in all_nodes.resources -%}
+              {%- if node.metadata.labels['kubernetes.io/arch'] == arch and builds | selectattr('arch', 'equalto', arch) | list | length == 0 -%}
+                {%- set _ = builds.append({'arch': arch, 'node': node.metadata.name}) -%}
+              {%- endif -%}
+            {%- endfor -%}
           {%- endfor -%}
           {{ builds }}
 
