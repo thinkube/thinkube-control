@@ -62,6 +62,7 @@ export default function NodesPage() {
   const [addSuccess, setAddSuccess] = useState(false);
   const [newArchDetected, setNewArchDetected] = useState(false);
   const [removeConfirm, setRemoveConfirm] = useState<string | null>(null);
+  const [rebuildActions, setRebuildActions] = useState<Array<{action: string; description: string; detail?: string}>>([]);
 
   const playbookRef = useRef<PlaybookExecutorHandle>(null);
 
@@ -120,6 +121,9 @@ export default function NodesPage() {
   const handleAddComplete = useCallback((result: any) => {
     if (result.status === 'success') {
       setAddSuccess(true);
+      if (result.rebuild_actions?.length > 0) {
+        setRebuildActions(result.rebuild_actions);
+      }
       listNodes();
     }
     setWizardStep('idle');
@@ -140,6 +144,7 @@ export default function NodesPage() {
     setAddJobId('');
     setAddSuccess(false);
     setNewArchDetected(false);
+    setRebuildActions([]);
     clearDiscoveredNode();
   };
 
@@ -186,6 +191,28 @@ export default function NodesPage() {
           title="Node Added"
           description="The new node has been successfully joined to the cluster."
         />
+      )}
+
+      {rebuildActions.length > 0 && (
+        <TkAlert className="bg-warning/10 text-warning border-warning/20">
+          <AlertTriangle className="h-5 w-5" />
+          <div>
+            <TkAlertTitle className="font-medium">New Architecture — Rebuild Required</TkAlertTitle>
+            <TkAlertDescription>
+              <p className="text-sm mb-2">
+                A new architecture was added to the cluster. The following actions are recommended:
+              </p>
+              <ul className="text-sm space-y-1 list-disc list-inside">
+                {rebuildActions.map((action, i) => (
+                  <li key={i}>
+                    <span className="font-medium">{action.description}</span>
+                    {action.detail && <span className="text-muted-foreground"> — {action.detail}</span>}
+                  </li>
+                ))}
+              </ul>
+            </TkAlertDescription>
+          </div>
+        </TkAlert>
       )}
 
       {error && (

@@ -1,5 +1,6 @@
 # CronWorkflow to periodically warm Kaniko cache
 # Runs daily at 2 AM to ensure cache is fresh
+# Multi-arch: when build_architectures has multiple entries, warms cache on each arch node
 apiVersion: argoproj.io/v1alpha1
 kind: CronWorkflow
 metadata:
@@ -21,10 +22,58 @@ spec:
     - name: docker-config
       secret:
         secretName: docker-config
+{% if build_architectures is defined and build_architectures | length > 1 %}
+    - name: workspace
+      emptyDir: {}
+{% endif %}
     templates:
     - name: warm-cache
       dag:
         tasks:
+{% if build_architectures is defined and build_architectures | length > 1 %}
+{% for arch in build_architectures %}
+        - name: warm-python-cache-{{ arch }}
+          template: warm-image-cache-on-arch
+          arguments:
+            parameters:
+            - name: image
+              value: "{{ container_registry }}/library/python:3.12-slim"
+            - name: target-arch
+              value: "{{ arch }}"
+        - name: warm-python-base-cache-{{ arch }}
+          template: warm-image-cache-on-arch
+          arguments:
+            parameters:
+            - name: image
+              value: "{{ container_registry }}/library/python-base:3.12-slim"
+            - name: target-arch
+              value: "{{ arch }}"
+        - name: warm-node-cache-{{ arch }}
+          template: warm-image-cache-on-arch
+          arguments:
+            parameters:
+            - name: image
+              value: "{{ container_registry }}/library/node:18-alpine"
+            - name: target-arch
+              value: "{{ arch }}"
+        - name: warm-node-base-cache-{{ arch }}
+          template: warm-image-cache-on-arch
+          arguments:
+            parameters:
+            - name: image
+              value: "{{ container_registry }}/library/node-base:18-alpine"
+            - name: target-arch
+              value: "{{ arch }}"
+        - name: warm-nginx-cache-{{ arch }}
+          template: warm-image-cache-on-arch
+          arguments:
+            parameters:
+            - name: image
+              value: "{{ container_registry }}/library/nginx:stable-alpine"
+            - name: target-arch
+              value: "{{ arch }}"
+{% endfor %}
+{% else %}
         - name: warm-python-cache
           template: warm-image-cache
           arguments:
@@ -55,7 +104,30 @@ spec:
             parameters:
             - name: image
               value: "{{ container_registry }}/library/nginx:stable-alpine"
+{% endif %}
+
+{% if build_architectures is defined and build_architectures | length > 1 %}
+    - name: warm-image-cache-on-arch
+      nodeSelector:
+        kubernetes.io/arch: "{% raw %}{{inputs.parameters.target-arch}}{% endraw %}"
+        thinkube.io/build-node: "true"
+      inputs:
+        parameters:
+        - name: image
+        - name: target-arch
+      container:
+        image: {{ container_registry }}/library/kaniko-warmer:latest
+        args:
+          - --cache-dir=/cache
+          - --image={% raw %}{{inputs.parameters.image}}{% endraw %}
+        volumeMounts:
+        - name: docker-config
+          mountPath: /kaniko/.docker
+{% endif %}
+
     - name: warm-image-cache
+      nodeSelector:
+        kubernetes.io/hostname: {{ master_node_name }}
       inputs:
         parameters:
         - name: image

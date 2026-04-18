@@ -393,5 +393,62 @@ echo '}'
         except Exception as e:
             return {"valid": False, "error": str(e)}
 
+    def update_build_platforms(self) -> Dict[str, Any]:
+        """Update container_build_platforms in inventory based on cluster architectures.
+
+        Returns the old and new platform values so callers can detect changes.
+        """
+        architectures = self.get_cluster_architectures()
+        platforms = ",".join(f"linux/{arch}" for arch in sorted(architectures))
+
+        if not platforms:
+            return {"changed": False, "platforms": ""}
+
+        inventory = self.read_inventory()
+        all_vars = inventory["all"].get("vars", {})
+        old_platforms = all_vars.get("container_build_platforms", "")
+
+        if old_platforms == platforms:
+            return {"changed": False, "platforms": platforms}
+
+        self.backup_inventory()
+        all_vars["container_build_platforms"] = platforms
+        inventory["all"]["vars"] = all_vars
+        self.write_inventory(inventory)
+
+        logger.info(f"Updated container_build_platforms: {old_platforms!r} -> {platforms!r}")
+        return {
+            "changed": True,
+            "old_platforms": old_platforms,
+            "platforms": platforms,
+            "architectures": architectures,
+        }
+
+    def get_rebuild_actions(self, new_arch: str) -> List[Dict[str, str]]:
+        """Return list of rebuild actions needed when a new architecture is introduced."""
+        actions = [
+            {
+                "action": "rebuild_base_images",
+                "description": f"Rebuild base images with multi-arch support (including {new_arch})",
+                "playbook": "14_build_base_images.yaml",
+            },
+            {
+                "action": "remirror_images",
+                "description": f"Re-mirror public images to include {new_arch} platform",
+                "detail": "Image mirror role will create manifest lists with all platforms",
+            },
+            {
+                "action": "rebuild_app_images",
+                "description": "Rebuild application container images for all architectures",
+                "detail": "Argo Workflows will generate per-arch build steps with manifest creation",
+            },
+            {
+                "action": "rebuild_venvs",
+                "description": f"Rebuild Jupyter venvs on a {new_arch} node",
+                "detail": "Venvs contain native binaries and need per-architecture builds",
+            },
+        ]
+        return actions
+
 
 node_manager = NodeManager()

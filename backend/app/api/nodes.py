@@ -272,9 +272,22 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
                 await websocket.send_json(
                     {"type": "task", "task_name": "Check for new architecture", "task_number": 4}
                 )
-                architectures = node_manager.get_cluster_architectures()
                 normalized = "arm64" if architecture.lower() in ("aarch64", "arm64") else "amd64"
-                new_arch = len(architectures) > 1
+
+                platform_result = node_manager.update_build_platforms()
+                architectures = node_manager.get_cluster_architectures()
+                new_arch_detected = platform_result.get("changed", False)
+
+                rebuild_actions = []
+                if new_arch_detected:
+                    rebuild_actions = node_manager.get_rebuild_actions(normalized)
+                    await websocket.send_json(
+                        {
+                            "type": "ok",
+                            "message": f"New architecture detected: {normalized}. "
+                            f"Updated build platforms to: {platform_result['platforms']}",
+                        }
+                    )
 
                 await websocket.send_json(
                     {
@@ -282,8 +295,9 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
                         "success": True,
                         "message": f"Node {hostname} successfully joined the cluster",
                         "architectures": architectures,
-                        "new_architecture_detected": new_arch,
+                        "new_architecture_detected": new_arch_detected,
                         "node_architecture": normalized,
+                        "rebuild_actions": rebuild_actions,
                     }
                 )
             else:

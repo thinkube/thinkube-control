@@ -5,6 +5,9 @@
 # Build Tool: Kaniko executor from Google (gcr.io/kaniko-project/executor:latest)
 # Security: Runs as non-root user, no special privileges required
 # Cache: Uses local cache directory only (no registry cache push to avoid permission issues)
+#
+# Multi-arch support: When build_architectures has multiple entries, builds run on
+# per-arch nodes using git-clone init containers and creates manifest lists.
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowTemplate
 metadata:
@@ -16,7 +19,7 @@ metadata:
     app.kubernetes.io/component: ci-cd
     thinkube.io/trigger: webhook
     thinkube.io/build-type: container
-    # 🤖 Critical for webhook adapter to identify the app
+    # Critical for webhook adapter to identify the app
     thinkube.io/app-name: {{ project_name }}
     thinkube.io/namespace: {{ namespace }}
 spec:
@@ -26,10 +29,6 @@ spec:
     parameters:
     - name: webhook-timestamp
       value: ""  # Will be set by Argo Events sensor
-
-  # Run on master node where shared-code exists
-  nodeSelector:
-    kubernetes.io/hostname: {{ master_node_name }}
 
   # Use artifact repository for build artifacts
   artifactRepositoryRef:
@@ -49,24 +48,76 @@ spec:
     hostPath:
       path: /home/{{ system_username }}/.cache/thinkube-builds
       type: DirectoryOrCreate
+  - name: workspace
+    emptyDir: {}
 
   templates:
   - name: build-and-push
     dag:
       tasks:
-      # TEST STAGES - Run directly on shared code
-      # COMMENTED OUT: Tests enforced after implementation, not TDD
-      # - name: test-backend
-      #   template: test-backend
+{% if build_architectures is defined and build_architectures | length > 1 %}
+      # Multi-arch: per-arch builds then manifest creation
+{% for arch in build_architectures %}
+      - name: build-backend-{{ arch }}
+        template: build-on-arch
+        arguments:
+          parameters:
+          - name: image-tag
+            value: "{% raw %}{{workflow.uid}}{% endraw %}"
+          - name: target-arch
+            value: "{{ arch }}"
+          - name: component
+            value: "backend"
+          - name: dockerfile
+            value: "backend/Dockerfile"
+          - name: context
+            value: "backend"
 
-      # - name: test-frontend
-      #   template: test-frontend
+      - name: build-frontend-{{ arch }}
+        template: build-on-arch
+        arguments:
+          parameters:
+          - name: image-tag
+            value: "{% raw %}{{workflow.uid}}{% endraw %}"
+          - name: target-arch
+            value: "{{ arch }}"
+          - name: component
+            value: "frontend"
+          - name: dockerfile
+            value: "frontend/Dockerfile"
+          - name: context
+            value: "frontend"
+{% endfor %}
 
-      # BUILD STAGES
+      - name: manifest-backend
+        dependencies:
+{% for arch in build_architectures %}
+          - build-backend-{{ arch }}
+{% endfor %}
+        template: create-manifest
+        arguments:
+          parameters:
+          - name: image-tag
+            value: "{% raw %}{{workflow.uid}}{% endraw %}"
+          - name: component
+            value: "backend"
+
+      - name: manifest-frontend
+        dependencies:
+{% for arch in build_architectures %}
+          - build-frontend-{{ arch }}
+{% endfor %}
+        template: create-manifest
+        arguments:
+          parameters:
+          - name: image-tag
+            value: "{% raw %}{{workflow.uid}}{% endraw %}"
+          - name: component
+            value: "frontend"
+{% else %}
+      # Single-arch builds on control plane
       - name: build-backend
         template: build-backend
-        # dependencies:
-        # - test-backend  # Must pass tests first
         arguments:
           parameters:
           - name: image-tag
@@ -74,172 +125,16 @@ spec:
 
       - name: build-frontend
         template: build-frontend
-        # dependencies:
-        # - test-frontend  # Must pass tests first
         arguments:
           parameters:
           - name: image-tag
             value: "{% raw %}{{workflow.uid}}{% endraw %}"
+{% endif %}
 
-  # COMMENTED OUT: Test templates disabled - not enforcing TDD
-  # # Test Backend Template
-  # - name: test-backend
-  #   container:
-  #     image: {{ container_registry }}/library/python-base:3.12-slim
-  #     imagePullPolicy: Always
-  #     command: ["/bin/bash", "-c"]
-  #     env:
-  #     - name: POSTGRES_PASSWORD
-  #       value: "{{ admin_password }}"
-  #     - name: ADMIN_PASSWORD
-  #       value: "{{ admin_password }}"
-  #     - name: ADMIN_USERNAME
-  #       value: "{{ admin_username }}"
-  #     - name: PIP_CACHE_DIR
-  #       value: "/workspace/.cache/pip"
-  #     args:
-  #       - |
-  #         set -e
-  #         cd /workspace/backend
-  #
-  #         # Create error capture file
-  #         ERROR_FILE=/tmp/test-error.txt
-  #         touch $ERROR_FILE
-  #
-  #         # Function to capture errors
-  #         capture_error() {
-  #           echo "$1" > $ERROR_FILE
-  #           echo "$1" >&2
-  #           exit 1
-  #         }
-  #
-  #         echo "Loading test environment variables..."
-  #         if [ -f .env.test ]; then
-  #           export $(cat .env.test | grep -v '^#' | xargs)
-  #         fi
-  #
-  #         # Set PostgreSQL credentials from environment
-  #         export POSTGRES_PASSWORD="${ADMIN_PASSWORD}"
-  #         export POSTGRES_USER="${ADMIN_USERNAME}"
-  #
-  #         # Construct DATABASE_URL with the credentials
-  #         export DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
-  #         echo "Database URL configured for user ${POSTGRES_USER} at host: ${POSTGRES_HOST}"
-  #
-  #         echo "Installing dependencies with cache..."
-  #         # Most dependencies are in base image, install only missing ones
-  #         pip install -r requirements.txt
-  #
-  #         echo "Installing fastapi-mcp-extended..."
-  #         # Install the local fastapi-mcp-extended package
-  #         pip install /workspace/backend/fastapi-mcp-extended
-  #
-  #         echo "Running linter checks..."
-  #         flake8 app/ --max-line-length=120 --exclude=__pycache__ || true
-  #
-  #         echo "Checking code formatting..."
-  #         black --check app/ || true
-  #
-  #         echo "Running unit tests with coverage..."
-  #         if [ -f run_tests.sh ]; then
-  #           chmod +x run_tests.sh
-  #           ./run_tests.sh || capture_error "Backend tests failed during run_tests.sh"
-  #         else
-  #           # Run pytest with coverage
-  #           pytest tests/ -v --cov=app --cov-report=term-missing || capture_error "Backend pytest tests failed"
-  #         fi
-  #
-  #         echo "Backend tests completed successfully!"
-  #         echo "" > $ERROR_FILE  # Clear error file on success
-  #     volumeMounts:
-  #     - name: shared-code
-  #       mountPath: /workspace
-  #     - name: build-cache
-  #       mountPath: /workspace/.cache
-  #     resources:
-  #       requests:
-  #         memory: "512Mi"
-  #         cpu: "500m"
-  #       limits:
-  #         memory: "1Gi"
-  #         cpu: "1"
-  #   outputs:
-  #     parameters:
-  #     - name: error-message
-  #       valueFrom:
-  #         path: /tmp/test-error.txt
-  #         default: ""
-  #
-  # # Test Frontend Template
-  # - name: test-frontend
-  #   container:
-  #     image: {{ container_registry }}/library/node-base:22-alpine
-  #     imagePullPolicy: Always
-  #     command: ["/bin/sh", "-c"]
-  #     env:
-  #     - name: NPM_CONFIG_CACHE
-  #       value: "/workspace/.cache/npm"
-  #     args:
-  #       - |
-  #         set -e
-  #         cd /workspace/frontend
-  #
-  #         # Create error capture file
-  #         ERROR_FILE=/tmp/test-error.txt
-  #         touch $ERROR_FILE
-  #
-  #         # Function to capture errors
-  #         capture_error() {
-  #           echo "$1" > $ERROR_FILE
-  #           echo "$1" >&2
-  #           exit 1
-  #         }
-  #
-  #         echo "Installing dependencies with cache..."
-  #         if [ -f package-lock.json ]; then
-  #           npm ci --cache /workspace/.cache/npm || capture_error "Failed to install frontend dependencies with npm ci"
-  #         else
-  #           npm install --cache /workspace/.cache/npm || capture_error "Failed to install frontend dependencies with npm install"
-  #         fi
-  #
-  #         echo "Running linter..."
-  #         npm run lint || true
-  #
-  #         echo "Running unit tests..."
-  #         if [ -f package.json ] && grep -q '"test"' package.json; then
-  #           npm run test || capture_error "Frontend tests failed"
-  #           echo "Tests passed successfully!"
-  #         else
-  #           capture_error "No test script found. Tests should be written before implementation."
-  #         fi
-  #
-  #         echo "Checking test coverage..."
-  #         npm run test:coverage || true
-  #
-  #         echo "Frontend tests completed!"
-  #         echo "" > $ERROR_FILE  # Clear error file on success
-  #     volumeMounts:
-  #     - name: shared-code
-  #       mountPath: /workspace
-  #     - name: build-cache
-  #       mountPath: /workspace/.cache
-  #     resources:
-  #       requests:
-  #         memory: "512Mi"
-  #         cpu: "500m"
-  #       limits:
-  #         memory: "1Gi"
-  #         cpu: "1"
-  #   outputs:
-  #     parameters:
-  #     - name: error-message
-  #       valueFrom:
-  #         path: /tmp/test-error.txt
-  #         default: ""
-
-
-  # Build Backend Template (Google Kaniko - official image)
+  # Build Backend Template — single-arch on control plane
   - name: build-backend
+    nodeSelector:
+      kubernetes.io/hostname: {{ master_node_name }}
     inputs:
       parameters:
       - name: image-tag
@@ -266,8 +161,10 @@ spec:
           memory: "2Gi"
           cpu: "2"
 
-  # Build Frontend Template (Google Kaniko - official image)
+  # Build Frontend Template — single-arch on control plane
   - name: build-frontend
+    nodeSelector:
+      kubernetes.io/hostname: {{ master_node_name }}
     inputs:
       parameters:
       - name: image-tag
@@ -293,3 +190,83 @@ spec:
         limits:
           memory: "4Gi"
           cpu: "2"
+
+{% if build_architectures is defined and build_architectures | length > 1 %}
+  # Per-arch build with git-clone init container
+  - name: build-on-arch
+    nodeSelector:
+      kubernetes.io/arch: "{% raw %}{{inputs.parameters.target-arch}}{% endraw %}"
+      thinkube.io/build-node: "true"
+    inputs:
+      parameters:
+      - name: image-tag
+      - name: target-arch
+      - name: component
+      - name: dockerfile
+      - name: context
+    initContainers:
+      - name: git-clone
+        image: {{ container_registry }}/library/ci-utils:latest
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            git clone --depth 1 https://gitea.{{ domain_name }}/{{ gitea_org | default('thinkube') }}/{{ project_name }}.git /workspace
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+    container:
+      image: {{ container_registry }}/library/kaniko-executor:latest
+      args:
+      - --dockerfile=/workspace/{% raw %}{{inputs.parameters.dockerfile}}{% endraw %}
+      - --context=/workspace/{% raw %}{{inputs.parameters.context}}{% endraw %}
+      - --destination={{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-{% raw %}{{inputs.parameters.component}}{% endraw %}:{% raw %}{{inputs.parameters.image-tag}}{% endraw %}-{% raw %}{{inputs.parameters.target-arch}}{% endraw %}
+      - --build-arg=REGISTRY={{ container_registry }}
+      - --cache-dir=/cache/kaniko
+      - --custom-platform=linux/{% raw %}{{inputs.parameters.target-arch}}{% endraw %}
+      volumeMounts:
+      - name: docker-config
+        mountPath: /kaniko/.docker
+      - name: workspace
+        mountPath: /workspace
+      resources:
+        requests:
+          memory: "2Gi"
+          cpu: "1"
+        limits:
+          memory: "4Gi"
+          cpu: "2"
+
+  # Create multi-arch manifest from per-arch images
+  - name: create-manifest
+    inputs:
+      parameters:
+      - name: image-tag
+      - name: component
+    container:
+      image: {{ container_registry }}/library/ci-utils:latest
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -e
+          IMAGE="{{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-{% raw %}{{inputs.parameters.component}}{% endraw %}"
+          TAG="{% raw %}{{inputs.parameters.image-tag}}{% endraw %}"
+
+          echo "Creating multi-arch manifest for ${IMAGE}:${TAG}"
+          podman manifest create "${IMAGE}:${TAG}" \
+{% for arch in build_architectures %}
+            "${IMAGE}:${TAG}-{{ arch }}"{{ " \\" if not loop.last else "" }}
+{% endfor %}
+
+          podman manifest push --tls-verify=true "${IMAGE}:${TAG}" "docker://${IMAGE}:${TAG}"
+
+          podman manifest create "${IMAGE}:latest" \
+{% for arch in build_architectures %}
+            "${IMAGE}:${TAG}-{{ arch }}"{{ " \\" if not loop.last else "" }}
+{% endfor %}
+
+          podman manifest push --tls-verify=true "${IMAGE}:latest" "docker://${IMAGE}:latest"
+          echo "Multi-arch manifest pushed"
+      volumeMounts:
+      - name: docker-config
+        mountPath: /run/containers/auth.json
+{% endif %}

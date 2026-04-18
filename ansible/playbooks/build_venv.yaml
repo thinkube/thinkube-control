@@ -39,9 +39,28 @@
       ansible.builtin.set_fact:
         package_list: "{{ packages if packages is sequence and packages is not string else packages | from_json }}"
 
-    - name: Get first GPU node if target_node not specified
+    - name: Get target architecture
       ansible.builtin.set_fact:
-        build_node: "{{ target_node | default(groups['baremetal_gpus'][0]) }}"
+        target_arch: "{{ target_architecture | default('') }}"
+
+    - name: Get first GPU node matching architecture if target_node not specified
+      ansible.builtin.set_fact:
+        build_node: >-
+          {%- if target_node is defined -%}
+            {{ target_node }}
+          {%- elif target_arch != '' -%}
+            {%- set ns = namespace(found='') -%}
+            {%- for node in groups['baremetal_gpus'] -%}
+              {%- set node_arch = hostvars[node].get('node_architecture', hostvars[node].get('ansible_architecture', '')) -%}
+              {%- set normalized = 'arm64' if node_arch in ['aarch64', 'arm64'] else ('amd64' if node_arch in ['x86_64', 'amd64'] else node_arch) -%}
+              {%- if normalized == target_arch and ns.found == '' -%}
+                {%- set ns.found = node -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {{ ns.found if ns.found != '' else groups['baremetal_gpus'][0] }}
+          {%- else -%}
+            {{ groups['baremetal_gpus'][0] }}
+          {%- endif -%}
 
     - name: Create build Job
       kubernetes.core.k8s:
@@ -166,9 +185,14 @@
         namespace: "{{ job_namespace }}"
         name: "venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}"
 
-    # Sync to other GPU nodes
-    - name: Sync venv to all GPU nodes
+    - name: Get build node architecture
+      ansible.builtin.set_fact:
+        build_node_arch: "{{ target_arch if target_arch != '' else '' }}"
+
+    # Sync to other GPU nodes of the same architecture
+    - name: Sync venv to matching GPU nodes
       ansible.builtin.include_tasks: sync_venv_tasks.yaml
       vars:
         source_node: "{{ build_node }}"
+        filter_architecture: "{{ build_node_arch }}"
       when: groups['baremetal_gpus'] | length > 1

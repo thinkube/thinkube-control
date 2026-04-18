@@ -1,4 +1,5 @@
 # Generated Argo Workflow template for building and testing containers
+# Supports multi-architecture builds when cluster has nodes of different architectures
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowTemplate
@@ -16,10 +17,6 @@ metadata:
     thinkube.io/namespace: {{ k8s_namespace }}
 spec:
   entrypoint: ci-cd-pipeline
-
-  # Force workflows to run on control plane node where shared-code is available
-  nodeSelector:
-    kubernetes.io/hostname: {{ master_node_name }}
 
   # Service account for Kaniko builds
   serviceAccountName: kaniko-builder
@@ -44,6 +41,8 @@ spec:
       hostPath:
         path: /home/{{ system_username }}/shared-code/apps/{{ project_name }}
         type: Directory
+    - name: workspace
+      emptyDir: {}
 
   templates:
     - name: ci-cd-pipeline
@@ -66,7 +65,37 @@ spec:
               - name: test_image
                 value: "{% if container.test is defined and container.test.image is defined %}{% if '/' in container.test.image %}{{ container.test.image }}{% else %}{{ container_registry }}/library/{{ container.test.image }}{% endif %}{% else %}{{ container_registry }}/library/test-runner:latest{% endif %}"
 
-        # {{ container.name }} build (depends on its own test)
+{% if build_architectures is defined and build_architectures | length > 1 %}
+        # Per-architecture builds for {{ container.name }}
+{% for arch in build_architectures %}
+        - name: build-{{ container.name }}-{{ arch }}
+          dependencies: [test-{{ container.name }}]
+          template: kaniko-build-on-arch
+          arguments:
+            parameters:
+              - name: container_name
+                value: "{{ container.name }}"
+              - name: dockerfile_path
+                value: "{{ container.build | replace('./', '') }}/Dockerfile"
+              - name: context_path
+                value: "{{ container.build | replace('./', '') }}"
+              - name: target_arch
+                value: "{{ arch }}"
+{% endfor %}
+
+        # Create multi-arch manifest for {{ container.name }}
+        - name: manifest-{{ container.name }}
+          dependencies:
+{% for arch in build_architectures %}
+            - build-{{ container.name }}-{{ arch }}
+{% endfor %}
+          template: create-manifest
+          arguments:
+            parameters:
+              - name: container_name
+                value: "{{ container.name }}"
+{% else %}
+        # Single-architecture build for {{ container.name }}
         - name: build-{{ container.name }}
           dependencies: [test-{{ container.name }}]
           template: kaniko-build
@@ -78,6 +107,7 @@ spec:
                 value: "{{ container.build | replace('./', '') }}/Dockerfile"
               - name: context_path
                 value: "{{ container.build | replace('./', '') }}"
+{% endif %}
 {% endfor %}
 
     # Template to execute container tests
@@ -97,8 +127,8 @@ spec:
                 - name: condition
                   value: "{{ "{{" }}inputs.parameters.test_enabled{{ "}}" }}"
         - - name: run-test
-            template: run-test
             when: "{{ "{{" }}steps.check-test-enabled.outputs.result{{ "}}" }} == true"
+            template: run-test
             arguments:
               parameters:
                 - name: container_name
@@ -112,6 +142,8 @@ spec:
 
     # Template that runs the actual test
     - name: run-test
+      nodeSelector:
+        kubernetes.io/hostname: {{ master_node_name }}
       inputs:
         parameters:
           - name: container_name
@@ -156,8 +188,10 @@ spec:
             memory: "1Gi"
             cpu: "1"
 
-    # Kaniko build template
+    # Single-arch Kaniko build (runs on control plane with hostPath)
     - name: kaniko-build
+      nodeSelector:
+        kubernetes.io/hostname: {{ master_node_name }}
       inputs:
         parameters:
           - name: container_name
@@ -178,6 +212,82 @@ spec:
             mountPath: /kaniko/.docker/
           - name: shared-code
             mountPath: /workspace
+
+{% if build_architectures is defined and build_architectures | length > 1 %}
+    # Per-arch Kaniko build with git-clone init container for worker nodes
+    - name: kaniko-build-on-arch
+      nodeSelector:
+        kubernetes.io/arch: "{{ "{{" }}inputs.parameters.target_arch{{ "}}" }}"
+        thinkube.io/build-node: "true"
+      inputs:
+        parameters:
+          - name: container_name
+          - name: dockerfile_path
+          - name: context_path
+          - name: target_arch
+      initContainers:
+        - name: git-clone
+          image: {{ container_registry }}/library/ci-utils:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              git clone --depth 1 https://gitea.{{ domain_name }}/{{ gitea_org | default('thinkube') }}/{{ project_name }}.git /workspace
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+      container:
+        image: gcr.io/kaniko-project/executor:latest
+        args:
+          - "--dockerfile=/workspace/{{ "{{" }}inputs.parameters.dockerfile_path{{ "}}" }}"
+          - "--context=/workspace/{{ "{{" }}inputs.parameters.context_path{{ "}}" }}"
+          - "--destination={{ container_registry }}/thinkube/{{ project_name }}-{{ "{{" }}inputs.parameters.container_name{{ "}}" }}:{{ "{{" }}workflow.parameters.image_tag{{ "}}" }}-{{ "{{" }}inputs.parameters.target_arch{{ "}}" }}"
+          - "--build-arg=CONTAINER_REGISTRY={{ container_registry }}"
+          - "--cache=true"
+          - "--cache-ttl=24h"
+          - "--custom-platform=linux/{{ "{{" }}inputs.parameters.target_arch{{ "}}" }}"
+        volumeMounts:
+          - name: docker-config
+            mountPath: /kaniko/.docker/
+          - name: workspace
+            mountPath: /workspace
+
+    # Create multi-arch manifest list from per-arch images
+    - name: create-manifest
+      inputs:
+        parameters:
+          - name: container_name
+      container:
+        image: {{ container_registry }}/library/ci-utils:latest
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            set -e
+            IMAGE="{{ container_registry }}/thinkube/{{ project_name }}-{{ "{{" }}inputs.parameters.container_name{{ "}}" }}"
+            TAG="{{ "{{" }}workflow.parameters.image_tag{{ "}}" }}"
+
+            echo "Creating multi-arch manifest for ${IMAGE}:${TAG}"
+
+            # Create manifest list from per-arch images
+            podman manifest create "${IMAGE}:${TAG}" \
+{% for arch in build_architectures %}
+              "${IMAGE}:${TAG}-{{ arch }}"{{ " \\" if not loop.last else "" }}
+{% endfor %}
+
+            # Push manifest
+            podman manifest push --tls-verify=true "${IMAGE}:${TAG}" "docker://${IMAGE}:${TAG}"
+
+            # Also create :latest manifest
+            podman manifest create "${IMAGE}:latest" \
+{% for arch in build_architectures %}
+              "${IMAGE}:${TAG}-{{ arch }}"{{ " \\" if not loop.last else "" }}
+{% endfor %}
+
+            podman manifest push --tls-verify=true "${IMAGE}:latest" "docker://${IMAGE}:latest"
+            echo "Multi-arch manifest created and pushed"
+        volumeMounts:
+          - name: docker-config
+            mountPath: /run/containers/auth.json
+{% endif %}
 
     # Helper template to check conditions
     - name: check-condition

@@ -6,11 +6,15 @@
 
 # tasks/main.yaml for image_mirror role
 # Description: Mirrors container images from a source registry to a destination registry
+# Supports multi-arch: when container_build_platforms has multiple architectures,
+# uses podman manifest to create a manifest list preserving all platforms.
+#
 # Parameters:
 #   source_image: Source image to pull from
 #   destination_image: Full path to the destination image
 #   harbor_api_user: Harbor API username (default: admin)
 #   harbor_api_password: Harbor API password
+#   container_build_platforms: (optional) e.g. "linux/amd64,linux/arm64"
 
 - name: Display processing
   ansible.builtin.debug:
@@ -31,6 +35,11 @@
 - name: Determine if tag is mutable (latest)
   ansible.builtin.set_fact:
     is_mutable_tag: "{{ dest_tag == 'latest' }}"
+
+- name: Parse build platforms
+  ansible.builtin.set_fact:
+    build_platforms: "{{ (container_build_platforms | default('linux/' + ansible_architecture_mapped | default('amd64'))).split(',') | map('trim') | list }}"
+    is_multi_arch: "{{ (container_build_platforms | default('')).split(',') | map('trim') | select | list | length > 1 }}"
 
 - name: Check if image already exists in Harbor
   ansible.builtin.uri:
@@ -53,9 +62,11 @@
     msg: "Image {{ destination_image }} exists but tag is 'latest' — pulling fresh from source."
   when: image_check.status == 200 and is_mutable_tag
 
-# For mutable tags (:latest), always pull fresh from source and push to Harbor.
-# This prevents stale local podman cache from silently providing outdated images.
-- name: Refresh mutable tag from source
+# ============================================================
+# Single-arch mirroring (original flow)
+# ============================================================
+
+- name: "Single-arch: Refresh mutable tag from source"
   block:
     - name: Pull fresh image from source registry
       ansible.builtin.command: >
@@ -78,10 +89,9 @@
       register: push_result
       changed_when: push_result.rc == 0
       failed_when: push_result.rc != 0
-  when: is_mutable_tag
+  when: is_mutable_tag and not is_multi_arch
 
-# For pinned tags, process only if not already in Harbor
-- name: Process pinned image not in Harbor
+- name: "Single-arch: Process pinned image not in Harbor"
   block:
     - name: Check image in local podman cache
       ansible.builtin.command: podman image exists {{ destination_image }}
@@ -94,7 +104,6 @@
         msg: "Image exists in local cache but not in Harbor registry. Will push local image."
       when: local_image_exists.rc == 0
 
-    # If image exists locally but not in registry, push it directly
     - name: Tag and push local image to Harbor
       block:
         - name: Tag local source image for destination registry
@@ -113,7 +122,6 @@
           failed_when: push_result.rc != 0
       when: local_image_exists.rc == 0
 
-    # If image doesn't exist locally or in registry, pull from source and push
     - name: Pull from source and push to Harbor
       block:
         - name: Pull source image from original registry
@@ -138,4 +146,44 @@
           changed_when: push_result.rc == 0
           failed_when: push_result.rc != 0
       when: local_image_exists.rc != 0
-  when: image_check.status != 200 and not is_mutable_tag
+  when: image_check.status != 200 and not is_mutable_tag and not is_multi_arch
+
+# ============================================================
+# Multi-arch mirroring: pull per-platform, create manifest list
+# ============================================================
+
+- name: "Multi-arch: Mirror image with manifest list"
+  block:
+    - name: Remove existing manifest if present
+      ansible.builtin.command: >
+        podman manifest rm {{ destination_image }}
+      changed_when: false
+      failed_when: false
+
+    - name: Create empty manifest list
+      ansible.builtin.command: >
+        podman manifest create {{ destination_image }}
+      register: manifest_create
+      changed_when: manifest_create.rc == 0
+
+    - name: Add each platform to manifest
+      ansible.builtin.command: >
+        podman manifest add --all {{ destination_image }} docker://{{ source_image }}
+      register: manifest_add
+      changed_when: manifest_add.rc == 0
+
+    - name: Push manifest list to destination registry
+      ansible.builtin.command: >
+        podman manifest push --tls-verify=true --all {{ destination_image }} docker://{{ destination_image }}
+      register: manifest_push
+      changed_when: manifest_push.rc == 0
+      failed_when: manifest_push.rc != 0
+
+    - name: Clean up local manifest
+      ansible.builtin.command: >
+        podman manifest rm {{ destination_image }}
+      changed_when: false
+      failed_when: false
+  when: >
+    is_multi_arch and
+    (is_mutable_tag or image_check.status != 200)

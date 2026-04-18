@@ -1,22 +1,42 @@
 ---
 # ansible/playbooks/sync_venv_tasks.yaml
 # Description:
-#   Tasks to sync a venv from source node to all other GPU nodes.
-#   Included by build_venv.yaml and can be used standalone.
+#   Tasks to sync a venv from source node to other GPU nodes.
+#   When filter_architecture is set, only syncs to nodes of the same architecture.
+#   Venvs contain native binaries and must match architecture.
 #
 # Required variables:
 #   - source_node: Node where venv was built
 #   - venv_name: Name of venv to sync
 #   - venvs_host_path: Base path for venvs (default: /var/lib/jupyterhub-venvs)
 #   - custom_venvs_subpath: Subpath for custom venvs (default: custom)
+# Optional variables:
+#   - filter_architecture: Only sync to nodes matching this arch (e.g. "arm64", "amd64")
 
 - name: Get list of target GPU nodes (excluding source)
   ansible.builtin.set_fact:
-    target_nodes: "{{ groups['baremetal_gpus'] | difference([source_node]) }}"
+    all_target_nodes: "{{ groups['baremetal_gpus'] | difference([source_node]) }}"
+
+- name: Filter target nodes by architecture
+  ansible.builtin.set_fact:
+    target_nodes: >-
+      {%- if filter_architecture is defined and filter_architecture != '' -%}
+        {%- set ns = namespace(nodes=[]) -%}
+        {%- for node in all_target_nodes -%}
+          {%- set node_arch = hostvars[node].get('node_architecture', hostvars[node].get('ansible_architecture', '')) -%}
+          {%- set normalized = 'arm64' if node_arch in ['aarch64', 'arm64'] else ('amd64' if node_arch in ['x86_64', 'amd64'] else node_arch) -%}
+          {%- if normalized == filter_architecture -%}
+            {%- set ns.nodes = ns.nodes + [node] -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {{ ns.nodes }}
+      {%- else -%}
+        {{ all_target_nodes }}
+      {%- endif -%}
 
 - name: Display sync info
   ansible.builtin.debug:
-    msg: "Syncing venv '{{ venv_name }}' from {{ source_node }} to {{ target_nodes | join(', ') }}"
+    msg: "Syncing venv '{{ venv_name }}' from {{ source_node }} to {{ target_nodes | join(', ') }}{{ ' (arch: ' + filter_architecture + ')' if filter_architecture is defined and filter_architecture != '' else '' }}"
   when: target_nodes | length > 0
 
 - name: Get source node connection info
@@ -39,10 +59,10 @@
 
 - name: Sync complete
   ansible.builtin.debug:
-    msg: "Venv '{{ venv_name }}' synced to all GPU nodes"
+    msg: "Venv '{{ venv_name }}' synced to {{ target_nodes | length }} node(s)"
   when: target_nodes | length > 0
 
 - name: No sync needed
   ansible.builtin.debug:
-    msg: "Only one GPU node - no sync needed"
+    msg: "No matching target nodes for sync"
   when: target_nodes | length == 0
