@@ -26,6 +26,7 @@ import ApiTokensPage from './pages/ApiTokensPage';
 import SecretsPage from './pages/SecretsPage';
 import OptionalComponentsPage from './pages/OptionalComponentsPage';
 import JupyterHubConfigPage from './pages/JupyterHubConfigPage';
+import JupyterKernelsPage from './pages/JupyterKernelsPage';
 import Templates from './pages/Templates';
 import ModelsPage from './pages/ModelsPage';
 import { HarborImages } from './pages/HarborImages';
@@ -79,6 +80,7 @@ const baseNavigationItems: TkNavItem[] = [
     lucideIcon: Shield,
     isGroup: true,
     children: [
+      { id: "jupyter-kernels", label: "Jupyter Kernels", lucideIcon: Code, href: "/jupyter-kernels" },
       { id: "jupyterhub-config", label: "JupyterHub Config", lucideIcon: Sliders, href: "/jupyterhub-config" },
       { id: "secrets", label: "Secrets", lucideIcon: Lock, href: "/secrets" },
       { id: "api-tokens", label: "API Tokens", lucideIcon: Key, href: "/tokens" },
@@ -134,6 +136,7 @@ function AppContent() {
       'harbor-images': '/harbor-images',
       'optional-components': '/optional-components',
       'nodes': '/nodes',
+      'jupyter-kernels': '/jupyter-kernels',
       'jupyterhub-config': '/jupyterhub-config',
       secrets: '/secrets',
       'api-tokens': '/tokens',
@@ -165,6 +168,7 @@ function AppContent() {
     if (path.startsWith('/harbor-images')) return 'harbor-images';
     if (path.startsWith('/optional-components')) return 'optional-components';
     if (path.startsWith('/nodes')) return 'nodes';
+    if (path.startsWith('/jupyter-kernels')) return 'jupyter-kernels';
     if (path.startsWith('/jupyterhub-config')) return 'jupyterhub-config';
     if (path.startsWith('/secrets')) return 'secrets';
     if (path.startsWith('/tokens')) return 'api-tokens';
@@ -190,6 +194,7 @@ function AppContent() {
     if (path.startsWith('/harbor-images')) return 'Harbor Images';
     if (path.startsWith('/optional-components')) return 'Optional Components';
     if (path.startsWith('/nodes')) return 'Cluster Nodes';
+    if (path.startsWith('/jupyter-kernels')) return 'Jupyter Kernels';
     if (path.startsWith('/jupyterhub-config')) return 'JupyterHub Config';
     if (path.startsWith('/secrets')) return 'Secrets';
     if (path.startsWith('/tokens')) return 'API Tokens';
@@ -222,6 +227,7 @@ function AppContent() {
         <Route path="/tokens" element={<ApiTokensPage />} />
         <Route path="/secrets" element={<SecretsPage />} />
         <Route path="/optional-components" element={<OptionalComponentsPage />} />
+        <Route path="/jupyter-kernels" element={<JupyterKernelsPage />} />
         <Route path="/jupyterhub-config" element={<JupyterHubConfigPage />} />
         <Route path="/templates" element={<Templates />} />
         <Route path="/knative-services" element={<KnativeServicesPage />} />

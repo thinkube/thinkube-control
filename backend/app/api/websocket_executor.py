@@ -1475,11 +1475,11 @@ async def stream_jupyter_venv_build(websocket: WebSocket, build_id: str):
             })
             return
 
-        # Check if already running or completed
-        if venv.status != "pending":
+        # Only block if currently building
+        if venv.status == "building":
             await websocket.send_json({
                 "type": "error",
-                "message": f"Venv is already {venv.status}. Cannot restart."
+                "message": "Venv is currently building. Please wait for it to complete."
             })
             return
 
@@ -1506,27 +1506,14 @@ async def stream_jupyter_venv_build(websocket: WebSocket, build_id: str):
             # Update venv status based on result
             if result["return_code"] == 0:
                 venv.status = "success"
-                venv.output = result.get("log_file", "Build completed successfully")
+                venv.output = "Build completed successfully"
                 venv.venv_path = result.get("venv_path")
-                venv.architecture = result.get("architecture")
-
-                await websocket.send_json({
-                    "type": "status",
-                    "status": "completed",
-                    "message": "Venv build completed successfully",
-                    "venv_path": result.get("venv_path"),
-                    "log_file": result.get("log_file")
-                })
+                archs = result.get("architectures", [])
+                venv.architectures_built = archs
+                venv.architecture = archs[0] if archs else "unknown"
             else:
                 venv.status = "failed"
-                venv.output = result.get("log_file", f"Build failed with return code: {result['return_code']}")
-
-                await websocket.send_json({
-                    "type": "status",
-                    "status": "failed",
-                    "message": f"Build failed with return code: {result['return_code']}",
-                    "log_file": result.get("log_file")
-                })
+                venv.output = f"Build failed with return code: {result['return_code']}"
 
         except asyncio.CancelledError:
             venv.status = "cancelled"
@@ -1567,272 +1554,157 @@ async def _execute_jupyter_venv_build(
     db: Session
 ) -> Dict[str, Any]:
     """
-    Execute Jupyter venv build
+    Execute Jupyter venv build via Ansible playbook.
 
-    Creates a virtualenv on JuiceFS and installs packages.
-    Uses --system-site-packages to inherit PyTorch from the base image.
+    Runs build_venv.yaml which creates K8s Jobs on GPU nodes for each
+    architecture in the cluster. Streams Ansible output in real-time.
     """
-    import platform
-    from pathlib import Path
-    from datetime import datetime
+    from app.services.ansible_environment import ansible_env
+    import re
 
-    # Detect architecture
-    arch = platform.machine()
-    if arch == "aarch64":
-        arch_dir = "arm64"
-    else:
-        arch_dir = "amd64"
+    playbook_path = Path("/home/thinkube/thinkube-control/ansible/playbooks/build_venv.yaml")
 
-    # Venv path on JuiceFS (custom venvs go in ~/venvs/custom/)
-    venvs_base = Path("/home/thinkube/venvs/custom")
-    venv_path = venvs_base / venv.name
+    if not playbook_path.exists():
+        await websocket.send_json({
+            "type": "error",
+            "message": f"Playbook not found: {playbook_path}"
+        })
+        return {"return_code": 1}
 
-    # Create log directory
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_base_dir = Path("/tmp/thinkube-venvs")
-    app_log_dir = log_base_dir / venv.name
-    app_log_dir.mkdir(parents=True, exist_ok=True)
+    extra_vars = {
+        "venv_name": venv.name,
+        "packages": json.dumps(venv.packages),
+    }
+    extra_vars = ansible_env.prepare_auth_vars(extra_vars)
+    extra_vars["kubeconfig"] = os.environ.get("KUBECONFIG", "/home/thinkube/.kube/config")
+    domain_name = os.environ.get("DOMAIN_NAME", "cmxela.com")
+    extra_vars["harbor_registry"] = f"registry.{domain_name}"
 
-    debug_log_file = app_log_dir / f"build-{timestamp}.log"
-
+    temp_vars_fd, temp_vars_path = tempfile.mkstemp(suffix=".yml", prefix="venv-vars-")
     process = None
-    debug_file = None
 
     try:
-        # Ensure base directory exists
-        venvs_base.mkdir(parents=True, exist_ok=True)
+        with os.fdopen(temp_vars_fd, "w") as f:
+            yaml.dump(extra_vars, f)
+    except:
+        os.close(temp_vars_fd)
+        raise
 
-        # Open debug log file
-        debug_file = open(debug_log_file, "w")
-        debug_file.write(f"=== THINKUBE VENV BUILD LOG ===\n")
-        debug_file.write(f"Venv ID: {venv.id}\n")
-        debug_file.write(f"Name: {venv.name}\n")
-        debug_file.write(f"Architecture: {arch_dir}\n")
-        debug_file.write(f"Started at: {datetime.now()}\n")
-        debug_file.write(f"Venv path: {venv_path}\n")
-        debug_file.write(f"Packages: {len(venv.packages)}\n")
-        debug_file.write(f"\n=== CREATING VENV ===\n")
-        debug_file.flush()
+    try:
+        inventory_path = ansible_env.get_inventory_path()
+        cmd = ansible_env.get_command_with_buffer(
+            playbook_path, inventory_path, temp_vars_path
+        )
+        env = ansible_env.get_environment(context="template")
 
-        # Step 1: Create virtualenv with system site packages
-        await websocket.send_json({
-            "type": "log",
-            "message": f"Creating virtualenv at {venv_path}..."
-        })
-
-        create_cmd = ["python3", "-m", "venv", "--system-site-packages", str(venv_path)]
-        logger.info(f"Creating venv: {' '.join(create_cmd)}")
+        logger.info(f"Executing venv build: {' '.join(cmd)}")
 
         process = await asyncio.create_subprocess_exec(
-            *create_cmd,
+            *cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT
+            stderr=asyncio.subprocess.STDOUT,
+            env=env,
+            cwd="/home/thinkube/thinkube-control"
         )
+
+        current_task = None
+        task_count = 0
+        all_output_lines = []
 
         while True:
             line = await process.stdout.readline()
             if not line:
                 break
-            line_text = line.decode('utf-8', errors='ignore').rstrip()
-            if debug_file:
-                debug_file.write(f"{line_text}\n")
-                debug_file.flush()
-            await websocket.send_json({"type": "log", "message": line_text})
 
-        return_code = await process.wait()
-        if return_code != 0:
-            if debug_file:
-                debug_file.write(f"\n\n=== VENV CREATION FAILED ===\n")
-            return {"return_code": return_code, "log_file": str(debug_log_file)}
+            line_text = line.decode("utf-8").strip()
+            if not line_text:
+                continue
 
-        await websocket.send_json({
-            "type": "log",
-            "message": "Virtualenv created successfully"
-        })
+            all_output_lines.append(line_text)
 
-        # Step 2: Upgrade pip
-        if debug_file:
-            debug_file.write(f"\n=== UPGRADING PIP ===\n")
-            debug_file.flush()
-
-        await websocket.send_json({
-            "type": "log",
-            "message": "Upgrading pip..."
-        })
-
-        pip_path = venv_path / "bin" / "pip"
-        upgrade_cmd = [str(pip_path), "install", "--upgrade", "pip"]
-
-        process = await asyncio.create_subprocess_exec(
-            *upgrade_cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT
-        )
-
-        while True:
-            line = await process.stdout.readline()
-            if not line:
-                break
-            line_text = line.decode('utf-8', errors='ignore').rstrip()
-            if debug_file:
-                debug_file.write(f"{line_text}\n")
-                debug_file.flush()
-            await websocket.send_json({"type": "log", "message": line_text})
-
-        return_code = await process.wait()
-        if return_code != 0:
-            if debug_file:
-                debug_file.write(f"\n\n=== PIP UPGRADE FAILED ===\n")
-            return {"return_code": return_code, "log_file": str(debug_log_file)}
-
-        # Step 3: Install packages
-        if debug_file:
-            debug_file.write(f"\n=== INSTALLING PACKAGES ===\n")
-            debug_file.flush()
-
-        await websocket.send_json({
-            "type": "log",
-            "message": f"Installing {len(venv.packages)} packages..."
-        })
-
-        # Filter out special installs (git URLs, --no-deps, etc.)
-        regular_packages = [p for p in venv.packages if not p.startswith("git+") and "--" not in p]
-        special_packages = [p for p in venv.packages if p.startswith("git+") or "--" in p]
-
-        # Install regular packages
-        if regular_packages:
-            install_cmd = [str(pip_path), "install"] + regular_packages
-
-            process = await asyncio.create_subprocess_exec(
-                *install_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT
-            )
-
-            while True:
-                line = await process.stdout.readline()
-                if not line:
-                    break
-                line_text = line.decode('utf-8', errors='ignore').rstrip()
-                if debug_file:
-                    debug_file.write(f"{line_text}\n")
-                    debug_file.flush()
-                await websocket.send_json({"type": "log", "message": line_text})
-
-            return_code = await process.wait()
-            if return_code != 0:
-                if debug_file:
-                    debug_file.write(f"\n\n=== PACKAGE INSTALLATION FAILED ===\n")
-                return {"return_code": return_code, "log_file": str(debug_log_file)}
-
-        # Install special packages (one by one to handle --no-deps etc.)
-        for special_pkg in special_packages:
-            await websocket.send_json({
-                "type": "log",
-                "message": f"Installing special package: {special_pkg}"
-            })
-
-            # Parse the package spec (e.g., "openlit --no-deps")
-            parts = special_pkg.split()
-            install_cmd = [str(pip_path), "install"] + parts
-
-            process = await asyncio.create_subprocess_exec(
-                *install_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT
-            )
-
-            while True:
-                line = await process.stdout.readline()
-                if not line:
-                    break
-                line_text = line.decode('utf-8', errors='ignore').rstrip()
-                if debug_file:
-                    debug_file.write(f"{line_text}\n")
-                    debug_file.flush()
-                await websocket.send_json({"type": "log", "message": line_text})
-
-            return_code = await process.wait()
-            if return_code != 0:
-                await websocket.send_json({
-                    "type": "log",
-                    "message": f"Warning: Special package {parts[0]} failed, continuing..."
+            if "TASK [" in line_text:
+                task_start = line_text.find("TASK [") + 6
+                task_end = line_text.find("]", task_start)
+                if task_end > task_start:
+                    current_task = line_text[task_start:task_end]
+                    task_count += 1
+                    await send_chunked_message(websocket, {
+                        "type": "task",
+                        "task_number": task_count,
+                        "task_name": current_task,
+                        "message": line_text,
+                    })
+            elif "PLAY [" in line_text:
+                await send_chunked_message(websocket, {
+                    "type": "play",
+                    "message": line_text,
                 })
-                if debug_file:
-                    debug_file.write(f"Warning: Special package {parts[0]} failed with code {return_code}\n")
-
-        # Step 4: Register as Jupyter kernel
-        if debug_file:
-            debug_file.write(f"\n=== REGISTERING JUPYTER KERNEL ===\n")
-            debug_file.flush()
-
-        await websocket.send_json({
-            "type": "log",
-            "message": "Registering Jupyter kernel..."
-        })
-
-        python_path = venv_path / "bin" / "python"
-        kernel_cmd = [
-            str(python_path), "-m", "ipykernel", "install",
-            "--user",
-            f"--name={venv.name}",
-            f"--display-name={venv.name} (custom)"
-        ]
-
-        process = await asyncio.create_subprocess_exec(
-            *kernel_cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT
-        )
-
-        while True:
-            line = await process.stdout.readline()
-            if not line:
-                break
-            line_text = line.decode('utf-8', errors='ignore').rstrip()
-            if debug_file:
-                debug_file.write(f"{line_text}\n")
-                debug_file.flush()
-            await websocket.send_json({"type": "log", "message": line_text})
+            elif "ok: [" in line_text:
+                await send_chunked_message(websocket, {
+                    "type": "ok",
+                    "task": current_task,
+                    "message": line_text,
+                })
+            elif "changed: [" in line_text:
+                await send_chunked_message(websocket, {
+                    "type": "changed",
+                    "task": current_task,
+                    "message": line_text,
+                })
+            elif "failed: [" in line_text or "fatal: [" in line_text:
+                await send_chunked_message(websocket, {
+                    "type": "failed",
+                    "task": current_task,
+                    "message": line_text,
+                })
+            elif "skipping: [" in line_text:
+                await send_chunked_message(websocket, {
+                    "type": "skipped",
+                    "task": current_task,
+                    "message": line_text,
+                })
+            else:
+                await send_chunked_message(websocket, {
+                    "type": "output",
+                    "message": line_text,
+                })
 
         return_code = await process.wait()
-        if return_code != 0:
-            await websocket.send_json({
-                "type": "log",
-                "message": "Warning: Kernel registration failed, venv is still usable"
-            })
 
-        # Success
-        if debug_file:
-            debug_file.write(f"\n\n=== BUILD COMPLETED SUCCESSFULLY ===\n")
-            debug_file.write(f"Venv path: {venv_path}\n")
-            debug_file.write(f"Finished at: {datetime.now()}\n")
+        architectures = []
+        for output_line in all_output_lines:
+            if "Architecture marker written:" in output_line:
+                match = re.search(r"Architecture marker written:\s*(\w+)", output_line)
+                if match:
+                    architectures.append(match.group(1))
 
         await websocket.send_json({
-            "type": "log",
-            "message": f"Venv '{venv.name}' built successfully at {venv_path}"
+            "type": "complete",
+            "status": "success" if return_code == 0 else "error",
+            "message": (
+                f"Venv '{venv.name}' built successfully for {', '.join(architectures) or 'unknown'}"
+                if return_code == 0
+                else f"Venv build failed with return code: {return_code}"
+            ),
+            "return_code": return_code,
         })
 
         return {
-            "return_code": 0,
-            "venv_path": str(venv_path),
-            "architecture": arch_dir,
-            "log_file": str(debug_log_file)
+            "return_code": return_code,
+            "venv_path": f"/var/lib/jupyterhub-venvs/custom/{venv.name}",
+            "architectures": architectures,
         }
 
     except Exception as e:
         logger.error(f"Error executing venv build: {e}")
-        if debug_file:
-            debug_file.write(f"\n\n=== EXECUTION ERROR ===\n")
-            debug_file.write(f"Error: {str(e)}\n")
-        await websocket.send_json({
-            "type": "error",
-            "message": f"Execution error: {str(e)}"
-        })
-        return {"return_code": 1, "log_file": str(debug_log_file)}
+        await websocket.send_json({"type": "error", "message": str(e)})
+        return {"return_code": -1}
+
     finally:
-        if debug_file:
-            debug_file.close()
         if process and process.returncode is None:
             process.terminate()
             await process.wait()
+        try:
+            os.unlink(temp_vars_path)
+        except:
+            pass
