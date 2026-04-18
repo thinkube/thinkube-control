@@ -66,6 +66,7 @@
       kubernetes.core.k8s:
         kubeconfig: "{{ kubeconfig }}"
         state: present
+      delegate_to: localhost
         definition:
           apiVersion: batch/v1
           kind: Job
@@ -155,6 +156,7 @@
         kind: Job
         namespace: "{{ job_namespace }}"
         name: "venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}"
+      delegate_to: localhost
       register: job_status
       until: >
         (job_status.resources[0].status.succeeded | default(0) > 0) or
@@ -169,7 +171,8 @@
 
     - name: Get Job logs
       ansible.builtin.command: >
-        kubectl logs -n {{ job_namespace }} job/venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}
+        kubectl --kubeconfig {{ kubeconfig }} logs -n {{ job_namespace }} job/venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}
+      delegate_to: localhost
       register: job_logs
 
     - name: Display build logs
@@ -184,10 +187,12 @@
         kind: Job
         namespace: "{{ job_namespace }}"
         name: "venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}"
+      delegate_to: localhost
 
     - name: Detect build node architecture from cluster
       ansible.builtin.shell: |
-        kubectl get node {{ build_node }} -o jsonpath='{.metadata.labels.kubernetes\.io/arch}'
+        kubectl --kubeconfig {{ kubeconfig }} get node {{ build_node }} -o jsonpath='{.metadata.labels.kubernetes\.io/arch}'
+      delegate_to: localhost
       register: build_node_arch_result
       changed_when: false
 
