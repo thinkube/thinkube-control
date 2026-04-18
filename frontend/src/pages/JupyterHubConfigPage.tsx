@@ -130,36 +130,41 @@ export default function JupyterHubConfigPage() {
     setError(null)
     setSaveSuccess(false)
 
-    try {
-      // Load cluster resources
-      const resourcesResponse = await api.get<ClusterNode[]>('/cluster/resources')
-      const parsedNodes = resourcesResponse.data.map(node => ({
-        ...node,
-        capacity: {
-          ...node.capacity,
-          memory: parseMemoryToGB(node.capacity.memory.toString())
-        }
-      }))
-      setClusterNodes(parsedNodes)
+    // Load venvs and cluster resources in parallel — independently
+    const [venvsResult, resourcesResult] = await Promise.allSettled([
+      (async () => {
+        const [templatesResponse, venvsResponse, configResponse] = await Promise.all([
+          api.get<{ templates: VenvTemplate[] }>('/jupyter-venvs/templates'),
+          api.get<{ venvs: JupyterVenv[], total: number }>('/jupyter-venvs'),
+          api.get<JupyterHubConfig>('/jupyterhub/config'),
+        ])
+        setVenvTemplates(templatesResponse.data.templates)
+        setVenvs(venvsResponse.data.venvs)
+        setConfig(configResponse.data)
+      })(),
+      (async () => {
+        const resourcesResponse = await api.get<ClusterNode[]>('/cluster/resources')
+        const parsedNodes = resourcesResponse.data.map(node => ({
+          ...node,
+          capacity: {
+            ...node.capacity,
+            memory: parseMemoryToGB(node.capacity.memory.toString())
+          }
+        }))
+        setClusterNodes(parsedNodes)
+      })(),
+    ])
 
-      // Load current configuration
-      const configResponse = await api.get<JupyterHubConfig>('/jupyterhub/config')
-      setConfig(configResponse.data)
-
-      // Load venv templates
-      const templatesResponse = await api.get<{ templates: VenvTemplate[] }>('/jupyter-venvs/templates')
-      setVenvTemplates(templatesResponse.data.templates)
-
-      // Load existing venvs
-      const venvsResponse = await api.get<{ venvs: JupyterVenv[], total: number }>('/jupyter-venvs')
-      setVenvs(venvsResponse.data.venvs)
-
-    } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to load configuration')
-      console.error('Error loading JupyterHub config:', err)
-    } finally {
-      setLoading(false)
+    if (venvsResult.status === 'rejected') {
+      const err = venvsResult.reason
+      setError(err?.response?.data?.detail || 'Failed to load venvs')
+      console.error('Error loading venvs:', err)
     }
+    if (resourcesResult.status === 'rejected') {
+      console.error('Error loading cluster resources:', resourcesResult.reason)
+    }
+
+    setLoading(false)
   }
 
   // Save configuration
