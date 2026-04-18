@@ -25,18 +25,6 @@ spec:
       timeoutSeconds: {{ deployment.timeoutSeconds | default(300) }}
       imagePullSecrets:
         - name: app-pull-secret
-{% if container.gpu is defined and container.gpu.memory is defined %}
-      affinity:
-        nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            preference:
-              matchExpressions:
-              - key: nvidia.com/gpu.memory
-                operator: Gt
-                {% set memory_value = container.gpu.memory.replace('Gi', '') | int * 1024 %}
-                values: ["{{ memory_value }}"]
-{% endif %}
       containers:
         - name: {{ container.name }}
           image: {{ container_registry }}/thinkube/{{ project_name }}-{{ container.name }}:latest
@@ -242,18 +230,6 @@ spec:
               cpu: "500m"
             {% endif %}
 {% endif %}
-{% if container.gpu is defined and container.gpu.count is defined and container.gpu.memory is defined %}
-{% if container.size is not defined %}
-          resources:
-            requests:
-              nvidia.com/gpu: {{ container.gpu.count }}
-            limits:
-              nvidia.com/gpu: {{ container.gpu.count }}
-{% else %}
-            # GPU resources added to existing resources
-              nvidia.com/gpu: {{ container.gpu.count }}
-{% endif %}
-{% endif %}
 {% if container.health is defined %}
           readinessProbe:
             httpGet:
@@ -263,26 +239,6 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 5
 {% endif %}
-{% if container.volume is defined %}
-          volumeMounts:
-            - name: app-storage
-              mountPath: {{ container.volume }}
-{% elif container.gpu is defined and container.gpu.count is defined %}
-          volumeMounts:
-            - name: mlflow-models
-              mountPath: /mlflow-models
-{% endif %}
-      {% if container.volume is defined %}
-      volumes:
-        - name: app-storage
-          persistentVolumeClaim:
-            claimName: {{ project_name }}-{{ container.name }}-storage
-      {% elif container.gpu is defined and container.gpu.count is defined %}
-      volumes:
-        - name: mlflow-models
-          persistentVolumeClaim:
-            claimName: {{ project_name }}-{{ container.name }}-mlflow-models
-      {% endif %}
   traffic:
     - latestRevision: true
       percent: 100

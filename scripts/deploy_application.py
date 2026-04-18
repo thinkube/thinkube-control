@@ -357,7 +357,9 @@ git reset --hard origin/main
             raise
 
     async def parse_thinkube_yaml(self):
-        """Parse thinkube.yaml configuration."""
+        """Parse and validate thinkube.yaml configuration."""
+        from thinkube_yaml_validator import validate_knative_constraints
+
         config_path = Path(self.local_repo_path) / "thinkube.yaml"
         try:
             with open(config_path, 'r') as f:
@@ -367,7 +369,16 @@ git reset --hard origin/main
             if 'metadata' not in self.thinkube_config:
                 self.thinkube_config['metadata'] = {}
             self.thinkube_config['metadata']['name'] = self.app_name
-            DeploymentLogger.log("Parsed thinkube.yaml configuration")
+
+            violations = validate_knative_constraints(self.thinkube_config)
+            if violations:
+                msg = "thinkube.yaml validation failed:\n" + "\n".join(f"  - {v}" for v in violations)
+                DeploymentLogger.error(msg)
+                raise ValueError(msg)
+
+            DeploymentLogger.log("Parsed and validated thinkube.yaml configuration")
+        except ValueError:
+            raise
         except Exception as e:
             DeploymentLogger.error(f"Failed to parse thinkube.yaml: {e}")
             raise

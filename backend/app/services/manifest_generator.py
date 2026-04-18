@@ -12,10 +12,15 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import sys
+
 import jinja2
 import yaml
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
+
+sys.path.insert(0, '/home/thinkube-control/scripts')
+from thinkube_yaml_validator import validate_knative_constraints as _validate_knative_constraints
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +201,12 @@ class ManifestGenerator:
         if 'metadata' not in self.thinkube_config:
             self.thinkube_config['metadata'] = {}
         self.thinkube_config['metadata']['name'] = self.app_name
+
+        # Validate Knative portability constraints
+        violations = _validate_knative_constraints(self.thinkube_config)
+        if violations:
+            msg = "thinkube.yaml validation failed:\n" + "\n".join(f"  - {v}" for v in violations)
+            raise ValueError(msg)
 
         # Fetch cluster secrets
         self._fetch_secrets()
