@@ -427,6 +427,27 @@ async def deploy_template_async(
         )
 
 
+@router.post(
+    "/redeploy-async",
+    response_model=DeploymentResponse,
+    operation_id="redeploy_template",
+)
+async def redeploy_template_async(
+    request: TemplateDeployAsyncRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """
+    Redeploy an existing template
+
+    Like deploy, but automatically confirms overwrite of existing user applications.
+    Use this when you know the app already exists and want to update it.
+    """
+    request.variables["_overwrite_confirmed"] = True
+    return await deploy_template_async(request, background_tasks, db, current_user)
+
+
 @router.get(
     "/deployments",
     response_model=DeploymentListResponse,
