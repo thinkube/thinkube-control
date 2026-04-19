@@ -245,6 +245,7 @@ def create_app() -> FastAPI:
                 "get_deployment_debug_logs",   # Resource
                 "download_debug_log",          # Resource
                 "deploy_template",             # Tool
+                "redeploy_template",           # Tool
                 "cancel_deployment",           # Tool
 
                 # === Harbor Images ===
