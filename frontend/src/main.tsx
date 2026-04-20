@@ -208,10 +208,10 @@ function AppContent() {
       onItemClick={handleNavClick}
       logoText="Thinkube Control"
       topBarTitle={getPageTitle()}
-      topBarLeftContent={<ThemeToggle />}
       topBarContent={
         <div className="flex items-center gap-3">
           <DownloadIndicator />
+          <ThemeToggle />
           <UserMenu />
         </div>
       }
