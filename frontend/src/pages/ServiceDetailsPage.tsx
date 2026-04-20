@@ -327,12 +327,12 @@ export default function ServiceDetailsPage() {
     ? 'disabled'
     : service.latest_health?.status || 'unknown';
 
-  const statusBadgeVariant = {
-    healthy: 'success' as const,
-    unhealthy: 'destructive' as const,
+  const statusBadgeStatus = {
+    healthy: 'healthy' as const,
+    unhealthy: 'unhealthy' as const,
     unknown: 'warning' as const,
-    disabled: 'secondary' as const,
-  }[healthStatus] || 'secondary' as const;
+    disabled: 'pending' as const,
+  }[healthStatus] || 'pending' as const;
 
   const statusLabel = {
     healthy: 'Healthy',
@@ -341,12 +341,12 @@ export default function ServiceDetailsPage() {
     disabled: 'Disabled',
   }[healthStatus] || 'Unknown';
 
-  // Type badge
-  const typeVariant = {
-    core: 'default' as const,
-    optional: 'secondary' as const,
-    user_app: 'outline' as const,
-  }[service.type] || 'outline' as const;
+  // Type badge category
+  const typeBadgeCategory = {
+    core: 'core' as const,
+    optional: 'optional' as const,
+    user_app: 'user' as const,
+  }[service.type] || 'user' as const;
 
   // Get icon
   const categoryIconMap: Record<string, any> = {
@@ -390,7 +390,7 @@ export default function ServiceDetailsPage() {
       {/* Back button */}
       <div className="mb-6">
         <TkButton
-          variant="ghost"
+          intent="ghost"
           size="sm"
           onClick={() => navigate('/dashboard/favorites')}
         >
@@ -426,15 +426,15 @@ export default function ServiceDetailsPage() {
 
               {/* Badges */}
               <div className="flex flex-wrap gap-2 mt-3">
-                <TkBadge variant={statusBadgeVariant}>{statusLabel}</TkBadge>
-                <TkBadge variant={typeVariant}>
+                <TkBadge status={statusBadgeStatus}>{statusLabel}</TkBadge>
+                <TkBadge category={typeBadgeCategory}>
                   {formatServiceType(service.type)}
                 </TkBadge>
                 {service.category && (
-                  <TkBadge variant="outline">{service.category}</TkBadge>
+                  <TkBadge appearance="outlined">{service.category}</TkBadge>
                 )}
                 {service.component_version && (
-                  <TkBadge variant="outline">v{service.component_version}</TkBadge>
+                  <TkBadge appearance="outlined">v{service.component_version}</TkBadge>
                 )}
                 {service.gpu_count && service.gpu_count > 0 && (
                   <TkGpuBadge gpuCount={service.gpu_count} />
@@ -445,7 +445,7 @@ export default function ServiceDetailsPage() {
             {/* Favorite button */}
             <TkTooltip content={service.is_favorite ? 'Remove from favorites' : 'Add to favorites'}>
               <TkButton
-                variant="ghost"
+                intent="ghost"
                 size="icon"
                 onClick={handleToggleFavorite}
               >
@@ -459,7 +459,7 @@ export default function ServiceDetailsPage() {
           {/* Actions */}
           <div className="flex gap-2">
             {service.is_enabled && isWebUrl(service.url) && (
-              <TkButton variant="default" asChild>
+              <TkButton asChild>
                 <a href={service.url} target="_blank" rel="noopener noreferrer">
                   <ExternalLink className="h-4 w-4 mr-2" />
                   Open Service
@@ -470,7 +470,7 @@ export default function ServiceDetailsPage() {
             {service.is_enabled && (
               <TkTooltip content="Restart service">
                 <TkButton
-                  variant="outline"
+                  intent="secondary"
                   onClick={() => setShowRestartConfirm(true)}
                   disabled={restarting}
                 >
@@ -483,7 +483,7 @@ export default function ServiceDetailsPage() {
             {service.is_enabled && (
               <TkTooltip content="Check health">
                 <TkButton
-                  variant="outline"
+                  intent="secondary"
                   onClick={handleHealthCheck}
                   disabled={checkingHealth}
                 >
@@ -529,7 +529,7 @@ export default function ServiceDetailsPage() {
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Status:</span>
-              <TkBadge variant={service.is_enabled ? 'success' : 'warning'}>
+              <TkBadge status={service.is_enabled ? 'healthy' : 'warning'}>
                 {service.is_enabled ? 'Enabled' : 'Disabled'}
               </TkBadge>
             </div>
@@ -616,15 +616,15 @@ export default function ServiceDetailsPage() {
                         <div className="flex items-center gap-2">
                           <span className="font-medium">{endpoint.name}</span>
                           {endpoint.is_primary && (
-                            <TkBadge variant="default" className="text-xs">Primary</TkBadge>
+                            <TkBadge status="active" className="text-xs">Primary</TkBadge>
                           )}
-                          <TkBadge variant="secondary" className="text-xs">{endpoint.type}</TkBadge>
+                          <TkBadge appearance="muted" className="text-xs">{endpoint.type}</TkBadge>
                         </div>
                         {endpoint.health_status && (
                           <TkBadge
-                            variant={
-                              endpoint.health_status === 'healthy' ? 'success' :
-                              endpoint.health_status === 'unhealthy' ? 'destructive' :
+                            status={
+                              endpoint.health_status === 'healthy' ? 'healthy' :
+                              endpoint.health_status === 'unhealthy' ? 'unhealthy' :
                               'warning'
                             }
                             className="text-xs"
@@ -668,19 +668,19 @@ export default function ServiceDetailsPage() {
               {dependencies.map((dep) => {
                 // Determine badge variant based on health status and enabled state
                 let badgeVariant: 'default' | 'success' | 'destructive' | 'secondary' = 'default';
-                let buttonVariant: 'default' | 'outline' | 'destructive' | 'secondary' = 'default';
+                let buttonIntent: 'primary' | 'secondary' | 'danger' | 'ghost' = 'primary';
                 if (!dep.enabled) {
                   badgeVariant = 'destructive';
-                  buttonVariant = 'destructive';
+                  buttonIntent = 'danger';
                 } else if (dep.health_status === 'healthy') {
                   badgeVariant = 'success';
-                  buttonVariant = 'outline';
+                  buttonIntent = 'secondary';
                 } else if (dep.health_status === 'unhealthy' || dep.health_status === 'disabled') {
                   badgeVariant = 'destructive';
-                  buttonVariant = 'destructive';
+                  buttonIntent = 'danger';
                 } else if (dep.health_status === 'unknown') {
                   badgeVariant = 'secondary';
-                  buttonVariant = 'secondary';
+                  buttonIntent = 'secondary';
                 }
 
                 const label = `${dep.name}${!dep.enabled ? ' (disabled)' : ''}${dep.enabled && dep.health_status ? ` (${dep.health_status})` : ''}`;
@@ -689,7 +689,7 @@ export default function ServiceDetailsPage() {
                 return dep.service_id ? (
                   <TkButton
                     key={dep.name}
-                    variant={buttonVariant}
+                    intent={buttonIntent}
                     size="sm"
                     onClick={() => navigate(`/services/${dep.service_id}`)}
                   >
@@ -754,7 +754,7 @@ export default function ServiceDetailsPage() {
                               className={`w-4 h-4 transition-transform ${expandedPods[pod.name] ? 'rotate-90' : ''}`}
                             />
                             <span className="font-medium">{pod.name}</span>
-                            <TkBadge variant={pod.ready ? 'success' : 'warning'} className="text-xs">
+                            <TkBadge status={pod.ready ? 'healthy' : 'warning'} className="text-xs">
                               {pod.status}
                             </TkBadge>
                           </div>
@@ -763,7 +763,7 @@ export default function ServiceDetailsPage() {
                             <span>Restarts: {pod.restart_count}</span>
                             <TkButton
                               size="sm"
-                              variant="outline"
+                              intent="secondary"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 handleDescribePod(pod.name);
@@ -801,7 +801,7 @@ export default function ServiceDetailsPage() {
                                   </div>
                                   <TkButton
                                     size="sm"
-                                    variant="outline"
+                                    intent="secondary"
                                     onClick={() => handleViewContainerLogs(pod.name, container.name)}
                                   >
                                     View Logs
@@ -853,7 +853,7 @@ export default function ServiceDetailsPage() {
                   <TkCardContent standalone>
                     <div className="flex items-center justify-between text-sm">
                       <div className="flex items-center gap-2">
-                        <TkBadge variant="outline" className="text-xs">{action.action}</TkBadge>
+                        <TkBadge appearance="outlined" className="text-xs">{action.action}</TkBadge>
                         <span>{action.action}</span>
                       </div>
                       <div className="text-muted-foreground">
@@ -879,7 +879,7 @@ export default function ServiceDetailsPage() {
               </TkCardTitle>
               <TkButton
                 size="sm"
-                variant="ghost"
+                intent="ghost"
                 onClick={() => setSelectedPod(null)}
               >
                 Close
@@ -910,7 +910,7 @@ export default function ServiceDetailsPage() {
               </TkCardTitle>
               <TkButton
                 size="sm"
-                variant="ghost"
+                intent="ghost"
                 onClick={() => setSelectedContainer(null)}
               >
                 Close

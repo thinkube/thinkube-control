@@ -171,7 +171,7 @@ export default function SecretsPage() {
       {/* Action Buttons */}
       <div className="flex justify-end gap-2 mb-4"> {/* @allowed-inline */}
         <TkButton
-          variant="secondary"
+          intent="secondary"
           onClick={exportToNotebooks}
           disabled={exporting || secrets.length === 0}
         >
@@ -182,7 +182,7 @@ export default function SecretsPage() {
           )}
           Export to Notebooks
         </TkButton>
-        <TkButton variant="default" onClick={openCreateDialog}>
+        <TkButton onClick={openCreateDialog}>
           <Plus className="h-5 w-5" />
           Add Secret
         </TkButton>
@@ -227,7 +227,7 @@ export default function SecretsPage() {
                         {secret.used_by_apps.length > 0 ? (
                           <div className="flex flex-wrap gap-1"> {/* @allowed-inline */}
                             {secret.used_by_apps.map((app) => (
-                              <TkBadge key={app} variant="default">
+                              <TkBadge key={app} appearance="prominent">
                                 {app}
                               </TkBadge>
                             ))}
@@ -239,7 +239,7 @@ export default function SecretsPage() {
                       <TkTableCell>
                         <div className="flex gap-2"> {/* @allowed-inline */}
                           <TkButton
-                            variant="ghost"
+                            intent="ghost"
                             size="sm"
                             onClick={() => openEditDialog(secret)}
                             title="Edit"
@@ -247,7 +247,7 @@ export default function SecretsPage() {
                             <Pencil className="h-4 w-4" />
                           </TkButton>
                           <TkButton
-                            variant="ghost"
+                            intent="ghost"
                             size="sm"
                             onClick={() => confirmDelete(secret)}
                             disabled={secret.used_by_apps.length > 0}
@@ -319,7 +319,7 @@ export default function SecretsPage() {
                 />
                 <TkButton
                   type="button"
-                  variant="outline"
+                  intent="secondary"
                   size="icon"
                   onClick={() => setShowValue(!showValue)}
                 >
@@ -333,10 +333,10 @@ export default function SecretsPage() {
             </div>
 
             <TkDialogFooter>
-              <TkButton type="button" variant="outline" onClick={closeDialog}>
+              <TkButton type="button" intent="secondary" onClick={closeDialog}>
                 Cancel
               </TkButton>
-              <TkButton type="submit" variant="default">
+              <TkButton type="submit">
                 {editingSecret ? 'Update' : 'Create'}
               </TkButton>
             </TkDialogFooter>
@@ -355,10 +355,10 @@ export default function SecretsPage() {
             This action cannot be undone.
           </p>
           <TkDialogFooter>
-            <TkButton variant="outline" onClick={() => setDeleteDialog(false)}>
+            <TkButton intent="secondary" onClick={() => setDeleteDialog(false)}>
               Cancel
             </TkButton>
-            <TkButton variant="destructive" onClick={deleteSecret}>
+            <TkButton intent="danger" onClick={deleteSecret}>
               Delete
             </TkButton>
           </TkDialogFooter>

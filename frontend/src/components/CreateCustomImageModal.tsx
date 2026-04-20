@@ -625,7 +625,7 @@ ${parentDockerfile}
           </TkCard>
 
           <TkDialogFooter>
-            <TkButton type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <TkButton type="button" intent="secondary" onClick={() => onOpenChange(false)}>
               Cancel
             </TkButton>
             <TkButton type="submit" disabled={loading}>

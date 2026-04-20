@@ -40,7 +40,7 @@ export function UserMenu() {
   return (
     <TkDropdownMenu
       trigger={
-        <TkButton variant="ghost">
+        <TkButton intent="ghost">
           <User className="w-4 h-4" />
           {user.preferred_username || user.email}
         </TkButton>

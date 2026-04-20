@@ -298,7 +298,7 @@ export default function JupyterHubConfigPage() {
           <div className="flex gap-4 justify-end"> {/* @allowed-inline */}
             <TkButton
               onClick={loadConfig}
-              variant="ghost"
+              intent="ghost"
               disabled={saving}
             >
               Reset

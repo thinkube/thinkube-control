@@ -334,13 +334,12 @@ export function TemplateParameterForm({
             <div className="mt-4 flex gap-2">
               <TkButton
                 size="sm"
-                variant="default"
                 className="bg-warning hover:bg-warning/90"
                 onClick={confirmOverwrite}
               >
                 Yes, Replace
               </TkButton>
-              <TkButton size="sm" variant="ghost" onClick={cancelOverwrite}>
+              <TkButton size="sm" intent="ghost" onClick={cancelOverwrite}>
                 Cancel
               </TkButton>
             </div>

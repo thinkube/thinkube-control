@@ -7,7 +7,7 @@ export function ThemeToggle() {
 
   return (
     <TkButton
-      variant="ghost"
+      intent="ghost"
       size="icon"
       onClick={() => setTheme(actualTheme === 'dark' ? 'light' : 'dark')}
     >

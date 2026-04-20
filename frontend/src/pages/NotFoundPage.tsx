@@ -17,7 +17,7 @@ export function NotFoundPage() {
             The page you're looking for doesn't exist or has been moved.
           </p>
           <Link to="/">
-            <TkButton variant="default" className="w-full">
+            <TkButton className="w-full">
               Back to Dashboard
             </TkButton>
           </Link>

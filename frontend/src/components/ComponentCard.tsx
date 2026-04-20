@@ -73,12 +73,12 @@ export function ComponentCard({
             <div className="flex items-center gap-2">
               {/* Installation status badge */}
               {isInstalled ? (
-                <TkBadge variant="success" className="gap-1">
+                <TkBadge status="healthy" className="gap-1">
                   <Check className="w-3 h-3" />
                   Installed
                 </TkBadge>
               ) : (
-                <TkBadge variant="outline">Not Installed</TkBadge>
+                <TkBadge appearance="outlined">Not Installed</TkBadge>
               )}
             </div>
           </div>
@@ -134,7 +134,7 @@ export function ComponentCard({
                 onInstall(component)
               }}
               disabled={!requirementsMet && !allowForceInstall}
-              variant="outline"
+              intent="secondary"
               size="sm"
               className="gap-2"
             >
@@ -144,7 +144,7 @@ export function ComponentCard({
           ) : (
             <TkButton
               onClick={() => onUninstall(component)}
-              variant="outline"
+              intent="secondary"
               size="sm"
               className="gap-2 text-destructive hover:bg-destructive hover:text-destructive-foreground"
             >

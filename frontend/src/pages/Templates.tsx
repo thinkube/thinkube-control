@@ -467,13 +467,12 @@ export default function Templates() {
           {/* Action Buttons */}
           <TkCardFooter className="flex justify-end gap-2">
             <TkButton
-              variant="ghost"
+              intent="ghost"
               onClick={cancelDeploy}
             >
               Cancel
             </TkButton>
             <TkButton
-              variant="default"
               disabled={!isValidConfig || isDeploying}
               onClick={handleDeployTemplate}
             >
@@ -521,7 +520,6 @@ export default function Templates() {
           </TkCardContent>
           <TkCardFooter className="flex justify-end">
             <TkButton
-              variant="default"
               disabled={!isValidUrl(manualTemplateUrl)}
               onClick={() => loadTemplate(manualTemplateUrl)}
             >
@@ -547,7 +545,7 @@ export default function Templates() {
                 <TkCardHeader>
                   <div className="flex items-center justify-between gap-2">
                     <TkCardTitle>{app.name}</TkCardTitle>
-                    <TkBadge variant={app.deployment_type === 'knative' ? 'secondary' : 'outline'}>
+                    <TkBadge appearance={app.deployment_type === 'knative' ? 'muted' : 'outlined'}>
                       {app.deployment_type === 'knative' ? 'Knative' : 'App'}
                     </TkBadge>
                   </div>
@@ -557,7 +555,7 @@ export default function Templates() {
                 </TkCardContent>
                 <TkCardFooter className="flex justify-end">
                   <TkButton
-                    variant="outline"
+                    intent="secondary"
                     size="sm"
                     onClick={() => openPublishDialog(app)}
                   >
@@ -654,14 +652,13 @@ export default function Templates() {
 
           <TkDialogFooter>
             <TkButton
-              variant="ghost"
+              intent="ghost"
               onClick={() => setShowPublishDialog(false)}
             >
               {publishResult?.status === 'success' ? 'Close' : 'Cancel'}
             </TkButton>
             {publishResult?.status !== 'success' && (
               <TkButton
-                variant="default"
                 disabled={!publishTemplateName || isPublishing}
                 onClick={handlePublish}
               >
@@ -702,11 +699,11 @@ export default function Templates() {
                   <div className="flex items-center justify-between gap-2">
                     <TkCardTitle>{template.name.replace('tkt-', '').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</TkCardTitle>
                     <div className="flex gap-1 shrink-0">
-                      <TkBadge variant={template.deployment_type === 'knative' ? 'secondary' : 'outline'}>
+                      <TkBadge appearance={template.deployment_type === 'knative' ? 'muted' : 'outlined'}>
                         {template.deployment_type === 'knative' ? 'Knative' : 'App'}
                       </TkBadge>
                       {template.source === 'user' && (
-                        <TkBadge variant="default">User</TkBadge>
+                        <TkBadge category="user">User</TkBadge>
                       )}
                     </div>
                   </div>
@@ -717,7 +714,6 @@ export default function Templates() {
                 </TkCardContent>
                 <TkCardFooter className="flex justify-end">
                   <TkButton
-                    variant="default"
                     size="sm"
                     onClick={() => selectTemplate(template.url)}
                   >

@@ -153,7 +153,7 @@ export default function ApiTokensPage() {
               <TkCodeBlock maxHeight="h-auto">
                 <code>{createdToken.token}</code>
               </TkCodeBlock>
-              <TkButton variant="outline" size="sm" onClick={() => handleCopyToken(createdToken.token)}>
+              <TkButton intent="secondary" size="sm" onClick={() => handleCopyToken(createdToken.token)}>
                 Copy to Clipboard
               </TkButton>
             </div>
@@ -169,10 +169,10 @@ export default function ApiTokensPage() {
                 <code>{revealedToken.token}</code>
               </TkCodeBlock>
               <div className="flex gap-2">
-                <TkButton variant="outline" size="sm" onClick={() => handleCopyToken(revealedToken.token)}>
+                <TkButton intent="secondary" size="sm" onClick={() => handleCopyToken(revealedToken.token)}>
                   Copy Token
                 </TkButton>
-                <TkButton variant="outline" size="sm" onClick={() => setRevealedToken(null)}>
+                <TkButton intent="secondary" size="sm" onClick={() => setRevealedToken(null)}>
                   Close
                 </TkButton>
               </div>
@@ -219,7 +219,6 @@ export default function ApiTokensPage() {
                           <div className="flex gap-2">
                             {token.name === 'MCP Default' && (
                               <TkButton
-                                variant="default"
                                 size="sm"
                                 onClick={() => handleShowToken(token.id)}
                               >
@@ -227,7 +226,7 @@ export default function ApiTokensPage() {
                               </TkButton>
                             )}
                             <TkButton
-                              variant="destructive"
+                              intent="danger"
                               size="sm"
                               disabled={!token.is_active}
                               onClick={() => handleRevokeToken(token.id)}

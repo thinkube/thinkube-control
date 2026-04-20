@@ -45,12 +45,12 @@ export function ServiceCard({
     disabled: 'var(--muted-foreground)',
   }[healthStatus] || 'var(--muted-foreground)';
 
-  const statusBadgeVariant = {
-    healthy: 'success' as const,
-    unhealthy: 'destructive' as const,
+  const statusBadgeStatus = {
+    healthy: 'healthy' as const,
+    unhealthy: 'unhealthy' as const,
     unknown: 'warning' as const,
-    disabled: 'secondary' as const,
-  }[healthStatus] || 'secondary' as const;
+    disabled: 'pending' as const,
+  }[healthStatus] || 'pending' as const;
 
   const statusLabel = {
     healthy: 'Healthy',
@@ -59,12 +59,12 @@ export function ServiceCard({
     disabled: 'Disabled',
   }[healthStatus] || 'Unknown';
 
-  // Type badge variant
-  const typeVariant = {
-    core: 'default' as const,
-    optional: 'secondary' as const,
-    user_app: 'outline' as const,
-  }[service.type] || 'outline' as const;
+  // Type badge category
+  const typeBadgeCategory = {
+    core: 'core' as const,
+    optional: 'optional' as const,
+    user_app: 'user' as const,
+  }[service.type] || 'user' as const;
 
   // Border styling based on health
   const borderClass = healthStatus === 'healthy'
@@ -157,7 +157,7 @@ export function ServiceCard({
               ) : null}
               <TkCardTitle className="text-base">{service.display_name || service.name}</TkCardTitle>
             </div>
-            <TkBadge variant={statusBadgeVariant} className="text-xs">{statusLabel}</TkBadge>
+            <TkBadge status={statusBadgeStatus} className="text-xs">{statusLabel}</TkBadge>
           </div>
         </TkCardHeader>
         <TkCardContent className="pb-2">
@@ -172,7 +172,7 @@ export function ServiceCard({
             {/* Open Service */}
             {service.is_enabled && isWebUrl(service.url) && (
               <TkTooltip content="Open service">
-                <TkButton size="icon" variant="ghost" className="h-7 w-7" asChild>
+                <TkButton size="icon" intent="ghost" className="h-7 w-7" asChild>
                   <a href={service.url} target="_blank" rel="noopener noreferrer">
                     <ExternalLink className="h-3 w-3" />
                   </a>
@@ -185,7 +185,7 @@ export function ServiceCard({
               <TkTooltip content="View details">
                 <TkButton
                   size="icon"
-                  variant="ghost"
+                  intent="ghost"
                   className="h-7 w-7"
                   onClick={() => onShowDetails(service)}
                 >
@@ -243,11 +243,11 @@ export function ServiceCard({
             )}
           </div>
           <div className="flex items-start gap-2">
-            <TkBadge variant={statusBadgeVariant}>{statusLabel}</TkBadge>
+            <TkBadge status={statusBadgeStatus}>{statusLabel}</TkBadge>
             {onToggleFavorite && (
               <TkTooltip content={service.is_favorite ? 'Remove from favorites' : 'Add to favorites'}>
                 <TkButton
-                  variant="ghost"
+                  intent="ghost"
                   size="icon"
                   onClick={() => onToggleFavorite(service)}
                 >
@@ -264,14 +264,14 @@ export function ServiceCard({
       <TkCardContent className="pb-3 flex-grow">
         {/* Badges */}
         <div className="flex flex-wrap gap-2 mb-4">
-          <TkBadge variant={typeVariant}>
+          <TkBadge category={typeBadgeCategory}>
             {service.type === 'core' ? 'Core' : service.type === 'optional' ? 'Optional' : 'User App'}
           </TkBadge>
           {service.category && (
-            <TkBadge variant="outline">{service.category}</TkBadge>
+            <TkBadge appearance="outlined">{service.category}</TkBadge>
           )}
           {service.component_version && (
-            <TkBadge variant="outline">v{service.component_version}</TkBadge>
+            <TkBadge appearance="outlined">v{service.component_version}</TkBadge>
           )}
           {service.gpu_count && service.gpu_count > 0 && (
             <TkGpuBadge gpuCount={service.gpu_count} />
@@ -312,7 +312,6 @@ export function ServiceCard({
             <TkTooltip content="Open service">
               <TkButton
                 size="sm"
-                variant="default"
                 className="flex-1"
                 asChild
               >
@@ -327,7 +326,7 @@ export function ServiceCard({
             <TkTooltip content="View details">
               <TkButton
                 size="sm"
-                variant="outline"
+                intent="secondary"
                 className="flex-1"
                 onClick={() => onShowDetails(service)}
               >
@@ -340,7 +339,7 @@ export function ServiceCard({
             <TkTooltip content="Restart service">
               <TkButton
                 size="sm"
-                variant="outline"
+                intent="secondary"
                 className="flex-1"
                 onClick={handleRestart}
                 disabled={restarting}
@@ -354,7 +353,7 @@ export function ServiceCard({
             <TkTooltip content="Check health">
               <TkButton
                 size="sm"
-                variant="outline"
+                intent="secondary"
                 className="flex-1"
                 onClick={handleHealthCheck}
                 disabled={checkingHealth}

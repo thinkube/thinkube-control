@@ -63,18 +63,18 @@ export function ViewImageModal({
     return Math.round((bytes / Math.pow(1024, i)) * 100) / 100 + " " + sizes[i]
   }
 
-  const getCategoryVariant = (
+  const getCategoryProp = (
     category: string
-  ): "default" | "success" | "warning" => {
+  ): "core" | "optional" | "user" => {
     switch (category) {
       case "core":
-        return "default"
+        return "core"
       case "custom":
-        return "success"
+        return "optional"
       case "user":
-        return "warning"
+        return "user"
       default:
-        return "default"
+        return "core"
     }
   }
 
@@ -105,7 +105,7 @@ export function ViewImageModal({
                 Tag
               </label>
               <p className="text-lg mt-1">
-                <TkBadge variant="outline">{image.tag}</TkBadge>
+                <TkBadge appearance="outlined">{image.tag}</TkBadge>
               </p>
             </div>
           </div>
@@ -117,7 +117,7 @@ export function ViewImageModal({
                 Category
               </label>
               <div className="mt-1">
-                <TkBadge variant={getCategoryVariant(image.category)}>
+                <TkBadge category={getCategoryProp(image.category)}>
                   {image.category}
                 </TkBadge>
               </div>
@@ -193,25 +193,25 @@ export function ViewImageModal({
                 <div className="flex flex-wrap gap-2 mt-1">
                   {image.vulnerabilities.critical !== undefined &&
                     image.vulnerabilities.critical > 0 && (
-                      <TkBadge variant="destructive">
+                      <TkBadge status="unhealthy">
                         {image.vulnerabilities.critical} Critical
                       </TkBadge>
                     )}
                   {image.vulnerabilities.high !== undefined &&
                     image.vulnerabilities.high > 0 && (
-                      <TkBadge variant="warning">
+                      <TkBadge status="warning">
                         {image.vulnerabilities.high} High
                       </TkBadge>
                     )}
                   {image.vulnerabilities.medium !== undefined &&
                     image.vulnerabilities.medium > 0 && (
-                      <TkBadge variant="default">
+                      <TkBadge status="warning">
                         {image.vulnerabilities.medium} Medium
                       </TkBadge>
                     )}
                   {image.vulnerabilities.low !== undefined &&
                     image.vulnerabilities.low > 0 && (
-                      <TkBadge variant="secondary">
+                      <TkBadge status="pending">
                         {image.vulnerabilities.low} Low
                       </TkBadge>
                     )}

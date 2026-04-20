@@ -125,10 +125,10 @@ export function EditPackagesModal({ open, onOpenChange, venv, onSave, onBuild }:
         </div>
 
         <TkDialogFooter>
-          <TkButton variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
+          <TkButton intent="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
             Cancel
           </TkButton>
-          <TkLoadingButton variant="secondary" onClick={handleSave} loading={saving}>
+          <TkLoadingButton intent="secondary" onClick={handleSave} loading={saving}>
             Save
           </TkLoadingButton>
           <TkLoadingButton onClick={handleSaveAndBuild} loading={saving}>

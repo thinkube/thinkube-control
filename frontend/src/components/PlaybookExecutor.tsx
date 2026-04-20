@@ -488,7 +488,7 @@ Timestamp: ${new Date().toISOString()}
                 <span className="text-sm text-muted-foreground">Live Output:</span>
                 <div className="flex items-center gap-2"> {/* @allowed-inline */}
                   <TkButton
-                    variant="ghost"
+                    intent="ghost"
                     size="sm"
                     onClick={copyOutput}
                     className={copySuccess ? 'text-success' : ''}
@@ -575,7 +575,7 @@ Timestamp: ${new Date().toISOString()}
           {/* Action Buttons */}
           <TkDialogFooter>
             {status === 'running' && (
-              <TkButton variant="outline" size="sm" onClick={cancelExecution} disabled={isCancelling}>
+              <TkButton intent="secondary" size="sm" onClick={cancelExecution} disabled={isCancelling}>
                 {isCancelling && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                 {isCancelling ? 'Cancelling...' : 'Cancel'}
               </TkButton>
@@ -645,7 +645,7 @@ Timestamp: ${new Date().toISOString()}
           {/* Actions */}
           <TkDialogFooter>
             <TkButton
-              variant="ghost"
+              intent="ghost"
               size="sm"
               onClick={copyOutput}
               className={copySuccess ? 'text-success' : ''}
@@ -666,7 +666,7 @@ Timestamp: ${new Date().toISOString()}
               {status === 'success' ? 'Continue' : 'Close'}
             </TkButton>
             {status === 'error' && onRetry && (
-              <TkButton variant="outline" size="sm" onClick={retry}>
+              <TkButton intent="secondary" size="sm" onClick={retry}>
                 Retry
               </TkButton>
             )}

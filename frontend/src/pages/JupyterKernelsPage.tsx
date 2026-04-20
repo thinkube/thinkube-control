@@ -132,13 +132,13 @@ export default function JupyterKernelsPage() {
   function getStatusBadge(status: string) {
     switch (status) {
       case 'success':
-        return <TkBadge variant="success">{status}</TkBadge>
+        return <TkBadge status="healthy">{status}</TkBadge>
       case 'building':
-        return <TkBadge variant="warning">{status}</TkBadge>
+        return <TkBadge status="warning">{status}</TkBadge>
       case 'failed':
-        return <TkBadge variant="destructive">{status}</TkBadge>
+        return <TkBadge status="unhealthy">{status}</TkBadge>
       default:
-        return <TkBadge variant="secondary">{status}</TkBadge>
+        return <TkBadge status="pending">{status}</TkBadge>
     }
   }
 
@@ -261,7 +261,7 @@ export default function JupyterKernelsPage() {
                               {venv.name}
                               {venv.architectures_built && venv.architectures_built.length > 0 ? (
                                 venv.architectures_built.map(arch => (
-                                  <TkBadge key={arch} variant="outline" className="text-xs">{arch}</TkBadge>
+                                  <TkBadge key={arch} appearance="outlined" className="text-xs">{arch}</TkBadge>
                                 ))
                               ) : venv.architecture ? (
                                 <span className="text-xs text-muted-foreground">({venv.architecture})</span>
@@ -274,7 +274,7 @@ export default function JupyterKernelsPage() {
                           <div className="flex items-center gap-2">
                             {getStatusBadge(venv.status)}
                             <TkButton
-                              variant="ghost"
+                              intent="ghost"
                               size="sm"
                               onClick={() => openEditPackages(venv)}
                               title="Edit packages"
@@ -283,7 +283,7 @@ export default function JupyterKernelsPage() {
                               <Edit2 className="h-4 w-4" />
                             </TkButton>
                             <TkButton
-                              variant="ghost"
+                              intent="ghost"
                               size="sm"
                               onClick={() => buildVenv(venv.id)}
                               title="Build kernel"
@@ -292,7 +292,7 @@ export default function JupyterKernelsPage() {
                               <Play className="h-4 w-4" />
                             </TkButton>
                             <TkButton
-                              variant="ghost"
+                              intent="ghost"
                               size="sm"
                               onClick={() => deleteVenv(venv.id)}
                               title="Delete kernel"

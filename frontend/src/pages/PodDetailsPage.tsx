@@ -179,7 +179,7 @@ export default function PodDetailsPage() {
       {/* Back button */}
       <div className="mb-6">
         <TkButton
-          variant="ghost"
+          intent="ghost"
           size="sm"
           onClick={() => navigate(`/services/${id}`)}
         >
@@ -205,7 +205,7 @@ export default function PodDetailsPage() {
                 <TkCardTitle>Pod Description</TkCardTitle>
                 <TkButton
                   size="sm"
-                  variant="outline"
+                  intent="secondary"
                   onClick={handleCopyDescription}
                 >
                   <Copy className="h-4 w-4 mr-2" />
@@ -268,7 +268,7 @@ export default function PodDetailsPage() {
                         {/* Actions */}
                         <TkButton
                           size="sm"
-                          variant="outline"
+                          intent="secondary"
                           onClick={handleRefreshLogs}
                           disabled={loadingLogs[container]}
                         >
@@ -277,7 +277,7 @@ export default function PodDetailsPage() {
                         </TkButton>
                         <TkButton
                           size="sm"
-                          variant="outline"
+                          intent="secondary"
                           onClick={handleDownloadLogs}
                           disabled={!logs[container]}
                         >

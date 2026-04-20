@@ -261,12 +261,12 @@ export default function NodesPage() {
                     <TkTableRow key={node.name}>
                       <TkTableCell className="font-medium">{node.name}</TkTableCell>
                       <TkTableCell>
-                        <TkBadge variant="outline" className="font-mono">
+                        <TkBadge appearance="outlined" className="font-mono">
                           {node.architecture}
                         </TkBadge>
                       </TkTableCell>
                       <TkTableCell>
-                        <TkBadge variant={node.role === 'control_plane' ? 'default' : 'secondary'}>
+                        <TkBadge appearance={node.role === 'control_plane' ? 'prominent' : 'muted'}>
                           {node.role === 'control_plane' ? 'Control Plane' : 'Worker'}
                         </TkBadge>
                       </TkTableCell>
@@ -292,7 +292,7 @@ export default function NodesPage() {
                       <TkTableCell>
                         {node.role !== 'control_plane' && (
                           <TkButton
-                            variant="ghost"
+                            intent="ghost"
                             size="sm"
                             className="text-destructive hover:text-destructive"
                             onClick={() => setRemoveConfirm(node.name)}
@@ -357,7 +357,7 @@ export default function NodesPage() {
               )}
 
               <TkDialogFooter>
-                <TkButton variant="ghost" onClick={resetWizard}>Cancel</TkButton>
+                <TkButton intent="ghost" onClick={resetWizard}>Cancel</TkButton>
                 <TkButton onClick={handleDiscover} disabled={!nodeIP || discovering} className="gap-2">
                   {discovering ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
                   {discovering ? 'Discovering...' : 'Discover'}
@@ -431,7 +431,7 @@ export default function NodesPage() {
               )}
 
               <TkDialogFooter>
-                <TkButton variant="ghost" onClick={() => { setWizardStep('discover'); clearDiscoveredNode(); }}>
+                <TkButton intent="ghost" onClick={() => { setWizardStep('discover'); clearDiscoveredNode(); }}>
                   Back
                 </TkButton>
                 <TkButton onClick={handleAddNode} className="gap-2">
@@ -463,9 +463,9 @@ export default function NodesPage() {
             This will drain all workloads and remove the node from the inventory.
           </p>
           <TkDialogFooter>
-            <TkButton variant="ghost" onClick={() => setRemoveConfirm(null)}>Cancel</TkButton>
+            <TkButton intent="ghost" onClick={() => setRemoveConfirm(null)}>Cancel</TkButton>
             <TkButton
-              variant="destructive"
+              intent="danger"
               onClick={() => removeConfirm && handleRemoveNode(removeConfirm)}
               className="gap-2"
             >

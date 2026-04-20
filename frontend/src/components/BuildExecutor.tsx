@@ -229,7 +229,7 @@ const BuildExecutor = forwardRef<BuildExecutorRef, BuildExecutorProps>(
                 <span className="text-sm text-muted-foreground">Build Output:</span>
                 <div className="flex items-center gap-2">
                   <TkButton
-                    variant="ghost"
+                    intent="ghost"
                     size="sm"
                     onClick={copy}
                     className={copied ? 'text-success' : ''}
@@ -282,7 +282,7 @@ const BuildExecutor = forwardRef<BuildExecutorRef, BuildExecutorProps>(
             <TkDialogFooter>
               {status === 'running' && (
                 <TkButton
-                  variant="destructive"
+                  intent="danger"
                   onClick={cancelExecution}
                   disabled={isCancelling}
                 >

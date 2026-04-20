@@ -99,7 +99,8 @@ export default function ModelsPage() {
   const getModelStatus = (model: Model): {
     label: string;
     icon: React.ReactNode | null;
-    variant: 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning';
+    status?: 'healthy' | 'unhealthy' | 'pending' | 'warning' | 'active';
+    appearance?: 'prominent' | 'muted' | 'outlined';
   } => {
     const download = getDownloadForModel(model.id);
 
@@ -108,7 +109,7 @@ export default function ModelsPage() {
       return {
         label: 'Registered',
         icon: <CheckCircle2 className="w-3 h-3" />,
-        variant: 'success',
+        status: 'healthy',
       };
     }
 
@@ -116,7 +117,7 @@ export default function ModelsPage() {
       return {
         label: 'Mirrored',
         icon: <CheckCircle2 className="w-3 h-3" />,
-        variant: 'success',
+        status: 'healthy',
       };
     }
 
@@ -125,7 +126,7 @@ export default function ModelsPage() {
         return {
           label: 'Mirroring',
           icon: <Loader2 className="w-3 h-3 animate-spin" />,
-          variant: 'default',
+          status: 'active',
         };
       }
 
@@ -133,7 +134,7 @@ export default function ModelsPage() {
         return {
           label: 'Mirrored',
           icon: <CheckCircle2 className="w-3 h-3" />,
-          variant: 'success',
+          status: 'healthy',
         };
       }
 
@@ -141,7 +142,7 @@ export default function ModelsPage() {
         return {
           label: 'Failed',
           icon: <XCircle className="w-3 h-3" />,
-          variant: 'destructive',
+          status: 'unhealthy',
         };
       }
 
@@ -149,7 +150,7 @@ export default function ModelsPage() {
       return {
         label: 'Pending',
         icon: <Clock className="w-3 h-3" />,
-        variant: 'warning',
+        status: 'warning',
       };
     }
 
@@ -157,7 +158,7 @@ export default function ModelsPage() {
     return {
       label: 'Not Mirrored',
       icon: null,
-      variant: 'outline',
+      appearance: 'outlined',
     };
   };
 
@@ -211,7 +212,6 @@ export default function ModelsPage() {
                   </p>
                 )}
                 <TkButton
-                  variant="default"
                   size="sm"
                   onClick={handleOpenMlflow}
                 >
@@ -264,7 +264,7 @@ export default function ModelsPage() {
                         <div className="flex items-center gap-2">
                           {model.name}
                           {model.is_finetuned && (
-                            <TkBadge variant="secondary" className="text-xs">
+                            <TkBadge appearance="muted" className="text-xs">
                               Fine-tuned
                             </TkBadge>
                           )}
@@ -276,19 +276,19 @@ export default function ModelsPage() {
                     </TkTableCell>
                     <TkTableCell>{model.size}</TkTableCell>
                     <TkTableCell>
-                      <TkBadge variant="outline">{model.quantization}</TkBadge>
+                      <TkBadge appearance="outlined">{model.quantization}</TkBadge>
                     </TkTableCell>
                     <TkTableCell>
                       <div className="flex gap-1 flex-wrap">
                         {model.server_type.map((type) => (
-                          <TkBadge key={type} variant="secondary">
+                          <TkBadge key={type} appearance="muted">
                             {type}
                           </TkBadge>
                         ))}
                       </div>
                     </TkTableCell>
                     <TkTableCell>
-                      <TkBadge variant={status.variant}>
+                      <TkBadge status={status.status} appearance={status.appearance}>
                         <span className="flex items-center gap-1">
                           {status.icon}
                           {status.label}
@@ -300,12 +300,12 @@ export default function ModelsPage() {
                         {/* Fine-tuned models are always ready - no Mirror button */}
                         {model.is_finetuned ? (
                           <>
-                            <TkBadge variant="success">
+                            <TkBadge status="healthy">
                               <CheckCircle2 className="w-3 h-3 mr-1" />
                               Ready
                             </TkBadge>
                             <TkButton
-                              variant="outline"
+                              intent="secondary"
                               size="sm"
                               onClick={() => handleDelete(model.id)}
                             >
@@ -315,19 +315,19 @@ export default function ModelsPage() {
                           </>
                         ) : model.is_downloaded && download && !download.is_failed ? (
                           <>
-                            <TkBadge variant="success">
+                            <TkBadge status="healthy">
                               <CheckCircle2 className="w-3 h-3 mr-1" />
                               Ready
                             </TkBadge>
                             <TkButton
-                              variant="ghost"
+                              intent="ghost"
                               size="sm"
                               onClick={() => resetMirrorJob(model.id)}
                             >
                               Reset
                             </TkButton>
                             <TkButton
-                              variant="outline"
+                              intent="secondary"
                               size="sm"
                               onClick={() => handleDelete(model.id)}
                             >
@@ -338,7 +338,7 @@ export default function ModelsPage() {
                         ) : isDownloading && download?.workflow_name ? (
                           <>
                             <TkButton
-                              variant="outline"
+                              intent="secondary"
                               size="sm"
                               asChild
                             >
@@ -352,7 +352,7 @@ export default function ModelsPage() {
                               </a>
                             </TkButton>
                             <TkButton
-                              variant="ghost"
+                              intent="ghost"
                               size="sm"
                               onClick={() => resetMirrorJob(model.id)}
                             >
@@ -362,7 +362,7 @@ export default function ModelsPage() {
                         ) : download?.is_failed || (model.is_downloaded && download?.is_failed) ? (
                           <>
                             <TkButton
-                              variant="outline"
+                              intent="secondary"
                               size="sm"
                               onClick={() => handleDownload(model.id)}
                               disabled={!mlflowStatus?.initialized}
@@ -371,14 +371,14 @@ export default function ModelsPage() {
                               Retry
                             </TkButton>
                             <TkButton
-                              variant="ghost"
+                              intent="ghost"
                               size="sm"
                               onClick={() => resetMirrorJob(model.id)}
                             >
                               Reset
                             </TkButton>
                             <TkButton
-                              variant="destructive"
+                              intent="danger"
                               size="sm"
                               onClick={() => handleDelete(model.id)}
                             >
@@ -389,7 +389,7 @@ export default function ModelsPage() {
                         ) : download ? (
                           <>
                             <TkButton
-                              variant="outline"
+                              intent="secondary"
                               size="sm"
                               onClick={() => handleDownload(model.id)}
                               disabled={!mlflowStatus?.initialized}
@@ -398,7 +398,7 @@ export default function ModelsPage() {
                               Mirror
                             </TkButton>
                             <TkButton
-                              variant="ghost"
+                              intent="ghost"
                               size="sm"
                               onClick={() => resetMirrorJob(model.id)}
                             >
@@ -407,7 +407,6 @@ export default function ModelsPage() {
                           </>
                         ) : (
                           <TkButton
-                            variant="default"
                             size="sm"
                             onClick={() => handleDownload(model.id)}
                             disabled={loading || !mlflowStatus?.initialized}

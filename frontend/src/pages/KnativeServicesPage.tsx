@@ -8,15 +8,15 @@ import { useKnativeServicesStore, type KnativeService } from '../stores/useKnati
 
 function StatusBadge({ status, replicas }: { status: string; replicas: number }) {
   if (status === 'Ready' && replicas > 0) {
-    return <TkBadge variant="default">Active ({replicas})</TkBadge>
+    return <TkBadge status="active">Active ({replicas})</TkBadge>
   }
   if (status === 'Ready' && replicas === 0) {
-    return <TkBadge variant="secondary">Scaled to Zero</TkBadge>
+    return <TkBadge status="pending">Scaled to Zero</TkBadge>
   }
   if (status === 'NotReady') {
-    return <TkBadge variant="destructive">Not Ready</TkBadge>
+    return <TkBadge status="unhealthy">Not Ready</TkBadge>
   }
-  return <TkBadge variant="outline">Unknown</TkBadge>
+  return <TkBadge appearance="outlined">Unknown</TkBadge>
 }
 
 function formatTime(isoString: string | null) {
@@ -74,13 +74,13 @@ function KnativeServiceCard({ service }: { service: KnativeService }) {
       <TkCardContent className="pb-3 flex-grow">
         {/* Badges */}
         <div className="flex flex-wrap gap-2 mb-4">
-          <TkBadge variant="secondary">Knative</TkBadge>
-          <TkBadge variant="outline">{service.min_scale}-{service.max_scale} pods</TkBadge>
+          <TkBadge appearance="muted">Knative</TkBadge>
+          <TkBadge appearance="outlined">{service.min_scale}-{service.max_scale} pods</TkBadge>
           {service.container_concurrency > 0 && (
-            <TkBadge variant="outline">{service.container_concurrency} req/pod</TkBadge>
+            <TkBadge appearance="outlined">{service.container_concurrency} req/pod</TkBadge>
           )}
           {service.timeout_seconds !== 300 && (
-            <TkBadge variant="outline">{service.timeout_seconds}s timeout</TkBadge>
+            <TkBadge appearance="outlined">{service.timeout_seconds}s timeout</TkBadge>
           )}
         </div>
 
@@ -113,7 +113,6 @@ function KnativeServiceCard({ service }: { service: KnativeService }) {
         <TkCardFooter className="pt-3">
           <TkButton
             size="sm"
-            variant="default"
             className="flex-1"
             asChild
           >
@@ -193,7 +192,7 @@ export default function KnativeServicesPage() {
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-bold">Services</h2>
         <TkButton
-          variant="outline"
+          intent="secondary"
           size="sm"
           onClick={() => fetchServices()}
           disabled={loading}

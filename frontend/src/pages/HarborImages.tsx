@@ -356,21 +356,21 @@ export function HarborImages() {
     store.fetchImageStats()
   }, [])
 
-  const getStatusVariant = (status: string) => {
+  const getStatusStatus = (status: string): 'healthy' | 'unhealthy' | 'warning' | 'active' | 'pending' => {
     switch (status) {
-      case 'pending': return 'default'
+      case 'pending': return 'active'
       case 'building': return 'warning'
-      case 'success': return 'success'
-      case 'failed': return 'destructive'
-      default: return 'default'
+      case 'success': return 'healthy'
+      case 'failed': return 'unhealthy'
+      default: return 'active'
     }
   }
 
-  const getCategoryVariant = (category: string) => {
+  const getCategoryCategory = (category: string): 'core' | 'user' => {
     switch (category) {
-      case 'system': return 'default'
-      case 'user': return 'warning'
-      default: return 'default'
+      case 'system': return 'core'
+      case 'user': return 'user'
+      default: return 'core'
     }
   }
 
@@ -386,7 +386,7 @@ export function HarborImages() {
             {activeTab === 'mirrored' && (
               <>
                 <TkButton
-                  variant="secondary"
+                  intent="secondary"
                   onClick={syncImages}
                   disabled={store.loading}
                 >
@@ -475,7 +475,7 @@ export function HarborImages() {
                 />
 
                 {hasActiveFilters && (
-                  <TkButton variant="ghost" onClick={clearAllFilters}>
+                  <TkButton intent="ghost" onClick={clearAllFilters}>
                     Clear Filters
                   </TkButton>
                 )}
@@ -528,12 +528,12 @@ export function HarborImages() {
                         </TkTableCell>
                         <TkTableCell>
                           <div className="flex gap-1" /* @allowed-inline */>
-                            <TkBadge variant={getCategoryVariant(image.category)}>
+                            <TkBadge category={getCategoryCategory(image.category)}>
                               {image.category}
                               {image.protected && <Lock className="h-3 w-3 ml-1" />}
                             </TkBadge>
                             {image.source && (
-                              <TkBadge variant="outline">
+                              <TkBadge appearance="outlined">
                                 {image.source}
                               </TkBadge>
                             )}
@@ -558,12 +558,12 @@ export function HarborImages() {
                           {image.vulnerabilities && Object.keys(image.vulnerabilities).length > 0 ? (
                             <div className="flex gap-1" /* @allowed-inline */>
                               {image.vulnerabilities.critical > 0 && (
-                                <TkBadge variant="destructive">
+                                <TkBadge status="unhealthy">
                                   {image.vulnerabilities.critical} critical
                                 </TkBadge>
                               )}
                               {image.vulnerabilities.high > 0 && (
-                                <TkBadge variant="warning">
+                                <TkBadge status="warning">
                                   {image.vulnerabilities.high} high
                                 </TkBadge>
                               )}
@@ -575,7 +575,7 @@ export function HarborImages() {
                         <TkTableCell>
                           <div className="flex gap-1" /* @allowed-inline */>
                             <TkButton
-                              variant="ghost"
+                              intent="ghost"
                               size="sm"
                               onClick={() => viewImage(image)}
                               title="View details"
@@ -583,7 +583,7 @@ export function HarborImages() {
                               <Eye className="h-4 w-4" />
                             </TkButton>
                             <TkButton
-                              variant="ghost"
+                              intent="ghost"
                               size="sm"
                               onClick={() => toggleMirroredBaseStatus(image)}
                               title={image.is_base ? 'Remove as base image' : 'Mark as base image'}
@@ -593,7 +593,7 @@ export function HarborImages() {
                             </TkButton>
                             {image.is_base && (
                               <TkButton
-                                variant="ghost"
+                                intent="ghost"
                                 size="sm"
                                 onClick={() => editMirroredTemplate(image)}
                                 title="Edit template for this base image"
@@ -603,7 +603,7 @@ export function HarborImages() {
                             )}
                             {image.category === 'user' && image.tag === 'latest' && (
                               <TkButton
-                                variant="ghost"
+                                intent="ghost"
                                 size="sm"
                                 onClick={() => remirrorImage(image)}
                                 title="Re-mirror latest image for updates"
@@ -613,7 +613,7 @@ export function HarborImages() {
                             )}
                             {!image.protected && image.category === 'user' && (
                               <TkButton
-                                variant="ghost"
+                                intent="ghost"
                                 size="sm"
                                 onClick={() => deleteImage(image)}
                                 title="Delete image"
@@ -632,17 +632,17 @@ export function HarborImages() {
                 {store.pagination && store.pagination.total > store.pagination.limit && (
                   <div className="flex justify-center mt-4 gap-2" /* @allowed-inline */>
                     <TkButton
-                      variant="outline"
+                      intent="secondary"
                       disabled={currentPage === 1}
                       onClick={() => store.previousPage()}
                     >
                       «
                     </TkButton>
-                    <TkButton variant="outline" disabled>
+                    <TkButton intent="secondary" disabled>
                       Page {currentPage} of {totalPages}
                     </TkButton>
                     <TkButton
-                      variant="outline"
+                      intent="secondary"
                       disabled={currentPage === totalPages}
                       onClick={() => store.nextPage()}
                     >
@@ -736,8 +736,8 @@ export function HarborImages() {
                     <div className="flex items-center gap-2 mb-1" /* @allowed-inline */>
                       <h3 className="font-semibold text-lg">{image.name}</h3>
                       {image.is_base && <TkBadge>Base</TkBadge>}
-                      <TkBadge variant="outline">{image.scope}</TkBadge>
-                      <TkBadge variant={getStatusVariant(image.status)} >
+                      <TkBadge appearance="outlined">{image.scope}</TkBadge>
+                      <TkBadge status={getStatusStatus(image.status)} >
                         {image.status}
                       </TkBadge>
                     </div>
@@ -751,7 +751,7 @@ export function HarborImages() {
                     </div>
                     <div className="flex gap-1 mt-2" /* @allowed-inline */>
                       <TkButton
-                        variant="ghost"
+                        intent="ghost"
                         size="sm"
                         onClick={() => editDockerfile(image)}
                         title="Edit Dockerfile"
@@ -760,7 +760,7 @@ export function HarborImages() {
                       </TkButton>
                       {image.status !== 'building' && (
                         <TkButton
-                          variant="ghost"
+                          intent="ghost"
                           size="sm"
                           onClick={() => buildImage(image)}
                           title="Build image"
@@ -770,7 +770,7 @@ export function HarborImages() {
                       )}
                       {image.status === 'success' && (
                         <TkButton
-                          variant="ghost"
+                          intent="ghost"
                           size="sm"
                           onClick={() => toggleBaseStatus(image)}
                           title={image.is_base ? 'Remove as base image' : 'Mark as base image'}
@@ -780,7 +780,7 @@ export function HarborImages() {
                       )}
                       {image.is_base && image.status === 'success' && (
                         <TkButton
-                          variant="ghost"
+                          intent="ghost"
                           size="sm"
                           onClick={() => editCustomTemplate(image)}
                           title="Edit template for this base image"
@@ -797,8 +797,8 @@ export function HarborImages() {
                             <TkCardContent>
                               <div className="flex items-center gap-2" /* @allowed-inline */>
                                 <span className="font-medium">{child.name}</span>
-                                <TkBadge variant="outline">{child.scope}</TkBadge>
-                                <TkBadge variant={getStatusVariant(child.status)} >
+                                <TkBadge appearance="outlined">{child.scope}</TkBadge>
+                                <TkBadge status={getStatusStatus(child.status)} >
                                   {child.status}
                                 </TkBadge>
                               </div>
@@ -807,7 +807,7 @@ export function HarborImages() {
                               </div>
                               <div className="flex gap-1 mt-2" /* @allowed-inline */>
                                 <TkButton
-                                  variant="ghost"
+                                  intent="ghost"
                                   size="sm"
                                   onClick={() => editDockerfile(child)}
                                 >
@@ -815,7 +815,7 @@ export function HarborImages() {
                                 </TkButton>
                                 {child.status !== 'building' && (
                                   <TkButton
-                                    variant="ghost"
+                                    intent="ghost"
                                     size="sm"
                                     onClick={() => buildImage(child)}
                                   >
@@ -861,19 +861,19 @@ export function HarborImages() {
                           )}
                         </TkTableCell>
                         <TkTableCell>
-                          <TkBadge variant="outline">{image.scope || 'general'}</TkBadge>
+                          <TkBadge appearance="outlined">{image.scope || 'general'}</TkBadge>
                         </TkTableCell>
                         <TkTableCell>
                           {image.is_base ? (
                             <TkBadge>Base</TkBadge>
                           ) : image.parent_image_id ? (
-                            <TkBadge variant="secondary">Extended</TkBadge>
+                            <TkBadge appearance="muted">Extended</TkBadge>
                           ) : (
-                            <TkBadge variant="outline">Standard</TkBadge>
+                            <TkBadge appearance="outlined">Standard</TkBadge>
                           )}
                         </TkTableCell>
                         <TkTableCell>
-                          <TkBadge variant={getStatusVariant(image.status)}>
+                          <TkBadge status={getStatusStatus(image.status)}>
                             {image.status}
                           </TkBadge>
                         </TkTableCell>
@@ -892,7 +892,7 @@ export function HarborImages() {
                         <TkTableCell>
                           <div className="flex gap-1" /* @allowed-inline */>
                             <TkButton
-                              variant="ghost"
+                              intent="ghost"
                               size="sm"
                               onClick={() => editDockerfile(image)}
                               title="Edit Dockerfile"
@@ -901,7 +901,7 @@ export function HarborImages() {
                             </TkButton>
                             {image.status !== 'building' && (
                               <TkButton
-                                variant="ghost"
+                                intent="ghost"
                                 size="sm"
                                 onClick={() => buildImage(image)}
                                 title="Build image"
@@ -911,7 +911,7 @@ export function HarborImages() {
                             )}
                             {image.output && (
                               <TkButton
-                                variant="ghost"
+                                intent="ghost"
                                 size="sm"
                                 onClick={() => viewLogs(image)}
                                 title="View logs"
@@ -920,7 +920,7 @@ export function HarborImages() {
                               </TkButton>
                             )}
                             <TkButton
-                              variant="ghost"
+                              intent="ghost"
                               size="sm"
                               onClick={() => deleteCustomImage(image)}
                               title="Delete image"

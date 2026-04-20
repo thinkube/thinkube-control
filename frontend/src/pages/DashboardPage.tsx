@@ -250,7 +250,7 @@ export default function DashboardPage() {
         </div>
         <div>
           <TkButton
-            variant="ghost"
+            intent="ghost"
             size="sm"
             onClick={handleSync}
             disabled={syncing}

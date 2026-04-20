@@ -181,7 +181,7 @@ export function AddImageModal({
           <TkDialogFooter className="mt-6">
             <TkButton
               type="button"
-              variant="outline"
+              intent="secondary"
               onClick={handleClose}
               disabled={loading}
             >

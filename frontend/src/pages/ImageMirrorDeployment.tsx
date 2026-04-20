@@ -48,19 +48,19 @@ export function ImageMirrorDeployment() {
 
   const playbookExecutorRef = useRef<{ startExecution: (wsPath: string) => void } | null>(null)
 
-  // Badge variant mapping
-  const getStatusBadgeVariant = (status: string) => {
+  // Badge status mapping
+  const getStatusBadgeStatus = (status: string): 'healthy' | 'unhealthy' | 'warning' | 'active' | 'pending' | undefined => {
     switch (status) {
       case 'success':
-        return 'success'
+        return 'healthy'
       case 'failed':
-        return 'destructive'
+        return 'unhealthy'
       case 'running':
         return 'warning'
       case 'pending':
-        return 'default'
+        return 'active'
       default:
-        return 'outline'
+        return undefined
     }
   }
 
@@ -176,7 +176,7 @@ export function ImageMirrorDeployment() {
               <TkCardContent className="py-3">
                 <span className="text-sm font-medium">Status:</span>
                 {' '}
-                <TkBadge variant={getStatusBadgeVariant(deployment.status)}>
+                <TkBadge status={getStatusBadgeStatus(deployment.status)} appearance={getStatusBadgeStatus(deployment.status) ? undefined : 'outlined'}>
                   {deployment.status}
                 </TkBadge>
                 {deployment.variables && (
