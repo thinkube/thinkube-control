@@ -53,8 +53,3 @@
   --radius-2xl: 0rem;
 }
 
-@layer base {
-  * {
-    border-color: var(--color-border);
-  }
-}
