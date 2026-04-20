@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { Loader2 } from 'lucide-react'
 import { TkErrorAlert } from 'thinkube-style/components/feedback'
+import { TkPageWrapper } from 'thinkube-style/components/utilities'
 import { ComponentCard } from '../components/ComponentCard'
 import { PlaybookExecutor, PlaybookExecutorHandle } from '../components/PlaybookExecutor'
 import { useComponentsStore } from '../stores/useComponentsStore'
@@ -124,13 +125,7 @@ export default function OptionalComponentsPage() {
   }, [])
 
   return (
-    <div className="min-h-screen bg-background p-8"> {/* @allowed-inline */}
-      <div className="prose prose-lg dark:prose-invert mb-8"> {/* @allowed-inline */}
-        <h1>Optional Components</h1>
-        <p className="lead">
-          Extend your Thinkube installation with optional AI, data, monitoring, and infrastructure components.
-        </p>
-      </div>
+    <TkPageWrapper description="Extend your Thinkube installation with optional AI, data, monitoring, and infrastructure components.">
 
       {/* Loading State */}
       {loading && (
@@ -224,6 +219,6 @@ export default function OptionalComponentsPage() {
         successMessage={installingSuccessMessage}
         onComplete={handleInstallationComplete}
       />
-    </div>
+    </TkPageWrapper>
   )
 }

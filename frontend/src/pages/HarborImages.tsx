@@ -12,6 +12,7 @@ import { TkLoader } from 'thinkube-style/components/feedback'
 import { TkErrorAlert } from 'thinkube-style/components/feedback'
 import { TkDialogRoot, TkDialogContent, TkDialogHeader, TkDialogTitle, TkDialogFooter } from 'thinkube-style/components/modals-overlays'
 import { TkCodeBlock } from 'thinkube-style/components/feedback'
+import { TkPageWrapper } from 'thinkube-style/components/utilities'
 import {
   RefreshCw,
   Plus,
@@ -375,42 +376,34 @@ export function HarborImages() {
   }
 
   return (
-    <div className="min-h-screen bg-background p-8" /* @allowed-inline */>
-      <TkCard className="mb-6">
-        <TkCardContent>
-          <h1 className="text-2xl font-bold">Thinkube Registry Images</h1>
-          <p className="text-muted-foreground mt-1">
-            Manage container images in Thinkube registry
-          </p>
-          <div className="flex gap-2 mt-4" /* @allowed-inline */>
-            {activeTab === 'mirrored' && (
-              <>
-                <TkButton
-                  intent="secondary"
-                  onClick={syncImages}
-                  disabled={store.loading}
-                >
-                  <RefreshCw className="h-5 w-5 mr-1" />
-                  Sync with Registry
-                </TkButton>
-                <TkButton onClick={() => setShowAddImageModal(true)}>
-                  <Plus className="h-5 w-5 mr-1" />
-                  Add Image
-                </TkButton>
-              </>
-            )}
-            {activeTab === 'custom' && (
-              <TkButton onClick={() => setShowCreateCustomImageModal(true)}>
-                <Plus className="h-5 w-5 mr-1" />
-                Create Custom Image
-              </TkButton>
-            )}
-          </div>
-        </TkCardContent>
-      </TkCard>
+    <TkPageWrapper description="Manage container images in Thinkube registry">
+      <div className="flex gap-2">
+        {activeTab === 'mirrored' && (
+          <>
+            <TkButton
+              intent="secondary"
+              onClick={syncImages}
+              disabled={store.loading}
+            >
+              <RefreshCw className="h-5 w-5 mr-1" />
+              Sync with Registry
+            </TkButton>
+            <TkButton onClick={() => setShowAddImageModal(true)}>
+              <Plus className="h-5 w-5 mr-1" />
+              Add Image
+            </TkButton>
+          </>
+        )}
+        {activeTab === 'custom' && (
+          <TkButton onClick={() => setShowCreateCustomImageModal(true)}>
+            <Plus className="h-5 w-5 mr-1" />
+            Create Custom Image
+          </TkButton>
+        )}
+      </div>
 
       <TkTabsRoot value={activeTab} onValueChange={(value) => setActiveTab(value as 'mirrored' | 'custom')}>
-        <TkTabsList className="mb-6">
+        <TkTabsList>
           <TkTabsTrigger value="mirrored">Mirrored Images</TkTabsTrigger>
           <TkTabsTrigger value="custom">Custom Images</TkTabsTrigger>
         </TkTabsList>
@@ -995,6 +988,6 @@ export function HarborImages() {
           </TkDialogFooter>
         </TkDialogContent>
       </TkDialogRoot>
-    </div>
+    </TkPageWrapper>
   )
 }

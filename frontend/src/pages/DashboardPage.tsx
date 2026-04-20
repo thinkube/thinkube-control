@@ -5,6 +5,7 @@ import { AlertCircle, Loader2, RefreshCw, Star } from 'lucide-react';
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent } from 'thinkube-style/components/cards-data';
 import { TkButton } from 'thinkube-style/components/buttons-badges';
 import { TkSwitch } from 'thinkube-style/components/forms-inputs';
+import { TkPageWrapper } from 'thinkube-style/components/utilities';
 import { TkControlledConfirmDialog } from 'thinkube-style/components/modals-overlays';
 import { ServiceCard } from '@/components/ServiceCard';
 import type { Service } from '@/stores/useServicesStore';
@@ -206,19 +207,21 @@ export default function DashboardPage() {
   // Loading state
   if (loading) {
     return (
-      <div className="min-h-screen bg-background p-8 flex items-center justify-center"> {/* @allowed-inline */}
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="h-12 w-12 animate-spin text-primary" />
-          <p className="text-muted-foreground">Loading services...</p>
+      <TkPageWrapper>
+        <div className="flex items-center justify-center py-16">
+          <div className="flex flex-col items-center gap-4">
+            <Loader2 className="h-12 w-12 animate-spin text-primary" />
+            <p className="text-muted-foreground">Loading services...</p>
+          </div>
         </div>
-      </div>
+      </TkPageWrapper>
     );
   }
 
   // Error state
   if (error) {
     return (
-      <div className="min-h-screen bg-background p-8"> {/* @allowed-inline */}
+      <TkPageWrapper>
         <TkCard className="border-destructive">
           <TkCardHeader>
             <div className="flex items-center gap-3">
@@ -230,13 +233,13 @@ export default function DashboardPage() {
             <p className="text-sm">{error}</p>
           </TkCardContent>
         </TkCard>
-      </div>
+      </TkPageWrapper>
     );
   }
 
   // Main dashboard content
   return (
-    <div className="min-h-screen bg-background p-8"> {/* @allowed-inline */}
+    <TkPageWrapper>
       {/* Header row */}
       <div className="flex justify-between items-center mb-4">
         <div className="flex items-center gap-2">
@@ -343,6 +346,6 @@ export default function DashboardPage() {
         confirmText="Restart"
         onConfirm={confirmRestart}
       />
-    </div>
+    </TkPageWrapper>
   );
 }

@@ -144,13 +144,7 @@ export default function KnativeServicesPage() {
   const idleCount = services.filter(s => s.status === 'Ready' && s.current_replicas === 0).length
 
   return (
-    <TkPageWrapper>
-      <div className="prose prose-lg mb-8">
-        <h1>Knative Services</h1>
-        <p className="lead">
-          Serverless workloads with automatic scale-to-zero
-        </p>
-      </div>
+    <TkPageWrapper description="Serverless workloads with automatic scale-to-zero">
 
       {/* Summary cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">

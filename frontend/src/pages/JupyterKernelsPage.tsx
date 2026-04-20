@@ -148,7 +148,6 @@ export default function JupyterKernelsPage() {
 
   return (
     <TkPageWrapper
-      title="Jupyter Kernels"
       description="Create and manage Python virtual environments that appear as kernels in JupyterLab"
     >
       {loading && (

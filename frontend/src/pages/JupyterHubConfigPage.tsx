@@ -170,7 +170,6 @@ export default function JupyterHubConfigPage() {
 
   return (
     <TkPageWrapper
-      title="JupyterHub Config"
       description="Configure default resource allocations for JupyterHub instances"
     >
       {loading && (

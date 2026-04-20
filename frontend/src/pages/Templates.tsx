@@ -406,13 +406,7 @@ export default function Templates() {
   }
 
   return (
-    <TkPageWrapper>
-      <div className="prose prose-lg mb-8">
-        <h1>Templates</h1>
-        <p className="lead">
-          Deploy pre-configured application templates to your Thinkube cluster
-        </p>
-      </div>
+    <TkPageWrapper description="Deploy pre-configured application templates to your Thinkube cluster">
 
       {/* Template Deployment Form */}
       {showDeployForm && (

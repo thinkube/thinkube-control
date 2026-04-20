@@ -175,14 +175,7 @@ export default function ModelsPage() {
   const activeDownloads = downloads.filter(d => d.is_running);
 
   return (
-    <TkPageWrapper>
-      {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold">AI Models</h1>
-        <p className="text-muted-foreground mt-2">
-          Mirror pre-optimized models from HuggingFace to MLflow model registry
-        </p>
-      </div>
+    <TkPageWrapper description="Mirror pre-optimized models from HuggingFace to MLflow model registry">
 
       {/* Error Alert */}
       {error && <TkErrorAlert title="Error" className="mb-6">{error}</TkErrorAlert>}

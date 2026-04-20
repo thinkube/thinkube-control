@@ -102,7 +102,7 @@ export default function ApiTokensPage() {
   }
 
   return (
-    <TkPageWrapper title="API Tokens">
+    <TkPageWrapper>
       <div className="space-y-6">
         {/* Create Token Form */}
         <TkCard>

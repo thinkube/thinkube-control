@@ -11,7 +11,7 @@ import {
   TkDialogTitle,
   TkDialogFooter,
 } from 'thinkube-style/components/modals-overlays';
-import { TkSeparator } from 'thinkube-style/components/utilities';
+import { TkSeparator, TkPageWrapper } from 'thinkube-style/components/utilities';
 import {
   TkTable,
   TkTableBody,
@@ -152,7 +152,7 @@ export default function NodesPage() {
   const workerNodes = nodes.filter(n => n.role === 'worker');
 
   return (
-    <div className="space-y-6">
+    <TkPageWrapper>
       {/* Cluster Overview */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <TkStatCard
@@ -475,6 +475,6 @@ export default function NodesPage() {
           </TkDialogFooter>
         </TkDialogContent>
       </TkDialogRoot>
-    </div>
+    </TkPageWrapper>
   );
 }

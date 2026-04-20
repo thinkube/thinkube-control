@@ -145,7 +145,7 @@ export function ImageMirrorDeployment() {
 
   if (loading) {
     return (
-      <TkPageWrapper title="Image Mirror Deployment">
+      <TkPageWrapper>
         <TkCard>
           <TkCardContent className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -157,14 +157,14 @@ export function ImageMirrorDeployment() {
 
   if (error) {
     return (
-      <TkPageWrapper title="Image Mirror Deployment">
+      <TkPageWrapper>
         <TkErrorAlert>{error}</TkErrorAlert>
       </TkPageWrapper>
     )
   }
 
   return (
-    <TkPageWrapper title="Image Mirror Deployment">
+    <TkPageWrapper>
       <TkCard>
         <TkCardHeader>
           <TkCardTitle>{deploymentName}</TkCardTitle>

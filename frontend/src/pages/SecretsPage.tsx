@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { TkButton } from 'thinkube-style/components/buttons-badges'
+import { TkPageWrapper } from 'thinkube-style/components/utilities'
 import { TkCard, TkCardContent } from 'thinkube-style/components/cards-data'
 import {
   TkDialogRoot,
@@ -162,11 +163,7 @@ export default function SecretsPage() {
   }, [])
 
   return (
-    <div className="min-h-screen bg-background p-8"> {/* @allowed-inline */}
-      <div className="prose prose-lg mb-6 dark:prose-invert"> {/* @allowed-inline */}
-        <h1>API Secrets Management</h1>
-        <p>Manage API keys and secrets that can be used by deployed applications. Secrets are encrypted and stored securely.</p>
-      </div>
+    <TkPageWrapper description="Manage API keys and secrets that can be used by deployed applications. Secrets are encrypted and stored securely.">
 
       {/* Action Buttons */}
       <div className="flex justify-end gap-2 mb-4"> {/* @allowed-inline */}
@@ -364,6 +361,6 @@ export default function SecretsPage() {
           </TkDialogFooter>
         </TkDialogContent>
       </TkDialogRoot>
-    </div>
+    </TkPageWrapper>
   )
 }
