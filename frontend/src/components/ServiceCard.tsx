@@ -326,7 +326,7 @@ export function ServiceCard({
             <TkTooltip content="View details">
               <TkButton
                 size="sm"
-                intent="secondary"
+                intent="ghost"
                 className="flex-1"
                 onClick={() => onShowDetails(service)}
               >
@@ -339,7 +339,7 @@ export function ServiceCard({
             <TkTooltip content="Restart service">
               <TkButton
                 size="sm"
-                intent="secondary"
+                intent="ghost"
                 className="flex-1"
                 onClick={handleRestart}
                 disabled={restarting}
@@ -353,7 +353,7 @@ export function ServiceCard({
             <TkTooltip content="Check health">
               <TkButton
                 size="sm"
-                intent="secondary"
+                intent="ghost"
                 className="flex-1"
                 onClick={handleHealthCheck}
                 disabled={checkingHealth}
