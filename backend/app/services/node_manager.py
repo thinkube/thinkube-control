@@ -429,33 +429,83 @@ fi
             return False, f"Uncordon failed: {str(e)}"
 
     async def drain_node(self, node_name: str) -> Tuple[bool, str]:
-        """Drain a kubernetes node (cordon + evict pods)."""
+        """Drain a kubernetes node (cordon + evict pods) using the k8s API."""
         try:
             v1 = client.CoreV1Api()
-            body = {"spec": {"unschedulable": True}}
-            v1.patch_node(node_name, body)
+            policy_api = client.PolicyV1Api()
 
-            cmd = [
-                "kubectl",
-                "drain",
-                node_name,
-                "--ignore-daemonsets",
-                "--delete-emptydir-data",
-                "--timeout=300s",
-                "--force",
-            ]
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
+            # Cordon
+            v1.patch_node(node_name, {"spec": {"unschedulable": True}})
+
+            # List non-daemonset pods on this node
+            pods = v1.list_pod_for_all_namespaces(
+                field_selector=f"spec.nodeName={node_name}"
             )
-            stdout, _ = await process.communicate()
-            output = stdout.decode("utf-8", errors="replace")
+            evict_pods = []
+            for pod in pods.items:
+                if pod.metadata.owner_references:
+                    is_ds = any(
+                        ref.kind == "DaemonSet"
+                        for ref in pod.metadata.owner_references
+                    )
+                    if is_ds:
+                        continue
+                evict_pods.append(pod)
 
-            if process.returncode == 0:
-                return True, output
-            else:
-                return False, f"Drain failed: {output}"
+            # Evict pods
+            evicted = []
+            failed = []
+            for pod in evict_pods:
+                try:
+                    eviction = client.V1Eviction(
+                        metadata=client.V1ObjectMeta(
+                            name=pod.metadata.name,
+                            namespace=pod.metadata.namespace,
+                        ),
+                        delete_options=client.V1DeleteOptions(
+                            grace_period_seconds=30,
+                        ),
+                    )
+                    policy_api.create_namespaced_pod_eviction(
+                        name=pod.metadata.name,
+                        namespace=pod.metadata.namespace,
+                        body=eviction,
+                    )
+                    evicted.append(f"{pod.metadata.namespace}/{pod.metadata.name}")
+                except client.exceptions.ApiException as e:
+                    if e.status == 404:
+                        evicted.append(f"{pod.metadata.namespace}/{pod.metadata.name}")
+                    elif e.status == 429:
+                        failed.append(
+                            f"{pod.metadata.namespace}/{pod.metadata.name}: "
+                            "blocked by PodDisruptionBudget"
+                        )
+                    else:
+                        failed.append(
+                            f"{pod.metadata.namespace}/{pod.metadata.name}: {e.reason}"
+                        )
+
+            # Wait for evicted pods to terminate (up to 5 min)
+            loop = asyncio.get_event_loop()
+            for _ in range(60):
+                remaining = v1.list_pod_for_all_namespaces(
+                    field_selector=f"spec.nodeName={node_name}"
+                )
+                non_ds = [
+                    p for p in remaining.items
+                    if not (
+                        p.metadata.owner_references
+                        and any(r.kind == "DaemonSet" for r in p.metadata.owner_references)
+                    )
+                ]
+                if not non_ds:
+                    break
+                await asyncio.sleep(5)
+
+            msg = f"Drained {node_name}: evicted {len(evicted)} pods"
+            if failed:
+                msg += f", {len(failed)} failed: {'; '.join(failed)}"
+            return len(failed) == 0, msg
 
         except Exception as e:
             return False, f"Drain error: {str(e)}"
