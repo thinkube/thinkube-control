@@ -540,6 +540,34 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
 
             step += 1
 
+            # Step: Expand LVM if needed
+            lvm_expandable = node_info.get("lvm_expandable", False)
+            lvm_lv_path = node_info.get("lvm_lv_path", "")
+            if lvm_expandable and lvm_lv_path:
+                await websocket.send_json({
+                    "type": "task",
+                    "task_name": f"[{hostname or ip}] Expand LVM volume",
+                    "task_number": step,
+                })
+                try:
+                    result = await node_manager.expand_lvm(ip, lvm_lv_path)
+                    if result["success"]:
+                        await websocket.send_json({
+                            "type": "ok",
+                            "message": f"[{hostname or ip}] LVM expanded to {result.get('new_size', 'full disk')}",
+                        })
+                    else:
+                        await websocket.send_json({
+                            "type": "warning",
+                            "message": f"[{hostname or ip}] LVM expansion failed: {result.get('error')} — continuing anyway",
+                        })
+                except Exception as e:
+                    await websocket.send_json({
+                        "type": "warning",
+                        "message": f"[{hostname or ip}] LVM expansion failed: {e} — continuing anyway",
+                    })
+                step += 1
+
             # Step: ZeroTier setup (if overlay mode)
             zerotier_ip = node_info.get("zerotier_ip")
             if network_mode == "overlay" and not zerotier_ip:

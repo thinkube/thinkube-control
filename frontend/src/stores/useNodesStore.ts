@@ -31,6 +31,9 @@ export interface DiscoveredNode {
   gpu_model: string;
   gpu_count: number;
   nvidia_driver_version: string;
+  lvm_expandable: boolean;
+  lvm_free_gb: number;
+  lvm_lv_path: string;
   error?: string;
 }
 

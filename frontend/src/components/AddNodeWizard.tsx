@@ -94,6 +94,8 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
       gpu_detected: n.hardware?.gpu_detected || false,
       gpu_count: n.hardware?.gpu_count || 0,
       gpu_model: n.hardware?.gpu_model || '',
+      lvm_expandable: n.hardware?.lvm_expandable || false,
+      lvm_lv_path: n.hardware?.lvm_lv_path || '',
     }));
 
     const params = new URLSearchParams({
@@ -143,9 +145,9 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
       );
     }
     return (
-      <div className="flex items-center gap-1 text-amber-500" title={node.validation.warnings.join(', ')}>
-        <AlertTriangle className="w-3.5 h-3.5" />
-        <span className="text-xs">Warnings</span>
+      <div className="flex items-center gap-1 text-green-500">
+        <CheckCircle2 className="w-3.5 h-3.5" />
+        <span className="text-xs">OK</span>
       </div>
     );
   };
@@ -339,6 +341,26 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
                         <TkAlertDescription className="text-sm">
                           One or more nodes introduce a new architecture to the cluster.
                           After joining, container images will be rebuilt for multi-arch support.
+                        </TkAlertDescription>
+                      </div>
+                    </TkAlert>
+                  )}
+
+                  {/* Validation warnings */}
+                  {selectedNodes.some((n) => n.validation?.warnings?.length) && (
+                    <TkAlert className="bg-amber-500/10 border-amber-500/50">
+                      <AlertTriangle className="h-5 w-5 text-amber-500" />
+                      <div>
+                        <TkAlertTitle className="font-medium">Warnings</TkAlertTitle>
+                        <TkAlertDescription className="text-sm">
+                          {selectedNodes
+                            .filter((n) => n.validation?.warnings?.length)
+                            .map((n) => (
+                              <div key={n.ip}>
+                                <strong>{n.hardware?.hostname || n.ip}:</strong>{' '}
+                                {n.validation?.warnings.join(', ')}
+                              </div>
+                            ))}
                         </TkAlertDescription>
                       </div>
                     </TkAlert>

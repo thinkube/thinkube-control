@@ -169,6 +169,44 @@ echo ','
 
 echo -n '"nvidia_driver_version": "'
 nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | tr -d '\n' || echo -n ""
+echo '",'
+
+echo -n '"lvm_expandable": '
+root_dev=$(df / 2>/dev/null | tail -1 | awk '{print $1}')
+if echo "$root_dev" | grep -q '/dev/mapper/'; then
+  vg_name=$(lvs --noheadings -o vg_name "$root_dev" 2>/dev/null | tr -d ' ')
+  if [ -n "$vg_name" ]; then
+    vg_free=$(vgs --noheadings --nosuffix --units g -o vg_free "$vg_name" 2>/dev/null | tr -d ' ' | cut -d. -f1)
+    if [ -n "$vg_free" ] && [ "$vg_free" -gt 10 ] 2>/dev/null; then
+      echo -n 'true'
+    else
+      echo -n 'false'
+    fi
+  else
+    echo -n 'false'
+  fi
+else
+  echo -n 'false'
+fi
+echo ','
+
+echo -n '"lvm_free_gb": '
+if echo "$root_dev" | grep -q '/dev/mapper/'; then
+  vg_name=$(lvs --noheadings -o vg_name "$root_dev" 2>/dev/null | tr -d ' ')
+  if [ -n "$vg_name" ]; then
+    vgs --noheadings --nosuffix --units g -o vg_free "$vg_name" 2>/dev/null | tr -d ' ' | cut -d. -f1 | tr -d '\n' || echo -n "0"
+  else
+    echo -n "0"
+  fi
+else
+  echo -n "0"
+fi
+echo ','
+
+echo -n '"lvm_lv_path": "'
+if echo "$root_dev" | grep -q '/dev/mapper/'; then
+  lvs --noheadings -o lv_path "$root_dev" 2>/dev/null | tr -d ' \n' || echo -n ""
+fi
 echo '"'
 
 echo '}'
@@ -702,6 +740,37 @@ fi
             "zerotier_ip": assigned_zt_ip,
         }
 
+    async def expand_lvm(self, ip: str, lv_path: str) -> Dict[str, Any]:
+        """Expand an LVM logical volume to use all free space in its volume group."""
+        ssh_key_path = ansible_env.get_ssh_key_path()
+        username = os.environ.get("SYSTEM_USERNAME", "thinkube")
+        password = os.environ.get("ANSIBLE_BECOME_PASSWORD", "")
+        ssh_opts = "-o StrictHostKeyChecking=no -o ConnectTimeout=10"
+
+        script = f"""
+echo '{password}' | sudo -S bash -c '
+lvextend -l +100%FREE {lv_path} 2>&1 && resize2fs {lv_path} 2>&1
+'
+df -BG / 2>/dev/null | tail -1 | awk '{{print $2}}' | tr -d 'G'
+"""
+        cmd = f"ssh {ssh_opts} -i {ssh_key_path} {username}@{ip} bash -s"
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd.split(),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(input=script.encode()), timeout=60
+            )
+            output = stdout.decode().strip()
+            lines = output.split('\n')
+            new_size = lines[-1].strip() if lines else "unknown"
+            return {"success": True, "new_size": f"{new_size} GB"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     def validate_hardware(self, hw_info: Dict[str, Any]) -> Dict[str, Any]:
         """Validate discovered hardware meets minimum requirements.
 
@@ -723,7 +792,14 @@ fi
             errors.append(f"Requires 64+ GB RAM (found: {memory_gb} GB)")
 
         disk_gb = int(hw_info.get("disk_gb", 0))
-        if disk_gb < 500:
+        lvm_expandable = hw_info.get("lvm_expandable", False)
+        lvm_free_gb = int(hw_info.get("lvm_free_gb", 0))
+        if lvm_expandable and lvm_free_gb > 10:
+            warnings.append(
+                f"LVM volume uses only {disk_gb} GB — {lvm_free_gb} GB available in volume group. "
+                f"Will be expanded automatically during installation."
+            )
+        elif disk_gb < 500:
             warnings.append(f"Recommended 1TB+ disk (found: {disk_gb} GB)")
 
         if hw_info.get("k8s_installed"):
