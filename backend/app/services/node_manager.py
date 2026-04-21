@@ -714,12 +714,12 @@ fi
             errors.append(f"Requires Ubuntu 24.04 LTS (found: {os_release})")
 
         cpu_cores = int(hw_info.get("cpu_cores", 0))
-        if cpu_cores < 2:
-            errors.append(f"Requires 2+ CPU cores (found: {cpu_cores})")
+        if cpu_cores < 16:
+            errors.append(f"Requires 16+ CPU cores (found: {cpu_cores})")
 
         memory_gb = int(hw_info.get("memory_gb", 0))
-        if memory_gb < 8:
-            errors.append(f"Requires 8+ GB RAM (found: {memory_gb} GB)")
+        if memory_gb < 60:
+            errors.append(f"Requires 64+ GB RAM (found: {memory_gb} GB)")
 
         disk_gb = int(hw_info.get("disk_gb", 0))
         if disk_gb < 500:
