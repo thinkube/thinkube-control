@@ -26,6 +26,25 @@ HARBOR_IMAGES_DIR = Path(
 )
 
 
+def _find_inventory_group_hosts(inventory: dict, group_name: str) -> List[str]:
+    """Find hosts for a named group anywhere in the inventory tree."""
+    results = []
+
+    def _walk(node: dict):
+        if not isinstance(node, dict):
+            return
+        for key, value in node.items():
+            if key == group_name and isinstance(value, dict):
+                hosts = value.get("hosts")
+                if isinstance(hosts, dict):
+                    results.extend(hosts.keys())
+            if isinstance(value, dict):
+                _walk(value)
+
+    _walk(inventory)
+    return results
+
+
 class DiscoverRequest(BaseModel):
     ip: str
     username: Optional[str] = None
@@ -758,10 +777,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
 
         # Include control plane + localhost so post-join plays run too
         inventory = node_manager.read_inventory()
-        cp_hosts = list(
-            inventory.get("all", {}).get("children", {})
-            .get("k8s_control_plane", {}).get("hosts", {}).keys()
-        )
+        cp_hosts = _find_inventory_group_hosts(inventory, "k8s_control_plane")
         limit_hosts = ",".join(added_hostnames + cp_hosts + ["localhost"])
         join_ok = await _stream_playbook(
             websocket=websocket,
@@ -958,10 +974,7 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
 
         # Include control plane + localhost so post-join plays run too
         inventory = node_manager.read_inventory()
-        cp_hosts = list(
-            inventory.get("all", {}).get("children", {})
-            .get("k8s_control_plane", {}).get("hosts", {}).keys()
-        )
+        cp_hosts = _find_inventory_group_hosts(inventory, "k8s_control_plane")
         limit_hosts = ",".join([hostname] + cp_hosts + ["localhost"])
         join_ok = await _stream_playbook(
             websocket=websocket,
