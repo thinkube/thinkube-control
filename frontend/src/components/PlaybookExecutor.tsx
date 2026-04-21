@@ -128,6 +128,21 @@ export const PlaybookExecutor = forwardRef<PlaybookExecutorHandle, PlaybookExecu
         setCurrentTask('Starting execution...')
         break
 
+      case 'playbook_start':
+        setLogOutput([])
+        seenTasksRef.current = new Set()
+        setTaskSummary({
+          totalTasks: 0,
+          completedTasks: 0,
+          failedTasks: 0,
+          ok: 0,
+          changed: 0,
+          failed: 0,
+        })
+        setCurrentTask(data.task_name || 'Starting playbook...')
+        if (data.task_number) setTaskCount(data.task_number)
+        break
+
       case 'task':
         setCurrentTask(data.task_name || data.message)
         setTaskCount(data.task_number || (prev => prev + 1))

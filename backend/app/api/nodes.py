@@ -94,6 +94,9 @@ async def _stream_playbook(
 ) -> bool:
     """Stream an Ansible playbook execution over WebSocket. Returns True on success."""
     await websocket.send_json(
+        {"type": "playbook_start", "task_name": step_name, "task_number": step_number}
+    )
+    await websocket.send_json(
         {"type": "task", "task_name": step_name, "task_number": step_number}
     )
 
@@ -121,6 +124,7 @@ async def _stream_playbook(
             "-i", str(inventory_path),
             str(playbook_path),
             "-e", f"@{temp_vars_path}",
+            "-v",
         ]
         if limit:
             cmd.extend(["--limit", limit])
@@ -138,6 +142,7 @@ async def _stream_playbook(
         )
 
         current_task = "Initializing"
+        in_failed_block = False
         while True:
             line = await process.stdout.readline()
             if not line:
@@ -148,6 +153,7 @@ async def _stream_playbook(
                 continue
 
             if "TASK [" in line_text:
+                in_failed_block = False
                 task_start = line_text.find("TASK [") + 6
                 task_end = line_text.find("]", task_start)
                 if task_end > task_start:
@@ -155,23 +161,37 @@ async def _stream_playbook(
                     await websocket.send_json(
                         {"type": "task", "task_name": current_task}
                     )
-            elif line_text.startswith("ok:"):
+            elif line_text.startswith("ok:") or line_text.startswith("changed:"):
+                msg_type = "ok" if line_text.startswith("ok:") else "changed"
+                # Strip verbose JSON from ok/changed lines (keep just the status)
+                brief = line_text.split(" => {")[0] if " => {" in line_text else line_text
                 await websocket.send_json(
-                    {"type": "ok", "message": line_text, "task": current_task}
-                )
-            elif line_text.startswith("changed:"):
-                await websocket.send_json(
-                    {"type": "changed", "message": line_text, "task": current_task}
+                    {"type": msg_type, "message": brief, "task": current_task}
                 )
             elif line_text.startswith("fatal:") or line_text.startswith("failed:"):
+                in_failed_block = True
                 await websocket.send_json(
                     {"type": "failed", "message": line_text, "task": current_task}
                 )
-            elif "PLAY RECAP" in line_text:
+            elif line_text.startswith("skipping:"):
+                brief = line_text.split(" => {")[0] if " => {" in line_text else line_text
+                await websocket.send_json(
+                    {"type": "output", "message": brief}
+                )
+            elif "PLAY RECAP" in line_text or "PLAY [" in line_text:
+                in_failed_block = False
                 await websocket.send_json(
                     {"type": "output", "message": line_text}
                 )
-            else:
+            elif in_failed_block:
+                # Include verbose details after a failure
+                await websocket.send_json(
+                    {"type": "output", "message": line_text}
+                )
+            elif line_text.startswith("[WARNING]") or line_text.startswith("[DEPRECATION"):
+                pass  # Suppress warnings and deprecation notices
+            elif not line_text.startswith(" ") and not line_text.startswith("{"):
+                # Non-indented, non-JSON lines (play names, recap, etc.)
                 await websocket.send_json(
                     {"type": "output", "message": line_text}
                 )
