@@ -189,9 +189,8 @@ async def _stream_playbook(
                     {"type": "output", "message": line_text}
                 )
             elif line_text.startswith("[WARNING]") or line_text.startswith("[DEPRECATION"):
-                pass  # Suppress warnings and deprecation notices
-            elif not line_text.startswith(" ") and not line_text.startswith("{"):
-                # Non-indented, non-JSON lines (play names, recap, etc.)
+                pass
+            else:
                 await websocket.send_json(
                     {"type": "output", "message": line_text}
                 )
