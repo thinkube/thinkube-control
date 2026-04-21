@@ -171,43 +171,7 @@ echo -n '"nvidia_driver_version": "'
 nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | tr -d '\n' || echo -n ""
 echo '",'
 
-echo -n '"lvm_expandable": '
-root_dev=$(df / 2>/dev/null | tail -1 | awk '{print $1}')
-if echo "$root_dev" | grep -q '/dev/mapper/'; then
-  vg_name=$(lvs --noheadings -o vg_name "$root_dev" 2>/dev/null | tr -d ' ')
-  if [ -n "$vg_name" ]; then
-    vg_free=$(vgs --noheadings --nosuffix --units g -o vg_free "$vg_name" 2>/dev/null | tr -d ' ' | cut -d. -f1)
-    if [ -n "$vg_free" ] && [ "$vg_free" -gt 10 ] 2>/dev/null; then
-      echo -n 'true'
-    else
-      echo -n 'false'
-    fi
-  else
-    echo -n 'false'
-  fi
-else
-  echo -n 'false'
-fi
-echo ','
-
-echo -n '"lvm_free_gb": '
-if echo "$root_dev" | grep -q '/dev/mapper/'; then
-  vg_name=$(lvs --noheadings -o vg_name "$root_dev" 2>/dev/null | tr -d ' ')
-  if [ -n "$vg_name" ]; then
-    vgs --noheadings --nosuffix --units g -o vg_free "$vg_name" 2>/dev/null | tr -d ' ' | cut -d. -f1 | tr -d '\n' || echo -n "0"
-  else
-    echo -n "0"
-  fi
-else
-  echo -n "0"
-fi
-echo ','
-
-echo -n '"lvm_lv_path": "'
-if echo "$root_dev" | grep -q '/dev/mapper/'; then
-  lvs --noheadings -o lv_path "$root_dev" 2>/dev/null | tr -d ' \n' || echo -n ""
-fi
-echo '"'
+echo -n '"lvm_expandable": false, "lvm_free_gb": 0, "lvm_lv_path": ""'
 
 echo '}'
 """
@@ -255,6 +219,53 @@ echo '}'
             return {"error": "SSH connection timed out", "ip": ip}
         except Exception as e:
             return {"error": f"Discovery failed: {str(e)}", "ip": ip}
+
+    async def detect_lvm_status(self, ip: str, username: Optional[str] = None) -> Dict[str, Any]:
+        """Detect LVM volume expansion opportunity on a node (requires sudo)."""
+        ssh_key_path = ansible_env.get_ssh_key_path()
+        if not username:
+            username = os.environ.get("SYSTEM_USERNAME", "tkadmin")
+        password = os.environ.get("ANSIBLE_BECOME_PASSWORD", "")
+        ssh_opts = "-o StrictHostKeyChecking=no -o ConnectTimeout=10"
+        ssh_key_arg = f"-i {ssh_key_path}" if ssh_key_path.exists() else ""
+
+        lvm_script = f"""
+echo '{password}' | sudo -S bash -c '
+root_dev=$(df / 2>/dev/null | tail -1 | awk "{{print \\$1}}")
+if echo "$root_dev" | grep -q "/dev/mapper/"; then
+  vg_name=$(lvs --noheadings -o vg_name "$root_dev" 2>/dev/null | tr -d " ")
+  if [ -n "$vg_name" ]; then
+    vg_free=$(vgs --noheadings --nosuffix --units g -o vg_free "$vg_name" 2>/dev/null | tr -d " " | cut -d. -f1)
+    lv_path=$(lvs --noheadings -o lv_path "$root_dev" 2>/dev/null | tr -d " ")
+    echo "$vg_free $lv_path"
+  fi
+fi
+' 2>/dev/null
+"""
+        cmd = f"ssh {ssh_opts} {ssh_key_arg} {username}@{ip} bash -s"
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd.split(),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(
+                process.communicate(input=lvm_script.encode()), timeout=15
+            )
+            output = stdout.decode().strip()
+            parts = output.split()
+            if len(parts) >= 2:
+                free_gb = int(parts[0])
+                lv_path = parts[1]
+                return {
+                    "lvm_expandable": free_gb > 10,
+                    "lvm_free_gb": free_gb,
+                    "lvm_lv_path": lv_path,
+                }
+        except Exception:
+            pass
+        return {"lvm_expandable": False, "lvm_free_gb": 0, "lvm_lv_path": ""}
 
     def read_inventory(self) -> Dict[str, Any]:
         """Read and parse the Ansible inventory YAML."""
@@ -648,17 +659,21 @@ echo '}'
         if not network_id or not api_token:
             return {"success": False, "error": "ZeroTier network_id or api_token not in inventory"}
 
+        password = os.environ.get("ANSIBLE_BECOME_PASSWORD", "")
         ssh_opts = f"-o StrictHostKeyChecking=no -o ConnectTimeout=10 -i {ssh_key_path}"
 
         # Step 1: Install ZeroTier and join network
         install_script = f"""
 set -e
-if ! command -v zerotier-cli &>/dev/null; then
-    curl -s https://install.zerotier.com | sudo bash
+echo '{password}' | sudo -S bash -c '
+set -e
+if ! command -v zerotier-cli >/dev/null 2>&1; then
+    curl -s https://install.zerotier.com | bash
 fi
-sudo systemctl enable --now zerotier-one
+systemctl enable --now zerotier-one
 sleep 2
-sudo zerotier-cli join {network_id}
+zerotier-cli join {network_id}
+'
 sleep 2
 zerotier-cli info | cut -d' ' -f3
 """
@@ -708,17 +723,19 @@ zerotier-cli info | cut -d' ' -f3
             return {"success": False, "error": f"ZeroTier API authorization failed: {e}"}
 
         # Step 3: Configure firewall and IP forwarding
-        fw_script = """
+        fw_script = f"""
+echo '{password}' | sudo -S bash -c '
 set -e
-echo 'net.ipv4.ip_forward=1' | sudo tee /etc/sysctl.d/90-zerotier.conf
-sudo sysctl -p /etc/sysctl.d/90-zerotier.conf
-sudo iptables -A FORWARD -i zt+ -j ACCEPT
-sudo iptables -A FORWARD -o zt+ -j ACCEPT
-if command -v netfilter-persistent &>/dev/null; then
-    sudo netfilter-persistent save
-elif command -v iptables-save &>/dev/null; then
-    sudo iptables-save | sudo tee /etc/iptables/rules.v4 > /dev/null 2>&1 || true
+echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/90-zerotier.conf
+sysctl -p /etc/sysctl.d/90-zerotier.conf
+iptables -A FORWARD -i zt+ -j ACCEPT
+iptables -A FORWARD -o zt+ -j ACCEPT
+if command -v netfilter-persistent >/dev/null 2>&1; then
+    netfilter-persistent save
+elif command -v iptables-save >/dev/null 2>&1; then
+    iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
 fi
+'
 """
         try:
             process = await asyncio.create_subprocess_exec(

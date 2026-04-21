@@ -410,6 +410,8 @@ async def detect_hardware_batch(request: DetectHardwareRequest):
         ip = node_info.get("ip", "")
         result = await node_manager.discover_node(ip)
         if "error" not in result:
+            lvm_info = await node_manager.detect_lvm_status(ip)
+            result.update(lvm_info)
             result["validation"] = node_manager.validate_hardware(result)
         return result
 
