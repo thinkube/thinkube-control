@@ -324,27 +324,41 @@ fi
         if network_mode == "overlay" and zerotier_ip:
             host_def["zerotier_ip"] = zerotier_ip
 
+        if children["baremetal"].get("hosts") is None:
+            children["baremetal"]["hosts"] = {}
         children["baremetal"]["hosts"][hostname] = host_def
-        children["baremetal"]["children"]["headless"]["hosts"][hostname] = {}
+
+        headless = children["baremetal"].setdefault("children", {}).setdefault("headless", {})
+        if headless.get("hosts") is None:
+            headless["hosts"] = {}
+        headless["hosts"][hostname] = {}
 
         arch_group = inv_arch_group
-        if arch_group not in children["arch"]["children"]:
-            children["arch"]["children"][arch_group] = {"hosts": {}}
-        children["arch"]["children"][arch_group]["hosts"][hostname] = {}
+        arch_children = children.setdefault("arch", {}).setdefault("children", {})
+        if arch_group not in arch_children:
+            arch_children[arch_group] = {"hosts": {}}
+        if arch_children[arch_group].get("hosts") is None:
+            arch_children[arch_group]["hosts"] = {}
+        arch_children[arch_group]["hosts"][hostname] = {}
 
-        if "k8s_workers" not in children["k8s"]["children"]:
-            children["k8s"]["children"]["k8s_workers"] = {"hosts": {}}
-        children["k8s"]["children"]["k8s_workers"]["hosts"][hostname] = {}
+        k8s_children = children.setdefault("k8s", {}).setdefault("children", {})
+        if "k8s_workers" not in k8s_children:
+            k8s_children["k8s_workers"] = {"hosts": {}}
+        if k8s_children["k8s_workers"].get("hosts") is None:
+            k8s_children["k8s_workers"]["hosts"] = {}
+        k8s_children["k8s_workers"]["hosts"][hostname] = {}
 
         if network_mode == "overlay":
             if "overlay_nodes" not in children:
                 children["overlay_nodes"] = {"hosts": {}}
+            if children["overlay_nodes"].get("hosts") is None:
+                children["overlay_nodes"]["hosts"] = {}
             children["overlay_nodes"]["hosts"][hostname] = {}
 
         if gpu_detected and gpu_count > 0:
             if "baremetal_gpus" not in children:
                 children["baremetal_gpus"] = {"hosts": {}, "vars": {}}
-            if "hosts" not in children["baremetal_gpus"]:
+            if children["baremetal_gpus"].get("hosts") is None:
                 children["baremetal_gpus"]["hosts"] = {}
             children["baremetal_gpus"]["hosts"][hostname] = {
                 "gpu_count": gpu_count,
