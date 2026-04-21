@@ -101,9 +101,8 @@ export function ComponentCard({
               {component.requirements.map((req) => (
                 <TkBadge
                   key={req}
-                  variant={
-                    isMissingRequirement(req) ? "destructive" : "outline"
-                  }
+                  status={isMissingRequirement(req) ? "unhealthy" : undefined}
+                  appearance={isMissingRequirement(req) ? undefined : "outlined"}
                   className="text-xs"
                 >
                   {req}

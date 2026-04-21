@@ -667,19 +667,19 @@ export default function ServiceDetailsPage() {
             <div className="flex flex-wrap gap-2">
               {dependencies.map((dep) => {
                 // Determine badge variant based on health status and enabled state
-                let badgeVariant: 'default' | 'success' | 'destructive' | 'secondary' = 'default';
+                let badgeStatus: 'healthy' | 'unhealthy' | 'pending' | 'active' = 'active';
                 let buttonIntent: 'primary' | 'secondary' | 'danger' | 'ghost' = 'primary';
                 if (!dep.enabled) {
-                  badgeVariant = 'destructive';
+                  badgeStatus = 'unhealthy';
                   buttonIntent = 'danger';
                 } else if (dep.health_status === 'healthy') {
-                  badgeVariant = 'success';
+                  badgeStatus = 'healthy';
                   buttonIntent = 'secondary';
                 } else if (dep.health_status === 'unhealthy' || dep.health_status === 'disabled') {
-                  badgeVariant = 'destructive';
+                  badgeStatus = 'unhealthy';
                   buttonIntent = 'danger';
                 } else if (dep.health_status === 'unknown') {
-                  badgeVariant = 'secondary';
+                  badgeStatus = 'pending';
                   buttonIntent = 'secondary';
                 }
 
@@ -698,7 +698,7 @@ export default function ServiceDetailsPage() {
                 ) : (
                   <TkBadge
                     key={dep.name}
-                    variant={badgeVariant}
+                    status={badgeStatus}
                   >
                     {label}
                   </TkBadge>
@@ -788,10 +788,10 @@ export default function ServiceDetailsPage() {
                                     <span className="font-medium">{container.name}</span>
                                     {container.state && (
                                       <TkBadge
-                                        variant={
-                                          container.state === 'running' ? 'success' :
+                                        status={
+                                          container.state === 'running' ? 'healthy' :
                                           container.state === 'waiting' ? 'warning' :
-                                          'destructive'
+                                          'unhealthy'
                                         }
                                         className="ml-2 text-xs"
                                       >
