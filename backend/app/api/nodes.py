@@ -737,6 +737,9 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
         await websocket.send_json({"type": "ok", "message": "Inventory is valid"})
         step += 1
 
+        # Capture architectures before join so we can detect new ones after
+        pre_join_architectures = set(node_manager.get_cluster_architectures())
+
         # Step: Run join workers playbook
         playbook_path = Path(
             "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
@@ -773,16 +776,21 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                 "task_number": step,
             })
 
+            post_join_architectures = set(node_manager.get_cluster_architectures())
+            new_archs = post_join_architectures - pre_join_architectures
+            new_arch_detected = len(new_archs) > 0
+
+            # Always sync inventory platforms to match cluster state
             platform_result = node_manager.update_build_platforms()
-            architectures = node_manager.get_cluster_architectures()
-            new_arch_detected = platform_result.get("changed", False)
+            architectures = sorted(post_join_architectures)
 
             rebuild_ok = True
             if new_arch_detected:
-                new_arch = platform_result.get("platforms", "").split(",")[-1].replace("linux/", "")
+                new_arch = sorted(new_archs)[-1]
+                platforms_str = ",".join(f"linux/{a}" for a in sorted(post_join_architectures))
                 await websocket.send_json({
                     "type": "ok",
-                    "message": f"New architecture detected. Updated build platforms to: {platform_result['platforms']}. Starting image rebuilds...",
+                    "message": f"New architecture detected: {new_arch}. Build platforms: {platforms_str}. Starting image rebuilds...",
                 })
 
                 rebuild_ok = await _run_arch_rebuild(
@@ -923,6 +931,9 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
             return
         await websocket.send_json({"type": "ok", "message": "Inventory is valid"})
 
+        # Capture architectures before join so we can detect new ones after
+        pre_join_architectures = set(node_manager.get_cluster_architectures())
+
         # Step 3: Run the join worker playbook
         playbook_path = Path(
             "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
@@ -955,17 +966,22 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
             )
             normalized = "arm64" if architecture.lower() in ("aarch64", "arm64") else "amd64"
 
+            post_join_architectures = set(node_manager.get_cluster_architectures())
+            new_archs = post_join_architectures - pre_join_architectures
+            new_arch_detected = len(new_archs) > 0
+
+            # Always sync inventory platforms to match cluster state
             platform_result = node_manager.update_build_platforms()
-            architectures = node_manager.get_cluster_architectures()
-            new_arch_detected = platform_result.get("changed", False)
+            architectures = sorted(post_join_architectures)
 
             rebuild_ok = True
             if new_arch_detected:
+                platforms_str = ",".join(f"linux/{a}" for a in sorted(post_join_architectures))
                 await websocket.send_json(
                     {
                         "type": "ok",
                         "message": f"New architecture detected: {normalized}. "
-                        f"Updated build platforms to: {platform_result['platforms']}. "
+                        f"Build platforms: {platforms_str}. "
                         f"Starting image rebuilds...",
                     }
                 )
