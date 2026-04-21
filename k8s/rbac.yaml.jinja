@@ -18,7 +18,6 @@ rules:
     - pods
     - pods/log
     - namespaces
-    - nodes
     - events
     - persistentvolumeclaims
     - persistentvolumes
@@ -26,6 +25,12 @@ rules:
     - secrets
     - serviceaccounts
   verbs: ["get", "list", "watch"]
+
+# Node management (cordon/uncordon/drain/delete)
+- apiGroups: [""]
+  resources:
+    - nodes
+  verbs: ["get", "list", "watch", "patch", "update", "delete"]
 
 # Apps resources
 - apiGroups: ["apps"]
