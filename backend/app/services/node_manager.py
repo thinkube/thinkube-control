@@ -672,10 +672,10 @@ if ! command -v zerotier-cli >/dev/null 2>&1; then
 fi
 systemctl enable --now zerotier-one
 sleep 2
-zerotier-cli join {network_id}
-'
+zerotier-cli join {network_id} >/dev/null
 sleep 2
-zerotier-cli info | cut -d' ' -f3
+zerotier-cli info | cut -d" " -f3
+'
 """
         cmd = f"ssh {ssh_opts} {username}@{ip} bash -s"
         try:
