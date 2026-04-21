@@ -124,7 +124,6 @@ async def _stream_playbook(
             "-i", str(inventory_path),
             str(playbook_path),
             "-e", f"@{temp_vars_path}",
-            "-v",
         ]
         if limit:
             cmd.extend(["--limit", limit])
@@ -181,7 +180,6 @@ async def _stream_playbook(
                     {"type": "output", "message": line_text}
                 )
             elif in_failed_block:
-                # Include verbose details after a failure
                 await websocket.send_json(
                     {"type": "output", "message": line_text}
                 )
