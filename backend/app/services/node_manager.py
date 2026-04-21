@@ -530,7 +530,8 @@ echo '}'
         """Copy the cluster SSH key to a new node using password authentication.
 
         Uses sshpass + ssh-copy-id to install the public key, then verifies
-        key-based auth works.
+        key-based auth works. If the .pub file is missing, derives it from
+        the private key.
         """
         ssh_key_path = ansible_env.get_ssh_key_path()
         username = os.environ.get("SYSTEM_USERNAME", "thinkube")
@@ -540,7 +541,20 @@ echo '}'
 
         pub_key_path = Path(f"{ssh_key_path}.pub")
         if not pub_key_path.exists():
-            return {"success": False, "error": f"SSH public key not found at {pub_key_path}"}
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    "ssh-keygen", "-y", "-f", str(ssh_key_path),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await process.communicate()
+                if process.returncode == 0:
+                    pub_key_path.write_bytes(stdout)
+                    logger.info(f"Generated {pub_key_path} from private key")
+                else:
+                    return {"success": False, "error": f"Cannot derive public key: {stderr.decode().strip()}"}
+            except Exception as e:
+                return {"success": False, "error": f"Cannot derive public key: {e}"}
 
         cmd = [
             "sshpass", "-p", password,
