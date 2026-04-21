@@ -270,14 +270,21 @@ class NetworkDiscovery:
         return any(v in banner for v in ubuntu_ssh_versions)
 
     async def _resolve_hostname(self, ip: str) -> Optional[str]:
-        """Try to resolve a hostname for an IP via reverse DNS."""
+        """Try to resolve a hostname for an IP via reverse DNS.
+
+        Discards Kubernetes-internal names (*.svc.cluster.local) since those
+        are synthetic and don't reflect the actual machine hostname.
+        """
         try:
             loop = asyncio.get_event_loop()
             result = await asyncio.wait_for(
                 loop.run_in_executor(None, socket.gethostbyaddr, ip),
                 timeout=2,
             )
-            return result[0]
+            hostname = result[0]
+            if ".svc.cluster.local" in hostname:
+                return None
+            return hostname
         except Exception:
             return None
 
@@ -390,10 +397,11 @@ class NetworkDiscovery:
             if ssh_ok:
                 eligible.append(node)
 
-        # Resolve hostnames via SSH for eligible nodes
+        # Resolve hostnames via SSH for eligible nodes (always prefer SSH over reverse DNS)
         for node in eligible:
-            if not node.hostname:
-                node.hostname = await self._get_hostname_via_ssh(node.ip)
+            ssh_hostname = await self._get_hostname_via_ssh(node.ip)
+            if ssh_hostname:
+                node.hostname = ssh_hostname
 
         return {
             "nodes": [n.to_dict() for n in eligible],
