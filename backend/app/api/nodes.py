@@ -756,12 +756,18 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             await websocket.close()
             return
 
-        limit_hosts = ",".join(added_hostnames)
+        # Include control plane + localhost so post-join plays run too
+        inventory = node_manager.read_inventory()
+        cp_hosts = list(
+            inventory.get("all", {}).get("children", {})
+            .get("k8s_control_plane", {}).get("hosts", {}).keys()
+        )
+        limit_hosts = ",".join(added_hostnames + cp_hosts + ["localhost"])
         join_ok = await _stream_playbook(
             websocket=websocket,
             playbook_path=playbook_path,
             extra_vars=extra_vars,
-            step_name=f"Join node(s) to cluster: {limit_hosts}",
+            step_name=f"Join node(s) to cluster: {','.join(added_hostnames)}",
             step_number=step,
             limit=limit_hosts,
         )
@@ -950,13 +956,20 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
             await websocket.close()
             return
 
+        # Include control plane + localhost so post-join plays run too
+        inventory = node_manager.read_inventory()
+        cp_hosts = list(
+            inventory.get("all", {}).get("children", {})
+            .get("k8s_control_plane", {}).get("hosts", {}).keys()
+        )
+        limit_hosts = ",".join([hostname] + cp_hosts + ["localhost"])
         join_ok = await _stream_playbook(
             websocket=websocket,
             playbook_path=playbook_path,
             extra_vars=extra_vars,
             step_name="Join node to cluster",
             step_number=3,
-            limit=hostname,
+            limit=limit_hosts,
         )
 
         if join_ok:
