@@ -163,10 +163,8 @@ async def _stream_playbook(
                     )
             elif line_text.startswith("ok:") or line_text.startswith("changed:"):
                 msg_type = "ok" if line_text.startswith("ok:") else "changed"
-                # Strip verbose JSON from ok/changed lines (keep just the status)
-                brief = line_text.split(" => {")[0] if " => {" in line_text else line_text
                 await websocket.send_json(
-                    {"type": msg_type, "message": brief, "task": current_task}
+                    {"type": msg_type, "message": line_text, "task": current_task}
                 )
             elif line_text.startswith("fatal:") or line_text.startswith("failed:"):
                 in_failed_block = True
@@ -174,9 +172,8 @@ async def _stream_playbook(
                     {"type": "failed", "message": line_text, "task": current_task}
                 )
             elif line_text.startswith("skipping:"):
-                brief = line_text.split(" => {")[0] if " => {" in line_text else line_text
                 await websocket.send_json(
-                    {"type": "output", "message": brief}
+                    {"type": "output", "message": line_text}
                 )
             elif "PLAY RECAP" in line_text or "PLAY [" in line_text:
                 in_failed_block = False
