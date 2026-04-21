@@ -100,9 +100,8 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
       nodes: JSON.stringify(nodesPayload),
     });
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const token = getToken();
-    const wsPath = `${protocol}//${window.location.host}/api/v1/nodes/ws/add-batch/${result.job_id}?${params.toString()}${token ? `&token=${token}` : ''}`;
+    const wsPath = `/api/v1/nodes/ws/add-batch/${result.job_id}?${params.toString()}${token ? `&token=${token}` : ''}`;
 
     playbookRef.current?.startExecution(wsPath);
   };
