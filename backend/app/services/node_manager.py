@@ -676,6 +676,46 @@ fi
         password = os.environ.get("ANSIBLE_BECOME_PASSWORD", "")
         ssh_opts = f"-o StrictHostKeyChecking=no -o ConnectTimeout=10 -i {ssh_key_path}"
 
+        # Step 0: Check if ZeroTier is already configured on this node
+        check_script = f"""
+echo '{password}' | sudo -S bash -c '
+if command -v zerotier-cli >/dev/null 2>&1; then
+    existing_ip=$(zerotier-cli listnetworks 2>/dev/null | grep {network_id} | awk "{{print \\$NF}}" | cut -d/ -f1)
+    if [ -n "$existing_ip" ]; then
+        node_id=$(zerotier-cli info 2>/dev/null | cut -d" " -f3)
+        echo "EXISTING $existing_ip $node_id"
+        exit 0
+    fi
+fi
+echo "NONE"
+' 2>/dev/null
+"""
+        cmd = f"ssh {ssh_opts} {username}@{ip} bash -s"
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd.split(),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(
+                process.communicate(input=check_script.encode()), timeout=15
+            )
+            output = stdout.decode().strip()
+            if output.startswith("EXISTING"):
+                parts = output.split()
+                existing_zt_ip = parts[1] if len(parts) > 1 else None
+                existing_node_id = parts[2] if len(parts) > 2 else None
+                if existing_zt_ip:
+                    logger.info(f"ZeroTier already configured on {ip}: {existing_zt_ip}")
+                    return {
+                        "success": True,
+                        "zerotier_node_id": existing_node_id,
+                        "zerotier_ip": existing_zt_ip,
+                    }
+        except Exception:
+            pass
+
         # Step 1: Install ZeroTier and join network
         install_script = f"""
 set -e
