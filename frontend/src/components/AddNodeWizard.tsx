@@ -60,6 +60,7 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
   } = useNodesStore();
 
   const [step, setStep] = useState<WizardStep>('scan');
+  const [scanCidr, setScanCidr] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const playbookRef = useRef<PlaybookExecutorHandle>(null);
@@ -76,7 +77,11 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
   );
 
   const handleScan = async () => {
-    await discoverNetwork();
+    const cidrs = scanCidr
+      .split(',')
+      .map((c) => c.trim())
+      .filter(Boolean);
+    await discoverNetwork(cidrs.length > 0 ? cidrs : undefined);
     setStep('select');
   };
 
@@ -133,6 +138,7 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
 
   const resetWizard = () => {
     setStep('scan');
+    setScanCidr('');
     setPassword('');
     setShowPassword(false);
     clearNetworkNodes();
@@ -219,14 +225,26 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
                 Scan the network to discover machines available to join the cluster.
-                {networkMode === 'overlay'
-                  ? ' Uses the ZeroTier API to find authorized members.'
-                  : ' Performs a ping sweep of the local network.'}
+                Performs a ping sweep and checks for SSH availability.
               </p>
               <p className="text-sm text-muted-foreground">
                 Prerequisites: target machines must have Ubuntu 24.04 and the cluster user account configured.
                 The app will handle SSH key distribution, ZeroTier setup, and cluster joining automatically.
               </p>
+
+              <div className="space-y-2">
+                <TkLabel>
+                  Network CIDR(s) to scan
+                  <span className="text-xs text-muted-foreground ml-2">
+                    Leave empty to use the cluster default. Comma-separate for multiple subnets.
+                  </span>
+                </TkLabel>
+                <TkInput
+                  placeholder="e.g. 192.168.1.0/24 or 192.168.1.0/24, 10.0.0.0/24"
+                  value={scanCidr}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setScanCidr(e.target.value)}
+                />
+              </div>
 
               {error && <TkErrorAlert title="Error">{error}</TkErrorAlert>}
 

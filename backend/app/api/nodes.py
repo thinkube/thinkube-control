@@ -56,6 +56,10 @@ class DetectHardwareRequest(BaseModel):
     nodes: List[Dict[str, str]]
 
 
+class DiscoverNetworkRequest(BaseModel):
+    scan_cidrs: Optional[List[str]] = None
+
+
 class AddNodesBatchRequest(BaseModel):
     nodes: List[Dict[str, Any]]
     password: Optional[str] = None
@@ -346,14 +350,14 @@ async def discover_node(request: DiscoverRequest):
 
 
 @router.post("/discover-network")
-async def discover_network():
+async def discover_network(request: DiscoverNetworkRequest = DiscoverNetworkRequest()):
     """Scan the network for nodes available to join the cluster.
 
-    Uses ZeroTier API (overlay mode) or ping sweep (local mode).
+    Ping-sweeps one or more CIDRs (defaults to inventory's network_cidr).
     Automatically excludes existing cluster nodes and MetalLB VIPs.
     """
     try:
-        result = await network_discovery.discover()
+        result = await network_discovery.discover(request.scan_cidrs)
         return result
     except Exception as e:
         logger.error(f"Network discovery failed: {e}", exc_info=True)

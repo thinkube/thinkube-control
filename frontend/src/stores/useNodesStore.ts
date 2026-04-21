@@ -88,7 +88,7 @@ interface NodesState {
   clearDiscoveredNode: () => void;
 
   // New wizard actions
-  discoverNetwork: () => Promise<void>;
+  discoverNetwork: (scanCidrs?: string[]) => Promise<void>;
   toggleNodeSelection: (ip: string) => void;
   selectAllNodes: () => void;
   deselectAllNodes: () => void;
@@ -169,10 +169,12 @@ export const useNodesStore = create<NodesState>((set, get) => ({
 
   clearDiscoveredNode: () => set({ discoveredNode: null, error: null }),
 
-  discoverNetwork: async () => {
+  discoverNetwork: async (scanCidrs?: string[]) => {
     set({ networkScanning: true, networkNodes: [], error: null });
     try {
-      const response = await api.post('/nodes/discover-network');
+      const response = await api.post('/nodes/discover-network', {
+        scan_cidrs: scanCidrs?.length ? scanCidrs : undefined,
+      });
       const nodes: NetworkDiscoveredNode[] = (response.data.nodes || []).map(
         (n: any) => ({
           ...n,

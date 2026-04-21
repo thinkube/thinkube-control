@@ -266,18 +266,33 @@ class NetworkDiscovery:
         except Exception:
             return None
 
-    async def discover_local_nodes(self) -> List[DiscoveredNetworkNode]:
-        """Ping sweep the network CIDR and check SSH banners."""
-        inv_vars = self._get_inventory_vars()
-        network_cidr = inv_vars.get("network_cidr")
+    async def discover_local_nodes(
+        self, scan_cidrs: Optional[List[str]] = None
+    ) -> List[DiscoveredNetworkNode]:
+        """Ping sweep one or more CIDRs and check SSH banners.
 
-        if not network_cidr:
-            logger.error("network_cidr not in inventory")
-            return []
+        Args:
+            scan_cidrs: CIDRs to scan. Defaults to the inventory's network_cidr.
+        """
+        if not scan_cidrs:
+            inv_vars = self._get_inventory_vars()
+            network_cidr = inv_vars.get("network_cidr")
+            if not network_cidr:
+                logger.error("network_cidr not in inventory")
+                return []
+            scan_cidrs = [network_cidr]
 
         excluded = self.get_excluded_ips()
-        network = ipaddress.ip_network(network_cidr, strict=False)
-        candidate_ips = [str(ip) for ip in network.hosts() if str(ip) not in excluded]
+        candidate_ips = []
+        for cidr in scan_cidrs:
+            try:
+                network = ipaddress.ip_network(cidr.strip(), strict=False)
+                candidate_ips.extend(
+                    str(ip) for ip in network.hosts() if str(ip) not in excluded
+                )
+            except ValueError as e:
+                logger.error(f"Invalid CIDR {cidr!r}: {e}")
+                continue
 
         # Ping sweep in batches
         reachable = []
@@ -318,17 +333,20 @@ class NetworkDiscovery:
 
         return nodes
 
-    async def discover(self) -> Dict[str, Any]:
-        """Run discovery based on the cluster's network mode.
+    async def discover(
+        self, scan_cidrs: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """Discover nodes by ping-sweeping one or more CIDRs.
 
-        Returns discovered nodes and metadata.
+        Always uses ping sweep regardless of network mode, since new nodes
+        won't have ZeroTier installed yet. The app handles ZeroTier setup
+        during the add pipeline.
+
+        Args:
+            scan_cidrs: CIDRs to scan. Defaults to the inventory's network_cidr.
         """
         network_mode = self.get_network_mode()
-
-        if network_mode == "overlay":
-            nodes = await self.discover_zerotier_nodes()
-        else:
-            nodes = await self.discover_local_nodes()
+        nodes = await self.discover_local_nodes(scan_cidrs)
 
         return {
             "nodes": [n.to_dict() for n in nodes],
