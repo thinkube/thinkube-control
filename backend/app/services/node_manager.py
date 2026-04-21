@@ -1,6 +1,7 @@
 """Node management service for discovering, adding, and removing cluster nodes."""
 
 import asyncio
+import ipaddress
 import json
 import logging
 import os
@@ -8,8 +9,9 @@ import shutil
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
+import httpx
 from kubernetes import client, config
 from ruamel.yaml import YAML
 
@@ -443,6 +445,279 @@ echo '}'
             "old_platforms": old_platforms,
             "platforms": platforms,
             "architectures": architectures,
+        }
+
+    def get_existing_node_ips(self) -> Set[str]:
+        """Get all IPs used by existing nodes in the inventory."""
+        ips = set()
+        try:
+            inventory = self.read_inventory()
+            children = inventory.get("all", {}).get("children", {})
+            for section_name, section in children.items():
+                if not isinstance(section, dict):
+                    continue
+                hosts = section.get("hosts") or {}
+                for hostname, host_vars in hosts.items():
+                    if isinstance(host_vars, dict):
+                        for key in ("ansible_host", "lan_ip", "zerotier_ip"):
+                            val = host_vars.get(key)
+                            if val:
+                                ips.add(val)
+                for sub_name, sub_section in (section.get("children") or {}).items():
+                    if not isinstance(sub_section, dict):
+                        continue
+                    for hostname, host_vars in (sub_section.get("hosts") or {}).items():
+                        if isinstance(host_vars, dict):
+                            for key in ("ansible_host", "lan_ip", "zerotier_ip"):
+                                val = host_vars.get(key)
+                                if val:
+                                    ips.add(val)
+        except Exception as e:
+            logger.error(f"Failed to get existing node IPs: {e}")
+        return ips
+
+    def get_metallb_ip_range(self) -> Set[str]:
+        """Get the set of MetalLB VIP addresses from inventory config."""
+        ips = set()
+        try:
+            inventory = self.read_inventory()
+            inv_vars = inventory.get("all", {}).get("vars", {})
+            start = int(inv_vars.get("metallb_ip_start_octet", "50"))
+            end = int(inv_vars.get("metallb_ip_end_octet", "55"))
+            mode = inv_vars.get("network_mode", "overlay")
+
+            if mode == "overlay":
+                prefix = inv_vars.get("zerotier_subnet_prefix", "192.168.191.")
+            else:
+                cidr = inv_vars.get("network_cidr", "")
+                if cidr:
+                    net = ipaddress.ip_network(cidr, strict=False)
+                    prefix = ".".join(str(net.network_address).split(".")[:3]) + "."
+                else:
+                    return ips
+
+            for octet in range(start, end + 1):
+                ips.add(f"{prefix}{octet}")
+        except Exception as e:
+            logger.error(f"Failed to get MetalLB IP range: {e}")
+        return ips
+
+    async def test_ssh_key_auth(self, ip: str) -> bool:
+        """Test if the cluster SSH key can authenticate to a node."""
+        ssh_key_path = ansible_env.get_ssh_key_path()
+        username = os.environ.get("SYSTEM_USERNAME", "thinkube")
+
+        if not ssh_key_path.exists():
+            return False
+
+        cmd = (
+            f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "
+            f"-o BatchMode=yes -i {ssh_key_path} "
+            f"{username}@{ip} echo ok"
+        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd.split(),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+            return process.returncode == 0
+        except Exception:
+            return False
+
+    async def distribute_ssh_key(self, ip: str, password: str) -> Dict[str, Any]:
+        """Copy the cluster SSH key to a new node using password authentication.
+
+        Uses sshpass + ssh-copy-id to install the public key, then verifies
+        key-based auth works.
+        """
+        ssh_key_path = ansible_env.get_ssh_key_path()
+        username = os.environ.get("SYSTEM_USERNAME", "thinkube")
+
+        if not ssh_key_path.exists():
+            return {"success": False, "error": f"SSH key not found at {ssh_key_path}"}
+
+        pub_key_path = Path(f"{ssh_key_path}.pub")
+        if not pub_key_path.exists():
+            return {"success": False, "error": f"SSH public key not found at {pub_key_path}"}
+
+        cmd = [
+            "sshpass", "-p", password,
+            "ssh-copy-id",
+            "-i", str(pub_key_path),
+            "-o", "StrictHostKeyChecking=no",
+            f"{username}@{ip}",
+        ]
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+
+            if process.returncode != 0:
+                error = stderr.decode("utf-8", errors="replace").strip()
+                return {"success": False, "error": f"ssh-copy-id failed: {error}"}
+
+            # Verify key auth works
+            if await self.test_ssh_key_auth(ip):
+                return {"success": True}
+            else:
+                return {"success": False, "error": "Key was copied but auth test failed"}
+
+        except asyncio.TimeoutError:
+            return {"success": False, "error": "SSH key distribution timed out"}
+        except FileNotFoundError:
+            return {"success": False, "error": "sshpass not found — install it in the backend container"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def setup_zerotier_on_node(
+        self, ip: str, assigned_zt_ip: str
+    ) -> Dict[str, Any]:
+        """Install ZeroTier on a remote node, join the network, and authorize it.
+
+        Steps:
+        1. SSH to node, install ZeroTier, join network
+        2. Get the node's ZeroTier node ID
+        3. Authorize the member via ZeroTier Central API with a static IP
+        4. Configure firewall and IP forwarding
+        """
+        ssh_key_path = ansible_env.get_ssh_key_path()
+        username = os.environ.get("SYSTEM_USERNAME", "thinkube")
+        inventory = self.read_inventory()
+        inv_vars = inventory.get("all", {}).get("vars", {})
+        network_id = inv_vars.get("zerotier_network_id")
+        api_token = inv_vars.get("zerotier_api_token")
+
+        if not network_id or not api_token:
+            return {"success": False, "error": "ZeroTier network_id or api_token not in inventory"}
+
+        ssh_opts = f"-o StrictHostKeyChecking=no -o ConnectTimeout=10 -i {ssh_key_path}"
+
+        # Step 1: Install ZeroTier and join network
+        install_script = f"""
+set -e
+if ! command -v zerotier-cli &>/dev/null; then
+    curl -s https://install.zerotier.com | sudo bash
+fi
+sudo systemctl enable --now zerotier-one
+sleep 2
+sudo zerotier-cli join {network_id}
+sleep 2
+zerotier-cli info | cut -d' ' -f3
+"""
+        cmd = f"ssh {ssh_opts} {username}@{ip} bash -s"
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd.split(),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(input=install_script.encode()), timeout=120
+            )
+
+            if process.returncode != 0:
+                error = stderr.decode("utf-8", errors="replace").strip()
+                return {"success": False, "error": f"ZeroTier install failed: {error}"}
+
+            node_id = stdout.decode("utf-8", errors="replace").strip().split("\n")[-1]
+            if not node_id or len(node_id) != 10:
+                return {"success": False, "error": f"Could not extract ZeroTier node ID (got: {node_id!r})"}
+
+        except asyncio.TimeoutError:
+            return {"success": False, "error": "ZeroTier installation timed out"}
+        except Exception as e:
+            return {"success": False, "error": f"ZeroTier install error: {e}"}
+
+        # Step 2: Authorize member and assign IP via ZeroTier API
+        try:
+            async with httpx.AsyncClient(timeout=15) as http_client:
+                response = await http_client.post(
+                    f"https://api.zerotier.com/api/v1/network/{network_id}/member/{node_id}",
+                    headers={"Authorization": f"bearer {api_token}"},
+                    json={
+                        "name": "",  # will be set by hostname later
+                        "description": "Added by thinkube-control",
+                        "config": {
+                            "authorized": True,
+                            "ipAssignments": [assigned_zt_ip],
+                            "noAutoAssignIps": True,
+                        },
+                    },
+                )
+                response.raise_for_status()
+        except Exception as e:
+            return {"success": False, "error": f"ZeroTier API authorization failed: {e}"}
+
+        # Step 3: Configure firewall and IP forwarding
+        fw_script = """
+set -e
+echo 'net.ipv4.ip_forward=1' | sudo tee /etc/sysctl.d/90-zerotier.conf
+sudo sysctl -p /etc/sysctl.d/90-zerotier.conf
+sudo iptables -A FORWARD -i zt+ -j ACCEPT
+sudo iptables -A FORWARD -o zt+ -j ACCEPT
+if command -v netfilter-persistent &>/dev/null; then
+    sudo netfilter-persistent save
+elif command -v iptables-save &>/dev/null; then
+    sudo iptables-save | sudo tee /etc/iptables/rules.v4 > /dev/null 2>&1 || true
+fi
+"""
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd.split(),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(input=fw_script.encode()), timeout=30
+            )
+            # Firewall setup is best-effort — don't fail on it
+        except Exception:
+            logger.warning("Firewall setup on new node had issues, continuing")
+
+        return {
+            "success": True,
+            "zerotier_node_id": node_id,
+            "zerotier_ip": assigned_zt_ip,
+        }
+
+    def validate_hardware(self, hw_info: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate discovered hardware meets minimum requirements.
+
+        Returns validation result with any warnings or errors.
+        """
+        errors = []
+        warnings = []
+
+        os_release = hw_info.get("os_release", "")
+        if "Ubuntu 24.04" not in os_release:
+            errors.append(f"Requires Ubuntu 24.04 LTS (found: {os_release})")
+
+        cpu_cores = int(hw_info.get("cpu_cores", 0))
+        if cpu_cores < 16:
+            errors.append(f"Requires 16+ CPU cores (found: {cpu_cores})")
+
+        memory_gb = int(hw_info.get("memory_gb", 0))
+        if memory_gb < 64:
+            errors.append(f"Requires 64+ GB RAM (found: {memory_gb} GB)")
+
+        disk_gb = int(hw_info.get("disk_gb", 0))
+        if disk_gb < 500:
+            warnings.append(f"Recommended 1TB+ disk (found: {disk_gb} GB)")
+
+        if hw_info.get("k8s_installed"):
+            warnings.append("k8s snap already installed — may have been in a previous cluster")
+
+        return {
+            "valid": len(errors) == 0,
+            "errors": errors,
+            "warnings": warnings,
         }
 
     def get_rebuild_actions(self, new_arch: str) -> List[Dict[str, str]]:

@@ -14,6 +14,7 @@ from pydantic import BaseModel
 import yaml
 
 from app.services.ansible_environment import ansible_env
+from app.services.network_discovery import network_discovery
 from app.services.node_manager import node_manager
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,20 @@ class AddNodeRequest(BaseModel):
 class RemoveNodeRequest(BaseModel):
     hostname: str
     drain: bool = True
+
+
+class VerifySSHRequest(BaseModel):
+    nodes: List[Dict[str, str]]
+    password: Optional[str] = None
+
+
+class DetectHardwareRequest(BaseModel):
+    nodes: List[Dict[str, str]]
+
+
+class AddNodesBatchRequest(BaseModel):
+    nodes: List[Dict[str, Any]]
+    password: Optional[str] = None
 
 
 async def _stream_playbook(
@@ -323,11 +338,417 @@ async def list_nodes():
 
 @router.post("/discover")
 async def discover_node(request: DiscoverRequest):
-    """Discover a node's hardware via SSH."""
+    """Discover a single node's hardware via SSH (legacy)."""
     result = await node_manager.discover_node(request.ip, request.username)
     if "error" in result:
         return {"success": False, **result}
     return {"success": True, **result}
+
+
+@router.post("/discover-network")
+async def discover_network():
+    """Scan the network for nodes available to join the cluster.
+
+    Uses ZeroTier API (overlay mode) or ping sweep (local mode).
+    Automatically excludes existing cluster nodes and MetalLB VIPs.
+    """
+    try:
+        result = await network_discovery.discover()
+        return result
+    except Exception as e:
+        logger.error(f"Network discovery failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/verify-ssh")
+async def verify_ssh(request: VerifySSHRequest):
+    """Test SSH connectivity to selected nodes using the cluster key.
+
+    If key auth fails and a password is provided, distributes the key first.
+    """
+    results = []
+    for node_info in request.nodes:
+        ip = node_info.get("ip", "")
+        if not ip:
+            continue
+
+        key_ok = await node_manager.test_ssh_key_auth(ip)
+        if key_ok:
+            results.append({"ip": ip, "ssh_status": "key_ok"})
+        elif request.password:
+            dist_result = await node_manager.distribute_ssh_key(ip, request.password)
+            if dist_result["success"]:
+                results.append({"ip": ip, "ssh_status": "key_distributed"})
+            else:
+                results.append({
+                    "ip": ip,
+                    "ssh_status": "failed",
+                    "error": dist_result.get("error", "Unknown error"),
+                })
+        else:
+            results.append({"ip": ip, "ssh_status": "needs_password"})
+
+    return {"results": results}
+
+
+@router.post("/detect-hardware-batch")
+async def detect_hardware_batch(request: DetectHardwareRequest):
+    """Detect hardware on multiple nodes in parallel."""
+    async def detect_one(node_info: Dict[str, str]) -> Dict[str, Any]:
+        ip = node_info.get("ip", "")
+        result = await node_manager.discover_node(ip)
+        if "error" not in result:
+            result["validation"] = node_manager.validate_hardware(result)
+        return result
+
+    results = await asyncio.gather(
+        *[detect_one(n) for n in request.nodes]
+    )
+    return {"results": list(results)}
+
+
+@router.post("/add-batch")
+async def add_nodes_batch(request: AddNodesBatchRequest):
+    """Initiate batch node addition. Returns a job_id for WebSocket streaming."""
+    validation = node_manager.validate_inventory()
+    if not validation["valid"]:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Inventory validation failed: {validation.get('error')}",
+        )
+
+    existing_nodes = node_manager.get_cluster_nodes()
+    existing_names = {n["name"] for n in existing_nodes}
+    for node_info in request.nodes:
+        hostname = node_info.get("hostname", "")
+        if hostname in existing_names:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Node '{hostname}' already exists in the cluster",
+            )
+
+    job_id = str(uuid.uuid4())
+    return {
+        "job_id": job_id,
+        "message": "Batch node addition job created. Connect to WebSocket to start.",
+        "node_count": len(request.nodes),
+    }
+
+
+@router.websocket("/ws/add-batch/{job_id}")
+async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
+    """Stream batch node addition progress via WebSocket.
+
+    Handles the full pipeline: SSH key distribution, ZeroTier setup (if overlay),
+    hardware detection, inventory update, and k8s join.
+
+    Expected query params: nodes (JSON array of node objects), password (optional)
+    """
+    await websocket.accept()
+
+    try:
+        import json as _json
+
+        params = websocket.query_params
+        nodes_json = params.get("nodes", "[]")
+        password = params.get("password", "")
+        nodes = _json.loads(nodes_json)
+
+        if not nodes:
+            await websocket.send_json(
+                {"type": "error", "message": "No nodes provided"}
+            )
+            await websocket.close()
+            return
+
+        inventory = node_manager.read_inventory()
+        inv_vars = inventory.get("all", {}).get("vars", {})
+        network_mode = inv_vars.get("network_mode", "overlay")
+        step = 1
+
+        await websocket.send_json({
+            "type": "start",
+            "message": f"Starting addition of {len(nodes)} node(s)",
+            "job_id": job_id,
+        })
+
+        added_hostnames = []
+
+        for node_info in nodes:
+            ip = node_info.get("ip", "")
+            hostname = node_info.get("hostname", "")
+            lan_ip = node_info.get("lan_ip", ip)
+
+            await websocket.send_json({
+                "type": "task",
+                "task_name": f"[{hostname or ip}] Distribute SSH key",
+                "task_number": step,
+            })
+
+            # Step: Distribute SSH key if needed
+            key_ok = await node_manager.test_ssh_key_auth(ip)
+            if key_ok:
+                await websocket.send_json({
+                    "type": "ok",
+                    "message": f"[{hostname or ip}] SSH key already authorized",
+                })
+            elif password:
+                dist_result = await node_manager.distribute_ssh_key(ip, password)
+                if not dist_result["success"]:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"[{hostname or ip}] SSH key distribution failed: {dist_result.get('error')}",
+                    })
+                    await websocket.send_json({
+                        "type": "node_complete",
+                        "hostname": hostname or ip,
+                        "success": False,
+                    })
+                    continue
+                await websocket.send_json({
+                    "type": "ok",
+                    "message": f"[{hostname or ip}] SSH key distributed successfully",
+                })
+            else:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": f"[{hostname or ip}] SSH key auth failed and no password provided",
+                })
+                await websocket.send_json({
+                    "type": "node_complete",
+                    "hostname": hostname or ip,
+                    "success": False,
+                })
+                continue
+
+            step += 1
+
+            # Step: ZeroTier setup (if overlay mode)
+            zerotier_ip = node_info.get("zerotier_ip")
+            if network_mode == "overlay" and not zerotier_ip:
+                await websocket.send_json({
+                    "type": "task",
+                    "task_name": f"[{hostname or ip}] Setup ZeroTier",
+                    "task_number": step,
+                })
+
+                assigned_ip = network_discovery.get_next_available_zerotier_ip()
+                if not assigned_ip:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"[{hostname or ip}] No available ZeroTier IPs",
+                    })
+                    await websocket.send_json({
+                        "type": "node_complete",
+                        "hostname": hostname or ip,
+                        "success": False,
+                    })
+                    continue
+
+                zt_result = await node_manager.setup_zerotier_on_node(ip, assigned_ip)
+                if not zt_result["success"]:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"[{hostname or ip}] ZeroTier setup failed: {zt_result.get('error')}",
+                    })
+                    await websocket.send_json({
+                        "type": "node_complete",
+                        "hostname": hostname or ip,
+                        "success": False,
+                    })
+                    continue
+
+                zerotier_ip = zt_result["zerotier_ip"]
+                await websocket.send_json({
+                    "type": "ok",
+                    "message": f"[{hostname or ip}] ZeroTier configured with IP {zerotier_ip}",
+                })
+                step += 1
+
+            # Step: Detect hardware (if not already provided)
+            architecture = node_info.get("architecture")
+            gpu_detected = node_info.get("gpu_detected", False)
+            gpu_count = node_info.get("gpu_count", 0)
+            gpu_model = node_info.get("gpu_model", "")
+
+            if not architecture:
+                await websocket.send_json({
+                    "type": "task",
+                    "task_name": f"[{hostname or ip}] Detect hardware",
+                    "task_number": step,
+                })
+                connect_ip = zerotier_ip if network_mode == "overlay" and zerotier_ip else ip
+                hw = await node_manager.discover_node(connect_ip)
+                if "error" in hw:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"[{hostname or ip}] Hardware detection failed: {hw['error']}",
+                    })
+                    await websocket.send_json({
+                        "type": "node_complete",
+                        "hostname": hostname or ip,
+                        "success": False,
+                    })
+                    continue
+
+                hostname = hostname or hw.get("hostname", ip)
+                architecture = hw.get("architecture", "unknown")
+                gpu_detected = hw.get("gpu_detected", False)
+                gpu_count = hw.get("gpu_count", 0)
+                gpu_model = hw.get("gpu_model", "")
+                await websocket.send_json({
+                    "type": "ok",
+                    "message": f"[{hostname}] Detected: {architecture}, {hw.get('cpu_cores', '?')} cores, {hw.get('memory_gb', '?')} GB RAM",
+                })
+                step += 1
+
+            # Step: Update inventory
+            await websocket.send_json({
+                "type": "task",
+                "task_name": f"[{hostname}] Update inventory",
+                "task_number": step,
+            })
+            try:
+                node_manager.add_node_to_inventory(
+                    hostname=hostname,
+                    ip=ip,
+                    architecture=architecture,
+                    zerotier_ip=zerotier_ip or None,
+                    lan_ip=lan_ip or None,
+                    gpu_detected=gpu_detected,
+                    gpu_count=gpu_count,
+                    gpu_model=gpu_model,
+                )
+                await websocket.send_json({
+                    "type": "ok",
+                    "message": f"[{hostname}] Added to inventory",
+                })
+                added_hostnames.append(hostname)
+            except Exception as e:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": f"[{hostname}] Inventory update failed: {e}",
+                })
+                await websocket.send_json({
+                    "type": "node_complete",
+                    "hostname": hostname,
+                    "success": False,
+                })
+                continue
+
+            step += 1
+
+        if not added_hostnames:
+            await websocket.send_json({
+                "type": "complete",
+                "success": False,
+                "message": "No nodes were successfully prepared for joining",
+            })
+            await websocket.close()
+            return
+
+        # Step: Validate inventory
+        await websocket.send_json({
+            "type": "task",
+            "task_name": "Validate inventory",
+            "task_number": step,
+        })
+        validation = node_manager.validate_inventory()
+        if not validation["valid"]:
+            await websocket.send_json({
+                "type": "error",
+                "message": f"Inventory validation failed: {validation.get('error')}",
+            })
+            await websocket.close()
+            return
+        await websocket.send_json({"type": "ok", "message": "Inventory is valid"})
+        step += 1
+
+        # Step: Run join workers playbook
+        playbook_path = Path(
+            "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
+            "40_thinkube/core/infrastructure/k8s/20_join_workers.yaml"
+        )
+        if not playbook_path.exists():
+            playbook_path = ansible_env.get_playbook_path("add_node.yaml")
+
+        extra_vars = {}
+        try:
+            extra_vars = ansible_env.prepare_auth_vars(extra_vars)
+        except RuntimeError as e:
+            await websocket.send_json({"type": "error", "message": str(e)})
+            await websocket.close()
+            return
+
+        limit_hosts = ",".join(added_hostnames)
+        join_ok = await _stream_playbook(
+            websocket=websocket,
+            playbook_path=playbook_path,
+            extra_vars=extra_vars,
+            step_name=f"Join node(s) to cluster: {limit_hosts}",
+            step_number=step,
+            limit=limit_hosts,
+        )
+
+        if join_ok:
+            step += 1
+
+            # Step: Check for new architecture
+            await websocket.send_json({
+                "type": "task",
+                "task_name": "Check for new architecture",
+                "task_number": step,
+            })
+
+            platform_result = node_manager.update_build_platforms()
+            architectures = node_manager.get_cluster_architectures()
+            new_arch_detected = platform_result.get("changed", False)
+
+            rebuild_ok = True
+            if new_arch_detected:
+                new_arch = platform_result.get("platforms", "").split(",")[-1].replace("linux/", "")
+                await websocket.send_json({
+                    "type": "ok",
+                    "message": f"New architecture detected. Updated build platforms to: {platform_result['platforms']}. Starting image rebuilds...",
+                })
+
+                rebuild_ok = await _run_arch_rebuild(
+                    websocket=websocket,
+                    hostname=added_hostnames[0],
+                    new_arch=new_arch,
+                    extra_vars=extra_vars,
+                )
+
+            await websocket.send_json({
+                "type": "complete",
+                "success": True,
+                "message": (
+                    f"Successfully added {len(added_hostnames)} node(s): {', '.join(added_hostnames)}"
+                    + (" — images rebuilt for multi-arch" if new_arch_detected and rebuild_ok else "")
+                    + (" — WARNING: image rebuild failed, node(s) cordoned" if new_arch_detected and not rebuild_ok else "")
+                ),
+                "architectures": architectures,
+                "new_architecture_detected": new_arch_detected,
+                "images_rebuilt": rebuild_ok if new_arch_detected else None,
+            })
+        else:
+            await websocket.send_json({
+                "type": "complete",
+                "success": False,
+                "message": "Node join failed",
+            })
+
+    except Exception as e:
+        logger.error(f"Batch node addition error: {e}", exc_info=True)
+        try:
+            await websocket.send_json({"type": "error", "message": str(e)})
+        except Exception:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 @router.post("/add")
