@@ -139,7 +139,8 @@ nproc 2>/dev/null | tr -d '\n' || echo -n "0"
 echo ','
 
 echo -n '"memory_gb": '
-free -g 2>/dev/null | grep '^Mem:' | awk '{print $2}' | tr -d '\n' || echo -n "0"
+mem_kb=$(grep '^MemTotal:' /proc/meminfo 2>/dev/null | awk '{print $2}')
+if [ -n "$mem_kb" ]; then mem_gb=$(( (mem_kb + 1048575) / 1048576 )); for s in 8 16 32 64 128 256 512 1024 2048; do if [ "$mem_gb" -le "$s" ]; then mem_gb=$s; break; fi; done; printf '%d' "$mem_gb" | tr -d '\n'; else echo -n "0"; fi
 echo ','
 
 echo -n '"disk_gb": '
@@ -718,7 +719,7 @@ fi
             errors.append(f"Requires 16+ CPU cores (found: {cpu_cores})")
 
         memory_gb = int(hw_info.get("memory_gb", 0))
-        if memory_gb < 60:
+        if memory_gb < 64:
             errors.append(f"Requires 64+ GB RAM (found: {memory_gb} GB)")
 
         disk_gb = int(hw_info.get("disk_gb", 0))
