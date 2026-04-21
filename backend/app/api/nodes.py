@@ -649,6 +649,32 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                 })
                 step += 1
 
+            # Step: Prepare Ansible Python environment
+            connect_ip = zerotier_ip if network_mode == "overlay" and zerotier_ip else ip
+            await websocket.send_json({
+                "type": "task",
+                "task_name": f"[{hostname}] Prepare Python environment",
+                "task_number": step,
+            })
+            py_result = await node_manager.prepare_ansible_python(connect_ip)
+            if py_result["success"]:
+                await websocket.send_json({
+                    "type": "ok",
+                    "message": f"[{hostname}] Python venv ready",
+                })
+            else:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": f"[{hostname}] Python setup failed: {py_result.get('error')}",
+                })
+                await websocket.send_json({
+                    "type": "node_complete",
+                    "hostname": hostname,
+                    "success": False,
+                })
+                continue
+            step += 1
+
             # Step: Update inventory
             await websocket.send_json({
                 "type": "task",

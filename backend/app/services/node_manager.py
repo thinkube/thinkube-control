@@ -843,6 +843,44 @@ df -BG / 2>/dev/null | tail -1 | awk '{{print $2}}' | tr -d 'G'
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    async def prepare_ansible_python(self, ip: str) -> Dict[str, Any]:
+        """Create the Python venv on a node that Ansible expects for remote execution."""
+        ssh_key_path = ansible_env.get_ssh_key_path()
+        username = os.environ.get("SYSTEM_USERNAME", "thinkube")
+        password = os.environ.get("ANSIBLE_BECOME_PASSWORD", "")
+        ssh_opts = "-o StrictHostKeyChecking=no -o ConnectTimeout=10"
+
+        script = f"""
+set -e
+echo '{password}' | sudo -S apt-get install -y python3-venv python3-full >/dev/null 2>&1
+if [ ! -f "$HOME/.venv/bin/python3" ]; then
+    python3 -m venv "$HOME/.venv"
+fi
+"$HOME/.venv/bin/python3" -m ensurepip --default-pip 2>/dev/null || true
+"$HOME/.venv/bin/python3" -m pip install --upgrade pip packaging setuptools wheel -q
+echo "OK"
+"""
+        cmd = f"ssh {ssh_opts} -i {ssh_key_path} {username}@{ip} bash -s"
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd.split(),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(input=script.encode()), timeout=120
+            )
+            output = stdout.decode().strip()
+            if "OK" in output:
+                return {"success": True}
+            error = stderr.decode("utf-8", errors="replace").strip()
+            return {"success": False, "error": error or "Unknown error"}
+        except asyncio.TimeoutError:
+            return {"success": False, "error": "Timed out"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     def validate_hardware(self, hw_info: Dict[str, Any]) -> Dict[str, Any]:
         """Validate discovered hardware meets minimum requirements.
 
