@@ -728,11 +728,40 @@ fi
         if hw_info.get("k8s_installed"):
             warnings.append("k8s snap already installed — may have been in a previous cluster")
 
+        if hw_info.get("gpu_detected") and hw_info.get("gpu_model"):
+            gpu_model = hw_info["gpu_model"]
+            if not self._is_gpu_cuda_compatible(gpu_model):
+                warnings.append(
+                    f"GPU not supported (requires Volta or newer): {gpu_model}"
+                )
+                hw_info["gpu_detected"] = False
+                hw_info["gpu_count"] = 0
+
         return {
             "valid": len(errors) == 0,
             "errors": errors,
             "warnings": warnings,
         }
+
+    def _is_gpu_cuda_compatible(self, gpu_model: str) -> bool:
+        """Check if a GPU supports CUDA 13+ (requires compute capability 7.0+, Volta or newer)."""
+        unsupported_chips = [
+            "GT", "GK", "GM", "GP",  # Fermi, Kepler, Maxwell, Pascal chip prefixes
+        ]
+        unsupported_families = [
+            "GeForce GTX 9", "GeForce GTX 10",  # Maxwell, Pascal
+            "GeForce GT ", "GeForce GTX 7", "GeForce GTX 6",  # Kepler and older
+            "Tesla K", "Tesla M", "Tesla P",  # Kepler, Maxwell, Pascal data center
+            "Quadro K", "Quadro M", "Quadro P",  # Kepler, Maxwell, Pascal workstation
+        ]
+        for family in unsupported_families:
+            if family in gpu_model:
+                return False
+        model_upper = gpu_model.upper()
+        for chip in unsupported_chips:
+            if model_upper.startswith(chip) and len(model_upper) > len(chip) and model_upper[len(chip):len(chip)+2].isdigit():
+                return False
+        return True
 
     def get_rebuild_actions(self, new_arch: str) -> List[Dict[str, str]]:
         """Return list of rebuild actions needed when a new architecture is introduced."""
