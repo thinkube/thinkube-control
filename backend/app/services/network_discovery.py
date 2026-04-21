@@ -21,8 +21,8 @@ from app.services.node_manager import node_manager
 logger = logging.getLogger(__name__)
 
 ZEROTIER_API_BASE = "https://api.zerotier.com/api/v1"
-PING_BATCH_SIZE = 20
-PING_TIMEOUT = 2
+PING_BATCH_SIZE = 50
+PING_TIMEOUT = 1
 SSH_BANNER_TIMEOUT = 3
 
 
