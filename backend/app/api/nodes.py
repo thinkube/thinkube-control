@@ -220,9 +220,9 @@ async def _run_arch_rebuild(
     await websocket.send_json({"type": "ok", "message": f"Node {hostname} cordoned"})
 
     rebuild_playbooks = [
+        (HARBOR_IMAGES_DIR / "13_mirror_public_images.yaml", "Mirror public images (multi-arch)"),
         (HARBOR_IMAGES_DIR / "14_build_base_images.yaml", "Rebuild base images (multi-arch)"),
         (HARBOR_IMAGES_DIR / "15_build_jupyter_images.yaml", "Rebuild Jupyter image (multi-arch)"),
-        (HARBOR_IMAGES_DIR / "13_mirror_public_images.yaml", "Re-mirror public images (multi-arch)"),
     ]
 
     step = 6
