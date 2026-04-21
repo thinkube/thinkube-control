@@ -366,7 +366,7 @@ fi
             }
 
         self.write_inventory(inventory)
-        logger.info(f"Added node {hostname} ({normalized_arch}) to inventory")
+        logger.info(f"Added node {hostname} ({inv_arch_group}) to inventory")
 
     def remove_node_from_inventory(self, hostname: str) -> None:
         """Remove a node from all inventory groups."""
