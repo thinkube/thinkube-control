@@ -80,40 +80,54 @@ class NetworkDiscovery:
         """Get all IPs that should be excluded from discovery results.
 
         Excludes:
-        - Existing cluster node IPs (from inventory)
+        - Nodes actually joined to the k8s cluster (from k8s API)
         - MetalLB VIP range
         - Gateway IP
         """
         excluded = set()
         inventory = node_manager.read_inventory()
         inv_vars = inventory.get("all", {}).get("vars", {})
-        children = inventory.get("all", {}).get("children", {})
 
-        # Existing node IPs from inventory
-        for section_name, section in children.items():
-            hosts = section.get("hosts", {})
-            if hosts:
-                for hostname, host_vars in hosts.items():
+        # Only exclude nodes that are actually in the k8s cluster
+        try:
+            from kubernetes import client
+            v1 = client.CoreV1Api()
+            k8s_nodes = v1.list_node()
+            for node in k8s_nodes.items:
+                for addr in (node.status.addresses or []):
+                    if addr.type in ("InternalIP", "ExternalIP"):
+                        excluded.add(addr.address)
+                # Also exclude the inventory IPs for this k8s node
+                node_name = node.metadata.name
+                inv_children = inventory.get("all", {}).get("children", {})
+                for section in inv_children.values():
+                    if not isinstance(section, dict):
+                        continue
+                    hosts = section.get("hosts") or {}
+                    if node_name in hosts and isinstance(hosts[node_name], dict):
+                        for key in ("ansible_host", "lan_ip", "zerotier_ip"):
+                            if hosts[node_name].get(key):
+                                excluded.add(hosts[node_name][key])
+                    for sub in (section.get("children") or {}).values():
+                        if not isinstance(sub, dict):
+                            continue
+                        sub_hosts = sub.get("hosts") or {}
+                        if node_name in sub_hosts and isinstance(sub_hosts[node_name], dict):
+                            for key in ("ansible_host", "lan_ip", "zerotier_ip"):
+                                if sub_hosts[node_name].get(key):
+                                    excluded.add(sub_hosts[node_name][key])
+        except Exception as e:
+            logger.warning(f"Could not query k8s nodes for exclusion: {e}")
+            # Fallback: exclude all inventory IPs
+            children = inventory.get("all", {}).get("children", {})
+            for section in children.values():
+                if not isinstance(section, dict):
+                    continue
+                for host_vars in (section.get("hosts") or {}).values():
                     if isinstance(host_vars, dict):
-                        if host_vars.get("ansible_host"):
-                            excluded.add(host_vars["ansible_host"])
-                        if host_vars.get("lan_ip"):
-                            excluded.add(host_vars["lan_ip"])
-                        if host_vars.get("zerotier_ip"):
-                            excluded.add(host_vars["zerotier_ip"])
-            # Check nested children
-            for sub_name, sub_section in section.get("children", {}).items():
-                if isinstance(sub_section, dict):
-                    sub_hosts = sub_section.get("hosts", {})
-                    if sub_hosts:
-                        for hostname, host_vars in sub_hosts.items():
-                            if isinstance(host_vars, dict):
-                                if host_vars.get("ansible_host"):
-                                    excluded.add(host_vars["ansible_host"])
-                                if host_vars.get("lan_ip"):
-                                    excluded.add(host_vars["lan_ip"])
-                                if host_vars.get("zerotier_ip"):
-                                    excluded.add(host_vars["zerotier_ip"])
+                        for key in ("ansible_host", "lan_ip", "zerotier_ip"):
+                            if host_vars.get(key):
+                                excluded.add(host_vars[key])
 
         # MetalLB VIP range
         network_mode = inv_vars.get("network_mode", "overlay")

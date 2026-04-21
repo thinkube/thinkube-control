@@ -380,27 +380,28 @@ fi
             ("overlay_nodes", "hosts"),
         ]
 
-        if hostname in children.get("baremetal", {}).get("hosts", {}):
-            del children["baremetal"]["hosts"][hostname]
+        bm_hosts = children.get("baremetal", {}).get("hosts") or {}
+        if hostname in bm_hosts:
+            del bm_hosts[hostname]
         for sub in ["headless", "desktops", "dgx"]:
-            sub_hosts = children.get("baremetal", {}).get("children", {}).get(sub, {}).get("hosts", {})
+            sub_hosts = (children.get("baremetal", {}).get("children") or {}).get(sub, {}).get("hosts") or {}
             if hostname in sub_hosts:
                 del sub_hosts[hostname]
 
         for arch in ["x86_64", "arm64"]:
-            arch_hosts = children.get("arch", {}).get("children", {}).get(arch, {}).get("hosts", {})
+            arch_hosts = (children.get("arch", {}).get("children") or {}).get(arch, {}).get("hosts") or {}
             if hostname in arch_hosts:
                 del arch_hosts[hostname]
 
-        workers = children.get("k8s", {}).get("children", {}).get("k8s_workers", {}).get("hosts", {})
+        workers = (children.get("k8s", {}).get("children") or {}).get("k8s_workers", {}).get("hosts") or {}
         if hostname in workers:
             del workers[hostname]
 
-        overlay = children.get("overlay_nodes", {}).get("hosts", {})
+        overlay = children.get("overlay_nodes", {}).get("hosts") or {}
         if hostname in overlay:
             del overlay[hostname]
 
-        gpu_hosts = children.get("baremetal_gpus", {}).get("hosts", {})
+        gpu_hosts = children.get("baremetal_gpus", {}).get("hosts") or {}
         if hostname in gpu_hosts:
             del gpu_hosts[hostname]
 
