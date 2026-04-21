@@ -368,8 +368,16 @@ async def discover_network(request: DiscoverNetworkRequest = DiscoverNetworkRequ
 async def verify_ssh(request: VerifySSHRequest):
     """Test SSH connectivity to selected nodes using the cluster key.
 
-    If key auth fails and a password is provided, distributes the key first.
+    If key auth fails, automatically distributes the key using the
+    system password from the environment (ANSIBLE_BECOME_PASSWORD).
+    Falls back to a user-supplied password if the env var is not set.
     """
+    password = (
+        request.password
+        or os.environ.get("ANSIBLE_BECOME_PASSWORD")
+        or os.environ.get("SYSTEM_PASSWORD")
+    )
+
     results = []
     for node_info in request.nodes:
         ip = node_info.get("ip", "")
@@ -379,8 +387,8 @@ async def verify_ssh(request: VerifySSHRequest):
         key_ok = await node_manager.test_ssh_key_auth(ip)
         if key_ok:
             results.append({"ip": ip, "ssh_status": "key_ok"})
-        elif request.password:
-            dist_result = await node_manager.distribute_ssh_key(ip, request.password)
+        elif password:
+            dist_result = await node_manager.distribute_ssh_key(ip, password)
             if dist_result["success"]:
                 results.append({"ip": ip, "ssh_status": "key_distributed"})
             else:
@@ -455,7 +463,12 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
 
         params = websocket.query_params
         nodes_json = params.get("nodes", "[]")
-        password = params.get("password", "")
+        password = (
+            params.get("password", "")
+            or os.environ.get("ANSIBLE_BECOME_PASSWORD")
+            or os.environ.get("SYSTEM_PASSWORD")
+            or ""
+        )
         nodes = _json.loads(nodes_json)
 
         if not nodes:

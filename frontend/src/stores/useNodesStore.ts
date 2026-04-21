@@ -68,7 +68,6 @@ interface NodesState {
   networkNodes: NetworkDiscoveredNode[];
   networkScanning: boolean;
   networkMode: string | null;
-  sshVerifying: boolean;
   hardwareDetecting: boolean;
 
   // Actions
@@ -92,9 +91,8 @@ interface NodesState {
   toggleNodeSelection: (ip: string) => void;
   selectAllNodes: () => void;
   deselectAllNodes: () => void;
-  verifySSH: (password?: string) => Promise<void>;
   detectHardwareBatch: () => Promise<void>;
-  addNodesBatch: (password?: string) => Promise<{ job_id: string } | null>;
+  addNodesBatch: () => Promise<{ job_id: string } | null>;
   clearNetworkNodes: () => void;
 }
 
@@ -108,7 +106,6 @@ export const useNodesStore = create<NodesState>((set, get) => ({
   networkNodes: [],
   networkScanning: false,
   networkMode: null,
-  sshVerifying: false,
   hardwareDetecting: false,
 
   listNodes: async () => {
@@ -216,43 +213,6 @@ export const useNodesStore = create<NodesState>((set, get) => ({
     }));
   },
 
-  verifySSH: async (password?: string) => {
-    const { networkNodes } = get();
-    const selected = networkNodes.filter((n) => n.selected);
-    if (selected.length === 0) return;
-
-    set({ sshVerifying: true, error: null });
-    try {
-      const response = await api.post('/nodes/verify-ssh', {
-        nodes: selected.map((n) => ({ ip: n.ip })),
-        password: password || undefined,
-      });
-
-      const results: Array<{ ip: string; ssh_status: NetworkDiscoveredNode['ssh_status']; error?: string }> =
-        response.data.results || [];
-      const resultMap = new Map(results.map((r) => [r.ip, r]));
-
-      set((state) => ({
-        networkNodes: state.networkNodes.map((n): NetworkDiscoveredNode => {
-          const r = resultMap.get(n.ip);
-          if (!r) return n;
-          return {
-            ...n,
-            ssh_status: r.ssh_status,
-            ssh_error: r.error,
-          };
-        }),
-        sshVerifying: false,
-      }));
-    } catch (err: any) {
-      console.error('SSH verification failed:', err);
-      set({
-        error: err.response?.data?.detail || err.message,
-        sshVerifying: false,
-      });
-    }
-  },
-
   detectHardwareBatch: async () => {
     const { networkNodes } = get();
     const selected = networkNodes.filter((n) => n.selected);
@@ -289,7 +249,7 @@ export const useNodesStore = create<NodesState>((set, get) => ({
     }
   },
 
-  addNodesBatch: async (password?: string) => {
+  addNodesBatch: async () => {
     const { networkNodes } = get();
     const selected = networkNodes.filter((n) => n.selected && n.hardware);
     if (selected.length === 0) return null;
@@ -308,7 +268,6 @@ export const useNodesStore = create<NodesState>((set, get) => ({
 
       const response = await api.post('/nodes/add-batch', {
         nodes: nodesPayload,
-        password: password || undefined,
       });
       return response.data;
     } catch (err: any) {

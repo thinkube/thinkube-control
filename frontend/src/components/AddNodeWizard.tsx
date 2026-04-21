@@ -26,13 +26,12 @@ import {
   AlertTriangle,
   Plus,
   Cpu,
-  Key,
 } from 'lucide-react';
 import { PlaybookExecutor, type PlaybookExecutorHandle } from '@/components/PlaybookExecutor';
 import { useNodesStore, type NetworkDiscoveredNode } from '@/stores/useNodesStore';
 import { getToken } from '@/lib/tokenManager';
 
-type WizardStep = 'scan' | 'select' | 'verify' | 'hardware' | 'adding';
+type WizardStep = 'scan' | 'select' | 'hardware' | 'adding';
 
 interface AddNodeWizardProps {
   open: boolean;
@@ -45,7 +44,6 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
     networkNodes,
     networkScanning,
     networkMode,
-    sshVerifying,
     hardwareDetecting,
     architectures,
     error,
@@ -53,7 +51,6 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
     toggleNodeSelection,
     selectAllNodes,
     deselectAllNodes,
-    verifySSH,
     detectHardwareBatch,
     addNodesBatch,
     clearNetworkNodes,
@@ -61,17 +58,9 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
 
   const [step, setStep] = useState<WizardStep>('scan');
   const [scanCidr, setScanCidr] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
   const playbookRef = useRef<PlaybookExecutorHandle>(null);
 
   const selectedNodes = networkNodes.filter((n) => n.selected);
-  const allNeedPassword = selectedNodes.some(
-    (n) => n.ssh_status === 'needs_password' || n.ssh_status === 'failed'
-  );
-  const allSSHReady = selectedNodes.length > 0 && selectedNodes.every(
-    (n) => n.ssh_status === 'key_ok' || n.ssh_status === 'key_distributed'
-  );
   const allHardwareDetected = selectedNodes.length > 0 && selectedNodes.every(
     (n) => n.hardware && !n.hardware.error
   );
@@ -85,23 +74,13 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
     setStep('select');
   };
 
-  const handleVerifySSH = async () => {
-    setStep('verify');
-    await verifySSH(password || undefined);
-  };
-
-  const handleRetryWithPassword = async () => {
-    if (!password) return;
-    await verifySSH(password);
-  };
-
   const handleDetectHardware = async () => {
     setStep('hardware');
     await detectHardwareBatch();
   };
 
   const handleAdd = async () => {
-    const result = await addNodesBatch(password || undefined);
+    const result = await addNodesBatch();
     if (!result?.job_id) return;
 
     setStep('adding');
@@ -119,7 +98,6 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
 
     const params = new URLSearchParams({
       nodes: JSON.stringify(nodesPayload),
-      password: password || '',
     });
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -139,43 +117,12 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
   const resetWizard = () => {
     setStep('scan');
     setScanCidr('');
-    setPassword('');
-    setShowPassword(false);
     clearNetworkNodes();
   };
 
   const handleClose = () => {
     resetWizard();
     onOpenChange(false);
-  };
-
-  const renderSSHStatus = (node: NetworkDiscoveredNode) => {
-    switch (node.ssh_status) {
-      case 'key_ok':
-      case 'key_distributed':
-        return (
-          <div className="flex items-center gap-1 text-green-500">
-            <CheckCircle2 className="w-3.5 h-3.5" />
-            <span className="text-xs">{node.ssh_status === 'key_ok' ? 'Key OK' : 'Key sent'}</span>
-          </div>
-        );
-      case 'needs_password':
-        return (
-          <div className="flex items-center gap-1 text-amber-500">
-            <Key className="w-3.5 h-3.5" />
-            <span className="text-xs">Needs password</span>
-          </div>
-        );
-      case 'failed':
-        return (
-          <div className="flex items-center gap-1 text-red-500" title={node.ssh_error}>
-            <XCircle className="w-3.5 h-3.5" />
-            <span className="text-xs">Failed</span>
-          </div>
-        );
-      default:
-        return <span className="text-xs text-muted-foreground">Not tested</span>;
-    }
   };
 
   const renderValidation = (node: NetworkDiscoveredNode) => {
@@ -204,7 +151,6 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
     );
   };
 
-  // Determine which dialog step to show
   const showDialog = open && step !== 'adding';
 
   return (
@@ -215,7 +161,6 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
             <TkDialogTitle>
               {step === 'scan' && 'Add Nodes — Scan Network'}
               {step === 'select' && 'Add Nodes — Select Nodes'}
-              {step === 'verify' && 'Add Nodes — Verify SSH'}
               {step === 'hardware' && 'Add Nodes — Hardware Detection'}
             </TkDialogTitle>
           </TkDialogHeader>
@@ -225,11 +170,7 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
                 Scan the network to discover machines available to join the cluster.
-                Performs a ping sweep and checks for SSH availability.
-              </p>
-              <p className="text-sm text-muted-foreground">
-                Prerequisites: target machines must have Ubuntu 24.04 and the cluster user account configured.
-                The app will handle SSH key distribution, ZeroTier setup, and cluster joining automatically.
+                Only Ubuntu machines with the cluster user account and matching credentials will be shown.
               </p>
 
               <div className="space-y-2">
@@ -262,15 +203,16 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
           {step === 'select' && (
             <div className="space-y-4">
               {networkNodes.length === 0 ? (
-                <TkInfoAlert title="No nodes found">
-                  No new machines were discovered on the network.
-                  Make sure the target machines are powered on and accessible.
+                <TkInfoAlert title="No eligible nodes found">
+                  No machines were found that meet the requirements: Ubuntu with the cluster
+                  user account and matching credentials. Make sure the target machines are powered on,
+                  accessible, and have the correct user configured.
                 </TkInfoAlert>
               ) : (
                 <>
                   <div className="flex items-center justify-between">
                     <p className="text-sm text-muted-foreground">
-                      Found {networkNodes.length} node(s). Select the ones you want to add.
+                      Found {networkNodes.length} eligible node(s). Select the ones you want to add.
                     </p>
                     <div className="flex gap-2">
                       <TkButton intent="ghost" size="sm" onClick={selectAllNodes}>Select All</TkButton>
@@ -285,11 +227,7 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
                           <TkTableHead className="w-10"></TkTableHead>
                           <TkTableHead className="font-semibold">IP Address</TkTableHead>
                           <TkTableHead className="font-semibold">Hostname</TkTableHead>
-                          {networkMode === 'overlay' && (
-                            <TkTableHead className="font-semibold">ZeroTier IP</TkTableHead>
-                          )}
-                          <TkTableHead className="font-semibold">SSH</TkTableHead>
-                          <TkTableHead className="font-semibold">Confidence</TkTableHead>
+                          <TkTableHead className="font-semibold">OS</TkTableHead>
                         </TkTableRow>
                       </TkTableHeader>
                       <TkTableBody>
@@ -307,28 +245,8 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
                             </TkTableCell>
                             <TkTableCell className="font-mono text-sm">{node.ip}</TkTableCell>
                             <TkTableCell>{node.hostname || '—'}</TkTableCell>
-                            {networkMode === 'overlay' && (
-                              <TkTableCell className="font-mono text-sm">
-                                {node.zerotier_ip || '—'}
-                              </TkTableCell>
-                            )}
                             <TkTableCell>
-                              {node.ssh_available ? (
-                                <div className="flex items-center gap-1 text-green-500">
-                                  <CheckCircle2 className="w-3.5 h-3.5" />
-                                  <span className="text-xs">Open</span>
-                                </div>
-                              ) : (
-                                <div className="flex items-center gap-1 text-red-500">
-                                  <XCircle className="w-3.5 h-3.5" />
-                                  <span className="text-xs">Closed</span>
-                                </div>
-                              )}
-                            </TkTableCell>
-                            <TkTableCell>
-                              <TkBadge appearance={node.confidence === 'confirmed' ? 'prominent' : 'muted'}>
-                                {node.confidence}
-                              </TkBadge>
+                              <TkBadge appearance="prominent">Ubuntu</TkBadge>
                             </TkTableCell>
                           </TkTableRow>
                         ))}
@@ -343,84 +261,8 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
               <TkDialogFooter>
                 <TkButton intent="ghost" onClick={() => setStep('scan')}>Back</TkButton>
                 <TkButton
-                  onClick={handleVerifySSH}
-                  disabled={selectedNodes.length === 0 || sshVerifying}
-                  className="gap-2"
-                >
-                  {sshVerifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Key className="w-4 h-4" />}
-                  {sshVerifying ? 'Verifying...' : 'Verify SSH'}
-                </TkButton>
-              </TkDialogFooter>
-            </div>
-          )}
-
-          {/* Step 3: Verify SSH */}
-          {step === 'verify' && (
-            <div className="space-y-4">
-              <div className="overflow-x-auto rounded-lg border">
-                <TkTable>
-                  <TkTableHeader>
-                    <TkTableRow>
-                      <TkTableHead className="font-semibold">IP Address</TkTableHead>
-                      <TkTableHead className="font-semibold">Hostname</TkTableHead>
-                      <TkTableHead className="font-semibold">SSH Status</TkTableHead>
-                    </TkTableRow>
-                  </TkTableHeader>
-                  <TkTableBody>
-                    {selectedNodes.map((node) => (
-                      <TkTableRow key={node.ip}>
-                        <TkTableCell className="font-mono text-sm">{node.ip}</TkTableCell>
-                        <TkTableCell>{node.hostname || '—'}</TkTableCell>
-                        <TkTableCell>{renderSSHStatus(node)}</TkTableCell>
-                      </TkTableRow>
-                    ))}
-                  </TkTableBody>
-                </TkTable>
-              </div>
-
-              {allNeedPassword && (
-                <TkAlert className="bg-warning/10 text-warning border-warning/20">
-                  <Key className="h-5 w-5" />
-                  <div>
-                    <TkAlertTitle className="font-medium">SSH Password Required</TkAlertTitle>
-                    <TkAlertDescription className="text-sm">
-                      Some nodes need the cluster SSH key distributed.
-                      Enter the password for the cluster user account on these machines.
-                    </TkAlertDescription>
-                  </div>
-                </TkAlert>
-              )}
-
-              {allNeedPassword && (
-                <div className="flex gap-2 items-end">
-                  <div className="flex-1 space-y-1">
-                    <TkLabel>SSH Password</TkLabel>
-                    <TkInput
-                      type={showPassword ? 'text' : 'password'}
-                      placeholder="Password for the cluster user"
-                      value={password}
-                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)}
-                    />
-                  </div>
-                  <TkButton
-                    intent="secondary"
-                    onClick={handleRetryWithPassword}
-                    disabled={!password || sshVerifying}
-                    className="gap-2"
-                  >
-                    {sshVerifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Key className="w-4 h-4" />}
-                    Distribute Key
-                  </TkButton>
-                </div>
-              )}
-
-              {error && <TkErrorAlert title="Error">{error}</TkErrorAlert>}
-
-              <TkDialogFooter>
-                <TkButton intent="ghost" onClick={() => setStep('select')}>Back</TkButton>
-                <TkButton
                   onClick={handleDetectHardware}
-                  disabled={!allSSHReady || hardwareDetecting}
+                  disabled={selectedNodes.length === 0 || hardwareDetecting}
                   className="gap-2"
                 >
                   {hardwareDetecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Cpu className="w-4 h-4" />}
@@ -430,7 +272,7 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
             </div>
           )}
 
-          {/* Step 4: Hardware Detection Results */}
+          {/* Step 3: Hardware Detection Results */}
           {step === 'hardware' && (
             <div className="space-y-4">
               {hardwareDetecting ? (
@@ -528,7 +370,7 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
               {error && <TkErrorAlert title="Error">{error}</TkErrorAlert>}
 
               <TkDialogFooter>
-                <TkButton intent="ghost" onClick={() => setStep('verify')}>Back</TkButton>
+                <TkButton intent="ghost" onClick={() => setStep('select')}>Back</TkButton>
                 <TkButton
                   onClick={handleAdd}
                   disabled={!allHardwareDetected}

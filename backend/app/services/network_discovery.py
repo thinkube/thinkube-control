@@ -10,6 +10,7 @@ In both modes, existing cluster nodes and MetalLB VIP ranges are filtered out.
 import asyncio
 import ipaddress
 import logging
+import os
 import socket
 from typing import Any, Dict, List, Optional, Set
 
@@ -333,14 +334,29 @@ class NetworkDiscovery:
 
         return nodes
 
+    async def _verify_ssh_auth(self, ip: str) -> bool:
+        """Check if we can SSH into a node using cluster key or env password."""
+        from app.services.node_manager import node_manager
+
+        if await node_manager.test_ssh_key_auth(ip):
+            return True
+
+        password = os.environ.get("ANSIBLE_BECOME_PASSWORD") or os.environ.get("SYSTEM_PASSWORD")
+        if not password:
+            return False
+
+        result = await node_manager.distribute_ssh_key(ip, password)
+        return result.get("success", False)
+
     async def discover(
         self, scan_cidrs: Optional[List[str]] = None
     ) -> Dict[str, Any]:
-        """Discover nodes by ping-sweeping one or more CIDRs.
+        """Discover eligible nodes by scanning CIDRs.
 
-        Always uses ping sweep regardless of network mode, since new nodes
-        won't have ZeroTier installed yet. The app handles ZeroTier setup
-        during the add pipeline.
+        Only returns nodes that:
+        - Are running Ubuntu
+        - Have SSH available
+        - Accept the cluster SSH key or env password
 
         Args:
             scan_cidrs: CIDRs to scan. Defaults to the inventory's network_cidr.
@@ -348,11 +364,46 @@ class NetworkDiscovery:
         network_mode = self.get_network_mode()
         nodes = await self.discover_local_nodes(scan_cidrs)
 
+        # Filter: Ubuntu only
+        ubuntu_nodes = [n for n in nodes if n.is_ubuntu]
+
+        # Filter: SSH auth must work (key or env password)
+        eligible = []
+        ssh_results = await asyncio.gather(
+            *[self._verify_ssh_auth(n.ip) for n in ubuntu_nodes]
+        )
+        for node, ssh_ok in zip(ubuntu_nodes, ssh_results):
+            if ssh_ok:
+                eligible.append(node)
+
+        # Resolve hostnames via SSH for eligible nodes
+        for node in eligible:
+            if not node.hostname:
+                node.hostname = await self._get_hostname_via_ssh(node.ip)
+
         return {
-            "nodes": [n.to_dict() for n in nodes],
+            "nodes": [n.to_dict() for n in eligible],
             "network_mode": network_mode,
-            "node_count": len(nodes),
+            "node_count": len(eligible),
         }
+
+    async def _get_hostname_via_ssh(self, ip: str) -> Optional[str]:
+        """Get hostname from a node via SSH."""
+        ssh_key_path = ansible_env.get_ssh_key_path()
+        username = os.environ.get("SYSTEM_USERNAME", "thinkube")
+        cmd = f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i {ssh_key_path} {username}@{ip} hostname"
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd.split(),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+            if process.returncode == 0:
+                return stdout.decode().strip()
+        except Exception:
+            pass
+        return None
 
 
 network_discovery = NetworkDiscovery()
