@@ -134,6 +134,8 @@ class PrometheusClient:
         """
         results = await cls.query(
             'kube_pod_container_resource_limits{resource="nvidia_com_gpu"}'
+            ' * on(namespace, pod) group_left()'
+            ' (kube_pod_status_phase{phase=~"Running|Pending"} == 1)'
         )
         if results is None:
             return None
