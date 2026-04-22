@@ -100,11 +100,17 @@
         - (admin_password is not defined or admin_password | length == 0)
 
   tasks:
-    - name: Ensure skopeo is installed
-      ansible.builtin.apt:
-        name: skopeo
-        state: present
+    - name: Check if crane is installed
+      ansible.builtin.stat:
+        path: /usr/local/bin/crane
+      register: crane_bin
+
+    - name: Install crane binary
+      ansible.builtin.shell: |
+        curl -sL https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_{{ 'arm64' if ansible_facts['architecture'] == 'aarch64' else 'x86_64' }}.tar.gz | tar xz -C /usr/local/bin crane
+        chmod +x /usr/local/bin/crane
       become: true
+      when: not crane_bin.stat.exists
 
     - name: Mirror the image
       include_role:
