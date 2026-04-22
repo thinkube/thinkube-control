@@ -5,8 +5,14 @@
 # tasks/main.yaml for image_mirror role
 # Description: Mirrors container images from a source registry to a destination registry
 #   using podman pull/push (with local cache) and crane for multi-arch manifest lists.
+#
+# Version pinning strategy: source images are pinned to specific versions.
+# The role checks if the pinned version tag exists in Harbor to decide whether to skip.
+# When source_tag != dest_tag, both tags are pushed so deployments can use the
+# dest_tag (e.g. :latest) while the version tag enables skip-on-rerun.
+#
 # Parameters:
-#   source_image: Source image to pull from
+#   source_image: Source image to pull from (should have pinned version tag)
 #   destination_image: Full path to the destination image
 #   harbor_api_user: Harbor API username for checking artifacts
 #   harbor_api_password: Harbor API password for checking artifacts
@@ -30,9 +36,18 @@
     harbor_host: "{{ dest_parts[0] }}"
     project_name: "{{ dest_parts[1] }}"
 
-- name: Check if image already exists in Harbor
+- name: Extract source tag for version pinning
+  ansible.builtin.set_fact:
+    source_tag: "{{ source_image.split(':')[-1] if ':' in source_image else 'latest' }}"
+    _dual_tag: "{{ (source_image.split(':')[-1] if ':' in source_image else 'latest') != (dest_repo_tag.split(':')[1] if ':' in dest_repo_tag else 'latest') }}"
+
+- name: Determine version check tag
+  ansible.builtin.set_fact:
+    _version_tag: "{{ source_tag if _dual_tag else dest_tag }}"
+
+- name: Check if pinned version exists in Harbor
   ansible.builtin.uri:
-    url: "https://{{ harbor_host }}/api/v2.0/projects/{{ project_name }}/repositories/{{ repo_name }}/artifacts/{{ dest_tag }}"
+    url: "https://{{ harbor_host }}/api/v2.0/projects/{{ project_name }}/repositories/{{ repo_name }}/artifacts/{{ _version_tag }}"
     method: GET
     headers:
       Authorization: "Basic {{ (harbor_api_user + ':' + harbor_api_password) | b64encode }}"
@@ -50,17 +65,13 @@
   ansible.builtin.set_fact:
     _missing_archs: "{{ required_architectures | default([]) | difference(_existing_archs) }}"
 
-- name: Determine if tag is mutable (latest)
-  ansible.builtin.set_fact:
-    is_mutable_tag: "{{ dest_tag == 'latest' }}"
-
 - name: Determine if copy needed
   ansible.builtin.set_fact:
-    _needs_copy: "{{ image_check.status != 200 or is_mutable_tag or (_existing_archs | length == 0) or (_missing_archs | length > 0) }}"
+    _needs_copy: "{{ image_check.status != 200 or (_existing_archs | length == 0) or (_missing_archs | length > 0) }}"
 
 - name: Skip image already mirrored with all architectures
   ansible.builtin.debug:
-    msg: "Image {{ destination_image }} already has architectures {{ _existing_archs }}. Skipping."
+    msg: "Image {{ repo_name }}:{{ _version_tag }} already has architectures {{ _existing_archs }}. Skipping."
   when: not _needs_copy
 
 - name: Pull and push each missing architecture
@@ -110,3 +121,31 @@
           ansible.builtin.debug:
             msg: "WARNING: crane index append failed for {{ destination_image }} — image may be single-arch. Add 'architectures' field to metadata. Error: {{ manifest_result.stderr }}"
           when: manifest_result.rc != 0
+
+    - name: Add version tag alias when using dual tags
+      when: _dual_tag | bool
+      block:
+        - name: Login to Harbor with crane (for tagging)
+          ansible.builtin.command: >
+            crane auth login
+            --insecure
+            -u {{ harbor_push_user }}
+            -p {{ harbor_push_password }}
+            {{ harbor_host }}
+          changed_when: false
+          no_log: true
+          when: required_architectures | default([]) | length <= 1
+
+        - name: Tag destination as version tag
+          ansible.builtin.command: >
+            crane tag --insecure
+            {{ destination_image }}
+            {{ source_tag }}
+          register: tag_result
+          changed_when: tag_result.rc == 0
+          failed_when: false
+
+        - name: Warn if version tagging failed
+          ansible.builtin.debug:
+            msg: "WARNING: crane tag failed for {{ destination_image }} → {{ source_tag }}: {{ tag_result.stderr | default('') }}"
+          when: tag_result.rc | default(0) != 0
