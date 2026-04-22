@@ -124,6 +124,7 @@ async def _stream_playbook(
             "-i", str(inventory_path),
             str(playbook_path),
             "-e", f"@{temp_vars_path}",
+            "-v",
         ]
         if limit:
             cmd.extend(["--limit", limit])

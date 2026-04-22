@@ -434,7 +434,11 @@ Timestamp: ${new Date().toISOString()}
 
 `
       const logText = logOutput.map((log) => log.message).join('\n')
-      const fullText = header + logText
+      const maxLogChars = 50000
+      const trimmedLog = logText.length > maxLogChars
+        ? '... [truncated beginning] ...\n' + logText.slice(-maxLogChars)
+        : logText
+      const fullText = header + trimmedLog
 
       await navigator.clipboard.writeText(fullText)
       setCopySuccess(true)
