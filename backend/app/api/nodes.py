@@ -526,6 +526,9 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
 
         added_hostnames = []
 
+        batch_failed = False
+        failed_hostname = ""
+
         for node_info in nodes:
             ip = node_info.get("ip", "")
             hostname = node_info.get("hostname", "")
@@ -549,14 +552,11 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                 if not dist_result["success"]:
                     await websocket.send_json({
                         "type": "error",
-                        "message": f"[{hostname or ip}] SSH key distribution failed: {dist_result.get('error')}",
+                        "message": f"[{hostname or ip}] SSH key distribution failed: {dist_result.get('error')}. Aborting batch.",
                     })
-                    await websocket.send_json({
-                        "type": "node_complete",
-                        "hostname": hostname or ip,
-                        "success": False,
-                    })
-                    continue
+                    batch_failed = True
+                    failed_hostname = hostname or ip
+                    break
                 await websocket.send_json({
                     "type": "ok",
                     "message": f"[{hostname or ip}] SSH key distributed successfully",
@@ -564,14 +564,11 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             else:
                 await websocket.send_json({
                     "type": "error",
-                    "message": f"[{hostname or ip}] SSH key auth failed and no password provided",
+                    "message": f"[{hostname or ip}] SSH key auth failed and no password provided. Aborting batch.",
                 })
-                await websocket.send_json({
-                    "type": "node_complete",
-                    "hostname": hostname or ip,
-                    "success": False,
-                })
-                continue
+                batch_failed = True
+                failed_hostname = hostname or ip
+                break
 
             step += 1
 
@@ -593,14 +590,20 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                         })
                     else:
                         await websocket.send_json({
-                            "type": "warning",
-                            "message": f"[{hostname or ip}] LVM expansion failed: {result.get('error')} — continuing anyway",
+                            "type": "error",
+                            "message": f"[{hostname or ip}] LVM expansion failed: {result.get('error')}. Aborting batch.",
                         })
+                        batch_failed = True
+                        failed_hostname = hostname or ip
+                        break
                 except Exception as e:
                     await websocket.send_json({
-                        "type": "warning",
-                        "message": f"[{hostname or ip}] LVM expansion failed: {e} — continuing anyway",
+                        "type": "error",
+                        "message": f"[{hostname or ip}] LVM expansion failed: {e}. Aborting batch.",
                     })
+                    batch_failed = True
+                    failed_hostname = hostname or ip
+                    break
                 step += 1
 
             # Step: ZeroTier setup (if overlay mode)
@@ -616,27 +619,21 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                 if not assigned_ip:
                     await websocket.send_json({
                         "type": "error",
-                        "message": f"[{hostname or ip}] No available ZeroTier IPs",
+                        "message": f"[{hostname or ip}] No available ZeroTier IPs. Aborting batch.",
                     })
-                    await websocket.send_json({
-                        "type": "node_complete",
-                        "hostname": hostname or ip,
-                        "success": False,
-                    })
-                    continue
+                    batch_failed = True
+                    failed_hostname = hostname or ip
+                    break
 
                 zt_result = await node_manager.setup_zerotier_on_node(ip, assigned_ip)
                 if not zt_result["success"]:
                     await websocket.send_json({
                         "type": "error",
-                        "message": f"[{hostname or ip}] ZeroTier setup failed: {zt_result.get('error')}",
+                        "message": f"[{hostname or ip}] ZeroTier setup failed: {zt_result.get('error')}. Aborting batch.",
                     })
-                    await websocket.send_json({
-                        "type": "node_complete",
-                        "hostname": hostname or ip,
-                        "success": False,
-                    })
-                    continue
+                    batch_failed = True
+                    failed_hostname = hostname or ip
+                    break
 
                 zerotier_ip = zt_result["zerotier_ip"]
                 await websocket.send_json({
@@ -662,14 +659,11 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                 if "error" in hw:
                     await websocket.send_json({
                         "type": "error",
-                        "message": f"[{hostname or ip}] Hardware detection failed: {hw['error']}",
+                        "message": f"[{hostname or ip}] Hardware detection failed: {hw['error']}. Aborting batch.",
                     })
-                    await websocket.send_json({
-                        "type": "node_complete",
-                        "hostname": hostname or ip,
-                        "success": False,
-                    })
-                    continue
+                    batch_failed = True
+                    failed_hostname = hostname or ip
+                    break
 
                 hostname = hostname or hw.get("hostname", ip)
                 architecture = hw.get("architecture", "unknown")
@@ -698,14 +692,11 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             else:
                 await websocket.send_json({
                     "type": "error",
-                    "message": f"[{hostname}] Python setup failed: {py_result.get('error')}",
+                    "message": f"[{hostname}] Python setup failed: {py_result.get('error')}. Aborting batch.",
                 })
-                await websocket.send_json({
-                    "type": "node_complete",
-                    "hostname": hostname,
-                    "success": False,
-                })
-                continue
+                batch_failed = True
+                failed_hostname = hostname
+                break
             step += 1
 
             # Step: Update inventory
@@ -733,16 +724,22 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             except Exception as e:
                 await websocket.send_json({
                     "type": "error",
-                    "message": f"[{hostname}] Inventory update failed: {e}",
+                    "message": f"[{hostname}] Inventory update failed: {e}. Aborting batch.",
                 })
-                await websocket.send_json({
-                    "type": "node_complete",
-                    "hostname": hostname,
-                    "success": False,
-                })
-                continue
+                batch_failed = True
+                failed_hostname = hostname
+                break
 
             step += 1
+
+        if batch_failed:
+            await websocket.send_json({
+                "type": "complete",
+                "success": False,
+                "message": f"Batch aborted: {failed_hostname} failed. No nodes were joined.",
+            })
+            await websocket.close()
+            return
 
         if not added_hostnames:
             await websocket.send_json({

@@ -412,7 +412,7 @@ class NetworkDiscovery:
     async def _get_hostname_via_ssh(self, ip: str) -> Optional[str]:
         """Get hostname from a node via SSH."""
         ssh_key_path = ansible_env.get_ssh_key_path()
-        username = os.environ.get("SYSTEM_USERNAME", "thinkube")
+        username = os.environ["SYSTEM_USERNAME"]
         cmd = f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i {ssh_key_path} {username}@{ip} hostname"
         try:
             process = await asyncio.create_subprocess_exec(

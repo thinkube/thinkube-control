@@ -620,7 +620,7 @@ fi
     async def test_ssh_key_auth(self, ip: str) -> bool:
         """Test if the cluster SSH key can authenticate to a node."""
         ssh_key_path = ansible_env.get_ssh_key_path()
-        username = os.environ.get("SYSTEM_USERNAME", "thinkube")
+        username = os.environ["SYSTEM_USERNAME"]
 
         if not ssh_key_path.exists():
             return False
@@ -649,7 +649,7 @@ fi
         the private key.
         """
         ssh_key_path = ansible_env.get_ssh_key_path()
-        username = os.environ.get("SYSTEM_USERNAME", "thinkube")
+        username = os.environ["SYSTEM_USERNAME"]
 
         if not ssh_key_path.exists():
             return {"success": False, "error": f"SSH key not found at {ssh_key_path}"}
@@ -715,7 +715,7 @@ fi
         4. Configure firewall and IP forwarding
         """
         ssh_key_path = ansible_env.get_ssh_key_path()
-        username = os.environ.get("SYSTEM_USERNAME", "thinkube")
+        username = os.environ["SYSTEM_USERNAME"]
         inventory = self.read_inventory()
         inv_vars = inventory.get("all", {}).get("vars", {})
         network_id = inv_vars.get("zerotier_network_id")
@@ -865,7 +865,7 @@ fi
     async def expand_lvm(self, ip: str, lv_path: str) -> Dict[str, Any]:
         """Expand an LVM logical volume to use all free space in its volume group."""
         ssh_key_path = ansible_env.get_ssh_key_path()
-        username = os.environ.get("SYSTEM_USERNAME", "thinkube")
+        username = os.environ["SYSTEM_USERNAME"]
         password = os.environ.get("ANSIBLE_BECOME_PASSWORD", "")
         ssh_opts = "-o StrictHostKeyChecking=no -o ConnectTimeout=10"
 
@@ -896,7 +896,7 @@ df -BG / 2>/dev/null | tail -1 | awk '{{print $2}}' | tr -d 'G'
     async def prepare_ansible_python(self, ip: str) -> Dict[str, Any]:
         """Create the Python venv on a node that Ansible expects for remote execution."""
         ssh_key_path = ansible_env.get_ssh_key_path()
-        username = os.environ.get("SYSTEM_USERNAME", "thinkube")
+        username = os.environ["SYSTEM_USERNAME"]
         password = os.environ.get("ANSIBLE_BECOME_PASSWORD", "")
         ssh_opts = "-o StrictHostKeyChecking=no -o ConnectTimeout=10"
 
