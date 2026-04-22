@@ -8,8 +8,10 @@
 # Parameters:
 #   source_image: Source image to pull from
 #   destination_image: Full path to the destination image
-#   harbor_api_user: Harbor API username (default: admin)
-#   harbor_api_password: Harbor API password
+#   harbor_api_user: Harbor API username for checking artifacts (default: admin)
+#   harbor_api_password: Harbor API password for checking artifacts
+#   harbor_push_user: Registry push user (e.g. robot$thinkube)
+#   harbor_push_password: Registry push password/token
 
 - name: Display processing
   ansible.builtin.debug:
@@ -56,11 +58,30 @@
     msg: "Image {{ destination_image }} already has architectures {{ _existing_archs }}. Skipping."
   when: not _needs_copy
 
+- name: Ensure skopeo authfile directory exists
+  ansible.builtin.file:
+    path: "{{ ansible_facts.env.HOME }}/.skopeo"
+    state: directory
+    mode: '0700'
+  when: _needs_copy
+
+- name: Login to destination registry with skopeo
+  ansible.builtin.command: >
+    skopeo login
+    --tls-verify=false
+    -u {{ harbor_push_user }}
+    -p {{ harbor_push_password }}
+    --authfile {{ ansible_facts.env.HOME }}/.skopeo/auth.json
+    {{ harbor_host }}
+  changed_when: false
+  no_log: true
+  when: _needs_copy
+
 - name: Copy image with skopeo (multi-arch)
   ansible.builtin.command: >
     skopeo copy --all
-    --dest-tls-verify=true
-    --dest-creds={{ harbor_api_user }}:{{ harbor_api_password }}
+    --dest-tls-verify=false
+    --authfile {{ ansible_facts.env.HOME }}/.skopeo/auth.json
     docker://{{ source_image }}
     docker://{{ destination_image }}
   register: skopeo_result

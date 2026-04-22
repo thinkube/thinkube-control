@@ -6,15 +6,13 @@
 #
 # Requirements:
 #   - Harbor registry must be installed and accessible
-#   - Podman or Docker must be installed on the control node
+#   - Skopeo must be installed on the control node
 #   - HARBOR_ROBOT_TOKEN environment variable must be set
 #
 # Variables passed by API:
 #   - source_image: Source image URL (required)
 #   - image_description: Description of the image (optional)
 #   - image_category: Category (user/custom) (optional, default: user)
-#
-# 🤖 [AI-assisted]
 
 - name: Mirror Container Image to Harbor
   hosts: k8s_control_plane
@@ -22,12 +20,6 @@
   vars:
     image_category: "{{ image_category | default('user') }}"
     image_description: "{{ image_description | default('User-added image') }}"
-
-    # Parse source image to build destination
-    # Examples:
-    # docker.io/library/nginx:latest -> registry.thinkube.com/library/nginx:latest
-    # quay.io/prometheus/prometheus:v2.45.0 -> registry.thinkube.com/library/prometheus:v2.45.0
-    # mysql:8.0 -> registry.thinkube.com/library/mysql:8.0
 
   pre_tasks:
     - name: Validate required variables
@@ -41,12 +33,10 @@
 
     - name: Parse source image components
       ansible.builtin.set_fact:
-        # Handle different image formats
         parsed_image: "{{ source_image | regex_replace('^docker\\.io/', '') | regex_replace('^index\\.docker\\.io/', '') }}"
 
     - name: Extract image name and tag
       ansible.builtin.set_fact:
-        # For images like: library/nginx:latest, nginx:latest, quay.io/prometheus/prometheus:latest
         image_parts: "{{ parsed_image.split('/') }}"
         has_registry: "{{ '.' in parsed_image.split('/')[0] }}"
 
@@ -83,8 +73,8 @@
 
     - name: Get robot token from env file
       ansible.builtin.shell: |
-        if [ -f {{ ansible_env.HOME }}/.env ]; then
-          grep HARBOR_ROBOT_TOKEN {{ ansible_env.HOME }}/.env | cut -d= -f2
+        if [ -f {{ ansible_facts.env.HOME }}/.env ]; then
+          grep HARBOR_ROBOT_TOKEN {{ ansible_facts.env.HOME }}/.env | cut -d= -f2
         else
           echo ""
         fi
@@ -110,44 +100,11 @@
         - (admin_password is not defined or admin_password | length == 0)
 
   tasks:
-    - name: Check container runtime
-      ansible.builtin.shell: which podman || which docker
-      register: container_runtime_check
-      changed_when: false
-      failed_when: false
-
-    - name: Set container runtime
-      ansible.builtin.set_fact:
-        container_runtime: "{{ 'podman' if 'podman' in container_runtime_check.stdout else 'docker' }}"
-
-    - name: Fail if no container runtime available
-      ansible.builtin.fail:
-        msg: "Neither podman nor docker is available on the system"
-      when: container_runtime_check.rc != 0
-
-    - name: Login to Harbor registry (using robot token)
-      ansible.builtin.command: >
-        {{ container_runtime }} login registry.{{ domain_name }}
-        --username {{ harbor_robot_user }}
-        --password {{ harbor_robot_token }}
-        --tls-verify=false
-      register: harbor_login
-      changed_when: "'Login Succeeded' in harbor_login.stdout"
-      no_log: true
-      when: harbor_robot_token is defined and harbor_robot_token | length > 0
-
-    - name: Login to Harbor registry (using admin password)
-      ansible.builtin.command: >
-        {{ container_runtime }} login registry.{{ domain_name }}
-        --username {{ harbor_admin_user }}
-        --password {{ admin_password }}
-        --tls-verify=false
-      register: harbor_login_admin
-      changed_when: "'Login Succeeded' in harbor_login_admin.stdout"
-      no_log: true
-      when:
-        - harbor_robot_token is not defined or harbor_robot_token | length == 0
-        - admin_password is defined and admin_password | length > 0
+    - name: Ensure skopeo is installed
+      ansible.builtin.apt:
+        name: skopeo
+        state: present
+      become: true
 
     - name: Mirror the image
       include_role:
@@ -157,17 +114,13 @@
         destination_image: "{{ destination_image }}"
         harbor_api_user: "{{ harbor_admin_user }}"
         harbor_api_password: "{{ admin_password }}"
-
-    - name: Logout from Harbor registry
-      ansible.builtin.command: >-
-        {{ container_runtime }} logout registry.{{ domain_name }}
-      changed_when: false
-      failed_when: false
+        harbor_push_user: "{{ harbor_robot_user }}"
+        harbor_push_password: "{{ harbor_robot_token }}"
 
     - name: Display success message
       ansible.builtin.debug:
         msg:
-          - "✅ Image mirrored successfully:"
+          - "Image mirrored successfully:"
           - "  Source: {{ source_image }}"
           - "  Destination: {{ destination_image }}"
           - "  Category: {{ image_category }}"
