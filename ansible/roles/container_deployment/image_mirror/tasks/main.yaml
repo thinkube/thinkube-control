@@ -4,11 +4,11 @@
 ---
 # tasks/main.yaml for image_mirror role
 # Description: Mirrors container images from a source registry to a destination registry
-#   using crane to copy only missing architectures.
+#   using podman pull/push (with local cache) and crane for multi-arch manifest lists.
 # Parameters:
 #   source_image: Source image to pull from
 #   destination_image: Full path to the destination image
-#   harbor_api_user: Harbor API username for checking artifacts (default: admin)
+#   harbor_api_user: Harbor API username for checking artifacts
 #   harbor_api_password: Harbor API password for checking artifacts
 #   harbor_push_user: Registry push user (e.g. robot$thinkube)
 #   harbor_push_password: Registry push password/token
@@ -30,10 +30,6 @@
     harbor_host: "{{ dest_parts[0] }}"
     project_name: "{{ dest_parts[1] }}"
 
-- name: Determine if tag is mutable (latest)
-  ansible.builtin.set_fact:
-    is_mutable_tag: "{{ dest_tag == 'latest' }}"
-
 - name: Check if image already exists in Harbor
   ansible.builtin.uri:
     url: "https://{{ harbor_host }}/api/v2.0/projects/{{ project_name }}/repositories/{{ repo_name }}/artifacts/{{ dest_tag }}"
@@ -54,6 +50,10 @@
   ansible.builtin.set_fact:
     _missing_archs: "{{ required_architectures | default([]) | difference(_existing_archs) }}"
 
+- name: Determine if tag is mutable (latest)
+  ansible.builtin.set_fact:
+    is_mutable_tag: "{{ dest_tag == 'latest' }}"
+
 - name: Determine if copy needed
   ansible.builtin.set_fact:
     _needs_copy: "{{ image_check.status != 200 or is_mutable_tag or (_existing_archs | length == 0) or (_missing_archs | length > 0) }}"
@@ -63,29 +63,50 @@
     msg: "Image {{ destination_image }} already has architectures {{ _existing_archs }}. Skipping."
   when: not _needs_copy
 
-- name: Login to destination registry with crane
-  ansible.builtin.command: >
-    crane auth login
-    --insecure
-    -u {{ harbor_push_user }}
-    -p {{ harbor_push_password }}
-    {{ harbor_host }}
-  changed_when: false
-  no_log: true
+- name: Pull and push each missing architecture
   when: _needs_copy
+  block:
+    - name: Login to Harbor with podman
+      ansible.builtin.command: >
+        podman login {{ harbor_host }}
+        --username {{ harbor_push_user }}
+        --password {{ harbor_push_password }}
+        --tls-verify=false
+      changed_when: false
+      no_log: true
 
-- name: Build crane platform flags
-  ansible.builtin.set_fact:
-    _crane_platform_args: "{{ required_architectures | default([]) | map('regex_replace', '^(.*)$', '--platform linux/\\1') | join(' ') }}"
-  when: _needs_copy
+    - name: Pull and push per architecture
+      include_tasks: mirror_arch.yaml
+      loop: "{{ _missing_archs if (_missing_archs | length > 0) else required_architectures | default([]) }}"
+      loop_control:
+        loop_var: _arch
 
-- name: Copy image with crane (filtered platforms)
-  ansible.builtin.command: >
-    crane copy
-    --insecure
-    {{ _crane_platform_args }}
-    {{ source_image }}
-    {{ destination_image }}
-  register: crane_result
-  changed_when: crane_result.rc == 0
-  when: _needs_copy
+    - name: Create multi-arch manifest list with crane
+      when: required_architectures | default([]) | length > 1
+      block:
+        - name: Login to Harbor with crane
+          ansible.builtin.command: >
+            crane auth login
+            --insecure
+            -u {{ harbor_push_user }}
+            -p {{ harbor_push_password }}
+            {{ harbor_host }}
+          changed_when: false
+          no_log: true
+
+        - name: Build manifest from per-arch tags
+          ansible.builtin.command: >
+            crane index append
+            --insecure
+            --tag {{ destination_image }}
+            {% for arch in required_architectures | default([]) %}
+            --manifest {{ destination_image }}-{{ arch }}
+            {% endfor %}
+          register: manifest_result
+          changed_when: manifest_result.rc == 0
+          failed_when: false
+
+        - name: Warn if manifest creation failed
+          ansible.builtin.debug:
+            msg: "WARNING: crane index append failed for {{ destination_image }} — image may be single-arch. Add 'architectures' field to metadata. Error: {{ manifest_result.stderr }}"
+          when: manifest_result.rc != 0

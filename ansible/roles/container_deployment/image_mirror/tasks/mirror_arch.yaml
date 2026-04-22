@@ -1,0 +1,40 @@
+# Copyright 2025 Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
+---
+# mirror_arch.yaml - Pull and push a single architecture
+# Called from main.yaml with _arch loop variable
+
+- name: Pull {{ source_image }} for {{ _arch }}
+  ansible.builtin.command: >
+    podman pull
+    --arch {{ _arch }}
+    --tls-verify=true
+    {{ source_image }}
+  register: pull_result
+  changed_when: pull_result.rc == 0
+  failed_when: false
+
+- name: Set destination tag
+  ansible.builtin.set_fact:
+    _dest_tag: "{{ destination_image if (required_architectures | length == 1) else destination_image + '-' + _arch }}"
+
+- name: Tag and push {{ _arch }} image
+  when: pull_result.rc == 0
+  block:
+    - name: Tag image for Harbor ({{ _arch }})
+      ansible.builtin.command: >
+        podman tag {{ source_image }} {{ _dest_tag }}
+
+    - name: Push {{ _arch }} image to Harbor
+      ansible.builtin.command: >
+        podman push
+        --tls-verify=false
+        {{ _dest_tag }}
+      register: push_result
+      changed_when: push_result.rc == 0
+
+- name: Report pull failure for {{ _arch }}
+  ansible.builtin.debug:
+    msg: "Could not pull {{ source_image }} for {{ _arch }} — may not be available for this architecture"
+  when: pull_result.rc != 0
