@@ -883,9 +883,7 @@ df -BG / 2>/dev/null | tail -1 | awk '{{print $2}}' | tr -d 'G'
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(input=script.encode()), timeout=60
-            )
+            stdout, stderr = await process.communicate(input=script.encode())
             output = stdout.decode().strip()
             lines = output.split('\n')
             new_size = lines[-1].strip() if lines else "unknown"
