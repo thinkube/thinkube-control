@@ -596,12 +596,12 @@ fi
         try:
             inventory = self.read_inventory()
             inv_vars = inventory.get("all", {}).get("vars", {})
-            start = int(inv_vars.get("metallb_ip_start_octet", "50"))
-            end = int(inv_vars.get("metallb_ip_end_octet", "55"))
-            mode = inv_vars.get("network_mode", "overlay")
+            start = int(inv_vars["metallb_ip_start_octet"])
+            end = int(inv_vars["metallb_ip_end_octet"])
+            mode = inv_vars["network_mode"]
 
             if mode == "overlay":
-                prefix = inv_vars.get("zerotier_subnet_prefix", "192.168.191.")
+                prefix = inv_vars["zerotier_subnet_prefix"]
             else:
                 cidr = inv_vars.get("network_cidr", "")
                 if cidr:

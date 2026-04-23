@@ -130,12 +130,12 @@ class NetworkDiscovery:
                                 excluded.add(host_vars[key])
 
         # MetalLB VIP range
-        network_mode = inv_vars.get("network_mode", "overlay")
-        start_octet = int(inv_vars.get("metallb_ip_start_octet", "50"))
-        end_octet = int(inv_vars.get("metallb_ip_end_octet", "55"))
+        network_mode = inv_vars["network_mode"]
+        start_octet = int(inv_vars["metallb_ip_start_octet"])
+        end_octet = int(inv_vars["metallb_ip_end_octet"])
 
         if network_mode == "overlay":
-            prefix = inv_vars.get("zerotier_subnet_prefix", "192.168.191.")
+            prefix = inv_vars["zerotier_subnet_prefix"]
         else:
             cidr = inv_vars.get("network_cidr", "")
             if cidr:
