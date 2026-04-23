@@ -429,12 +429,20 @@ fi
             return False, f"Uncordon failed: {str(e)}"
 
     async def drain_node(self, node_name: str) -> Tuple[bool, str]:
-        """Drain a kubernetes node (cordon + evict pods) using the k8s API."""
+        """Drain a kubernetes node (cordon + evict/force-delete pods)."""
         try:
             v1 = client.CoreV1Api()
 
             # Cordon
             v1.patch_node(node_name, {"spec": {"unschedulable": True}})
+
+            # Check if node is reachable
+            node = v1.read_node(node_name)
+            node_ready = False
+            for cond in (node.status.conditions or []):
+                if cond.type == "Ready":
+                    node_ready = cond.status == "True"
+                    break
 
             # List non-daemonset pods on this node
             pods = v1.list_pod_for_all_namespaces(
@@ -451,60 +459,86 @@ fi
                         continue
                 evict_pods.append(pod)
 
-            # Evict pods
+            if not evict_pods:
+                return True, f"Drained {node_name}: no pods to evict"
+
             evicted = []
+            force_deleted = []
             failed = []
-            for pod in evict_pods:
-                try:
-                    eviction = client.V1Eviction(
-                        metadata=client.V1ObjectMeta(
+
+            if node_ready:
+                # Node is reachable — use graceful eviction
+                for pod in evict_pods:
+                    try:
+                        eviction = client.V1Eviction(
+                            metadata=client.V1ObjectMeta(
+                                name=pod.metadata.name,
+                                namespace=pod.metadata.namespace,
+                            ),
+                            delete_options=client.V1DeleteOptions(
+                                grace_period_seconds=30,
+                            ),
+                        )
+                        v1.create_namespaced_pod_eviction(
                             name=pod.metadata.name,
                             namespace=pod.metadata.namespace,
-                        ),
-                        delete_options=client.V1DeleteOptions(
-                            grace_period_seconds=30,
-                        ),
-                    )
-                    v1.create_namespaced_pod_eviction(
-                        name=pod.metadata.name,
-                        namespace=pod.metadata.namespace,
-                        body=eviction,
-                    )
-                    evicted.append(f"{pod.metadata.namespace}/{pod.metadata.name}")
-                except client.exceptions.ApiException as e:
-                    if e.status == 404:
+                            body=eviction,
+                        )
                         evicted.append(f"{pod.metadata.namespace}/{pod.metadata.name}")
-                    elif e.status == 429:
-                        failed.append(
-                            f"{pod.metadata.namespace}/{pod.metadata.name}: "
-                            "blocked by PodDisruptionBudget"
-                        )
-                    else:
-                        failed.append(
-                            f"{pod.metadata.namespace}/{pod.metadata.name}: {e.reason}"
-                        )
+                    except client.exceptions.ApiException as e:
+                        if e.status == 404:
+                            evicted.append(f"{pod.metadata.namespace}/{pod.metadata.name}")
+                        elif e.status == 429:
+                            failed.append(
+                                f"{pod.metadata.namespace}/{pod.metadata.name}: "
+                                "blocked by PodDisruptionBudget"
+                            )
+                        else:
+                            failed.append(
+                                f"{pod.metadata.namespace}/{pod.metadata.name}: {e.reason}"
+                            )
 
-            # Wait for evicted pods to terminate (up to 5 min)
-            loop = asyncio.get_event_loop()
-            for _ in range(60):
-                remaining = v1.list_pod_for_all_namespaces(
-                    field_selector=f"spec.nodeName={node_name}"
-                )
-                non_ds = [
-                    p for p in remaining.items
-                    if not (
-                        p.metadata.owner_references
-                        and any(r.kind == "DaemonSet" for r in p.metadata.owner_references)
+                # Wait up to 30s for graceful termination
+                for _ in range(6):
+                    remaining = v1.list_pod_for_all_namespaces(
+                        field_selector=f"spec.nodeName={node_name}"
                     )
-                ]
-                if not non_ds:
-                    break
-                await asyncio.sleep(5)
+                    non_ds = [
+                        p for p in remaining.items
+                        if not (
+                            p.metadata.owner_references
+                            and any(r.kind == "DaemonSet" for r in p.metadata.owner_references)
+                        )
+                    ]
+                    if not non_ds:
+                        break
+                    await asyncio.sleep(5)
+            else:
+                # Node is unreachable — force-delete pods immediately
+                for pod in evict_pods:
+                    try:
+                        v1.delete_namespaced_pod(
+                            name=pod.metadata.name,
+                            namespace=pod.metadata.namespace,
+                            body=client.V1DeleteOptions(grace_period_seconds=0),
+                        )
+                        force_deleted.append(f"{pod.metadata.namespace}/{pod.metadata.name}")
+                    except client.exceptions.ApiException as e:
+                        if e.status == 404:
+                            force_deleted.append(f"{pod.metadata.namespace}/{pod.metadata.name}")
+                        else:
+                            failed.append(
+                                f"{pod.metadata.namespace}/{pod.metadata.name}: {e.reason}"
+                            )
 
-            msg = f"Drained {node_name}: evicted {len(evicted)} pods"
+            parts = [f"Drained {node_name}:"]
+            if evicted:
+                parts.append(f"evicted {len(evicted)} pods")
+            if force_deleted:
+                parts.append(f"force-deleted {len(force_deleted)} pods (node unreachable)")
             if failed:
-                msg += f", {len(failed)} failed: {'; '.join(failed)}"
-            return len(failed) == 0, msg
+                parts.append(f"{len(failed)} failed: {'; '.join(failed)}")
+            return len(failed) == 0, " ".join(parts)
 
         except Exception as e:
             return False, f"Drain error: {str(e)}"
