@@ -432,7 +432,6 @@ fi
         """Drain a kubernetes node (cordon + evict pods) using the k8s API."""
         try:
             v1 = client.CoreV1Api()
-            policy_api = client.PolicyV1Api()
 
             # Cordon
             v1.patch_node(node_name, {"spec": {"unschedulable": True}})
@@ -466,7 +465,7 @@ fi
                             grace_period_seconds=30,
                         ),
                     )
-                    policy_api.create_namespaced_pod_eviction(
+                    v1.create_namespaced_pod_eviction(
                         name=pod.metadata.name,
                         namespace=pod.metadata.namespace,
                         body=eviction,
