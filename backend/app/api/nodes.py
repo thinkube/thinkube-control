@@ -24,6 +24,10 @@ HARBOR_IMAGES_DIR = Path(
     "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
     "40_thinkube/core/harbor-images"
 )
+GPU_OPERATOR_DIR = Path(
+    "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
+    "40_thinkube/core/infrastructure/gpu_operator"
+)
 
 
 def _find_inventory_group_hosts(inventory: dict, group_name: str) -> List[str]:
@@ -271,6 +275,65 @@ async def _run_arch_rebuild(
                 await websocket.send_json({"type": "ok", "message": f"Node {h} uncordoned and ready"})
 
     return all_ok
+
+
+async def _run_gpu_setup(
+    websocket: WebSocket,
+    extra_vars: Dict[str, Any],
+    step: int,
+    has_dgx_spark: bool,
+) -> bool:
+    """Deploy GPU operator and optionally configure time slicing."""
+    gpu_deploy = GPU_OPERATOR_DIR / "10_deploy.yaml"
+    if not gpu_deploy.exists():
+        await websocket.send_json(
+            {"type": "error", "message": f"GPU operator playbook not found: {gpu_deploy}"}
+        )
+        return False
+
+    await websocket.send_json(
+        {"type": "task", "task_name": "Deploy GPU Operator", "task_number": step}
+    )
+    ok = await _stream_playbook(
+        websocket=websocket,
+        playbook_path=gpu_deploy,
+        extra_vars=extra_vars,
+        step_name="Deploy GPU Operator",
+        step_number=step,
+    )
+    if not ok:
+        await websocket.send_json(
+            {"type": "error", "message": "GPU Operator deployment failed"}
+        )
+        return False
+    await websocket.send_json(
+        {"type": "ok", "message": "GPU Operator deployed"}
+    )
+
+    if has_dgx_spark:
+        step += 1
+        time_slicing = GPU_OPERATOR_DIR / "15_configure_time_slicing.yaml"
+        if time_slicing.exists():
+            await websocket.send_json(
+                {"type": "task", "task_name": "Configure GPU time slicing (DGX Spark)", "task_number": step}
+            )
+            ts_ok = await _stream_playbook(
+                websocket=websocket,
+                playbook_path=time_slicing,
+                extra_vars=extra_vars,
+                step_name="Configure GPU time slicing",
+                step_number=step,
+            )
+            if not ts_ok:
+                await websocket.send_json(
+                    {"type": "error", "message": "GPU time slicing configuration failed"}
+                )
+                return False
+            await websocket.send_json(
+                {"type": "ok", "message": "GPU time slicing configured"}
+            )
+
+    return True
 
 
 async def _rebuild_venvs_for_arch(
@@ -546,6 +609,8 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             )
 
         added_hostnames = []
+        any_gpu_detected = False
+        any_dgx_spark = False
 
         batch_failed = False
         failed_hostname = ""
@@ -742,6 +807,10 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     "message": f"[{hostname}] Added to inventory",
                 })
                 added_hostnames.append(hostname)
+                if gpu_detected:
+                    any_gpu_detected = True
+                    if gpu_model and ("DGX Spark" in gpu_model or "GB10" in gpu_model):
+                        any_dgx_spark = True
             except Exception as e:
                 await websocket.send_json({
                     "type": "error",
@@ -788,8 +857,16 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
         await websocket.send_json({"type": "ok", "message": "Inventory is valid"})
         step += 1
 
-        # Capture architectures before join so we can detect new ones after
-        pre_join_architectures = set(node_manager.get_cluster_architectures())
+        # Read existing build platforms from inventory — this is the source of truth
+        # for what architectures Harbor already has images for, independent of
+        # which nodes happen to be in the cluster right now.
+        inventory = node_manager.read_inventory()
+        existing_platforms = inventory["all"].get("vars", {}).get("container_build_platforms", "")
+        existing_archs = set()
+        for p in existing_platforms.split(","):
+            p = p.strip()
+            if p.startswith("linux/"):
+                existing_archs.add(p.split("/", 1)[1])
 
         # Step: Run join workers playbook
         playbook_path = Path(
@@ -808,7 +885,6 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             return
 
         # Include control plane + localhost so post-join plays run too
-        inventory = node_manager.read_inventory()
         cp_hosts = _find_inventory_group_hosts(inventory, "k8s_control_plane")
         limit_hosts = ",".join(added_hostnames + cp_hosts + ["localhost"])
         join_ok = await _stream_playbook(
@@ -831,12 +907,8 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             })
 
             post_join_architectures = set(node_manager.get_cluster_architectures())
-            new_archs = post_join_architectures - pre_join_architectures
+            new_archs = post_join_architectures - existing_archs
             new_arch_detected = len(new_archs) > 0
-
-            # Always sync inventory platforms to match cluster state
-            platform_result = node_manager.update_build_platforms()
-            architectures = sorted(post_join_architectures)
 
             rebuild_ok = True
             if new_arch_detected:
@@ -854,13 +926,39 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     extra_vars=extra_vars,
                 )
 
+            # Only update container_build_platforms after a successful rebuild.
+            # If the rebuild failed, the inventory keeps the old value so the
+            # next add-node attempt knows it still needs to rebuild.
+            if not new_arch_detected or rebuild_ok:
+                node_manager.update_build_platforms()
+            architectures = sorted(post_join_architectures)
+
+            # GPU Operator setup for nodes with GPUs
+            gpu_ok = True
+            if any_gpu_detected:
+                step += 1
+                gpu_ok = await _run_gpu_setup(
+                    websocket=websocket,
+                    extra_vars=extra_vars,
+                    step=step,
+                    has_dgx_spark=any_dgx_spark,
+                )
+
+            warnings = []
+            if new_arch_detected and not rebuild_ok:
+                warnings.append("image rebuild failed")
+            if any_gpu_detected and not gpu_ok:
+                warnings.append("GPU operator setup failed")
+
+            status = "success" if not warnings else "warning"
             await websocket.send_json({
                 "type": "complete",
-                "status": "success" if not (new_arch_detected and not rebuild_ok) else "warning",
+                "status": status,
                 "message": (
                     f"Successfully added {len(added_hostnames)} node(s): {', '.join(added_hostnames)}"
                     + (" — images rebuilt for multi-arch" if new_arch_detected and rebuild_ok else "")
-                    + (" — WARNING: image rebuild failed, node(s) cordoned" if new_arch_detected and not rebuild_ok else "")
+                    + (" — GPU operator configured" if any_gpu_detected and gpu_ok else "")
+                    + (f" — WARNING: {', '.join(warnings)}" if warnings else "")
                 ),
                 "architectures": architectures,
                 "new_architecture_detected": new_arch_detected,
@@ -985,8 +1083,15 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
             return
         await websocket.send_json({"type": "ok", "message": "Inventory is valid"})
 
-        # Capture architectures before join so we can detect new ones after
-        pre_join_architectures = set(node_manager.get_cluster_architectures())
+        # Read existing build platforms from inventory — source of truth for
+        # what architectures Harbor already has images for.
+        inventory = node_manager.read_inventory()
+        existing_platforms = inventory["all"].get("vars", {}).get("container_build_platforms", "")
+        existing_archs = set()
+        for p in existing_platforms.split(","):
+            p = p.strip()
+            if p.startswith("linux/"):
+                existing_archs.add(p.split("/", 1)[1])
 
         # Step 3: Run the join worker playbook
         playbook_path = Path(
@@ -1005,7 +1110,6 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
             return
 
         # Include control plane + localhost so post-join plays run too
-        inventory = node_manager.read_inventory()
         cp_hosts = _find_inventory_group_hosts(inventory, "k8s_control_plane")
         limit_hosts = ",".join([hostname] + cp_hosts + ["localhost"])
         join_ok = await _stream_playbook(
@@ -1025,12 +1129,8 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
             normalized = "arm64" if architecture.lower() in ("aarch64", "arm64") else "amd64"
 
             post_join_architectures = set(node_manager.get_cluster_architectures())
-            new_archs = post_join_architectures - pre_join_architectures
+            new_archs = post_join_architectures - existing_archs
             new_arch_detected = len(new_archs) > 0
-
-            # Always sync inventory platforms to match cluster state
-            platform_result = node_manager.update_build_platforms()
-            architectures = sorted(post_join_architectures)
 
             rebuild_ok = True
             if new_arch_detected:
@@ -1052,14 +1152,38 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
                     extra_vars=extra_vars,
                 )
 
+            if not new_arch_detected or rebuild_ok:
+                node_manager.update_build_platforms()
+            architectures = sorted(post_join_architectures)
+
+            # GPU Operator setup if this node has GPUs
+            gpu_ok = True
+            if gpu_detected:
+                step = 6 if not new_arch_detected else step + 1
+                has_dgx_spark = bool(gpu_model and ("DGX Spark" in gpu_model or "GB10" in gpu_model))
+                gpu_ok = await _run_gpu_setup(
+                    websocket=websocket,
+                    extra_vars=extra_vars,
+                    step=step,
+                    has_dgx_spark=has_dgx_spark,
+                )
+
+            warnings = []
+            if new_arch_detected and not rebuild_ok:
+                warnings.append("image rebuild failed")
+            if gpu_detected and not gpu_ok:
+                warnings.append("GPU operator setup failed")
+
+            status = "success" if not warnings else "warning"
             await websocket.send_json(
                 {
                     "type": "complete",
-                    "status": "success" if not (new_arch_detected and not rebuild_ok) else "warning",
+                    "status": status,
                     "message": (
                         f"Node {hostname} successfully joined the cluster"
                         + (" and all images rebuilt for multi-arch" if new_arch_detected and rebuild_ok else "")
-                        + (". WARNING: Image rebuild failed — node is cordoned." if new_arch_detected and not rebuild_ok else "")
+                        + (" — GPU operator configured" if gpu_detected and gpu_ok else "")
+                        + (f". WARNING: {', '.join(warnings)}" if warnings else "")
                     ),
                     "architectures": architectures,
                     "new_architecture_detected": new_arch_detected,
