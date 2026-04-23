@@ -67,7 +67,6 @@ class AddNodeRequest(BaseModel):
 
 class RemoveNodeRequest(BaseModel):
     hostname: str
-    drain: bool = True
 
 
 class VerifySSHRequest(BaseModel):
@@ -1221,11 +1220,6 @@ async def remove_node(request: RemoveNodeRequest):
 
     if node and node["role"] == "control_plane":
         raise HTTPException(status_code=400, detail="Cannot remove control plane node")
-
-    if request.drain and node:
-        success, msg = await node_manager.drain_node(request.hostname)
-        if not success:
-            raise HTTPException(status_code=500, detail=msg)
 
     if node:
         success, msg = await node_manager.delete_node(request.hostname)

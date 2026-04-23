@@ -214,7 +214,7 @@ export default function NodesPage() {
           </TkDialogHeader>
           <p className="text-sm text-muted-foreground">
             Are you sure you want to remove <strong>{removeConfirm}</strong> from the cluster?
-            This will drain all workloads and remove the node from the inventory.
+            This will remove the node from the cluster and inventory.
           </p>
           <TkDialogFooter>
             <TkButton intent="ghost" onClick={() => setRemoveConfirm(null)}>Cancel</TkButton>

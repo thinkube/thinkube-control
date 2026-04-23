@@ -86,7 +86,7 @@ interface NodesState {
     gpu_count?: number;
     gpu_model?: string;
   }) => Promise<{ job_id: string } | null>;
-  removeNode: (hostname: string, drain?: boolean) => Promise<boolean>;
+  removeNode: (hostname: string) => Promise<boolean>;
   clearDiscoveredNode: () => void;
 
   // New wizard actions
@@ -155,9 +155,9 @@ export const useNodesStore = create<NodesState>((set, get) => ({
     }
   },
 
-  removeNode: async (hostname: string, drain = true) => {
+  removeNode: async (hostname: string) => {
     try {
-      await api.post('/nodes/remove', { hostname, drain });
+      await api.post('/nodes/remove', { hostname });
       await get().listNodes();
       return true;
     } catch (err: any) {
