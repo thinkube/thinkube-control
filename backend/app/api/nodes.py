@@ -515,7 +515,11 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
 
         inventory = node_manager.read_inventory()
         inv_vars = inventory.get("all", {}).get("vars", {})
-        network_mode = inv_vars.get("network_mode", "overlay")
+        network_mode = inv_vars.get("network_mode")
+        if not network_mode:
+            await websocket.send_json({"type": "error", "message": "network_mode not set in inventory"})
+            await websocket.close()
+            return
         step = 1
 
         await websocket.send_json({
@@ -523,6 +527,18 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             "message": f"Starting addition of {len(nodes)} node(s)",
             "job_id": job_id,
         })
+
+        # Ensure MetalLB VIP routes in ZeroTier (once, before node loop)
+        if network_mode == "overlay":
+            zt_network_id = inv_vars.get("zerotier_network_id")
+            zt_api_token = inv_vars.get("zerotier_api_token")
+            if not zt_network_id or not zt_api_token:
+                await websocket.send_json({"type": "error", "message": "zerotier_network_id or zerotier_api_token not in inventory"})
+                await websocket.close()
+                return
+            await node_manager._ensure_zerotier_vip_routes(
+                inventory, inv_vars, zt_network_id, zt_api_token
+            )
 
         added_hostnames = []
 
