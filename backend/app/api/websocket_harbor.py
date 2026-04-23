@@ -130,7 +130,8 @@ async def stream_image_mirror_deployment(websocket: WebSocket, deployment_id: st
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                env=env
+                env=env,
+                limit=1024 * 1024,
             )
 
             task_pattern = r'TASK \[(.*?)\]'

@@ -522,6 +522,7 @@ async def _execute_template_deployment(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=os.environ.copy(),
+            limit=1024 * 1024,
         )
 
         # Register process for cleanup on disconnect
@@ -692,7 +693,7 @@ async def _execute_playbook(
             stderr=asyncio.subprocess.STDOUT,
             env=env,
             cwd=str(working_dir),
-            bufsize=0,  # Unbuffered
+            limit=1024 * 1024,
         )
 
         # Stream output
@@ -839,7 +840,8 @@ async def _execute_optional_component(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env,
-            cwd="/home/thinkube/thinkube-platform/core/thinkube"
+            cwd="/home/thinkube/thinkube-platform/core/thinkube",
+            limit=1024 * 1024,
         )
         
         # Stream output - exactly like templates
@@ -1291,7 +1293,8 @@ async def _execute_custom_image_build(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            env={**os.environ, "BUILDAH_FORMAT": "docker"}
+            env={**os.environ, "BUILDAH_FORMAT": "docker"},
+            limit=1024 * 1024,
         )
 
         # Stream output line by line - exactly like templates
@@ -1334,7 +1337,8 @@ async def _execute_custom_image_build(
             login_process = await asyncio.create_subprocess_exec(
                 *login_cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT
+                stderr=asyncio.subprocess.STDOUT,
+                limit=1024 * 1024,
             )
 
             # Write login header to file
@@ -1382,7 +1386,8 @@ async def _execute_custom_image_build(
             push_process = await asyncio.create_subprocess_exec(
                 *push_cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT
+                stderr=asyncio.subprocess.STDOUT,
+                limit=1024 * 1024,
             )
 
             # Write push header to file
@@ -1604,7 +1609,8 @@ async def _execute_jupyter_venv_build(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env,
-            cwd="/home/thinkube/thinkube-control"
+            cwd="/home/thinkube/thinkube-control",
+            limit=1024 * 1024,
         )
 
         current_task = None

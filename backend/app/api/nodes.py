@@ -138,7 +138,7 @@ async def _stream_playbook(
             stderr=asyncio.subprocess.STDOUT,
             env=env,
             cwd=str(playbook_path.parent),
-            bufsize=0,
+            limit=1024 * 1024,
         )
 
         current_task = "Initializing"
@@ -751,7 +751,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
         if batch_failed:
             await websocket.send_json({
                 "type": "complete",
-                "success": False,
+                "status": "failed",
                 "message": f"Batch aborted: {failed_hostname} failed. No nodes were joined.",
             })
             await websocket.close()
@@ -760,7 +760,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
         if not added_hostnames:
             await websocket.send_json({
                 "type": "complete",
-                "success": False,
+                "status": "failed",
                 "message": "No nodes were successfully prepared for joining",
             })
             await websocket.close()
@@ -851,7 +851,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
 
             await websocket.send_json({
                 "type": "complete",
-                "success": True,
+                "status": "success" if not (new_arch_detected and not rebuild_ok) else "warning",
                 "message": (
                     f"Successfully added {len(added_hostnames)} node(s): {', '.join(added_hostnames)}"
                     + (" — images rebuilt for multi-arch" if new_arch_detected and rebuild_ok else "")
@@ -864,7 +864,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
         else:
             await websocket.send_json({
                 "type": "complete",
-                "success": False,
+                "status": "failed",
                 "message": "Node join failed",
             })
 
@@ -1050,7 +1050,7 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
             await websocket.send_json(
                 {
                     "type": "complete",
-                    "success": True,
+                    "status": "success" if not (new_arch_detected and not rebuild_ok) else "warning",
                     "message": (
                         f"Node {hostname} successfully joined the cluster"
                         + (" and all images rebuilt for multi-arch" if new_arch_detected and rebuild_ok else "")
@@ -1066,8 +1066,8 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
             await websocket.send_json(
                 {
                     "type": "complete",
-                    "success": False,
-                    "message": f"Node join failed",
+                    "status": "failed",
+                    "message": "Node join failed",
                 }
             )
 
