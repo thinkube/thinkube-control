@@ -203,20 +203,23 @@ async def _stream_playbook(
 
 async def _run_arch_rebuild(
     websocket: WebSocket,
-    hostname: str,
+    hostnames: List[str],
     new_arch: str,
     extra_vars: Dict[str, Any],
 ) -> bool:
-    """Cordon node, rebuild all images for the new architecture, uncordon on success."""
-    # Cordon the new node to prevent scheduling until images are ready
+    """Cordon all new nodes, rebuild images for the new architecture, uncordon all unconditionally."""
+    hosts_label = ", ".join(hostnames)
+
+    # Cordon ALL new nodes
     await websocket.send_json(
-        {"type": "task", "task_name": f"Cordon {hostname} (preventing scheduling until images are rebuilt)", "task_number": 5}
+        {"type": "task", "task_name": f"Cordon {hosts_label} (preventing scheduling until images are rebuilt)", "task_number": 5}
     )
-    success, msg = await node_manager.cordon_node(hostname)
-    if not success:
-        await websocket.send_json({"type": "error", "message": f"Failed to cordon node: {msg}"})
-        return False
-    await websocket.send_json({"type": "ok", "message": f"Node {hostname} cordoned"})
+    for h in hostnames:
+        success, msg = await node_manager.cordon_node(h)
+        if not success:
+            await websocket.send_json({"type": "error", "message": f"Failed to cordon {h}: {msg}"})
+        else:
+            await websocket.send_json({"type": "ok", "message": f"Node {h} cordoned"})
 
     rebuild_playbooks = [
         (HARBOR_IMAGES_DIR / "13_mirror_public_images.yaml", "Mirror public images (multi-arch)"),
@@ -226,44 +229,46 @@ async def _run_arch_rebuild(
 
     step = 6
     all_ok = True
-    for playbook_path, description in rebuild_playbooks:
-        await websocket.send_json(
-            {"type": "ok", "message": f"Starting: {description}"}
-        )
-        ok = await _stream_playbook(
-            websocket=websocket,
-            playbook_path=playbook_path,
-            extra_vars=extra_vars,
-            step_name=description,
-            step_number=step,
-        )
-        if not ok:
+    try:
+        for playbook_path, description in rebuild_playbooks:
             await websocket.send_json(
-                {"type": "error", "message": f"Failed: {description}. Node remains cordoned."}
+                {"type": "ok", "message": f"Starting: {description}"}
             )
-            all_ok = False
-            break
-        await websocket.send_json(
-            {"type": "ok", "message": f"Completed: {description}"}
-        )
-        step += 1
+            ok = await _stream_playbook(
+                websocket=websocket,
+                playbook_path=playbook_path,
+                extra_vars=extra_vars,
+                step_name=description,
+                step_number=step,
+            )
+            if not ok:
+                await websocket.send_json(
+                    {"type": "error", "message": f"Failed: {description}"}
+                )
+                all_ok = False
+                break
+            await websocket.send_json(
+                {"type": "ok", "message": f"Completed: {description}"}
+            )
+            step += 1
 
-    if all_ok:
-        # Rebuild existing venvs for the new architecture
+        if all_ok:
+            await websocket.send_json(
+                {"type": "task", "task_name": f"Rebuild Jupyter venvs for {new_arch}", "task_number": step}
+            )
+            await _rebuild_venvs_for_arch(websocket, new_arch, extra_vars, step)
+            step += 1
+    finally:
+        # Always uncordon ALL nodes, regardless of rebuild success/failure
         await websocket.send_json(
-            {"type": "task", "task_name": f"Rebuild Jupyter venvs for {new_arch}", "task_number": step}
+            {"type": "task", "task_name": f"Uncordon {hosts_label}", "task_number": step}
         )
-        venv_ok = await _rebuild_venvs_for_arch(websocket, new_arch, extra_vars, step)
-        step += 1
-
-        await websocket.send_json(
-            {"type": "task", "task_name": f"Uncordon {hostname}", "task_number": step}
-        )
-        success, msg = await node_manager.uncordon_node(hostname)
-        if not success:
-            await websocket.send_json({"type": "error", "message": f"Failed to uncordon: {msg}"})
-            return False
-        await websocket.send_json({"type": "ok", "message": f"Node {hostname} uncordoned and ready"})
+        for h in hostnames:
+            success, msg = await node_manager.uncordon_node(h)
+            if not success:
+                await websocket.send_json({"type": "error", "message": f"Failed to uncordon {h}: {msg}"})
+            else:
+                await websocket.send_json({"type": "ok", "message": f"Node {h} uncordoned and ready"})
 
     return all_ok
 
@@ -844,7 +849,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
 
                 rebuild_ok = await _run_arch_rebuild(
                     websocket=websocket,
-                    hostname=added_hostnames[0],
+                    hostnames=added_hostnames,
                     new_arch=new_arch,
                     extra_vars=extra_vars,
                 )
@@ -1042,7 +1047,7 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
                 # Steps 5+: Cordon, rebuild images, uncordon
                 rebuild_ok = await _run_arch_rebuild(
                     websocket=websocket,
-                    hostname=hostname,
+                    hostnames=[hostname],
                     new_arch=normalized,
                     extra_vars=extra_vars,
                 )
