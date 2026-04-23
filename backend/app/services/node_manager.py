@@ -702,6 +702,71 @@ fi
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    async def _ensure_zerotier_vip_routes(
+        self,
+        inventory: Dict[str, Any],
+        inv_vars: Dict[str, Any],
+        network_id: str,
+        api_token: str,
+    ) -> None:
+        """Ensure MetalLB VIP routes exist as ZeroTier managed routes.
+
+        MetalLB VIPs are virtual IPs on the control plane that ZeroTier
+        members can't reach via L2/ARP. Adding managed routes makes all
+        members route VIP traffic through the control plane.
+        """
+        try:
+            cp_hosts = (inventory.get("all", {}).get("children", {})
+                        .get("k8s", {}).get("children", {})
+                        .get("k8s_control_plane", {}).get("hosts", {}))
+            cp_name = next(iter(cp_hosts or {}), None)
+            baremetal_hosts = (inventory.get("all", {}).get("children", {})
+                              .get("baremetal", {}).get("hosts", {}))
+            cp_vars = baremetal_hosts.get(cp_name, {}) if cp_name else {}
+            control_plane_zt_ip = (cp_vars.get("zerotier_ip")
+                                   or cp_vars.get("ansible_host"))
+
+            if not control_plane_zt_ip:
+                raise ValueError(f"Could not find control plane ZeroTier IP for {cp_name}")
+
+            prefix = inv_vars.get("zerotier_subnet_prefix")
+            start_octet_str = inv_vars.get("metallb_ip_start_octet")
+            end_octet_str = inv_vars.get("metallb_ip_end_octet")
+            if not prefix or not start_octet_str or not end_octet_str:
+                raise ValueError("Missing zerotier_subnet_prefix, metallb_ip_start_octet, or metallb_ip_end_octet in inventory")
+            start_octet = int(start_octet_str)
+            end_octet = int(end_octet_str)
+
+            async with httpx.AsyncClient(timeout=15) as http_client:
+                net_resp = await http_client.get(
+                    f"https://api.zerotier.com/api/v1/network/{network_id}",
+                    headers={"Authorization": f"bearer {api_token}"},
+                )
+                net_resp.raise_for_status()
+                existing_routes = net_resp.json().get("config", {}).get("routes", [])
+                existing_targets = {r["target"] for r in existing_routes}
+
+                new_routes = list(existing_routes)
+                added = []
+                for octet in range(start_octet, end_octet + 1):
+                    vip = f"{prefix}{octet}"
+                    target = f"{vip}/32"
+                    if vip == control_plane_zt_ip:
+                        continue
+                    if target not in existing_targets:
+                        new_routes.append({"target": target, "via": control_plane_zt_ip})
+                        added.append(vip)
+
+                if added:
+                    await http_client.post(
+                        f"https://api.zerotier.com/api/v1/network/{network_id}",
+                        headers={"Authorization": f"bearer {api_token}"},
+                        json={"config": {"routes": new_routes}},
+                    )
+                    logger.info(f"Added ZeroTier managed routes for MetalLB VIPs: {added} via {control_plane_zt_ip}")
+        except Exception as e:
+            logger.warning(f"Could not configure ZeroTier VIP routes: {e}")
+
     async def setup_zerotier_on_node(
         self, ip: str, assigned_zt_ip: str
     ) -> Dict[str, Any]:
@@ -758,6 +823,7 @@ echo "NONE"
                 existing_node_id = parts[2] if len(parts) > 2 else None
                 if existing_zt_ip:
                     logger.info(f"ZeroTier already configured on {ip}: {existing_zt_ip}")
+                    await self._ensure_zerotier_vip_routes(inventory, inv_vars, network_id, api_token)
                     return {
                         "success": True,
                         "zerotier_node_id": existing_node_id,
@@ -827,60 +893,7 @@ zerotier-cli info | cut -d" " -f3
             return {"success": False, "error": f"ZeroTier API authorization failed: {e}"}
 
         # Step 3: Ensure MetalLB VIP routes exist in ZeroTier network
-        # MetalLB VIPs are virtual IPs on the control plane that ZeroTier
-        # members can't reach via L2/ARP. Adding managed routes makes all
-        # members route VIP traffic through the control plane.
-        try:
-            cp_hosts = (inventory.get("all", {}).get("children", {})
-                        .get("k8s", {}).get("children", {})
-                        .get("k8s_control_plane", {}).get("hosts", {}))
-            cp_name = next(iter(cp_hosts or {}), None)
-            baremetal_hosts = (inventory.get("all", {}).get("children", {})
-                              .get("baremetal", {}).get("hosts", {}))
-            cp_vars = baremetal_hosts.get(cp_name, {}) if cp_name else {}
-            control_plane_zt_ip = (cp_vars.get("zerotier_ip")
-                                   or cp_vars.get("ansible_host"))
-
-            if not control_plane_zt_ip:
-                raise ValueError(f"Could not find control plane ZeroTier IP for {cp_name}")
-
-            prefix = inv_vars.get("zerotier_subnet_prefix")
-            start_octet_str = inv_vars.get("metallb_ip_start_octet")
-            end_octet_str = inv_vars.get("metallb_ip_end_octet")
-            if not prefix or not start_octet_str or not end_octet_str:
-                raise ValueError("Missing zerotier_subnet_prefix, metallb_ip_start_octet, or metallb_ip_end_octet in inventory")
-            start_octet = int(start_octet_str)
-            end_octet = int(end_octet_str)
-
-            async with httpx.AsyncClient(timeout=15) as http_client:
-                net_resp = await http_client.get(
-                    f"https://api.zerotier.com/api/v1/network/{network_id}",
-                    headers={"Authorization": f"bearer {api_token}"},
-                )
-                net_resp.raise_for_status()
-                existing_routes = net_resp.json().get("config", {}).get("routes", [])
-                existing_targets = {r["target"] for r in existing_routes}
-
-                new_routes = list(existing_routes)
-                added = []
-                for octet in range(start_octet, end_octet + 1):
-                    vip = f"{prefix}{octet}"
-                    target = f"{vip}/32"
-                    if vip == control_plane_zt_ip:
-                        continue
-                    if target not in existing_targets:
-                        new_routes.append({"target": target, "via": control_plane_zt_ip})
-                        added.append(vip)
-
-                if added:
-                    await http_client.post(
-                        f"https://api.zerotier.com/api/v1/network/{network_id}",
-                        headers={"Authorization": f"bearer {api_token}"},
-                        json={"config": {"routes": new_routes}},
-                    )
-                    logger.info(f"Added ZeroTier managed routes for MetalLB VIPs: {added} via {control_plane_zt_ip}")
-        except Exception as e:
-            logger.warning(f"Could not configure ZeroTier VIP routes: {e}")
+        await self._ensure_zerotier_vip_routes(inventory, inv_vars, network_id, api_token)
 
         # Step 4: Configure firewall and IP forwarding
         fw_script = f"""
