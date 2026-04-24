@@ -934,19 +934,17 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
 
         step += 1
 
-        # Disable GPU operator DaemonSets on ALL newly joined nodes.
-        # The GPU operator is already deployed, so NFD immediately labels
-        # new nodes and DaemonSets try to schedule before the NVIDIA driver
-        # is installed — flooding the kubelet with "no runtime for nvidia"
-        # errors and causing transient NotReady states.
-        # For GPU nodes, 10_deploy.yaml will install the driver and the
-        # subsequent helm upgrade re-triggers NFD to restore correct labels.
-        for nh in added_hostnames:
+        # Disable GPU operator on nodes without compatible GPUs.
+        # NFD detects physical GPUs regardless of compatibility (Volta+
+        # required), so incompatible-GPU nodes need explicit false labels
+        # to prevent operator DaemonSets from scheduling there.
+        # Compatible GPU nodes are NOT disabled — the operator's own
+        # validator (host-driver-ready marker) sequences DaemonSet startup.
+        for nh in non_gpu_hostnames:
             if node_manager.disable_gpu_operator_on_node(nh):
-                reason = "no compatible GPU" if nh in non_gpu_hostnames else "pending driver install"
                 await websocket.send_json({
                     "type": "ok",
-                    "message": f"[{nh}] GPU operator disabled ({reason})",
+                    "message": f"[{nh}] GPU operator disabled (no compatible GPU)",
                 })
             else:
                 logger.warning(f"Could not disable GPU operator labels on {nh}")
