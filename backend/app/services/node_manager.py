@@ -841,6 +841,18 @@ echo '{password}' | sudo -S bash -c '
 if command -v zerotier-cli >/dev/null 2>&1; then
     existing_ip=$(zerotier-cli listnetworks 2>/dev/null | grep {network_id} | awk "{{print \\$NF}}" | cut -d/ -f1)
     if [ -n "$existing_ip" ]; then
+        # Ensure local.conf blacklists k8s interfaces from peer discovery
+        if [ ! -f /var/lib/zerotier-one/local.conf ] || ! grep -q interfacePrefixBlacklist /var/lib/zerotier-one/local.conf 2>/dev/null; then
+            cat > /var/lib/zerotier-one/local.conf << LOCALCONF
+{{
+  "settings": {{
+    "interfacePrefixBlacklist": ["cilium", "cni", "lxc", "veth"]
+  }}
+}}
+LOCALCONF
+            systemctl restart zerotier-one
+            sleep 3
+        fi
         node_id=$(zerotier-cli info 2>/dev/null | cut -d" " -f3)
         echo "EXISTING $existing_ip $node_id"
         exit 0
@@ -884,6 +896,13 @@ set -e
 if ! command -v zerotier-cli >/dev/null 2>&1; then
     curl -s https://install.zerotier.com | bash
 fi
+cat > /var/lib/zerotier-one/local.conf << LOCALCONF
+{{
+  "settings": {{
+    "interfacePrefixBlacklist": ["cilium", "cni", "lxc", "veth"]
+  }}
+}}
+LOCALCONF
 systemctl enable --now zerotier-one
 sleep 2
 zerotier-cli join {network_id} >/dev/null
