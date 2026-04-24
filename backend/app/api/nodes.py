@@ -1011,6 +1011,12 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                                f"Build platforms: {platforms_str}. Starting image rebuild...",
                 })
 
+                # Update inventory BEFORE the build so playbooks target
+                # all architectures (needed for multi-arch manifests).
+                # The completion token stays unchanged until the build
+                # succeeds, so a failure will re-trigger the build.
+                node_manager.update_build_platforms()
+
                 step += 1
                 rebuild_ok = await _run_image_rebuild(
                     websocket=websocket,
@@ -1028,9 +1034,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     await websocket.close()
                     return
 
-                # Token written ONLY after successful build.
                 _write_build_token(post_join_architectures)
-                node_manager.update_build_platforms()
             else:
                 await websocket.send_json({
                     "type": "ok",
