@@ -28,6 +28,10 @@ GPU_OPERATOR_DIR = Path(
     "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
     "40_thinkube/core/infrastructure/gpu_operator"
 )
+COREDNS_DIR = Path(
+    "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
+    "40_thinkube/core/infrastructure/coredns"
+)
 
 
 def _find_inventory_group_hosts(inventory: dict, group_name: str) -> List[str]:
@@ -204,76 +208,47 @@ async def _stream_playbook(
             pass
 
 
-async def _run_arch_rebuild(
+async def _run_image_rebuild(
     websocket: WebSocket,
-    hostnames: List[str],
     new_arch: str,
     extra_vars: Dict[str, Any],
+    start_step: int,
 ) -> bool:
-    """Cordon all new nodes, rebuild images for the new architecture, uncordon all unconditionally."""
-    hosts_label = ", ".join(hostnames)
-
-    # Cordon ALL new nodes
-    await websocket.send_json(
-        {"type": "task", "task_name": f"Cordon {hosts_label} (preventing scheduling until images are rebuilt)", "task_number": 5}
-    )
-    for h in hostnames:
-        success, msg = await node_manager.cordon_node(h)
-        if not success:
-            await websocket.send_json({"type": "error", "message": f"Failed to cordon {h}: {msg}"})
-        else:
-            await websocket.send_json({"type": "ok", "message": f"Node {h} cordoned"})
-
+    """Rebuild images for a new architecture. Caller handles cordon/uncordon."""
     rebuild_playbooks = [
         (HARBOR_IMAGES_DIR / "13_mirror_public_images.yaml", "Mirror public images (multi-arch)"),
         (HARBOR_IMAGES_DIR / "14_build_base_images.yaml", "Rebuild base images (multi-arch)"),
         (HARBOR_IMAGES_DIR / "15_build_jupyter_images.yaml", "Rebuild Jupyter image (multi-arch)"),
     ]
 
-    step = 6
-    all_ok = True
-    try:
-        for playbook_path, description in rebuild_playbooks:
-            await websocket.send_json(
-                {"type": "ok", "message": f"Starting: {description}"}
-            )
-            ok = await _stream_playbook(
-                websocket=websocket,
-                playbook_path=playbook_path,
-                extra_vars=extra_vars,
-                step_name=description,
-                step_number=step,
-            )
-            if not ok:
-                await websocket.send_json(
-                    {"type": "error", "message": f"Failed: {description}"}
-                )
-                all_ok = False
-                break
-            await websocket.send_json(
-                {"type": "ok", "message": f"Completed: {description}"}
-            )
-            step += 1
-
-        if all_ok:
-            await websocket.send_json(
-                {"type": "task", "task_name": f"Rebuild Jupyter venvs for {new_arch}", "task_number": step}
-            )
-            await _rebuild_venvs_for_arch(websocket, new_arch, extra_vars, step)
-            step += 1
-    finally:
-        # Always uncordon ALL nodes, regardless of rebuild success/failure
+    step = start_step
+    for playbook_path, description in rebuild_playbooks:
         await websocket.send_json(
-            {"type": "task", "task_name": f"Uncordon {hosts_label}", "task_number": step}
+            {"type": "ok", "message": f"Starting: {description}"}
         )
-        for h in hostnames:
-            success, msg = await node_manager.uncordon_node(h)
-            if not success:
-                await websocket.send_json({"type": "error", "message": f"Failed to uncordon {h}: {msg}"})
-            else:
-                await websocket.send_json({"type": "ok", "message": f"Node {h} uncordoned and ready"})
+        ok = await _stream_playbook(
+            websocket=websocket,
+            playbook_path=playbook_path,
+            extra_vars=extra_vars,
+            step_name=description,
+            step_number=step,
+        )
+        if not ok:
+            await websocket.send_json(
+                {"type": "error", "message": f"Failed: {description}"}
+            )
+            return False
+        await websocket.send_json(
+            {"type": "ok", "message": f"Completed: {description}"}
+        )
+        step += 1
 
-    return all_ok
+    await websocket.send_json(
+        {"type": "task", "task_name": f"Rebuild Jupyter venvs for {new_arch}", "task_number": step}
+    )
+    await _rebuild_venvs_for_arch(websocket, new_arch, extra_vars, step)
+
+    return True
 
 
 async def _run_gpu_setup(
@@ -934,78 +909,129 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
 
         step += 1
 
-        # Disable GPU operator on nodes without compatible GPUs.
-        # NFD detects physical GPUs regardless of compatibility (Volta+
-        # required), so incompatible-GPU nodes need explicit false labels
-        # to prevent operator DaemonSets from scheduling there.
-        # Compatible GPU nodes are NOT disabled — the operator's own
-        # validator (host-driver-ready marker) sequences DaemonSet startup.
-        for nh in non_gpu_hostnames:
-            if node_manager.disable_gpu_operator_on_node(nh):
+        # Cordon all new nodes immediately to prevent scheduling
+        # until DNS, GPU, and image setup are complete.
+        for h in added_hostnames:
+            ok, msg = await node_manager.cordon_node(h)
+            if ok:
                 await websocket.send_json({
                     "type": "ok",
-                    "message": f"[{nh}] GPU operator disabled (no compatible GPU)",
+                    "message": f"[{h}] Cordoned — preventing scheduling until setup completes",
                 })
             else:
-                logger.warning(f"Could not disable GPU operator labels on {nh}")
+                logger.warning(f"Could not cordon {h}: {msg}")
 
-        # GPU Operator setup FIRST — if any node has GPUs and setup fails,
-        # there is no point rebuilding images for a broken cluster state.
-        if any_gpu_detected:
-            gpu_ok = await _run_gpu_setup(
-                websocket=websocket,
-                extra_vars=extra_vars,
-                step=step,
-                has_dgx_spark=any_dgx_spark,
-            )
-            if not gpu_ok:
+        new_arch_detected = False
+        post_join_architectures = existing_archs
+        try:
+            # Disable GPU operator on nodes without compatible GPUs.
+            # NFD detects physical GPUs regardless of compatibility (Volta+
+            # required), so incompatible-GPU nodes need explicit false labels
+            # to prevent operator DaemonSets from scheduling there.
+            for nh in non_gpu_hostnames:
+                if node_manager.disable_gpu_operator_on_node(nh):
+                    await websocket.send_json({
+                        "type": "ok",
+                        "message": f"[{nh}] GPU operator disabled (no compatible GPU)",
+                    })
+                else:
+                    logger.warning(f"Could not disable GPU operator labels on {nh}")
+
+            # Configure DNS on new nodes so they can resolve internal
+            # domains (e.g. registry.cmxela.com) before image pulls.
+            dns_playbook = COREDNS_DIR / "15_configure_node_dns.yaml"
+            if dns_playbook.exists():
                 await websocket.send_json({
-                    "type": "complete",
-                    "status": "failed",
-                    "message": f"Node(s) {', '.join(added_hostnames)} joined but GPU operator setup failed. "
-                               "Fix the issue and re-run add-node to resume.",
+                    "type": "task",
+                    "task_name": "Configure DNS on new nodes",
+                    "task_number": step,
                 })
-                await websocket.close()
-                return
-            step += 1
+                dns_ok = await _stream_playbook(
+                    websocket=websocket,
+                    playbook_path=dns_playbook,
+                    extra_vars=extra_vars,
+                    step_name="Configure DNS on new nodes",
+                    step_number=step,
+                    limit=",".join(added_hostnames),
+                )
+                if not dns_ok:
+                    logger.warning("DNS configuration failed on new nodes — continuing")
+                    await websocket.send_json({
+                        "type": "warning",
+                        "message": "DNS configuration failed on new nodes — continuing",
+                    })
+                step += 1
 
-        # Check for new architecture
-        await websocket.send_json({
-            "type": "task",
-            "task_name": "Check for new architecture",
-            "task_number": step,
-        })
+            # GPU Operator setup — if any node has GPUs and setup fails,
+            # there is no point rebuilding images for a broken cluster state.
+            if any_gpu_detected:
+                gpu_ok = await _run_gpu_setup(
+                    websocket=websocket,
+                    extra_vars=extra_vars,
+                    step=step,
+                    has_dgx_spark=any_dgx_spark,
+                )
+                if not gpu_ok:
+                    await websocket.send_json({
+                        "type": "complete",
+                        "status": "failed",
+                        "message": f"Node(s) {', '.join(added_hostnames)} joined but GPU operator setup failed. "
+                                   "Fix the issue and re-run add-node to resume.",
+                    })
+                    await websocket.close()
+                    return
+                step += 1
 
-        post_join_architectures = set(node_manager.get_cluster_architectures())
-        new_archs = post_join_architectures - existing_archs
-        new_arch_detected = len(new_archs) > 0
-
-        if new_arch_detected:
-            step += 1
-            new_arch = sorted(new_archs)[-1]
-            platforms_str = ",".join(f"linux/{a}" for a in sorted(post_join_architectures))
+            # Check for new architecture and rebuild images if needed
             await websocket.send_json({
-                "type": "ok",
-                "message": f"New architecture detected: {new_arch}. Build platforms: {platforms_str}. Starting image rebuilds...",
+                "type": "task",
+                "task_name": "Check for new architecture",
+                "task_number": step,
             })
 
-            rebuild_ok = await _run_arch_rebuild(
-                websocket=websocket,
-                hostnames=added_hostnames,
-                new_arch=new_arch,
-                extra_vars=extra_vars,
-            )
-            if not rebuild_ok:
-                await websocket.send_json({
-                    "type": "complete",
-                    "status": "failed",
-                    "message": f"Node(s) {', '.join(added_hostnames)} joined but image rebuild failed. "
-                               "Fix the issue and re-run add-node to resume.",
-                })
-                await websocket.close()
-                return
+            post_join_architectures = set(node_manager.get_cluster_architectures())
+            new_archs = post_join_architectures - existing_archs
+            new_arch_detected = len(new_archs) > 0
 
-            node_manager.update_build_platforms()
+            if new_arch_detected:
+                step += 1
+                new_arch = sorted(new_archs)[-1]
+                platforms_str = ",".join(f"linux/{a}" for a in sorted(post_join_architectures))
+                await websocket.send_json({
+                    "type": "ok",
+                    "message": f"New architecture detected: {new_arch}. Build platforms: {platforms_str}. Starting image rebuilds...",
+                })
+
+                rebuild_ok = await _run_image_rebuild(
+                    websocket=websocket,
+                    new_arch=new_arch,
+                    extra_vars=extra_vars,
+                    start_step=step,
+                )
+                if not rebuild_ok:
+                    await websocket.send_json({
+                        "type": "complete",
+                        "status": "failed",
+                        "message": f"Node(s) {', '.join(added_hostnames)} joined but image rebuild failed. "
+                                   "Fix the issue and re-run add-node to resume.",
+                    })
+                    await websocket.close()
+                    return
+
+                node_manager.update_build_platforms()
+
+        finally:
+            # Always uncordon new nodes so they can accept workloads,
+            # even if a step above failed and returned early.
+            for h in added_hostnames:
+                ok, msg = await node_manager.uncordon_node(h)
+                if ok:
+                    await websocket.send_json({
+                        "type": "ok",
+                        "message": f"[{h}] Uncordoned — node ready for scheduling",
+                    })
+                else:
+                    logger.warning(f"Could not uncordon {h}: {msg}")
 
         architectures = sorted(post_join_architectures)
         await websocket.send_json({
@@ -1175,68 +1201,115 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
             step = 4
             normalized = "arm64" if architecture.lower() in ("aarch64", "arm64") else "amd64"
 
-            if not gpu_detected:
-                if node_manager.disable_gpu_operator_on_node(hostname):
-                    await websocket.send_json({
-                        "type": "ok",
-                        "message": f"[{hostname}] GPU operator disabled (no compatible GPU)",
-                    })
-
-            # GPU Operator setup FIRST — if this node has GPUs and setup
-            # fails, there is no point rebuilding images for a broken node.
-            if gpu_detected:
-                has_dgx_spark = bool(gpu_model and ("DGX Spark" in gpu_model or "GB10" in gpu_model))
-                gpu_ok = await _run_gpu_setup(
-                    websocket=websocket,
-                    extra_vars=extra_vars,
-                    step=step,
-                    has_dgx_spark=has_dgx_spark,
-                )
-                if not gpu_ok:
-                    await websocket.send_json({
-                        "type": "complete",
-                        "status": "failed",
-                        "message": f"Node {hostname} joined the cluster but GPU operator setup failed. "
-                                   "Fix the issue and re-run add-node to resume.",
-                    })
-                    await websocket.close()
-                    return
-                step += 1
-
-            # Check for new architecture and rebuild images if needed
-            await websocket.send_json(
-                {"type": "task", "task_name": "Check for new architecture", "task_number": step}
-            )
-            post_join_architectures = set(node_manager.get_cluster_architectures())
-            new_archs = post_join_architectures - existing_archs
-            new_arch_detected = len(new_archs) > 0
-
-            if new_arch_detected:
-                step += 1
-                platforms_str = ",".join(f"linux/{a}" for a in sorted(post_join_architectures))
+            # Cordon node immediately to prevent scheduling until setup completes.
+            ok, msg = await node_manager.cordon_node(hostname)
+            if ok:
                 await websocket.send_json({
                     "type": "ok",
-                    "message": f"New architecture detected: {normalized}. "
-                               f"Build platforms: {platforms_str}. Starting image rebuilds...",
+                    "message": f"[{hostname}] Cordoned — preventing scheduling until setup completes",
                 })
+            else:
+                logger.warning(f"Could not cordon {hostname}: {msg}")
 
-                rebuild_ok = await _run_arch_rebuild(
-                    websocket=websocket,
-                    hostnames=[hostname],
-                    new_arch=normalized,
-                    extra_vars=extra_vars,
-                )
-                if not rebuild_ok:
+            new_arch_detected = False
+            post_join_architectures = existing_archs
+            try:
+                if not gpu_detected:
+                    if node_manager.disable_gpu_operator_on_node(hostname):
+                        await websocket.send_json({
+                            "type": "ok",
+                            "message": f"[{hostname}] GPU operator disabled (no compatible GPU)",
+                        })
+
+                # Configure DNS so the node can resolve internal domains.
+                dns_playbook = COREDNS_DIR / "15_configure_node_dns.yaml"
+                if dns_playbook.exists():
                     await websocket.send_json({
-                        "type": "complete",
-                        "status": "failed",
-                        "message": f"Node {hostname} joined but image rebuild failed. "
-                                   "Fix the issue and re-run add-node to resume.",
+                        "type": "task",
+                        "task_name": "Configure DNS on new node",
+                        "task_number": step,
                     })
-                    await websocket.close()
-                    return
+                    dns_ok = await _stream_playbook(
+                        websocket=websocket,
+                        playbook_path=dns_playbook,
+                        extra_vars=extra_vars,
+                        step_name="Configure DNS on new node",
+                        step_number=step,
+                        limit=hostname,
+                    )
+                    if not dns_ok:
+                        logger.warning(f"DNS configuration failed on {hostname} — continuing")
+                        await websocket.send_json({
+                            "type": "warning",
+                            "message": f"DNS configuration failed on {hostname} — continuing",
+                        })
+                    step += 1
 
-                node_manager.update_build_platforms()
+                # GPU Operator setup — if this node has GPUs and setup
+                # fails, there is no point rebuilding images.
+                if gpu_detected:
+                    has_dgx_spark = bool(gpu_model and ("DGX Spark" in gpu_model or "GB10" in gpu_model))
+                    gpu_ok = await _run_gpu_setup(
+                        websocket=websocket,
+                        extra_vars=extra_vars,
+                        step=step,
+                        has_dgx_spark=has_dgx_spark,
+                    )
+                    if not gpu_ok:
+                        await websocket.send_json({
+                            "type": "complete",
+                            "status": "failed",
+                            "message": f"Node {hostname} joined the cluster but GPU operator setup failed. "
+                                       "Fix the issue and re-run add-node to resume.",
+                        })
+                        await websocket.close()
+                        return
+                    step += 1
+
+                # Check for new architecture and rebuild images if needed
+                await websocket.send_json(
+                    {"type": "task", "task_name": "Check for new architecture", "task_number": step}
+                )
+                post_join_architectures = set(node_manager.get_cluster_architectures())
+                new_archs = post_join_architectures - existing_archs
+                new_arch_detected = len(new_archs) > 0
+
+                if new_arch_detected:
+                    step += 1
+                    platforms_str = ",".join(f"linux/{a}" for a in sorted(post_join_architectures))
+                    await websocket.send_json({
+                        "type": "ok",
+                        "message": f"New architecture detected: {normalized}. "
+                                   f"Build platforms: {platforms_str}. Starting image rebuilds...",
+                    })
+
+                    rebuild_ok = await _run_image_rebuild(
+                        websocket=websocket,
+                        new_arch=normalized,
+                        extra_vars=extra_vars,
+                        start_step=step,
+                    )
+                    if not rebuild_ok:
+                        await websocket.send_json({
+                            "type": "complete",
+                            "status": "failed",
+                            "message": f"Node {hostname} joined but image rebuild failed. "
+                                       "Fix the issue and re-run add-node to resume.",
+                        })
+                        await websocket.close()
+                        return
+
+                    node_manager.update_build_platforms()
+
+            finally:
+                ok, msg = await node_manager.uncordon_node(hostname)
+                if ok:
+                    await websocket.send_json({
+                        "type": "ok",
+                        "message": f"[{hostname}] Uncordoned — node ready for scheduling",
+                    })
+                else:
+                    logger.warning(f"Could not uncordon {hostname}: {msg}")
 
             architectures = sorted(post_join_architectures)
             await websocket.send_json({
