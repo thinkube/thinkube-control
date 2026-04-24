@@ -255,9 +255,8 @@ async def _run_gpu_setup(
     websocket: WebSocket,
     extra_vars: Dict[str, Any],
     step: int,
-    has_dgx_spark: bool,
 ) -> bool:
-    """Deploy GPU operator and optionally configure time slicing."""
+    """Deploy GPU operator and configure time-slicing profiles."""
     gpu_deploy = GPU_OPERATOR_DIR / "10_deploy.yaml"
     if not gpu_deploy.exists():
         await websocket.send_json(
@@ -284,28 +283,31 @@ async def _run_gpu_setup(
         {"type": "ok", "message": "GPU Operator deployed"}
     )
 
-    if has_dgx_spark:
-        step += 1
-        time_slicing = GPU_OPERATOR_DIR / "15_configure_time_slicing.yaml"
-        if time_slicing.exists():
+    # Always run time-slicing config — the playbook self-gates on whether
+    # DGX Spark nodes exist in baremetal_gpus. Running it every time ensures
+    # the correct per-node profiles are applied (DGX Spark gets time-slicing,
+    # standard GPUs do not).
+    step += 1
+    time_slicing = GPU_OPERATOR_DIR / "15_configure_time_slicing.yaml"
+    if time_slicing.exists():
+        await websocket.send_json(
+            {"type": "task", "task_name": "Configure GPU time-slicing profiles", "task_number": step}
+        )
+        ts_ok = await _stream_playbook(
+            websocket=websocket,
+            playbook_path=time_slicing,
+            extra_vars=extra_vars,
+            step_name="Configure GPU time-slicing profiles",
+            step_number=step,
+        )
+        if not ts_ok:
             await websocket.send_json(
-                {"type": "task", "task_name": "Configure GPU time slicing (DGX Spark)", "task_number": step}
+                {"type": "error", "message": "GPU time-slicing configuration failed"}
             )
-            ts_ok = await _stream_playbook(
-                websocket=websocket,
-                playbook_path=time_slicing,
-                extra_vars=extra_vars,
-                step_name="Configure GPU time slicing",
-                step_number=step,
-            )
-            if not ts_ok:
-                await websocket.send_json(
-                    {"type": "error", "message": "GPU time slicing configuration failed"}
-                )
-                return False
-            await websocket.send_json(
-                {"type": "ok", "message": "GPU time slicing configured"}
-            )
+            return False
+        await websocket.send_json(
+            {"type": "ok", "message": "GPU time-slicing profiles configured"}
+        )
 
     return True
 
@@ -585,7 +587,6 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
         added_hostnames = []
         non_gpu_hostnames = []
         any_gpu_detected = False
-        any_dgx_spark = False
 
         batch_failed = False
         failed_hostname = ""
@@ -809,8 +810,6 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                 added_hostnames.append(hostname)
                 if gpu_detected:
                     any_gpu_detected = True
-                    if gpu_model and ("DGX Spark" in gpu_model or "GB10" in gpu_model):
-                        any_dgx_spark = True
                 else:
                     non_gpu_hostnames.append(hostname)
             except Exception as e:
@@ -969,7 +968,6 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     websocket=websocket,
                     extra_vars=extra_vars,
                     step=step,
-                    has_dgx_spark=any_dgx_spark,
                 )
                 if not gpu_ok:
                     await websocket.send_json({
@@ -1248,12 +1246,10 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
                 # GPU Operator setup — if this node has GPUs and setup
                 # fails, there is no point rebuilding images.
                 if gpu_detected:
-                    has_dgx_spark = bool(gpu_model and ("DGX Spark" in gpu_model or "GB10" in gpu_model))
                     gpu_ok = await _run_gpu_setup(
                         websocket=websocket,
                         extra_vars=extra_vars,
                         step=step,
-                        has_dgx_spark=has_dgx_spark,
                     )
                     if not gpu_ok:
                         await websocket.send_json({
