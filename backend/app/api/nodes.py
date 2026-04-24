@@ -895,80 +895,88 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             limit=limit_hosts,
         )
 
-        if join_ok:
-            step += 1
-
-            # Step: Check for new architecture
-            await websocket.send_json({
-                "type": "task",
-                "task_name": "Check for new architecture",
-                "task_number": step,
-            })
-
-            post_join_architectures = set(node_manager.get_cluster_architectures())
-            new_archs = post_join_architectures - existing_archs
-            new_arch_detected = len(new_archs) > 0
-
-            rebuild_ok = True
-            if new_arch_detected:
-                new_arch = sorted(new_archs)[-1]
-                platforms_str = ",".join(f"linux/{a}" for a in sorted(post_join_architectures))
-                await websocket.send_json({
-                    "type": "ok",
-                    "message": f"New architecture detected: {new_arch}. Build platforms: {platforms_str}. Starting image rebuilds...",
-                })
-
-                rebuild_ok = await _run_arch_rebuild(
-                    websocket=websocket,
-                    hostnames=added_hostnames,
-                    new_arch=new_arch,
-                    extra_vars=extra_vars,
-                )
-
-            # Only update container_build_platforms after a successful rebuild.
-            # If the rebuild failed, the inventory keeps the old value so the
-            # next add-node attempt knows it still needs to rebuild.
-            if not new_arch_detected or rebuild_ok:
-                node_manager.update_build_platforms()
-            architectures = sorted(post_join_architectures)
-
-            # GPU Operator setup for nodes with GPUs
-            gpu_ok = True
-            if any_gpu_detected:
-                step += 1
-                gpu_ok = await _run_gpu_setup(
-                    websocket=websocket,
-                    extra_vars=extra_vars,
-                    step=step,
-                    has_dgx_spark=any_dgx_spark,
-                )
-
-            warnings = []
-            if new_arch_detected and not rebuild_ok:
-                warnings.append("image rebuild failed")
-            if any_gpu_detected and not gpu_ok:
-                warnings.append("GPU operator setup failed")
-
-            status = "success" if not warnings else "warning"
-            await websocket.send_json({
-                "type": "complete",
-                "status": status,
-                "message": (
-                    f"Successfully added {len(added_hostnames)} node(s): {', '.join(added_hostnames)}"
-                    + (" — images rebuilt for multi-arch" if new_arch_detected and rebuild_ok else "")
-                    + (" — GPU operator configured" if any_gpu_detected and gpu_ok else "")
-                    + (f" — WARNING: {', '.join(warnings)}" if warnings else "")
-                ),
-                "architectures": architectures,
-                "new_architecture_detected": new_arch_detected,
-                "images_rebuilt": rebuild_ok if new_arch_detected else None,
-            })
-        else:
+        if not join_ok:
             await websocket.send_json({
                 "type": "complete",
                 "status": "failed",
                 "message": "Node join failed",
             })
+            await websocket.close()
+            return
+
+        step += 1
+
+        # GPU Operator setup FIRST — if any node has GPUs and setup fails,
+        # there is no point rebuilding images for a broken cluster state.
+        if any_gpu_detected:
+            gpu_ok = await _run_gpu_setup(
+                websocket=websocket,
+                extra_vars=extra_vars,
+                step=step,
+                has_dgx_spark=any_dgx_spark,
+            )
+            if not gpu_ok:
+                await websocket.send_json({
+                    "type": "complete",
+                    "status": "failed",
+                    "message": f"Node(s) {', '.join(added_hostnames)} joined but GPU operator setup failed. "
+                               "Fix the issue and re-run add-node to resume.",
+                })
+                await websocket.close()
+                return
+            step += 1
+
+        # Check for new architecture
+        await websocket.send_json({
+            "type": "task",
+            "task_name": "Check for new architecture",
+            "task_number": step,
+        })
+
+        post_join_architectures = set(node_manager.get_cluster_architectures())
+        new_archs = post_join_architectures - existing_archs
+        new_arch_detected = len(new_archs) > 0
+
+        if new_arch_detected:
+            step += 1
+            new_arch = sorted(new_archs)[-1]
+            platforms_str = ",".join(f"linux/{a}" for a in sorted(post_join_architectures))
+            await websocket.send_json({
+                "type": "ok",
+                "message": f"New architecture detected: {new_arch}. Build platforms: {platforms_str}. Starting image rebuilds...",
+            })
+
+            rebuild_ok = await _run_arch_rebuild(
+                websocket=websocket,
+                hostnames=added_hostnames,
+                new_arch=new_arch,
+                extra_vars=extra_vars,
+            )
+            if not rebuild_ok:
+                await websocket.send_json({
+                    "type": "complete",
+                    "status": "failed",
+                    "message": f"Node(s) {', '.join(added_hostnames)} joined but image rebuild failed. "
+                               "Fix the issue and re-run add-node to resume.",
+                })
+                await websocket.close()
+                return
+
+            node_manager.update_build_platforms()
+
+        architectures = sorted(post_join_architectures)
+        await websocket.send_json({
+            "type": "complete",
+            "status": "success",
+            "message": (
+                f"Successfully added {len(added_hostnames)} node(s): {', '.join(added_hostnames)}"
+                + (" — GPU operator configured" if any_gpu_detected else "")
+                + (" — images rebuilt for multi-arch" if new_arch_detected else "")
+            ),
+            "architectures": architectures,
+            "new_architecture_detected": new_arch_detected,
+            "images_rebuilt": True if new_arch_detected else None,
+        })
 
     except Exception as e:
         logger.error(f"Batch node addition error: {e}", exc_info=True)
@@ -1121,44 +1129,12 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
         )
 
         if join_ok:
-            # Step 4: Check for new architecture
-            await websocket.send_json(
-                {"type": "task", "task_name": "Check for new architecture", "task_number": 4}
-            )
+            step = 4
             normalized = "arm64" if architecture.lower() in ("aarch64", "arm64") else "amd64"
 
-            post_join_architectures = set(node_manager.get_cluster_architectures())
-            new_archs = post_join_architectures - existing_archs
-            new_arch_detected = len(new_archs) > 0
-
-            rebuild_ok = True
-            if new_arch_detected:
-                platforms_str = ",".join(f"linux/{a}" for a in sorted(post_join_architectures))
-                await websocket.send_json(
-                    {
-                        "type": "ok",
-                        "message": f"New architecture detected: {normalized}. "
-                        f"Build platforms: {platforms_str}. "
-                        f"Starting image rebuilds...",
-                    }
-                )
-
-                # Steps 5+: Cordon, rebuild images, uncordon
-                rebuild_ok = await _run_arch_rebuild(
-                    websocket=websocket,
-                    hostnames=[hostname],
-                    new_arch=normalized,
-                    extra_vars=extra_vars,
-                )
-
-            if not new_arch_detected or rebuild_ok:
-                node_manager.update_build_platforms()
-            architectures = sorted(post_join_architectures)
-
-            # GPU Operator setup if this node has GPUs
-            gpu_ok = True
+            # GPU Operator setup FIRST — if this node has GPUs and setup
+            # fails, there is no point rebuilding images for a broken node.
             if gpu_detected:
-                step = 6 if not new_arch_detected else step + 1
                 has_dgx_spark = bool(gpu_model and ("DGX Spark" in gpu_model or "GB10" in gpu_model))
                 gpu_ok = await _run_gpu_setup(
                     websocket=websocket,
@@ -1166,30 +1142,66 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
                     step=step,
                     has_dgx_spark=has_dgx_spark,
                 )
+                if not gpu_ok:
+                    await websocket.send_json({
+                        "type": "complete",
+                        "status": "failed",
+                        "message": f"Node {hostname} joined the cluster but GPU operator setup failed. "
+                                   "Fix the issue and re-run add-node to resume.",
+                    })
+                    await websocket.close()
+                    return
+                step += 1
 
-            warnings = []
-            if new_arch_detected and not rebuild_ok:
-                warnings.append("image rebuild failed")
-            if gpu_detected and not gpu_ok:
-                warnings.append("GPU operator setup failed")
-
-            status = "success" if not warnings else "warning"
+            # Check for new architecture and rebuild images if needed
             await websocket.send_json(
-                {
-                    "type": "complete",
-                    "status": status,
-                    "message": (
-                        f"Node {hostname} successfully joined the cluster"
-                        + (" and all images rebuilt for multi-arch" if new_arch_detected and rebuild_ok else "")
-                        + (" — GPU operator configured" if gpu_detected and gpu_ok else "")
-                        + (f". WARNING: {', '.join(warnings)}" if warnings else "")
-                    ),
-                    "architectures": architectures,
-                    "new_architecture_detected": new_arch_detected,
-                    "node_architecture": normalized,
-                    "images_rebuilt": rebuild_ok if new_arch_detected else None,
-                }
+                {"type": "task", "task_name": "Check for new architecture", "task_number": step}
             )
+            post_join_architectures = set(node_manager.get_cluster_architectures())
+            new_archs = post_join_architectures - existing_archs
+            new_arch_detected = len(new_archs) > 0
+
+            if new_arch_detected:
+                step += 1
+                platforms_str = ",".join(f"linux/{a}" for a in sorted(post_join_architectures))
+                await websocket.send_json({
+                    "type": "ok",
+                    "message": f"New architecture detected: {normalized}. "
+                               f"Build platforms: {platforms_str}. Starting image rebuilds...",
+                })
+
+                rebuild_ok = await _run_arch_rebuild(
+                    websocket=websocket,
+                    hostnames=[hostname],
+                    new_arch=normalized,
+                    extra_vars=extra_vars,
+                )
+                if not rebuild_ok:
+                    await websocket.send_json({
+                        "type": "complete",
+                        "status": "failed",
+                        "message": f"Node {hostname} joined but image rebuild failed. "
+                                   "Fix the issue and re-run add-node to resume.",
+                    })
+                    await websocket.close()
+                    return
+
+                node_manager.update_build_platforms()
+
+            architectures = sorted(post_join_architectures)
+            await websocket.send_json({
+                "type": "complete",
+                "status": "success",
+                "message": (
+                    f"Node {hostname} successfully added"
+                    + (" — GPU operator configured" if gpu_detected else "")
+                    + (" — images rebuilt for multi-arch" if new_arch_detected else "")
+                ),
+                "architectures": architectures,
+                "new_architecture_detected": new_arch_detected,
+                "node_architecture": normalized,
+                "images_rebuilt": True if new_arch_detected else None,
+            })
         else:
             await websocket.send_json(
                 {
