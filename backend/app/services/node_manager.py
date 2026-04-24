@@ -5,6 +5,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 from datetime import datetime, timezone
@@ -1001,6 +1002,28 @@ df -BG / 2>/dev/null | tail -1 | awk '{{print $2}}' | tr -d 'G'
             return {"success": True, "new_size": f"{new_size} GB"}
         except Exception as e:
             return {"success": False, "error": str(e)}
+
+    async def detect_zerotier_ip(self, lan_ip: str) -> Optional[str]:
+        """Check if a node already has a ZeroTier IP configured. Returns the IP or None."""
+        ssh_key_path = ansible_env.get_ssh_key_path()
+        username = os.environ["SYSTEM_USERNAME"]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ssh", "-o", "StrictHostKeyChecking=no",
+                "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
+                "-i", str(ssh_key_path), f"{username}@{lan_ip}",
+                "ip", "-4", "-o", "addr", "show", "dev", "zt+",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
+            if proc.returncode == 0 and stdout:
+                match = re.search(r'inet\s+([\d.]+)/', stdout.decode())
+                if match:
+                    return match.group(1)
+        except Exception:
+            pass
+        return None
 
     async def wait_for_ssh(self, ip: str, retries: int = 12, interval: int = 5) -> bool:
         """Wait until SSH is reachable on the given IP."""
