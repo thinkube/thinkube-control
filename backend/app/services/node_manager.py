@@ -993,6 +993,28 @@ df -BG / 2>/dev/null | tail -1 | awk '{{print $2}}' | tr -d 'G'
         except Exception as e:
             return {"success": False, "error": str(e)}
 
+    async def wait_for_ssh(self, ip: str, retries: int = 12, interval: int = 5) -> bool:
+        """Wait until SSH is reachable on the given IP."""
+        ssh_key_path = ansible_env.get_ssh_key_path()
+        username = os.environ["SYSTEM_USERNAME"]
+        for i in range(retries):
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "ssh", "-o", "StrictHostKeyChecking=no",
+                    "-o", "ConnectTimeout=3", "-o", "BatchMode=yes",
+                    "-i", ssh_key_path, f"{username}@{ip}", "true",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await asyncio.wait_for(proc.wait(), timeout=10)
+                if proc.returncode == 0:
+                    return True
+            except Exception:
+                pass
+            if i < retries - 1:
+                await asyncio.sleep(interval)
+        return False
+
     async def prepare_ansible_python(self, ip: str) -> Dict[str, Any]:
         """Create the Python venv on a node that Ansible expects for remote execution."""
         ssh_key_path = ansible_env.get_ssh_key_path()

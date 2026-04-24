@@ -723,7 +723,22 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                 zerotier_ip = zt_result["zerotier_ip"]
                 await websocket.send_json({
                     "type": "ok",
-                    "message": f"[{hostname or ip}] ZeroTier configured with IP {zerotier_ip}",
+                    "message": f"[{hostname or ip}] ZeroTier configured with IP {zerotier_ip}, waiting for tunnel...",
+                })
+
+                zt_reachable = await node_manager.wait_for_ssh(zerotier_ip, retries=12, interval=5)
+                if not zt_reachable:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"[{hostname or ip}] ZeroTier tunnel to {zerotier_ip} not reachable after 60s. Aborting batch.",
+                    })
+                    batch_failed = True
+                    failed_hostname = hostname or ip
+                    break
+
+                await websocket.send_json({
+                    "type": "ok",
+                    "message": f"[{hostname or ip}] ZeroTier tunnel established",
                 })
                 step += 1
 
