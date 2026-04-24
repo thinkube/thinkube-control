@@ -608,6 +608,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             )
 
         added_hostnames = []
+        non_gpu_hostnames = []
         any_gpu_detected = False
         any_dgx_spark = False
 
@@ -825,6 +826,8 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     any_gpu_detected = True
                     if gpu_model and ("DGX Spark" in gpu_model or "GB10" in gpu_model):
                         any_dgx_spark = True
+                else:
+                    non_gpu_hostnames.append(hostname)
             except Exception as e:
                 await websocket.send_json({
                     "type": "error",
@@ -920,6 +923,18 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             return
 
         step += 1
+
+        # Disable GPU operator DaemonSets on nodes without compatible GPUs.
+        # NFD detects any NVIDIA PCI device and auto-labels the node, causing
+        # GPU operator pods to schedule even on nodes with unsupported GPUs.
+        for nh in non_gpu_hostnames:
+            if node_manager.disable_gpu_operator_on_node(nh):
+                await websocket.send_json({
+                    "type": "ok",
+                    "message": f"[{nh}] GPU operator disabled (no compatible GPU)",
+                })
+            else:
+                logger.warning(f"Could not disable GPU operator labels on {nh}")
 
         # GPU Operator setup FIRST — if any node has GPUs and setup fails,
         # there is no point rebuilding images for a broken cluster state.
@@ -1146,6 +1161,13 @@ async def stream_node_addition(websocket: WebSocket, job_id: str):
         if join_ok:
             step = 4
             normalized = "arm64" if architecture.lower() in ("aarch64", "arm64") else "amd64"
+
+            if not gpu_detected:
+                if node_manager.disable_gpu_operator_on_node(hostname):
+                    await websocket.send_json({
+                        "type": "ok",
+                        "message": f"[{hostname}] GPU operator disabled (no compatible GPU)",
+                    })
 
             # GPU Operator setup FIRST — if this node has GPUs and setup
             # fails, there is no point rebuilding images for a broken node.

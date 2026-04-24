@@ -1141,6 +1141,28 @@ echo "OK"
                 return False
         return True
 
+    def disable_gpu_operator_on_node(self, hostname: str) -> bool:
+        """Set nvidia.com/gpu.deploy.*=false labels to prevent GPU operator DaemonSets."""
+        gpu_deploy_labels = [
+            "nvidia.com/gpu.deploy.container-toolkit",
+            "nvidia.com/gpu.deploy.dcgm",
+            "nvidia.com/gpu.deploy.dcgm-exporter",
+            "nvidia.com/gpu.deploy.device-plugin",
+            "nvidia.com/gpu.deploy.driver",
+            "nvidia.com/gpu.deploy.gpu-feature-discovery",
+            "nvidia.com/gpu.deploy.node-status-exporter",
+            "nvidia.com/gpu.deploy.operator-validator",
+        ]
+        try:
+            v1 = client.CoreV1Api()
+            body = {"metadata": {"labels": {lbl: "false" for lbl in gpu_deploy_labels}}}
+            v1.patch_node(hostname, body)
+            logger.info(f"Disabled GPU operator on node {hostname}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to disable GPU operator on {hostname}: {e}")
+            return False
+
     def get_rebuild_actions(self, new_arch: str) -> List[Dict[str, str]]:
         """Return list of rebuild actions needed when a new architecture is introduced."""
         actions = [
