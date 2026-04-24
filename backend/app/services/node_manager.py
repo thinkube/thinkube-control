@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -935,7 +936,43 @@ zerotier-cli info | cut -d" " -f3
         except Exception as e:
             return {"success": False, "error": f"ZeroTier install error: {e}"}
 
-        # Step 2: Authorize member and assign IP via ZeroTier API
+        # Step 2: Remove stale members that hold the target IP
+        try:
+            async with httpx.AsyncClient(timeout=15) as http_client:
+                headers = {"Authorization": f"bearer {api_token}"}
+                members_resp = await http_client.get(
+                    f"https://api.zerotier.com/api/v1/network/{network_id}/member",
+                    headers=headers,
+                )
+                members_resp.raise_for_status()
+                now_ms = int(time.time() * 1000)
+                thirty_days_ms = 30 * 24 * 60 * 60 * 1000
+                for member in members_resp.json():
+                    member_id = member.get("nodeId", "")
+                    if member_id == node_id:
+                        continue
+                    ip_assignments = member.get("config", {}).get("ipAssignments", [])
+                    if assigned_zt_ip in ip_assignments:
+                        last_online = member.get("lastOnline", 0) or 0
+                        if now_ms - last_online > thirty_days_ms:
+                            logger.info(
+                                f"Removing stale ZeroTier member {member_id} "
+                                f"(holds IP {assigned_zt_ip}, offline for "
+                                f"{(now_ms - last_online) // 86400000}d)"
+                            )
+                            await http_client.delete(
+                                f"https://api.zerotier.com/api/v1/network/{network_id}/member/{member_id}",
+                                headers=headers,
+                            )
+                        else:
+                            logger.warning(
+                                f"ZeroTier member {member_id} already has IP {assigned_zt_ip} "
+                                f"and was online recently — not removing"
+                            )
+        except Exception as e:
+            logger.warning(f"Could not check for stale ZeroTier members: {e}")
+
+        # Step 3: Authorize member and assign IP via ZeroTier API
         try:
             async with httpx.AsyncClient(timeout=15) as http_client:
                 response = await http_client.post(
@@ -955,10 +992,10 @@ zerotier-cli info | cut -d" " -f3
         except Exception as e:
             return {"success": False, "error": f"ZeroTier API authorization failed: {e}"}
 
-        # Step 3: Ensure MetalLB VIP routes exist in ZeroTier network
+        # Step 4: Ensure MetalLB VIP routes exist in ZeroTier network
         await self._ensure_zerotier_vip_routes(inventory, inv_vars, network_id, api_token)
 
-        # Step 4: Configure firewall and IP forwarding
+        # Step 5: Configure firewall and IP forwarding
         fw_script = f"""
 echo '{password}' | sudo -S bash -c '
 set -e
