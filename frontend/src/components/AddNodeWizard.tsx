@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   TkDialogRoot,
   TkDialogContent,
@@ -60,6 +60,14 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
   const [scanCidr, setScanCidr] = useState('');
   const playbookRef = useRef<PlaybookExecutorHandle>(null);
 
+  useEffect(() => {
+    if (open) {
+      setStep('scan');
+      setScanCidr('');
+      clearNetworkNodes();
+    }
+  }, [open, clearNetworkNodes]);
+
   const selectedNodes = networkNodes.filter((n) => n.selected);
   const allHardwareDetected = selectedNodes.length > 0 && selectedNodes.every(
     (n) => n.hardware && !n.hardware.error
@@ -111,9 +119,10 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
   const handlePlaybookComplete = useCallback((result: any) => {
     if (result.status === 'success') {
       onComplete();
+      resetWizard();
+      onOpenChange(false);
     }
-    resetWizard();
-  }, [onComplete]);
+  }, [onComplete, onOpenChange]);
 
   const resetWizard = () => {
     setStep('scan');
