@@ -76,16 +76,6 @@ interface NodesState {
   // Actions
   listNodes: () => Promise<void>;
   discoverNode: (ip: string, username?: string) => Promise<DiscoveredNode | null>;
-  addNode: (params: {
-    hostname: string;
-    ip: string;
-    architecture: string;
-    zerotier_ip?: string;
-    lan_ip?: string;
-    gpu_detected?: boolean;
-    gpu_count?: number;
-    gpu_model?: string;
-  }) => Promise<{ job_id: string } | null>;
   removeNode: (hostname: string) => Promise<boolean>;
   clearDiscoveredNode: () => void;
 
@@ -140,17 +130,6 @@ export const useNodesStore = create<NodesState>((set, get) => ({
     } catch (err: any) {
       console.error('Failed to discover node:', err);
       set({ error: err.message, discovering: false });
-      return null;
-    }
-  },
-
-  addNode: async (params) => {
-    try {
-      const response = await api.post('/nodes/add', params);
-      return response.data;
-    } catch (err: any) {
-      console.error('Failed to initiate node addition:', err);
-      set({ error: err.response?.data?.detail || err.message });
       return null;
     }
   },

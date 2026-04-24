@@ -32,6 +32,29 @@ COREDNS_DIR = Path(
     "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
     "40_thinkube/core/infrastructure/coredns"
 )
+IMAGE_BUILD_TOKEN = Path("/home/thinkube/.image_build_completed_platforms")
+
+
+def _read_build_token() -> set:
+    """Read architectures that have completed image builds."""
+    if not IMAGE_BUILD_TOKEN.exists():
+        return set()
+    content = IMAGE_BUILD_TOKEN.read_text().strip()
+    if not content:
+        return set()
+    archs = set()
+    for p in content.split(","):
+        p = p.strip()
+        if p.startswith("linux/"):
+            archs.add(p.split("/", 1)[1])
+    return archs
+
+
+def _write_build_token(architectures: set) -> None:
+    """Write completed architectures to the build token file."""
+    platforms = ",".join(f"linux/{a}" for a in sorted(architectures))
+    IMAGE_BUILD_TOKEN.parent.mkdir(parents=True, exist_ok=True)
+    IMAGE_BUILD_TOKEN.write_text(platforms + "\n")
 
 
 def _find_inventory_group_hosts(inventory: dict, group_name: str) -> List[str]:
@@ -56,17 +79,6 @@ def _find_inventory_group_hosts(inventory: dict, group_name: str) -> List[str]:
 class DiscoverRequest(BaseModel):
     ip: str
     username: Optional[str] = None
-
-
-class AddNodeRequest(BaseModel):
-    hostname: str
-    ip: str
-    architecture: str
-    zerotier_ip: Optional[str] = None
-    lan_ip: Optional[str] = None
-    gpu_detected: bool = False
-    gpu_count: int = 0
-    gpu_model: str = ""
 
 
 class RemoveNodeRequest(BaseModel):
@@ -210,11 +222,16 @@ async def _stream_playbook(
 
 async def _run_image_rebuild(
     websocket: WebSocket,
-    new_arch: str,
     extra_vars: Dict[str, Any],
     start_step: int,
+    new_arch: Optional[str] = None,
 ) -> bool:
-    """Rebuild images for a new architecture. Caller handles cordon/uncordon."""
+    """Mirror and build images for all cluster architectures.
+
+    Always runs the mirror/build playbooks (idempotent). Only rebuilds
+    Jupyter venvs when new_arch is set (genuinely new architecture).
+    Caller handles cordon/uncordon.
+    """
     rebuild_playbooks = [
         (HARBOR_IMAGES_DIR / "13_mirror_public_images.yaml", "Mirror public images (multi-arch)"),
         (HARBOR_IMAGES_DIR / "14_build_base_images.yaml", "Rebuild base images (multi-arch)"),
@@ -243,10 +260,11 @@ async def _run_image_rebuild(
         )
         step += 1
 
-    await websocket.send_json(
-        {"type": "task", "task_name": f"Rebuild Jupyter venvs for {new_arch}", "task_number": step}
-    )
-    await _rebuild_venvs_for_arch(websocket, new_arch, extra_vars, step)
+    if new_arch:
+        await websocket.send_json(
+            {"type": "task", "task_name": f"Rebuild Jupyter venvs for {new_arch}", "task_number": step}
+        )
+        await _rebuild_venvs_for_arch(websocket, new_arch, extra_vars, step)
 
     return True
 
@@ -858,16 +876,12 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
         await websocket.send_json({"type": "ok", "message": "Inventory is valid"})
         step += 1
 
-        # Read existing build platforms from inventory — this is the source of truth
-        # for what architectures Harbor already has images for, independent of
-        # which nodes happen to be in the cluster right now.
         inventory = node_manager.read_inventory()
-        existing_platforms = inventory["all"].get("vars", {}).get("container_build_platforms", "")
-        existing_archs = set()
-        for p in existing_platforms.split(","):
-            p = p.strip()
-            if p.startswith("linux/"):
-                existing_archs.add(p.split("/", 1)[1])
+        # Read the build completion token — the set of architectures that
+        # have actually completed image builds. This is the ONLY reliable
+        # source; container_build_platforms in inventory can be stale from
+        # incomplete runs.
+        built_archs = _read_build_token()
 
         # Step: Run join workers playbook
         playbook_path = Path(
@@ -920,8 +934,8 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             else:
                 logger.warning(f"Could not cordon {h}: {msg}")
 
-        new_arch_detected = False
-        post_join_architectures = existing_archs
+        needs_rebuild = False
+        post_join_architectures = built_archs
         try:
             # Disable GPU operator on nodes without compatible GPUs.
             # NFD detects physical GPUs regardless of compatibility (Volta+
@@ -980,31 +994,29 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     return
                 step += 1
 
-            # Check for new architecture and rebuild images if needed
-            await websocket.send_json({
-                "type": "task",
-                "task_name": "Check for new architecture",
-                "task_number": step,
-            })
-
+            # Compare cluster architectures against the build completion
+            # token to determine if images need to be built. The token is
+            # only written after a successful build, so a previous incomplete
+            # run won't fool us.
             post_join_architectures = set(node_manager.get_cluster_architectures())
-            new_archs = post_join_architectures - existing_archs
-            new_arch_detected = len(new_archs) > 0
+            unbuilt_archs = post_join_architectures - built_archs
+            needs_rebuild = len(unbuilt_archs) > 0
 
-            if new_arch_detected:
-                step += 1
-                new_arch = sorted(new_archs)[-1]
+            if needs_rebuild:
+                new_arch = sorted(unbuilt_archs)[-1]
                 platforms_str = ",".join(f"linux/{a}" for a in sorted(post_join_architectures))
                 await websocket.send_json({
                     "type": "ok",
-                    "message": f"New architecture detected: {new_arch}. Build platforms: {platforms_str}. Starting image rebuilds...",
+                    "message": f"Architecture {new_arch} missing from image builds. "
+                               f"Build platforms: {platforms_str}. Starting image rebuild...",
                 })
 
+                step += 1
                 rebuild_ok = await _run_image_rebuild(
                     websocket=websocket,
-                    new_arch=new_arch,
                     extra_vars=extra_vars,
                     start_step=step,
+                    new_arch=new_arch,
                 )
                 if not rebuild_ok:
                     await websocket.send_json({
@@ -1016,7 +1028,14 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     await websocket.close()
                     return
 
+                # Token written ONLY after successful build.
+                _write_build_token(post_join_architectures)
                 node_manager.update_build_platforms()
+            else:
+                await websocket.send_json({
+                    "type": "ok",
+                    "message": "Images already built for all cluster architectures — skipping rebuild.",
+                })
 
         finally:
             # Always uncordon new nodes so they can accept workloads,
@@ -1038,300 +1057,14 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             "message": (
                 f"Successfully added {len(added_hostnames)} node(s): {', '.join(added_hostnames)}"
                 + (" — GPU operator configured" if any_gpu_detected else "")
-                + (" — images rebuilt for multi-arch" if new_arch_detected else "")
+                + (" — images rebuilt for multi-arch" if needs_rebuild else "")
             ),
             "architectures": architectures,
-            "new_architecture_detected": new_arch_detected,
-            "images_rebuilt": True if new_arch_detected else None,
+            "images_rebuilt": needs_rebuild,
         })
 
     except Exception as e:
         logger.error(f"Batch node addition error: {e}", exc_info=True)
-        try:
-            await websocket.send_json({"type": "error", "message": str(e)})
-        except Exception:
-            pass
-    finally:
-        try:
-            await websocket.close()
-        except Exception:
-            pass
-
-
-@router.post("/add")
-async def add_node(request: AddNodeRequest):
-    """Initiate node addition. Returns a job_id for WebSocket streaming."""
-    validation = node_manager.validate_inventory()
-    if not validation["valid"]:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Inventory validation failed: {validation.get('error')}",
-        )
-
-    existing_nodes = node_manager.get_cluster_nodes()
-    existing_names = [n["name"] for n in existing_nodes]
-    if request.hostname in existing_names:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Node '{request.hostname}' already exists in the cluster",
-        )
-
-    job_id = str(uuid.uuid4())
-    return {
-        "job_id": job_id,
-        "message": f"Node addition job created. Connect to WebSocket to start.",
-        "hostname": request.hostname,
-    }
-
-
-@router.websocket("/ws/add/{job_id}")
-async def stream_node_addition(websocket: WebSocket, job_id: str):
-    """Stream node addition progress via WebSocket.
-
-    Expected query params: hostname, ip, architecture, zerotier_ip, lan_ip,
-    gpu_detected, gpu_count, gpu_model
-    """
-    await websocket.accept()
-
-    try:
-        params = websocket.query_params
-        hostname = params.get("hostname", "")
-        ip = params.get("ip", "")
-        architecture = params.get("architecture", "")
-        zerotier_ip = params.get("zerotier_ip", "")
-        lan_ip = params.get("lan_ip", "")
-        gpu_detected = params.get("gpu_detected", "false") == "true"
-        gpu_count = int(params.get("gpu_count", "0"))
-        gpu_model = params.get("gpu_model", "")
-
-        if not hostname or not ip or not architecture:
-            await websocket.send_json(
-                {"type": "error", "message": "Missing required params: hostname, ip, architecture"}
-            )
-            await websocket.close()
-            return
-
-        await websocket.send_json(
-            {
-                "type": "start",
-                "message": f"Starting node addition for {hostname}",
-                "job_id": job_id,
-            }
-        )
-
-        # Step 1: Update inventory
-        await websocket.send_json(
-            {"type": "task", "task_name": "Update Ansible inventory", "task_number": 1}
-        )
-        try:
-            node_manager.add_node_to_inventory(
-                hostname=hostname,
-                ip=ip,
-                architecture=architecture,
-                zerotier_ip=zerotier_ip or None,
-                lan_ip=lan_ip or None,
-                gpu_detected=gpu_detected,
-                gpu_count=gpu_count,
-                gpu_model=gpu_model,
-            )
-            await websocket.send_json(
-                {"type": "ok", "message": f"Node {hostname} added to inventory"}
-            )
-        except Exception as e:
-            await websocket.send_json(
-                {"type": "error", "message": f"Failed to update inventory: {e}"}
-            )
-            await websocket.close()
-            return
-
-        # Step 2: Validate inventory
-        await websocket.send_json(
-            {"type": "task", "task_name": "Validate inventory", "task_number": 2}
-        )
-        validation = node_manager.validate_inventory()
-        if not validation["valid"]:
-            await websocket.send_json(
-                {"type": "error", "message": f"Inventory validation failed: {validation.get('error')}"}
-            )
-            await websocket.close()
-            return
-        await websocket.send_json({"type": "ok", "message": "Inventory is valid"})
-
-        # Read existing build platforms from inventory — source of truth for
-        # what architectures Harbor already has images for.
-        inventory = node_manager.read_inventory()
-        existing_platforms = inventory["all"].get("vars", {}).get("container_build_platforms", "")
-        existing_archs = set()
-        for p in existing_platforms.split(","):
-            p = p.strip()
-            if p.startswith("linux/"):
-                existing_archs.add(p.split("/", 1)[1])
-
-        # Step 3: Run the join worker playbook
-        playbook_path = Path(
-            "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
-            "40_thinkube/core/infrastructure/k8s/20_join_workers.yaml"
-        )
-        if not playbook_path.exists():
-            playbook_path = ansible_env.get_playbook_path("add_node.yaml")
-
-        extra_vars = {}
-        try:
-            extra_vars = ansible_env.prepare_auth_vars(extra_vars)
-        except RuntimeError as e:
-            await websocket.send_json({"type": "error", "message": str(e)})
-            await websocket.close()
-            return
-
-        # Include control plane + localhost so post-join plays run too
-        cp_hosts = _find_inventory_group_hosts(inventory, "k8s_control_plane")
-        limit_hosts = ",".join([hostname] + cp_hosts + ["localhost"])
-        join_ok = await _stream_playbook(
-            websocket=websocket,
-            playbook_path=playbook_path,
-            extra_vars=extra_vars,
-            step_name="Join node to cluster",
-            step_number=3,
-            limit=limit_hosts,
-        )
-
-        if join_ok:
-            step = 4
-            normalized = "arm64" if architecture.lower() in ("aarch64", "arm64") else "amd64"
-
-            # Cordon node immediately to prevent scheduling until setup completes.
-            ok, msg = await node_manager.cordon_node(hostname)
-            if ok:
-                await websocket.send_json({
-                    "type": "ok",
-                    "message": f"[{hostname}] Cordoned — preventing scheduling until setup completes",
-                })
-            else:
-                logger.warning(f"Could not cordon {hostname}: {msg}")
-
-            new_arch_detected = False
-            post_join_architectures = existing_archs
-            try:
-                if not gpu_detected:
-                    if node_manager.disable_gpu_operator_on_node(hostname):
-                        await websocket.send_json({
-                            "type": "ok",
-                            "message": f"[{hostname}] GPU operator disabled (no compatible GPU)",
-                        })
-
-                # Configure DNS so the node can resolve internal domains.
-                dns_playbook = COREDNS_DIR / "15_configure_node_dns.yaml"
-                if dns_playbook.exists():
-                    await websocket.send_json({
-                        "type": "task",
-                        "task_name": "Configure DNS on new node",
-                        "task_number": step,
-                    })
-                    dns_ok = await _stream_playbook(
-                        websocket=websocket,
-                        playbook_path=dns_playbook,
-                        extra_vars=extra_vars,
-                        step_name="Configure DNS on new node",
-                        step_number=step,
-                        limit=hostname,
-                    )
-                    if not dns_ok:
-                        logger.warning(f"DNS configuration failed on {hostname} — continuing")
-                        await websocket.send_json({
-                            "type": "warning",
-                            "message": f"DNS configuration failed on {hostname} — continuing",
-                        })
-                    step += 1
-
-                # GPU Operator setup — if this node has GPUs and setup
-                # fails, there is no point rebuilding images.
-                if gpu_detected:
-                    gpu_ok = await _run_gpu_setup(
-                        websocket=websocket,
-                        extra_vars=extra_vars,
-                        step=step,
-                    )
-                    if not gpu_ok:
-                        await websocket.send_json({
-                            "type": "complete",
-                            "status": "failed",
-                            "message": f"Node {hostname} joined the cluster but GPU operator setup failed. "
-                                       "Fix the issue and re-run add-node to resume.",
-                        })
-                        await websocket.close()
-                        return
-                    step += 1
-
-                # Check for new architecture and rebuild images if needed
-                await websocket.send_json(
-                    {"type": "task", "task_name": "Check for new architecture", "task_number": step}
-                )
-                post_join_architectures = set(node_manager.get_cluster_architectures())
-                new_archs = post_join_architectures - existing_archs
-                new_arch_detected = len(new_archs) > 0
-
-                if new_arch_detected:
-                    step += 1
-                    platforms_str = ",".join(f"linux/{a}" for a in sorted(post_join_architectures))
-                    await websocket.send_json({
-                        "type": "ok",
-                        "message": f"New architecture detected: {normalized}. "
-                                   f"Build platforms: {platforms_str}. Starting image rebuilds...",
-                    })
-
-                    rebuild_ok = await _run_image_rebuild(
-                        websocket=websocket,
-                        new_arch=normalized,
-                        extra_vars=extra_vars,
-                        start_step=step,
-                    )
-                    if not rebuild_ok:
-                        await websocket.send_json({
-                            "type": "complete",
-                            "status": "failed",
-                            "message": f"Node {hostname} joined but image rebuild failed. "
-                                       "Fix the issue and re-run add-node to resume.",
-                        })
-                        await websocket.close()
-                        return
-
-                    node_manager.update_build_platforms()
-
-            finally:
-                ok, msg = await node_manager.uncordon_node(hostname)
-                if ok:
-                    await websocket.send_json({
-                        "type": "ok",
-                        "message": f"[{hostname}] Uncordoned — node ready for scheduling",
-                    })
-                else:
-                    logger.warning(f"Could not uncordon {hostname}: {msg}")
-
-            architectures = sorted(post_join_architectures)
-            await websocket.send_json({
-                "type": "complete",
-                "status": "success",
-                "message": (
-                    f"Node {hostname} successfully added"
-                    + (" — GPU operator configured" if gpu_detected else "")
-                    + (" — images rebuilt for multi-arch" if new_arch_detected else "")
-                ),
-                "architectures": architectures,
-                "new_architecture_detected": new_arch_detected,
-                "node_architecture": normalized,
-                "images_rebuilt": True if new_arch_detected else None,
-            })
-        else:
-            await websocket.send_json(
-                {
-                    "type": "complete",
-                    "status": "failed",
-                    "message": "Node join failed",
-                }
-            )
-
-    except Exception as e:
-        logger.error(f"Node addition error: {e}", exc_info=True)
         try:
             await websocket.send_json({"type": "error", "message": str(e)})
         except Exception:
