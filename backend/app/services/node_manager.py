@@ -171,6 +171,15 @@ echo -n '"nvidia_driver_version": "'
 nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | tr -d '\n' || echo -n ""
 echo '",'
 
+echo -n '"nouveau_loaded": '
+if lsmod 2>/dev/null | grep -q '^nouveau '; then echo -n 'true'; else echo -n 'false'; fi
+echo ','
+
+echo -n '"nouveau_in_use": '
+refcnt=$(lsmod 2>/dev/null | awk '/^nouveau / {print $3}')
+if [ -n "$refcnt" ] && [ "$refcnt" -gt 0 ] 2>/dev/null; then echo -n 'true'; else echo -n 'false'; fi
+echo ','
+
 echo -n '"lvm_expandable": false, "lvm_free_gb": 0, "lvm_lv_path": ""'
 
 echo '}'
@@ -1095,6 +1104,16 @@ echo "OK"
                 )
                 hw_info["gpu_detected"] = False
                 hw_info["gpu_count"] = 0
+            elif hw_info.get("nouveau_in_use"):
+                errors.append(
+                    "nouveau driver is active (display attached). "
+                    "Disconnect the display or blacklist nouveau and reboot before adding this node."
+                )
+            elif hw_info.get("nouveau_loaded"):
+                warnings.append(
+                    "nouveau driver is loaded but not in use — "
+                    "it will be replaced by the NVIDIA driver during GPU setup"
+                )
 
         return {
             "valid": len(errors) == 0,
