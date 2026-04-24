@@ -32,6 +32,10 @@ COREDNS_DIR = Path(
     "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
     "40_thinkube/core/infrastructure/coredns"
 )
+SSH_SETUP_DIR = Path(
+    "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
+    "00_initial_setup"
+)
 IMAGE_BUILD_TOKEN = Path("/home/thinkube/.image_build_completed_platforms")
 
 
@@ -949,6 +953,27 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     })
                 else:
                     logger.warning(f"Could not disable GPU operator labels on {nh}")
+
+            # Set up SSH from control plane to new workers so that
+            # build playbooks can delegate tasks (synchronize/rsync).
+            ssh_playbook = SSH_SETUP_DIR / "11_update_ssh_for_workers.yaml"
+            if ssh_playbook.exists():
+                await websocket.send_json({
+                    "type": "task",
+                    "task_name": "Configure inter-node SSH",
+                    "task_number": step,
+                })
+                ssh_ok = await _stream_playbook(
+                    websocket=websocket,
+                    playbook_path=ssh_playbook,
+                    extra_vars=extra_vars,
+                    step_name="Configure inter-node SSH",
+                    step_number=step,
+                    limit=",".join(added_hostnames),
+                )
+                if not ssh_ok:
+                    logger.warning("Inter-node SSH setup failed — build delegation may fail")
+                step += 1
 
             # Configure DNS on new nodes so they can resolve internal
             # domains (e.g. registry.cmxela.com) before image pulls.
