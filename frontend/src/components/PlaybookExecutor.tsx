@@ -112,6 +112,8 @@ export const PlaybookExecutor = forwardRef<PlaybookExecutorHandle, PlaybookExecu
 
   // WebSocket message handler
   const handleWebSocketMessage = useCallback((data: any) => {
+    if (data.type === 'heartbeat') return
+
     // Add to log
     const newEntry: LogEntry = {
       type: data.type,

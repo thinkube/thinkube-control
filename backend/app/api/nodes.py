@@ -1031,56 +1031,42 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     return
                 step += 1
 
-            # Compare cluster architectures against the build completion
-            # token to determine if images need to be built. The token is
-            # only written after a successful build, so a previous incomplete
-            # run won't fool us.
+            # Check if images need to be rebuilt for new architectures.
+            # Update inventory build platforms so the playbooks will
+            # target all architectures when run manually.
             post_join_architectures = set(node_manager.get_cluster_architectures())
             unbuilt_archs = post_join_architectures - built_archs
             needs_rebuild = len(unbuilt_archs) > 0
 
             if needs_rebuild:
-                new_arch = sorted(unbuilt_archs)[-1]
-                platforms_str = ",".join(f"linux/{a}" for a in sorted(post_join_architectures))
-                await websocket.send_json({
-                    "type": "ok",
-                    "message": f"Architecture {new_arch} missing from image builds. "
-                               f"Build platforms: {platforms_str}. Starting image rebuild...",
-                })
-
-                # Update inventory BEFORE the build so playbooks target
-                # all architectures (needed for multi-arch manifests).
-                # The completion token stays unchanged until the build
-                # succeeds, so a failure will re-trigger the build.
                 node_manager.update_build_platforms()
 
-                step += 1
-                rebuild_ok = await _run_image_rebuild(
-                    websocket=websocket,
-                    extra_vars=extra_vars,
-                    start_step=step,
-                    new_arch=new_arch,
-                )
-                if not rebuild_ok:
-                    await websocket.send_json({
-                        "type": "complete",
-                        "status": "failed",
-                        "message": f"Node(s) {', '.join(added_hostnames)} joined but image rebuild failed. "
-                                   "Fix the issue and re-run add-node to resume.",
-                    })
-                    await websocket.close()
-                    return
+        except Exception:
+            raise
+        # Nodes stay cordoned — user will uncordon after building images.
 
-                _write_build_token(post_join_architectures)
-            else:
-                await websocket.send_json({
-                    "type": "ok",
-                    "message": "Images already built for all cluster architectures — skipping rebuild.",
-                })
+        hostnames_csv = ",".join(added_hostnames)
+        architectures = sorted(post_join_architectures)
 
-        finally:
-            # Always uncordon new nodes so they can accept workloads,
-            # even if a step above failed and returned early.
+        if needs_rebuild:
+            platforms_str = ",".join(f"linux/{a}" for a in architectures)
+            tk_images_cmd = f"tk_images rebuild --uncordon {hostnames_csv}"
+            await websocket.send_json({
+                "type": "complete",
+                "status": "success",
+                "message": (
+                    f"Successfully added {len(added_hostnames)} node(s): {', '.join(added_hostnames)}"
+                    + (" — GPU operator configured" if any_gpu_detected else "")
+                    + f". Nodes are cordoned. New architecture detected — images need rebuilding for {platforms_str}."
+                    + f" Open a terminal and run:\n\n  {tk_images_cmd}\n"
+                ),
+                "architectures": architectures,
+                "images_rebuilt": False,
+                "needs_image_rebuild": True,
+                "tk_images_command": tk_images_cmd,
+            })
+        else:
+            # All images already exist — uncordon immediately.
             for h in added_hostnames:
                 ok, msg = await node_manager.uncordon_node(h)
                 if ok:
@@ -1091,18 +1077,18 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                 else:
                     logger.warning(f"Could not uncordon {h}: {msg}")
 
-        architectures = sorted(post_join_architectures)
-        await websocket.send_json({
-            "type": "complete",
-            "status": "success",
-            "message": (
-                f"Successfully added {len(added_hostnames)} node(s): {', '.join(added_hostnames)}"
-                + (" — GPU operator configured" if any_gpu_detected else "")
-                + (" — images rebuilt for multi-arch" if needs_rebuild else "")
-            ),
-            "architectures": architectures,
-            "images_rebuilt": needs_rebuild,
-        })
+            await websocket.send_json({
+                "type": "complete",
+                "status": "success",
+                "message": (
+                    f"Successfully added {len(added_hostnames)} node(s): {', '.join(added_hostnames)}"
+                    + (" — GPU operator configured" if any_gpu_detected else "")
+                    + ". All images already built — nodes are ready."
+                ),
+                "architectures": architectures,
+                "images_rebuilt": False,
+                "needs_image_rebuild": False,
+            })
 
     except Exception as e:
         logger.error(f"Batch node addition error: {e}", exc_info=True)
