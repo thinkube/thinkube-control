@@ -124,14 +124,31 @@ class LLMModelRegistry:
             return self._poll_catalog()
 
     def _poll_catalog(self) -> int:
-        from app.services.model_downloader import get_model_catalog
+        from app.services.model_downloader import get_model_catalog, ModelDownloaderService
 
         catalog = get_model_catalog()
+
+        try:
+            downloader = ModelDownloaderService()
+            mirrored = downloader.check_all_models_exist()
+        except Exception as e:
+            logger.warning(f"Could not check MLflow mirror status: {e}")
+            mirrored = {}
+
+        catalog_by_id = {entry["id"]: entry for entry in catalog}
         updated = {}
 
-        for entry in catalog:
-            model_id = entry["id"]
+        for model_id, is_mirrored in mirrored.items():
+            if not is_mirrored:
+                continue
+
+            entry = catalog_by_id.get(model_id, {})
             existing = self._models.get(model_id)
+
+            if existing and existing.state in (ModelState.available, ModelState.loading, ModelState.unloading):
+                initial_state = existing.state
+            else:
+                initial_state = ModelState.deployable
 
             model = ModelEntry(
                 id=model_id,
@@ -144,14 +161,19 @@ class LLMModelRegistry:
                 context_window=entry.get("context_window"),
                 capabilities=entry.get("capabilities", []),
                 is_finetuned=entry.get("is_finetuned", False),
-                state=existing.state if existing else ModelState.registered,
+                state=initial_state,
                 backend_id=existing.backend_id if existing else None,
                 tier=existing.tier if existing else None,
             )
             updated[model_id] = model
 
+        # Keep any models that are currently loaded but not in catalog (e.g. fine-tuned)
+        for model_id, existing in self._models.items():
+            if model_id not in updated and existing.state in (ModelState.available, ModelState.loading):
+                updated[model_id] = existing
+
         self._models = updated
-        logger.debug(f"Model registry refreshed: {len(updated)} models")
+        logger.debug(f"Model registry refreshed: {len(updated)} models mirrored to MLflow")
         return len(updated)
 
     def update_model_state(
