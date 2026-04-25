@@ -1,0 +1,20 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: llm-proxy-httproute
+  namespace: {{ namespace }}
+spec:
+  parentRefs:
+    - name: thinkube-gateway
+      namespace: gateway-system
+      sectionName: https
+  hostnames:
+    - llm.{{ domain_name }}
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: llm-proxy
+          port: 8080

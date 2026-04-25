@@ -87,6 +87,21 @@ spec:
             value: "frontend/Dockerfile"
           - name: context
             value: "frontend"
+
+      - name: build-llm-proxy-{{ arch }}
+        template: build-on-arch
+        arguments:
+          parameters:
+          - name: image-tag
+            value: "{% raw %}{{workflow.uid}}{% endraw %}"
+          - name: target-arch
+            value: "{{ arch }}"
+          - name: component
+            value: "llm-proxy"
+          - name: dockerfile
+            value: "proxy/Dockerfile"
+          - name: context
+            value: "proxy"
 {% endfor %}
 
       - name: manifest-backend
@@ -114,6 +129,19 @@ spec:
             value: "{% raw %}{{workflow.uid}}{% endraw %}"
           - name: component
             value: "frontend"
+
+      - name: manifest-llm-proxy
+        dependencies:
+{% for arch in build_architectures %}
+          - build-llm-proxy-{{ arch }}
+{% endfor %}
+        template: create-manifest
+        arguments:
+          parameters:
+          - name: image-tag
+            value: "{% raw %}{{workflow.uid}}{% endraw %}"
+          - name: component
+            value: "llm-proxy"
 {% else %}
       # Single-arch builds on control plane
       - name: build-backend
@@ -125,6 +153,13 @@ spec:
 
       - name: build-frontend
         template: build-frontend
+        arguments:
+          parameters:
+          - name: image-tag
+            value: "{% raw %}{{workflow.uid}}{% endraw %}"
+
+      - name: build-llm-proxy
+        template: build-llm-proxy
         arguments:
           parameters:
           - name: image-tag
@@ -189,6 +224,36 @@ spec:
           cpu: "1"
         limits:
           memory: "4Gi"
+          cpu: "2"
+
+  # Build LLM Proxy Template — single-arch on control plane
+  - name: build-llm-proxy
+    nodeSelector:
+      kubernetes.io/hostname: {{ master_node_name }}
+    inputs:
+      parameters:
+      - name: image-tag
+    container:
+      image: {{ container_registry }}/library/kaniko-executor:latest
+      args:
+      - --dockerfile=/workspace/proxy/Dockerfile
+      - --context=/workspace/proxy
+      - --destination={{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-llm-proxy:{% raw %}{{inputs.parameters.image-tag}}{% endraw %}
+      - --build-arg=REGISTRY={{ container_registry }}
+      - --cache-dir=/workspace/.cache/kaniko
+      volumeMounts:
+      - name: docker-config
+        mountPath: /kaniko/.docker
+      - name: shared-code
+        mountPath: /workspace
+      - name: build-cache
+        mountPath: /workspace/.cache
+      resources:
+        requests:
+          memory: "1Gi"
+          cpu: "1"
+        limits:
+          memory: "2Gi"
           cpu: "2"
 
 {% if build_architectures is defined and build_architectures | length > 1 %}

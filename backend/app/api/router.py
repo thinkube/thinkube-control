@@ -26,6 +26,7 @@ from app.api import (
     jupyter_venvs,
     nodes,
 )
+from app.api.llm.router import llm_router
 
 api_router = APIRouter()
 
@@ -54,6 +55,9 @@ api_router.include_router(gpu_metrics.router, tags=["gpu-metrics"])
 api_router.include_router(jupyter_venvs.router, tags=["jupyter-venvs"])
 api_router.include_router(nodes.router, tags=["nodes"])
 api_router.include_router(debug.router, tags=["debug"])
+
+# LLM Gateway API
+api_router.include_router(llm_router, prefix="/llm", tags=["llm"])
 
 # Include WebSocket routes (no prefix for WebSocket endpoints)
 api_router.include_router(websocket_executor.router)

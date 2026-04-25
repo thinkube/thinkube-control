@@ -71,6 +71,23 @@ spec:
         # MLflow configuration
         - name: MLFLOW_TRACKING_URI
           value: "http://mlflow.mlflow.svc.cluster.local:5000"
+        # LLM Gateway configuration
+        - name: LLM_MODEL_REFRESH_INTERVAL_SECONDS
+          value: "60"
+        - name: LLM_BACKEND_PROBE_INTERVAL_SECONDS
+          value: "30"
+        - name: LLM_OLLAMA_URL
+          value: "http://ollama.ollama.svc.cluster.local:11434"
+        - name: LLM_MODEL_LOAD_TIMEOUT_SECONDS
+          value: "120"
+        - name: LLM_GPU_TOTAL_MEMORY_GB
+          value: "128"
+        - name: LLM_GPU_SHARED_MEMORY
+          value: "true"
+        - name: LLM_GPU_MEMORY_THRESHOLD
+          value: "0.85"
+        - name: LLM_MODEL_IDLE_TIMEOUT_MINUTES
+          value: "30"
         # Services not yet deployed - uncomment when ready
         # - name: OPENSEARCH_URL
         #   value: "https://osd.{{ domain_name }}"

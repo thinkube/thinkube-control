@@ -83,6 +83,11 @@ frontend_image_repo:
   default: "{{ registry_subdomain }}.{{ domain_name }}/thinkube/{{ project_name }}-frontend"
   when: false  # Don't ask user
 
+llm_proxy_image_repo:
+  type: str
+  default: "{{ registry_subdomain }}.{{ domain_name }}/thinkube/{{ project_name }}-llm-proxy"
+  when: false  # Don't ask user
+
 container_registry:
   type: str
   default: "{{ registry_subdomain }}.{{ domain_name }}"

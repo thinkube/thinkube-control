@@ -10,6 +10,10 @@ resources:
   - backend-service.yaml
   - frontend-deployment.yaml
   - frontend-service.yaml
+  - llm-proxy-deployment.yaml
+  - llm-proxy-service.yaml
+  - llm-proxy-httproute.yaml
+  - llm-proxy-traffic-policy.yaml
   - ingress.yaml
   - backend-traffic-policy.yaml
   - keycloak-setup.yaml
@@ -18,4 +22,6 @@ images:
   - name: {{ backend_image_repo }}
     newTag: latest
   - name: {{ frontend_image_repo }}
+    newTag: latest
+  - name: {{ llm_proxy_image_repo }}
     newTag: latest

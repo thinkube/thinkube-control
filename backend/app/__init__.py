@@ -19,6 +19,9 @@ from app.models.container_images import ContainerImage, ImageMirrorJob
 from app.models.custom_images import CustomImageBuild
 from app.models.jupyter_venvs import JupyterVenv
 from app.services import health_checker, ServiceDiscovery
+from app.services.llm_model_registry import llm_model_registry
+from app.services.llm_backend_discovery import llm_backend_discovery
+from app.services.llm_ollama_client import ollama_client
 
 logger = logging.getLogger(__name__)
 
@@ -142,20 +145,30 @@ async def app_lifespan(app: FastAPI):
     discovery_task = asyncio.create_task(periodic_discovery())
     logger.info("Started periodic discovery task (5 minute interval)")
 
+    # Start LLM model registry and backend discovery polling
+    llm_registry_task = asyncio.create_task(llm_model_registry.start_polling())
+    logger.info("Started LLM model registry polling")
+    llm_discovery_task = asyncio.create_task(llm_backend_discovery.start_polling())
+    logger.info("Started LLM backend discovery polling")
+
     yield
 
     # Shutdown: Clean up resources
     health_checker.stop()
+    llm_model_registry.stop()
+    llm_backend_discovery.stop()
+
     health_check_task.cancel()
     discovery_task.cancel()
-    try:
-        await health_check_task
-    except asyncio.CancelledError:
-        pass
-    try:
-        await discovery_task
-    except asyncio.CancelledError:
-        pass
+    llm_registry_task.cancel()
+    llm_discovery_task.cancel()
+    for task in [health_check_task, discovery_task, llm_registry_task, llm_discovery_task]:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    await llm_backend_discovery.close()
+    await ollama_client.close()
 
 
 def create_app() -> FastAPI:
@@ -319,6 +332,16 @@ def create_app() -> FastAPI:
                 # === Cluster & GPU ===
                 "get_cluster_resources",       # Resource
                 "get_gpu_metrics",             # Resource
+
+                # === LLM Gateway ===
+                "get_llm_models",              # Resource
+                "get_llm_model_status",        # Resource
+                "resolve_llm_model",           # Resource
+                "get_llm_backends",            # Resource
+                "get_llm_gpu_status",          # Resource
+                "refresh_llm_registry",        # Tool
+                "load_llm_model",              # Tool
+                "unload_llm_model",            # Tool
 
                 # === Debug ===
                 "resolve_hostname",            # Resource
