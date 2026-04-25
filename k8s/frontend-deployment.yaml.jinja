@@ -14,6 +14,8 @@ spec:
         app: thinkube-control-frontend
     spec:
       serviceAccountName: {{ namespace }}
+      nodeSelector:
+        kubernetes.io/hostname: {{ master_node_name }}
       containers:
       - name: control-frontend
         image: {{ frontend_image_repo }}
