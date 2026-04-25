@@ -969,7 +969,6 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     extra_vars=extra_vars,
                     step_name="Configure inter-node SSH",
                     step_number=step,
-                    limit=",".join(added_hostnames),
                 )
                 if not ssh_ok:
                     logger.warning("Inter-node SSH setup failed — build delegation may fail")
