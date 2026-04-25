@@ -166,8 +166,21 @@ async def _stream_playbook(
 
         current_task = "Initializing"
         in_failed_block = False
+        HEARTBEAT_INTERVAL = 30
         while True:
-            line = await process.stdout.readline()
+            try:
+                line = await asyncio.wait_for(
+                    process.stdout.readline(), timeout=HEARTBEAT_INTERVAL
+                )
+            except asyncio.TimeoutError:
+                try:
+                    await websocket.send_json({"type": "heartbeat"})
+                except Exception:
+                    logger.warning("WebSocket closed during heartbeat — abandoning stream")
+                    process.kill()
+                    await process.wait()
+                    return False
+                continue
             if not line:
                 break
 
