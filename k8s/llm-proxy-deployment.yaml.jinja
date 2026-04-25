@@ -16,6 +16,8 @@ spec:
         app: thinkube-control-llm-proxy
     spec:
       serviceAccountName: {{ namespace }}
+      nodeSelector:
+        kubernetes.io/hostname: {{ master_node_name }}
       containers:
       - name: llm-proxy
         image: {{ llm_proxy_image_repo }}
