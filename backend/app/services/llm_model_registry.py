@@ -211,19 +211,36 @@ class LLMModelRegistry:
     def _reconcile_states(self):
         from app.services.llm_backend_discovery import llm_backend_discovery
 
-        serving_models = set()
+        backend_models: dict[str, str] = {}
         for backend in llm_backend_discovery.list_backends():
             if backend.status == "healthy":
-                serving_models.update(backend.models)
+                for model_name in backend.models:
+                    backend_models[model_name] = backend.id
+
+        matched_serving = set()
 
         for model_id, entry in self._models.items():
-            if model_id in serving_models and entry.state != ModelState.loading:
+            if model_id in backend_models and entry.state != ModelState.loading:
                 entry.state = ModelState.available
+                entry.backend_id = backend_models[model_id]
+                matched_serving.add(model_id)
             elif (
-                model_id not in serving_models
+                model_id not in backend_models
                 and entry.state == ModelState.available
             ):
                 entry.state = ModelState.deployable
+                entry.backend_id = None
+
+        for model_name, backend_id in backend_models.items():
+            if model_name not in matched_serving and model_name not in self._models:
+                self._models[model_name] = ModelEntry(
+                    id=model_name,
+                    name=model_name,
+                    server_type=["ollama"] if backend_id == "ollama" else [],
+                    state=ModelState.available,
+                    backend_id=backend_id,
+                    tier=ModelTier.flexible if backend_id == "ollama" else ModelTier.performance,
+                )
 
 
 llm_model_registry = LLMModelRegistry()
