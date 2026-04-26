@@ -68,12 +68,15 @@ class LLMLifecycleManager:
             if resolved_tier == ModelTier.flexible and "ollama" in entry.server_type:
                 resolved_backend = "ollama"
             elif resolved_tier == ModelTier.performance:
-                return await self._load_performance(model_id)
+                return await self._load_performance(model_id, backend=backend, node=node)
             elif "ollama" in entry.server_type:
                 resolved_backend = "ollama"
 
         if resolved_backend == "ollama":
             return await self._load_ollama(model_id, keep_alive, node)
+
+        if resolved_backend in ("vllm", "tensorrt-llm"):
+            return await self._load_performance(model_id, backend=backend, node=node)
 
         return ModelLoadResponse(
             model_id=model_id, state=entry.state,
@@ -192,25 +195,114 @@ class LLMLifecycleManager:
             event.set()
             self._loading_locks.pop(model_id, None)
 
-    async def _load_performance(self, model_id: str) -> ModelLoadResponse:
+    async def _load_performance(
+        self, model_id: str,
+        backend: Optional[str] = None, node: Optional[str] = None,
+    ) -> ModelLoadResponse:
         from app.services.llm_backend_discovery import llm_backend_discovery
+        from app.services.llm_model_registry import llm_model_registry
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
 
-        backends = llm_backend_discovery.list_backends()
-        perf_backends = [
-            b for b in backends
-            if b.type in ("vllm", "tensorrt-llm") and b.status == "healthy"
-        ]
-
-        if not perf_backends:
+        entry = llm_model_registry.get_model(model_id)
+        if entry is None:
             return ModelLoadResponse(
-                model_id=model_id, state=ModelState.deployable,
-                message="No performance-tier backends available. Deploy a vLLM or TRT-LLM template first."
+                model_id=model_id, state=ModelState.registered,
+                message=f"Model '{model_id}' not found"
             )
 
-        return ModelLoadResponse(
-            model_id=model_id, state=ModelState.deployable,
-            message="Performance-tier model loading requires deploying via template. Use the thinkube-control UI."
+        all_backends = llm_backend_discovery.list_backends()
+        compatible = [
+            b for b in all_backends
+            if b.type in (entry.server_type or []) and b.status == "healthy"
+        ]
+
+        if backend:
+            compatible = [b for b in compatible if b.id == backend]
+        if node:
+            compatible = [b for b in compatible if b.node == node]
+
+        if not compatible:
+            return ModelLoadResponse(
+                model_id=model_id, state=ModelState.deployable,
+                message="No compatible healthy backends available. Deploy a vLLM or TRT-LLM component first."
+            )
+
+        target_backend = compatible[0]
+
+        estimated_memory = self._estimate_memory(entry)
+        can_load, reason = llm_gpu_tracker.check_can_load(
+            estimated_memory, node_name=target_backend.node
         )
+        if not can_load:
+            return ModelLoadResponse(
+                model_id=model_id, state=ModelState.deployable,
+                message=f"Insufficient GPU resources: {reason}"
+            )
+
+        payload: dict = {"model_id": model_id}
+        if entry.stop_tokens:
+            payload["stop_tokens"] = entry.stop_tokens
+        if entry.reasoning_format:
+            payload["reasoning_format"] = entry.reasoning_format
+        if entry.tool_use:
+            payload["tool_use"] = entry.tool_use
+
+        llm_model_registry.update_model_state(model_id, ModelState.loading, target_backend.id)
+
+        asyncio.create_task(
+            self._load_performance_background(
+                model_id, target_backend, payload, estimated_memory
+            )
+        )
+
+        return ModelLoadResponse(
+            model_id=model_id, state=ModelState.loading,
+            message="Loading model on performance backend — this may take several minutes",
+            backend_id=target_backend.id
+        )
+
+    async def _load_performance_background(
+        self, model_id: str, backend, payload: dict, estimated_memory: float,
+    ):
+        from app.services.llm_model_registry import llm_model_registry
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+
+        event = asyncio.Event()
+        self._loading_locks[model_id] = event
+
+        try:
+            async with httpx.AsyncClient(
+                verify=False, timeout=httpx.Timeout(660.0, connect=10.0)
+            ) as client:
+                resp = await client.post(
+                    f"{backend.url}/admin/switch-model",
+                    json=payload,
+                )
+                resp.raise_for_status()
+                result = resp.json()
+
+            if result.get("status") == "serving" or result.get("current_model"):
+                llm_model_registry.update_model_state(
+                    model_id, ModelState.available, backend.id
+                )
+                llm_gpu_tracker.record_allocation(
+                    model_id, backend.id, estimated_memory, node_name=backend.node
+                )
+                logger.info(f"Model '{model_id}' loaded on {backend.id}")
+            else:
+                error = result.get("error", "Backend returned non-serving status")
+                llm_model_registry.update_model_state(
+                    model_id, ModelState.deployable, error=error
+                )
+                logger.error(f"Failed to load '{model_id}' on {backend.id}: {error}")
+        except Exception as e:
+            logger.error(f"Performance load failed for {model_id}: {e}")
+            llm_model_registry.update_model_state(
+                model_id, ModelState.deployable, error=str(e)
+            )
+        finally:
+            event.set()
+            self._loading_locks.pop(model_id, None)
 
     async def unload_model(self, model_id: str, force: bool = False) -> ModelLoadResponse:
         from app.services.llm_model_registry import llm_model_registry
@@ -387,6 +479,9 @@ class LLMLifecycleManager:
         if entry is None:
             return 4.0
 
+        if getattr(entry, "params_b", None):
+            return self._estimate_from_params(entry.params_b, entry.quantization)
+
         size = entry.size or ""
         quant = (entry.quantization or "").lower()
 
@@ -408,6 +503,25 @@ class LLMLifecycleManager:
         if "fp16" in quant or "f16" in quant:
             return size_gb * 0.55
         return size_gb * 0.35
+
+    def _estimate_from_params(self, params_b: float, quantization: Optional[str]) -> float:
+        quant = (quantization or "BF16").upper()
+        if "FP4" in quant or "NVFP4" in quant:
+            bpp = 0.5
+        elif "FP8" in quant:
+            bpp = 1.0
+        elif "BF16" in quant or "FP16" in quant or "F16" in quant:
+            bpp = 2.0
+        elif "Q4" in quant:
+            bpp = 0.56
+        elif "Q8" in quant:
+            bpp = 1.0
+        elif "1.58" in quant:
+            bpp = 0.2
+        else:
+            bpp = 1.0
+        weight_gb = params_b * bpp
+        return round(weight_gb * 1.2, 1)
 
     def _parse_size_gb(self, size: str) -> Optional[float]:
         s = size.lower().replace(" ", "").lstrip("~")

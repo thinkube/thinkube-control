@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Copy, Loader2, CheckCircle2, XCircle, Clock, ExternalLink, Trash2 } from 'lucide-react';
+import { Copy, Loader2, CheckCircle2, XCircle, Clock, ExternalLink, Trash2, Lock } from 'lucide-react';
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent } from 'thinkube-style/components/cards-data';
 import { TkTable, TkTableHeader, TkTableBody, TkTableRow, TkTableHead, TkTableCell } from 'thinkube-style/components/tables';
 import { TkButton, TkLoadingButton, TkBadge } from 'thinkube-style/components/buttons-badges';
@@ -7,6 +7,23 @@ import { TkErrorAlert, TkInfoAlert } from 'thinkube-style/components/feedback';
 import { TkPageWrapper } from 'thinkube-style/components/utilities';
 import { useModelDownloadsStore, Model, DownloadStatus } from '../stores/useModelDownloadsStore';
 import api from '../lib/axios';
+
+function formatParams(params_b: number | null, active_params_b: number | null): string {
+  if (!params_b) return '-';
+  const main = params_b >= 1 ? `${params_b}B` : `${(params_b * 1000).toFixed(0)}M`;
+  if (active_params_b) {
+    const active = active_params_b >= 1 ? `${active_params_b}B` : `${(active_params_b * 1000).toFixed(0)}M`;
+    return `${main} / ${active} active`;
+  }
+  return main;
+}
+
+function formatContextLength(ctx: number | null): string {
+  if (!ctx) return '';
+  if (ctx >= 1000000) return `${(ctx / 1000000).toFixed(0)}M ctx`;
+  if (ctx >= 1000) return `${Math.round(ctx / 1000)}K ctx`;
+  return `${ctx} ctx`;
+}
 
 export default function ModelsPage() {
   const {
@@ -237,7 +254,7 @@ export default function ModelsPage() {
             <TkTableHeader>
               <TkTableRow>
                 <TkTableHead>Model</TkTableHead>
-                <TkTableHead>Size</TkTableHead>
+                <TkTableHead>Params</TkTableHead>
                 <TkTableHead>Quantization</TkTableHead>
                 <TkTableHead>Server Type</TkTableHead>
                 <TkTableHead>Status</TkTableHead>
@@ -254,20 +271,49 @@ export default function ModelsPage() {
                   <TkTableRow key={model.id}>
                     <TkTableCell className="font-medium">
                       <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           {model.name}
                           {model.is_finetuned && (
                             <TkBadge appearance="muted" className="text-xs">
                               Fine-tuned
                             </TkBadge>
                           )}
+                          {model.reasoning_format && (
+                            <TkBadge appearance="muted" className="text-xs">
+                              {model.reasoning_format}
+                            </TkBadge>
+                          )}
+                          {model.tool_use && (
+                            <TkBadge appearance="muted" className="text-xs">
+                              tools
+                            </TkBadge>
+                          )}
+                          {model.gated && (
+                            <TkBadge status="warning" className="text-xs">
+                              <Lock className="w-3 h-3 mr-0.5" />
+                              gated
+                            </TkBadge>
+                          )}
                         </div>
                         <div className="text-sm text-muted-foreground">
                           {model.description}
                         </div>
+                        <div className="flex gap-2 text-xs text-muted-foreground mt-0.5">
+                          {formatContextLength(model.context_length) && (
+                            <span>{formatContextLength(model.context_length)}</span>
+                          )}
+                          {model.license && <span>{model.license}</span>}
+                        </div>
                       </div>
                     </TkTableCell>
-                    <TkTableCell>{model.size}</TkTableCell>
+                    <TkTableCell>
+                      <div>
+                        <div>{model.params_b ? formatParams(model.params_b, model.active_params_b) : (model.size || '-')}</div>
+                        {model.params_b && model.size && (
+                          <div className="text-xs text-muted-foreground">{model.size}</div>
+                        )}
+                      </div>
+                    </TkTableCell>
                     <TkTableCell>
                       <TkBadge appearance="outlined">{model.quantization}</TkBadge>
                     </TkTableCell>

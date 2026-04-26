@@ -61,6 +61,11 @@ interface Props {
   modelName: string;
   size: string | null;
   quantization: string | null;
+  params_b: number | null;
+  active_params_b: number | null;
+  context_length: number | null;
+  reasoning_format: string | null;
+  tool_use: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onLoaded: () => void;
@@ -74,11 +79,33 @@ function formatGpuProduct(product: string | null): string {
     .replace('-', ' ');
 }
 
+function formatParams(params_b: number | null, active_params_b: number | null): string {
+  if (!params_b) return '';
+  const main = params_b >= 1 ? `${params_b}B` : `${(params_b * 1000).toFixed(0)}M`;
+  if (active_params_b) {
+    const active = active_params_b >= 1 ? `${active_params_b}B` : `${(active_params_b * 1000).toFixed(0)}M`;
+    return `${main} / ${active} active`;
+  }
+  return main;
+}
+
+function formatContextLength(ctx: number | null): string {
+  if (!ctx) return '';
+  if (ctx >= 1000000) return `${(ctx / 1000000).toFixed(0)}M tokens`;
+  if (ctx >= 1000) return `${Math.round(ctx / 1000)}K tokens`;
+  return `${ctx} tokens`;
+}
+
 export default function LoadModelDialog({
   modelId,
   modelName,
   size,
   quantization,
+  params_b,
+  active_params_b,
+  context_length,
+  reasoning_format,
+  tool_use,
   open,
   onOpenChange,
   onLoaded,
@@ -198,12 +225,27 @@ export default function LoadModelDialog({
         ) : options ? (
           <div className="space-y-5">
             {/* Model info */}
-            <div className="rounded-lg border p-3 space-y-1">
-              <div className="font-medium">{modelName}</div>
-              <div className="flex gap-2 text-sm text-muted-foreground">
-                {size && <span>{size}</span>}
+            <div className="rounded-lg border p-3 space-y-1.5">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-medium">{modelName}</span>
+                {reasoning_format && (
+                  <TkBadge appearance="muted" className="text-xs">{reasoning_format}</TkBadge>
+                )}
+                {tool_use && (
+                  <TkBadge appearance="muted" className="text-xs">tools</TkBadge>
+                )}
+              </div>
+              <div className="flex gap-2 text-sm text-muted-foreground flex-wrap">
+                {params_b ? (
+                  <span>{formatParams(params_b, active_params_b)}</span>
+                ) : size ? (
+                  <span>{size}</span>
+                ) : null}
                 {quantization && (
                   <TkBadge appearance="outlined">{quantization}</TkBadge>
+                )}
+                {formatContextLength(context_length) && (
+                  <span>{formatContextLength(context_length)}</span>
                 )}
               </div>
               <div className="flex items-center gap-1 text-sm">

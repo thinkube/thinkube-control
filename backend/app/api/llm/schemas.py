@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ModelState(str, Enum):
@@ -25,6 +25,14 @@ class ModelEntry(BaseModel):
     size: Optional[str] = None
     description: Optional[str] = None
     context_window: Optional[int] = None
+    context_length: Optional[int] = None
+    params_b: Optional[float] = None
+    active_params_b: Optional[float] = None
+    reasoning_format: Optional[str] = None
+    tool_use: bool = False
+    stop_tokens: List[str] = Field(default_factory=list)
+    license: Optional[str] = None
+    gated: bool = False
     capabilities: List[str] = Field(default_factory=list)
     artifact_path: Optional[str] = None
     state: ModelState = ModelState.registered
@@ -32,6 +40,14 @@ class ModelEntry(BaseModel):
     tier: Optional[ModelTier] = None
     is_finetuned: bool = False
     last_error: Optional[str] = None
+
+    @model_validator(mode='after')
+    def sync_context_fields(self):
+        if self.context_length is not None and self.context_window is None:
+            self.context_window = self.context_length
+        elif self.context_window is not None and self.context_length is None:
+            self.context_length = self.context_window
+        return self
 
 
 class ModelsListResponse(BaseModel):

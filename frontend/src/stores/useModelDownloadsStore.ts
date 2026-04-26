@@ -5,13 +5,20 @@ import { toast } from 'sonner';
 export interface Model {
   id: string;
   name: string;
-  size: string;
+  size: string | null;
   quantization: string;
   description: string;
   server_type: string[];
   is_downloaded: boolean;
   is_finetuned: boolean;
   task: string;
+  params_b: number | null;
+  active_params_b: number | null;
+  context_length: number | null;
+  reasoning_format: string | null;
+  tool_use: boolean;
+  license: string | null;
+  gated: boolean;
 }
 
 export interface MirrorJob {

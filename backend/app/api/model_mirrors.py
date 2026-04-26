@@ -24,13 +24,20 @@ class ModelInfo(BaseModel):
     """Model information"""
     id: str
     name: str
-    size: str
+    size: Optional[str] = None
     quantization: str
     description: str
     server_type: List[str]
     is_downloaded: bool = False
     is_finetuned: bool = False
     task: str = "text-generation"
+    params_b: Optional[float] = None
+    active_params_b: Optional[float] = None
+    context_length: Optional[int] = None
+    reasoning_format: Optional[str] = None
+    tool_use: bool = False
+    license: Optional[str] = None
+    gated: bool = False
 
 
 class ModelCatalogResponse(BaseModel):
@@ -82,6 +89,29 @@ class MirrorJobsResponse(BaseModel):
     jobs: List[MirrorStatus]
 
 
+# Helpers
+
+def estimate_size_from_params(params_b: float, quantization: str) -> str:
+    """Compute human-readable weight size from params_b and quantization."""
+    quant = (quantization or "BF16").upper()
+    if "FP4" in quant or "NVFP4" in quant:
+        bpp = 0.5
+    elif "FP8" in quant:
+        bpp = 1.0
+    elif "BF16" in quant or "FP16" in quant or "F16" in quant:
+        bpp = 2.0
+    elif "Q4" in quant:
+        bpp = 0.56
+    elif "Q8" in quant:
+        bpp = 1.0
+    elif "1.58" in quant:
+        bpp = 0.2
+    else:
+        bpp = 1.0
+    gb = params_b * bpp
+    return f"~{gb:.0f}GB"
+
+
 # API Endpoints
 
 @router.get("/catalog", response_model=ModelCatalogResponse, operation_id="get_model_catalog")
@@ -100,9 +130,13 @@ async def get_model_catalog(
         # Check which models are already downloaded
         downloaded_models = service.check_all_models_exist()
 
-        # Enrich model info with download status
+        # Enrich model info with download status and computed size
         model_infos = []
         for model in models:
+            if not model.get("size") and model.get("params_b"):
+                model = {**model, "size": estimate_size_from_params(
+                    model["params_b"], model.get("quantization", "BF16")
+                )}
             model_info = ModelInfo(
                 **model,
                 is_downloaded=downloaded_models.get(model["id"], False)

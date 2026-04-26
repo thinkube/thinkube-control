@@ -181,15 +181,29 @@ class LLMModelRegistry:
             else:
                 initial_state = ModelState.deployable
 
+            size = entry.get("size")
+            if not size and entry.get("params_b"):
+                from app.api.model_mirrors import estimate_size_from_params
+                size = estimate_size_from_params(
+                    entry["params_b"], entry.get("quantization", "BF16")
+                )
+
             model = ModelEntry(
                 id=model_id,
                 name=entry.get("name", model_id),
                 server_type=entry.get("server_type", []),
                 task=entry.get("task", "text-generation"),
                 quantization=entry.get("quantization"),
-                size=entry.get("size"),
+                size=size,
                 description=entry.get("description"),
-                context_window=entry.get("context_window"),
+                context_length=entry.get("context_length"),
+                params_b=entry.get("params_b"),
+                active_params_b=entry.get("active_params_b"),
+                reasoning_format=entry.get("reasoning_format"),
+                tool_use=entry.get("tool_use", False),
+                stop_tokens=entry.get("stop_tokens", []),
+                license=entry.get("license"),
+                gated=entry.get("gated", False),
                 capabilities=entry.get("capabilities", []),
                 is_finetuned=entry.get("is_finetuned", False),
                 state=initial_state,
