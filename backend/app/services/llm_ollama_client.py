@@ -153,8 +153,7 @@ class OllamaClient:
         self, name: str, keep_alive: Optional[str] = None, node: Optional[str] = None
     ) -> bool:
         payload: Dict[str, Any] = {"model": name, "prompt": ""}
-        if keep_alive:
-            payload["keep_alive"] = keep_alive
+        payload["keep_alive"] = keep_alive or "-1"
 
         try:
             client = self._get_client(node)
