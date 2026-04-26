@@ -356,25 +356,35 @@ class LLMLifecycleManager:
         quant = (entry.quantization or "").lower()
 
         size_gb = self._parse_size_gb(size)
-        if size_gb:
-            if "q4" in quant or "4bit" in quant:
-                return size_gb * 0.3
-            if "q8" in quant or "8bit" in quant:
-                return size_gb * 0.55
-            if "fp16" in quant or "f16" in quant:
-                return size_gb * 0.55
-            return size_gb * 0.35
+        if not size_gb:
+            return 4.0
 
-        return 4.0
+        is_gguf = any(
+            st in ("ollama",) for st in (entry.server_type or [])
+        ) and ("q4" in quant or "q8" in quant or "gguf" in quant or "q5" in quant or "q6" in quant)
+
+        if is_gguf:
+            return size_gb
+
+        if "q4" in quant or "4bit" in quant:
+            return size_gb * 0.3
+        if "q8" in quant or "8bit" in quant:
+            return size_gb * 0.55
+        if "fp16" in quant or "f16" in quant:
+            return size_gb * 0.55
+        return size_gb * 0.35
 
     def _parse_size_gb(self, size: str) -> Optional[float]:
-        s = size.lower().replace(" ", "")
+        s = size.lower().replace(" ", "").lstrip("~")
         if not s:
             return None
         try:
+            if s.endswith("gb"):
+                return float(s[:-2])
+            if s.endswith("mb"):
+                return float(s[:-2]) / 1024.0
             if s.endswith("b"):
-                num = float(s[:-1])
-                return num
+                return float(s[:-1])
             return float(s)
         except ValueError:
             return None
