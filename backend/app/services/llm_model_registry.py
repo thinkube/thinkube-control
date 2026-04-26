@@ -231,6 +231,8 @@ class LLMModelRegistry:
 
     def _reconcile_states(self):
         from app.services.llm_backend_discovery import llm_backend_discovery
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+        from app.services.llm_lifecycle import llm_lifecycle
 
         backend_models: dict[str, str] = {}
         for backend in llm_backend_discovery.list_backends():
@@ -256,12 +258,17 @@ class LLMModelRegistry:
                 entry.state = ModelState.available
                 entry.backend_id = backend_models[serving_name]
                 matched_serving.add(serving_name)
+                self._sync_gpu_allocation(
+                    model_id, backend_models[serving_name],
+                    llm_gpu_tracker, llm_lifecycle,
+                )
             elif (
                 serving_name is None
                 and entry.state == ModelState.available
             ):
                 entry.state = ModelState.deployable
                 entry.backend_id = None
+                llm_gpu_tracker.release_allocation(model_id)
 
         for model_name, backend_id in backend_models.items():
             if model_name in matched_serving:
@@ -279,6 +286,14 @@ class LLMModelRegistry:
                 backend_id=backend_id,
                 tier=ModelTier.flexible if backend_id == "ollama" else ModelTier.performance,
             )
+
+    def _sync_gpu_allocation(self, model_id, backend_id, gpu_tracker, lifecycle):
+        existing = gpu_tracker.get_eviction_candidates()
+        if any(a.model_id == model_id for a in existing):
+            return
+        entry = self._models.get(model_id)
+        estimated = lifecycle._estimate_memory(entry) if entry else 4.0
+        gpu_tracker.record_allocation(model_id, backend_id, estimated)
 
 
 llm_model_registry = LLMModelRegistry()
