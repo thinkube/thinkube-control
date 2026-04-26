@@ -339,6 +339,7 @@ def create_app() -> FastAPI:
                 "resolve_llm_model",           # Resource
                 "get_llm_backends",            # Resource
                 "get_llm_gpu_status",          # Resource
+                "get_llm_load_options",        # Resource
                 "refresh_llm_registry",        # Tool
                 "load_llm_model",              # Tool
                 "unload_llm_model",            # Tool
