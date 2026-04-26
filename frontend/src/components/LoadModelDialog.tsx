@@ -125,6 +125,31 @@ export default function LoadModelDialog({
     }
   }, [selectedBackend, options]);
 
+  const selectedBackendData = options?.compatible_backends.find(
+    (b) => b.id === selectedBackend
+  );
+  const nodeIsLocked = !!selectedBackendData?.node;
+
+  const handleNodeChange = (nodeName: string) => {
+    setSelectedNode(nodeName);
+    if (!options) return;
+    const backendOnNode = options.compatible_backends.find(
+      (b) => b.node === nodeName
+    );
+    if (backendOnNode) {
+      setSelectedBackend(backendOnNode.id);
+    }
+  };
+
+  const handleBackendChange = (backendId: string) => {
+    setSelectedBackend(backendId);
+    if (!options) return;
+    const backend = options.compatible_backends.find((b) => b.id === backendId);
+    if (backend?.node) {
+      setSelectedNode(backend.node);
+    }
+  };
+
   const handleLoad = async () => {
     setLoading(true);
     setError(null);
@@ -199,7 +224,7 @@ export default function LoadModelDialog({
               ) : (
                 <TkSelect
                   value={selectedBackend}
-                  onValueChange={setSelectedBackend}
+                  onValueChange={handleBackendChange}
                 >
                   <TkSelectTrigger>
                     <TkSelectValue placeholder="Select backend" />
@@ -225,7 +250,8 @@ export default function LoadModelDialog({
               ) : (
                 <TkSelect
                   value={selectedNode}
-                  onValueChange={setSelectedNode}
+                  onValueChange={handleNodeChange}
+                  disabled={nodeIsLocked}
                 >
                   <TkSelectTrigger>
                     <TkSelectValue placeholder="Select GPU node" />
@@ -239,6 +265,11 @@ export default function LoadModelDialog({
                     ))}
                   </TkSelectContent>
                 </TkSelect>
+                {nodeIsLocked && (
+                  <p className="text-xs text-muted-foreground">
+                    Node is determined by the selected backend
+                  </p>
+                )}
               )}
             </div>
 
