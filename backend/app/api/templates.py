@@ -132,14 +132,17 @@ async def list_available_templates(
         templates = []
         for repo in repositories:
             if repo.get("type") == "application_template":
-                templates.append({
+                entry = {
                     "name": repo["name"],
                     "description": repo.get("description", ""),
                     "url": repo.get("github_url", ""),
                     "org": repo.get("org", "thinkube"),
                     "deployment_type": repo.get("deployment_type", "app"),
                     "source": repo.get("_source", "platform"),
-                })
+                }
+                if repo.get("fixed_name"):
+                    entry["fixed_name"] = repo["fixed_name"]
+                templates.append(entry)
 
         logger.info(f"Discovered {len(templates)} application templates")
         return {"templates": templates}
@@ -318,28 +321,49 @@ async def deploy_template_async(
         # Extract overwrite flag from variables
         overwrite_confirmed = request.variables.pop("_overwrite_confirmed", False)
 
+        # Determine if this is a component deployment
+        template_url_str = str(request.template_url).rstrip("/")
+        repositories = fetch_merged_catalog(
+            catalog_name="repositories",
+            file_name="repositories.json",
+            extract_key="repositories",
+            bundled_path=None,
+            merge_strategy="list",
+            dedup_key="name",
+        )
+        template_repo = next(
+            (r for r in repositories if r.get("github_url", "").rstrip("/") == template_url_str),
+            None,
+        )
+        is_component = template_repo and template_repo.get("deployment_type") == "component"
+        service_type = "component" if is_component else "user_app"
+
+        if is_component:
+            expected_name = template_repo.get("fixed_name")
+            if expected_name and request.template_name != expected_name:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Component must use the fixed name '{expected_name}'",
+                )
+
         # Check for service name conflicts
         dep_manager = DependencyManager(db)
         is_valid, conflict_message = dep_manager.validate_service_name(
-            request.template_name, "user_app"
+            request.template_name, service_type
         )
 
-        # If there's a conflict and it's not a user app, reject immediately
-        if not is_valid and "user application" not in (conflict_message or ""):
+        # If there's a hard conflict (name used by a different service type), reject
+        if not is_valid:
             raise HTTPException(
                 status_code=400,
                 detail=conflict_message
                 or f"Service name '{request.template_name}' is not available",
             )
 
-        # If it's a user app conflict and overwrite not confirmed, return with warning
-        if (
-            conflict_message
-            and "will be overwritten" in conflict_message
-            and not overwrite_confirmed
-        ):
+        # Components auto-confirm overwrites; user apps need explicit confirmation
+        if conflict_message and not is_component and not overwrite_confirmed:
             return DeploymentResponse(
-                deployment_id="",  # No deployment created yet
+                deployment_id="",
                 status="conflict",
                 message=conflict_message,
                 requires_confirmation=True,

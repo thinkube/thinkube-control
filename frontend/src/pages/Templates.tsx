@@ -47,7 +47,8 @@ interface AvailableTemplate {
   description: string
   url: string
   org: string
-  deployment_type: 'app' | 'knative'
+  deployment_type: 'app' | 'knative' | 'component'
+  fixed_name?: string
   source: 'platform' | 'user'
 }
 
@@ -97,6 +98,10 @@ export default function Templates() {
   const domainName = typeof window !== 'undefined'
     ? window.location.hostname.replace('control.', '')
     : 'thinkube.com'
+
+  // Determine if current template is a component
+  const selectedTemplate = availableTemplates.find(t => t.url === templateUrl)
+  const isComponent = selectedTemplate?.deployment_type === 'component'
 
   // Check if config is valid
   const isValidConfig =
@@ -300,7 +305,10 @@ export default function Templates() {
       console.error('Invalid template URL:', url)
       return
     }
-    // Pass URL directly to avoid state timing issues
+    const template = availableTemplates.find(t => t.url === url)
+    if (template?.deployment_type === 'component' && template.fixed_name) {
+      setDeployConfig(prev => ({ ...prev, project_name: template.fixed_name! }))
+    }
     loadTemplate(url)
   }
 
@@ -412,7 +420,7 @@ export default function Templates() {
       {showDeployForm && (
         <TkCard className="mb-8">
           <TkCardHeader>
-            <TkCardTitle>Deploy Template</TkCardTitle>
+            <TkCardTitle>{isComponent ? 'Deploy Component' : 'Deploy Template'}</TkCardTitle>
           </TkCardHeader>
           <TkCardContent className="space-y-6">
             {/* Template Info */}
@@ -446,6 +454,7 @@ export default function Templates() {
                 parameters={templateMetadata.parameters}
                 modelValue={deployConfig}
                 onUpdate={setDeployConfig}
+                readOnlyName={isComponent}
               />
             )}
 
@@ -473,7 +482,7 @@ export default function Templates() {
               {isDeploying && (
                 <Loader2 className="h-4 w-4 animate-spin mr-2" />
               )}
-              {isDeploying ? 'Deploying...' : 'Deploy Template'}
+              {isDeploying ? 'Deploying...' : isComponent ? 'Deploy Component' : 'Deploy Template'}
             </TkButton>
           </TkCardFooter>
         </TkCard>
@@ -539,8 +548,8 @@ export default function Templates() {
                 <TkCardHeader>
                   <div className="flex items-center justify-between gap-2">
                     <TkCardTitle>{app.name}</TkCardTitle>
-                    <TkBadge appearance={app.deployment_type === 'knative' ? 'muted' : 'outlined'}>
-                      {app.deployment_type === 'knative' ? 'Knative' : 'App'}
+                    <TkBadge appearance={app.deployment_type === 'knative' ? 'muted' : app.deployment_type === 'component' ? 'prominent' : 'outlined'}>
+                      {app.deployment_type === 'knative' ? 'Knative' : app.deployment_type === 'component' ? 'Component' : 'App'}
                     </TkBadge>
                   </div>
                 </TkCardHeader>
@@ -693,8 +702,8 @@ export default function Templates() {
                   <div className="flex items-center justify-between gap-2">
                     <TkCardTitle>{template.name.replace('tkt-', '').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</TkCardTitle>
                     <div className="flex gap-1 shrink-0">
-                      <TkBadge appearance={template.deployment_type === 'knative' ? 'muted' : 'outlined'}>
-                        {template.deployment_type === 'knative' ? 'Knative' : 'App'}
+                      <TkBadge appearance={template.deployment_type === 'knative' ? 'muted' : template.deployment_type === 'component' ? 'prominent' : 'outlined'}>
+                        {template.deployment_type === 'knative' ? 'Knative' : template.deployment_type === 'component' ? 'Component' : 'App'}
                       </TkBadge>
                       {template.source === 'user' && (
                         <TkBadge category="user">User</TkBadge>

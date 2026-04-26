@@ -101,6 +101,10 @@ class ApplicationDeployer:
         """Check if current deployment is a Knative service."""
         return self.thinkube_config.get('spec', {}).get('deployment', {}).get('type') == 'knative'
 
+    def _is_component(self) -> bool:
+        """Check if current deployment is a platform component."""
+        return self.thinkube_config.get('spec', {}).get('deployment', {}).get('type') == 'component'
+
     async def phase1_setup(self):
         """Phase 1: Validate parameters, create namespace, and run Copier."""
         DeploymentLogger.phase(1, "Setup & Validation")
@@ -358,7 +362,7 @@ git reset --hard origin/main
 
     async def parse_thinkube_yaml(self):
         """Parse and validate thinkube.yaml configuration."""
-        from thinkube_yaml_validator import validate_knative_constraints
+        from thinkube_yaml_validator import validate_knative_constraints, validate_component_constraints
 
         config_path = Path(self.local_repo_path) / "thinkube.yaml"
         try:
@@ -371,10 +375,19 @@ git reset --hard origin/main
             self.thinkube_config['metadata']['name'] = self.app_name
 
             violations = validate_knative_constraints(self.thinkube_config)
+            violations.extend(validate_component_constraints(self.thinkube_config))
             if violations:
                 msg = "thinkube.yaml validation failed:\n" + "\n".join(f"  - {v}" for v in violations)
                 DeploymentLogger.error(msg)
                 raise ValueError(msg)
+
+            if self._is_component():
+                manifest_name = self.thinkube_config['spec']['deployment']['name']
+                if manifest_name != self.app_name:
+                    raise ValueError(
+                        f"Component name mismatch: manifest declares '{manifest_name}' "
+                        f"but deployment was requested as '{self.app_name}'"
+                    )
 
             DeploymentLogger.log("Parsed and validated thinkube.yaml configuration")
         except ValueError:
@@ -2007,7 +2020,7 @@ git push -u origin main --force
                         labels={
                             'app': self.app_name,
                             'thinkube.io/managed': 'true',
-                            'thinkube.io/service-type': 'user_app',
+                            'thinkube.io/service-type': 'component' if self._is_component() else 'user_app',
                             'thinkube.io/service-name': self.app_name
                         }
                     ),

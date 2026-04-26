@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
 # Enums
-ServiceType = Literal["core", "optional", "user_app"]
+ServiceType = Literal["core", "optional", "user_app", "component"]
 ServiceStatus = Literal["healthy", "unhealthy", "unknown", "disabled"]
 ServiceAction = Literal["enable", "disable", "restart", "delete", "update"]
 EndpointType = Literal["http", "grpc", "tcp", "postgres", "redis", "docker-registry", "internal"]

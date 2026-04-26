@@ -296,10 +296,14 @@ class DependencyManager:
         existing = self.db.query(ServiceModel).filter(ServiceModel.name == name).first()
         if existing:
             if existing.type == "user_app" and service_type == "user_app":
-                # User app with same name exists, overwrite is possible
                 return (
                     True,
                     f"A user application named '{name}' already exists and will be overwritten",
+                )
+            elif existing.type == "component" and service_type == "component":
+                return (
+                    True,
+                    f"Component '{name}' already exists and will be redeployed",
                 )
             else:
                 return (

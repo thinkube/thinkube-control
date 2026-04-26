@@ -2,9 +2,10 @@
 Validates thinkube.yaml against the v1.0 specification constraints.
 
 Knative services must remain portable to cloud serverless platforms
-(AWS Lambda, Cloud Run). This module enforces those constraints.
+(AWS Lambda, Cloud Run). Component deployments require a fixed name.
 """
 
+import re
 from typing import Any, Dict, List
 
 
@@ -65,5 +66,32 @@ def validate_knative_constraints(config: Dict[str, Any]) -> List[str]:
                 f"Service '{svc}': storage is not allowed in Knative services. "
                 "database, cache, and queue are allowed."
             )
+
+    return errors
+
+
+def validate_component_constraints(config: Dict[str, Any]) -> List[str]:
+    """Return a list of constraint violations for component deployments.
+
+    Components require spec.deployment.name (the fixed deployment name).
+    Returns an empty list for other types or when no violations are found.
+    """
+    spec = config.get('spec', {})
+    deployment = spec.get('deployment', {})
+    if deployment.get('type') != 'component':
+        return []
+
+    errors = []
+    name = deployment.get('name')
+    if not name:
+        errors.append(
+            "Component deployments require spec.deployment.name "
+            "(the fixed deployment name)."
+        )
+    elif not re.match(r'^[a-z][a-z0-9-]*$', name):
+        errors.append(
+            f"spec.deployment.name '{name}' is invalid. "
+            "Must be lowercase alphanumeric with hyphens (^[a-z][a-z0-9-]*$)."
+        )
 
     return errors

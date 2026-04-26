@@ -42,6 +42,7 @@ interface TemplateParameterFormProps {
   modelValue?: Record<string, string | number | boolean>
   onUpdate?: (value: Record<string, string | number | boolean>) => void
   onValidationChange?: (validation: { isValid: boolean; fieldName: string }) => void
+  readOnlyName?: boolean
 }
 
 interface NameValidation {
@@ -61,6 +62,7 @@ export function TemplateParameterForm({
   modelValue = {},
   onUpdate,
   onValidationChange,
+  readOnlyName = false,
 }: TemplateParameterFormProps) {
   // Local form data
   const [formData, setFormData] = useState<Record<string, string | number | boolean>>({
@@ -300,25 +302,30 @@ export function TemplateParameterForm({
     <div className="space-y-6">
       {/* Standard fields that are always present */}
       <div className="space-y-2">
-        <TkLabel htmlFor="project-name">Project Name</TkLabel>
+        <TkLabel htmlFor="project-name">{readOnlyName ? 'Component Name' : 'Project Name'}</TkLabel>
         <div className="relative">
           <TkInput
             id="project-name"
             value={(formData.project_name as string) || ''}
             type="text"
-            placeholder="my-awesome-app"
-            className={nameValidation.class}
+            placeholder={readOnlyName ? '' : 'my-awesome-app'}
+            className={readOnlyName ? 'opacity-60' : nameValidation.class}
             required
+            disabled={readOnlyName}
             onChange={(e) => handleProjectNameChange(e.target.value)}
-            onBlur={() => validateProjectName()}
+            onBlur={() => !readOnlyName && validateProjectName()}
           />
-          {checkingName && (
+          {checkingName && !readOnlyName && (
             <div className="absolute right-3 top-3">
               <TkLoader size="sm" />
             </div>
           )}
         </div>
-        {nameValidation.message ? (
+        {readOnlyName ? (
+          <p className="text-sm text-muted-foreground">
+            Name is set by the component manifest
+          </p>
+        ) : nameValidation.message ? (
           <p className={`text-sm ${nameValidation.messageClass}`}>{nameValidation.message}</p>
         ) : (
           <p className="text-sm text-muted-foreground">
