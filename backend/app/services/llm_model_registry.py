@@ -215,6 +215,10 @@ class LLMModelRegistry:
 
         self._poll_catalog()
 
+        # Wait briefly for backend discovery to finish its initial probe
+        await asyncio.sleep(2)
+        self._reconcile_states()
+
         while self._is_running:
             try:
                 await asyncio.sleep(self._refresh_interval)

@@ -145,11 +145,11 @@ async def app_lifespan(app: FastAPI):
     discovery_task = asyncio.create_task(periodic_discovery())
     logger.info("Started periodic discovery task (5 minute interval)")
 
-    # Start LLM model registry and backend discovery polling
-    llm_registry_task = asyncio.create_task(llm_model_registry.start_polling())
-    logger.info("Started LLM model registry polling")
+    # Start LLM backend discovery first so registry reconciliation has backend data
     llm_discovery_task = asyncio.create_task(llm_backend_discovery.start_polling())
     logger.info("Started LLM backend discovery polling")
+    llm_registry_task = asyncio.create_task(llm_model_registry.start_polling())
+    logger.info("Started LLM model registry polling")
 
     yield
 
