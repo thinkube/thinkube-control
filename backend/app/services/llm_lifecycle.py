@@ -3,9 +3,13 @@ import logging
 import os
 from typing import Optional
 
+import httpx
+
 from app.api.llm.schemas import ModelLoadResponse, ModelState, ModelTier
 
 logger = logging.getLogger(__name__)
+
+MLFLOW_ARTIFACT_BASE = "/mlflow-models/artifacts"
 
 
 class LLMLifecycleManager:
@@ -95,10 +99,20 @@ class LLMLifecycleManager:
             if ollama_name:
                 success = await ollama_client.load_model(ollama_name, keep_alive)
             else:
-                success = await ollama_client.pull_model(model_id)
+                gguf_path = await self._resolve_gguf_path(model_id)
+                if not gguf_path:
+                    llm_model_registry.update_model_state(model_id, ModelState.deployable)
+                    return ModelLoadResponse(
+                        model_id=model_id, state=ModelState.deployable,
+                        message=f"Could not find GGUF artifact for '{model_id}' in MLflow"
+                    )
+
+                ollama_name = self._model_id_to_ollama_name(model_id)
+                modelfile = f"FROM {gguf_path}"
+                logger.info(f"Creating Ollama model '{ollama_name}' from {gguf_path}")
+                success = await ollama_client.create_model(ollama_name, modelfile)
                 if success:
-                    ollama_name = model_id
-                    success = await ollama_client.load_model(model_id, keep_alive)
+                    success = await ollama_client.load_model(ollama_name, keep_alive)
 
             if success:
                 llm_model_registry.update_model_state(model_id, ModelState.available, "ollama")
@@ -164,7 +178,12 @@ class LLMLifecycleManager:
 
         if entry.backend_id == "ollama":
             llm_model_registry.update_model_state(model_id, ModelState.unloading, "ollama")
-            success = await ollama_client.unload_model(model_id)
+            models = await ollama_client.list_models()
+            model_names = [m.get("name", "") for m in models]
+            ollama_name = self._find_ollama_name(model_id, model_names)
+            if not ollama_name:
+                ollama_name = self._model_id_to_ollama_name(model_id)
+            success = await ollama_client.delete_model(ollama_name)
             if success:
                 llm_model_registry.update_model_state(model_id, ModelState.deployable)
                 llm_gpu_tracker.release_allocation(model_id)
@@ -197,6 +216,109 @@ class LLMLifecycleManager:
 
         result = await self.load_model(model_id)
         return result.state == ModelState.available
+
+    async def _resolve_gguf_path(self, model_id: str) -> Optional[str]:
+        mlflow_url = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000")
+        token = await self._get_mlflow_token()
+        if not token:
+            logger.error("Cannot get MLflow auth token")
+            return None
+
+        headers = {"Authorization": f"Bearer {token}"}
+        model_name = model_id.replace("/", "-")
+
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+                resp = await client.get(
+                    f"{mlflow_url}/api/2.0/mlflow/model-versions/search",
+                    params={"filter": f"name='{model_name}'"},
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                versions = resp.json().get("model_versions", [])
+                if not versions:
+                    logger.warning(f"Model '{model_name}' not found in MLflow registry")
+                    return None
+
+                latest = max(versions, key=lambda v: int(v["version"]))
+                run_id = latest["run_id"]
+
+                resp = await client.get(
+                    f"{mlflow_url}/api/2.0/mlflow/runs/get",
+                    params={"run_id": run_id},
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                experiment_id = resp.json()["run"]["info"]["experiment_id"]
+
+            model_dir = f"{MLFLOW_ARTIFACT_BASE}/{experiment_id}/{run_id}/artifacts/model"
+
+            gguf_file = await self._find_gguf_filename(run_id, token)
+            if gguf_file:
+                return f"{model_dir}/{gguf_file}"
+
+            logger.warning(f"No GGUF file found for run {run_id}")
+            return None
+
+        except Exception as e:
+            logger.error(f"Failed to resolve GGUF path for {model_id}: {e}")
+            return None
+
+    async def _find_gguf_filename(self, run_id: str, token: str) -> Optional[str]:
+        mlflow_url = os.getenv("MLFLOW_TRACKING_URI")
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+                resp = await client.get(
+                    f"{mlflow_url}/api/2.0/mlflow/artifacts/list",
+                    params={"run_id": run_id, "path": "model"},
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                if resp.status_code == 200:
+                    files = resp.json().get("files", [])
+                    for f in files:
+                        path = f.get("path", "")
+                        if path.endswith(".gguf"):
+                            return path.split("/")[-1]
+        except Exception as e:
+            logger.debug(f"MLflow artifact list failed: {e}")
+        return None
+
+    async def _get_mlflow_token(self) -> Optional[str]:
+        token_url = os.getenv("MLFLOW_KEYCLOAK_TOKEN_URL")
+        client_id = os.getenv("MLFLOW_KEYCLOAK_CLIENT_ID")
+        client_secret = os.getenv("MLFLOW_CLIENT_SECRET")
+        username = os.getenv("MLFLOW_AUTH_USERNAME")
+        password = os.getenv("MLFLOW_AUTH_PASSWORD")
+
+        if not all([token_url, client_id, client_secret, username, password]):
+            logger.error("Missing MLflow auth credentials")
+            return None
+
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+                resp = await client.post(
+                    token_url,
+                    data={
+                        "grant_type": "password",
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "username": username,
+                        "password": password,
+                        "scope": "openid",
+                    },
+                )
+                resp.raise_for_status()
+                return resp.json()["access_token"]
+        except Exception as e:
+            logger.error(f"Failed to get MLflow token: {e}")
+            return None
+
+    def _model_id_to_ollama_name(self, model_id: str) -> str:
+        name = model_id.split("/")[-1].lower()
+        for suffix in ["-gguf", "-ggml"]:
+            if name.endswith(suffix):
+                name = name[: -len(suffix)]
+        return name
 
     def _find_ollama_name(self, model_id: str, available: list[str]) -> Optional[str]:
         for name in available:

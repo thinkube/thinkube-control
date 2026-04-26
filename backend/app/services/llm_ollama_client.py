@@ -85,16 +85,20 @@ class OllamaClient:
             return False
 
     async def unload_model(self, name: str) -> bool:
+        return await self.delete_model(name)
+
+    async def delete_model(self, name: str) -> bool:
         try:
-            resp = await self._client.post(
-                "/api/generate",
-                json={"model": name, "keep_alive": 0},
+            resp = await self._client.request(
+                "DELETE",
+                "/api/delete",
+                json={"model": name},
                 timeout=60.0,
             )
             resp.raise_for_status()
             return True
         except Exception as e:
-            logger.error(f"Ollama unload failed for {name}: {e}")
+            logger.error(f"Ollama delete failed for {name}: {e}")
             return False
 
     async def is_model_loaded(self, name: str) -> bool:
