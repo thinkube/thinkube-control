@@ -187,6 +187,7 @@ class ModelDownloaderService:
             service_account_name="thinkube-control",
             entrypoint="download",
             parallelism=self.parallelism,
+            node_selector={"node-role.kubernetes.io/control-plane": ""},
             labels={
                 "model-id": model_id.replace("/", "-"),  # Label for tracking which model
                 "workflow-type": "model-download"
@@ -838,6 +839,7 @@ except Exception as e:
             service_account_name="thinkube-control",
             entrypoint="register",
             parallelism=self.parallelism,
+            node_selector={"node-role.kubernetes.io/control-plane": ""},
             labels={
                 "model-id": name.replace("/", "-"),
                 "workflow-type": "model-register"
