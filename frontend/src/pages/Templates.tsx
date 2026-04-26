@@ -385,6 +385,7 @@ export default function Templates() {
           })
 
           setDeploymentId(retryResponse.data.deployment_id)
+          setShowDeployForm(false)
 
           // Start PlaybookExecutor with WebSocket URL
           if (retryResponse.data.websocket_url) {
@@ -400,6 +401,7 @@ export default function Templates() {
       }
 
       setDeploymentId(response.data.deployment_id)
+      setShowDeployForm(false)
 
       // Start PlaybookExecutor with WebSocket URL
       if (response.data.websocket_url) {
@@ -418,13 +420,14 @@ export default function Templates() {
   return (
     <TkPageWrapper description="Deploy pre-configured application templates to your Thinkube cluster">
 
-      {/* Template Deployment Form */}
-      {showDeployForm && (
-        <TkCard className="mb-8">
-          <TkCardHeader>
-            <TkCardTitle>{isComponent ? 'Deploy Component' : 'Deploy Template'}</TkCardTitle>
-          </TkCardHeader>
-          <TkCardContent className="space-y-6">
+      {/* Template Deployment Dialog */}
+      <TkDialogRoot open={showDeployForm} onOpenChange={(open) => { if (!open) cancelDeploy() }}>
+        <TkDialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <TkDialogHeader>
+            <TkDialogTitle>{isComponent ? 'Deploy Component' : 'Deploy Template'}</TkDialogTitle>
+          </TkDialogHeader>
+
+          <div className="space-y-4">
             {/* Template Info */}
             {templateInfo && (
               <TkInfoAlert title={templateInfo.name}>
@@ -442,7 +445,7 @@ export default function Templates() {
 
             {/* Loading template metadata */}
             {loadingMetadata && (
-              <div className="flex items-center justify-center py-12"> {/* @allowed-inline */}
+              <div className="flex items-center justify-center py-12">
                 <div className="text-center">
                   <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-4" />
                   <p>Loading template configuration...</p>
@@ -450,8 +453,15 @@ export default function Templates() {
               </div>
             )}
 
-            {/* Dynamic form based on template.yaml */}
-            {!loadingMetadata && templateMetadata && (
+            {/* Component with no parameters: streamlined confirmation */}
+            {!loadingMetadata && templateMetadata && isComponent && templateMetadata.parameters.length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                This will deploy the <strong>{deployConfig.project_name}</strong> component to your cluster.
+              </p>
+            )}
+
+            {/* App/knative or component with parameters: full form */}
+            {!loadingMetadata && templateMetadata && (!isComponent || templateMetadata.parameters.length > 0) && (
               <TemplateParameterForm
                 parameters={templateMetadata.parameters}
                 modelValue={deployConfig}
@@ -467,10 +477,9 @@ export default function Templates() {
                 <p>All Thinkube templates must include a template.yaml manifest file.</p>
               </TkErrorAlert>
             )}
-          </TkCardContent>
+          </div>
 
-          {/* Action Buttons */}
-          <TkCardFooter className="flex justify-end gap-2">
+          <TkDialogFooter>
             <TkButton
               intent="ghost"
               onClick={cancelDeploy}
@@ -486,9 +495,9 @@ export default function Templates() {
               )}
               {isDeploying ? 'Deploying...' : isComponent ? 'Deploy Component' : 'Deploy Template'}
             </TkButton>
-          </TkCardFooter>
-        </TkCard>
-      )}
+          </TkDialogFooter>
+        </TkDialogContent>
+      </TkDialogRoot>
 
       {/* Playbook Executor */}
       <PlaybookExecutor
@@ -499,40 +508,38 @@ export default function Templates() {
       />
 
       {/* Manual Template URL */}
-      {!showDeployForm && (
-        <TkCard className="mb-8">
-          <TkCardHeader>
-            <TkCardTitle>Deploy from GitHub</TkCardTitle>
-          </TkCardHeader>
-          <TkCardContent>
-            <p className="mb-4">Enter a GitHub repository URL to deploy a template</p>
+      <TkCard className="mb-8">
+        <TkCardHeader>
+          <TkCardTitle>Deploy from GitHub</TkCardTitle>
+        </TkCardHeader>
+        <TkCardContent>
+          <p className="mb-4">Enter a GitHub repository URL to deploy a template</p>
 
-            <div className="space-y-2">
-              <label
-                htmlFor="template-url"
-                className="text-sm font-medium"
-              >
-                Template Repository URL
-              </label>
-              <TkInput
-                id="template-url"
-                value={manualTemplateUrl}
-                onChange={(e) => setManualTemplateUrl(e.target.value)}
-                type="url"
-                placeholder="https://github.com/thinkube/tkt-webapp-vue-fastapi"
-              />
-            </div>
-          </TkCardContent>
-          <TkCardFooter className="flex justify-end">
-            <TkButton
-              disabled={!isValidUrl(manualTemplateUrl)}
-              onClick={() => loadTemplate(manualTemplateUrl)}
+          <div className="space-y-2">
+            <label
+              htmlFor="template-url"
+              className="text-sm font-medium"
             >
-              Load Template
-            </TkButton>
-          </TkCardFooter>
-        </TkCard>
-      )}
+              Template Repository URL
+            </label>
+            <TkInput
+              id="template-url"
+              value={manualTemplateUrl}
+              onChange={(e) => setManualTemplateUrl(e.target.value)}
+              type="url"
+              placeholder="https://github.com/thinkube/tkt-webapp-vue-fastapi"
+            />
+          </div>
+        </TkCardContent>
+        <TkCardFooter className="flex justify-end">
+          <TkButton
+            disabled={!isValidUrl(manualTemplateUrl)}
+            onClick={() => loadTemplate(manualTemplateUrl)}
+          >
+            Load Template
+          </TkButton>
+        </TkCardFooter>
+      </TkCard>
 
       {/* Your Deployed Apps */}
       {deployedApps.length > 0 && (
