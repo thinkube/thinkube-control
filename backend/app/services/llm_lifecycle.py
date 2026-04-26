@@ -123,6 +123,24 @@ class LLMLifecycleManager:
 
         backend_id = f"ollama-{target_node}" if target_node else "ollama"
         llm_model_registry.update_model_state(model_id, ModelState.loading, backend_id)
+
+        asyncio.create_task(
+            self._load_ollama_background(model_id, keep_alive, target_node, backend_id, estimated_memory)
+        )
+
+        return ModelLoadResponse(
+            model_id=model_id, state=ModelState.loading,
+            message="Loading model — this may take several minutes", backend_id=backend_id
+        )
+
+    async def _load_ollama_background(
+        self, model_id: str, keep_alive: Optional[str],
+        target_node: Optional[str], backend_id: str, estimated_memory: float,
+    ):
+        from app.services.llm_model_registry import llm_model_registry
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+        from app.services.llm_ollama_client import ollama_client
+
         event = asyncio.Event()
         self._loading_locks[model_id] = event
 
@@ -137,10 +155,8 @@ class LLMLifecycleManager:
                 gguf_path = await self._resolve_gguf_path(model_id)
                 if not gguf_path:
                     llm_model_registry.update_model_state(model_id, ModelState.deployable)
-                    return ModelLoadResponse(
-                        model_id=model_id, state=ModelState.deployable,
-                        message=f"Could not find GGUF artifact for '{model_id}' in MLflow"
-                    )
+                    logger.error(f"Could not find GGUF artifact for '{model_id}' in MLflow")
+                    return
 
                 ollama_name = model_id_to_ollama_name(model_id)
                 logger.info(f"Creating Ollama model '{ollama_name}' from {gguf_path}")
@@ -154,23 +170,13 @@ class LLMLifecycleManager:
                 llm_gpu_tracker.record_allocation(
                     model_id, backend_id, estimated_memory, node_name=target_node
                 )
-                return ModelLoadResponse(
-                    model_id=model_id, state=ModelState.available,
-                    message="Model loaded successfully", backend_id=backend_id
-                )
+                logger.info(f"Model '{model_id}' loaded successfully on {backend_id}")
             else:
                 llm_model_registry.update_model_state(model_id, ModelState.deployable)
-                return ModelLoadResponse(
-                    model_id=model_id, state=ModelState.deployable,
-                    message="Failed to load model on Ollama"
-                )
+                logger.error(f"Failed to load model '{model_id}' on Ollama")
         except Exception as e:
-            logger.error(f"Load failed for {model_id}: {e}")
+            logger.error(f"Background load failed for {model_id}: {e}")
             llm_model_registry.update_model_state(model_id, ModelState.deployable)
-            return ModelLoadResponse(
-                model_id=model_id, state=ModelState.deployable,
-                message=f"Load failed: {e}"
-            )
         finally:
             event.set()
             self._loading_locks.pop(model_id, None)
