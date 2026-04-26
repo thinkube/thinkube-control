@@ -171,11 +171,13 @@ export default function Templates() {
           }
         })
 
-        setDeployConfig({
+        setDeployConfig(prev => ({
           project_name: '',
           project_description: '',
-          ...defaultValues
-        })
+          ...defaultValues,
+          // Preserve fixed name set by selectTemplate for components
+          ...(prev.project_name ? { project_name: prev.project_name } : {}),
+        }))
       }
     } catch (e) {
       console.error('Failed to fetch template metadata:', e)
