@@ -24,6 +24,7 @@ interface LoadOptionBackend {
   name: string;
   type: string;
   status: string;
+  node: string | null;
 }
 
 interface GPUAllocation {
@@ -98,10 +99,15 @@ export default function LoadModelDialog({
       .then((res) => {
         const opts: LoadOptions = res.data;
         setOptions(opts);
-        if (opts.compatible_backends.length > 0) {
-          setSelectedBackend(opts.compatible_backends[0].id);
-        }
-        if (opts.gpu_nodes.length > 0) {
+        const firstBackend = opts.compatible_backends[0];
+        if (firstBackend) {
+          setSelectedBackend(firstBackend.id);
+          if (firstBackend.node) {
+            setSelectedNode(firstBackend.node);
+          } else if (opts.gpu_nodes.length > 0) {
+            setSelectedNode(opts.gpu_nodes[0].name);
+          }
+        } else if (opts.gpu_nodes.length > 0) {
           setSelectedNode(opts.gpu_nodes[0].name);
         }
       })
@@ -110,6 +116,14 @@ export default function LoadModelDialog({
       })
       .finally(() => setLoadingOptions(false));
   }, [open, modelId]);
+
+  useEffect(() => {
+    if (!selectedBackend || !options) return;
+    const backend = options.compatible_backends.find(b => b.id === selectedBackend);
+    if (backend?.node) {
+      setSelectedNode(backend.node);
+    }
+  }, [selectedBackend, options]);
 
   const handleLoad = async () => {
     setLoading(true);

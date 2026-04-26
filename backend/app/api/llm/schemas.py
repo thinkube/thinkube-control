@@ -55,6 +55,7 @@ class BackendEntry(BaseModel):
     status: str = "unknown"
     models: List[str] = Field(default_factory=list)
     last_probe: Optional[str] = None
+    node: Optional[str] = None
 
 
 class BackendsListResponse(BaseModel):

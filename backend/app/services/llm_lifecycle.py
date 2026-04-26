@@ -54,6 +54,12 @@ class LLMLifecycleManager:
             )
 
         resolved_backend = backend
+        if resolved_backend and "-" in resolved_backend:
+            parts = resolved_backend.split("-", 1)
+            if not node:
+                node = parts[1]
+            resolved_backend = parts[0]
+
         if not resolved_backend:
             resolved_tier = tier or (
                 ModelTier.performance if any(t in ("vllm", "tensorrt-llm") for t in entry.server_type)
@@ -81,7 +87,7 @@ class LLMLifecycleManager:
         from app.services.llm_gpu_tracker import llm_gpu_tracker
         from app.services.llm_ollama_client import ollama_client
 
-        if not await ollama_client.is_available():
+        if not await ollama_client.is_available(node):
             return ModelLoadResponse(
                 model_id=model_id, state=ModelState.deployable,
                 message="Ollama backend is not available"
@@ -94,7 +100,7 @@ class LLMLifecycleManager:
             estimated_memory, node_name=node
         )
         if not can_load:
-            candidate = self._select_eviction_candidate()
+            candidate = self._select_eviction_candidate(target_node=node)
             if candidate:
                 logger.info(f"Evicting {candidate} to make room for {model_id}")
                 await self.unload_model(candidate)
@@ -108,19 +114,25 @@ class LLMLifecycleManager:
                     message=f"Insufficient GPU resources: {reason}"
                 )
 
-        target_node = reason if can_load and not node else node
+        if node:
+            target_node = node
+        elif can_load and reason not in ("ok",):
+            target_node = reason
+        else:
+            target_node = None
 
-        llm_model_registry.update_model_state(model_id, ModelState.loading, "ollama")
+        backend_id = f"ollama-{target_node}" if target_node else "ollama"
+        llm_model_registry.update_model_state(model_id, ModelState.loading, backend_id)
         event = asyncio.Event()
         self._loading_locks[model_id] = event
 
         try:
-            models = await ollama_client.list_models()
+            models = await ollama_client.list_models(node=target_node)
             model_names = [m.get("name", "") for m in models]
             ollama_name = self._find_ollama_name(model_id, model_names)
 
             if ollama_name:
-                success = await ollama_client.load_model(ollama_name, keep_alive)
+                success = await ollama_client.load_model(ollama_name, keep_alive, node=target_node)
             else:
                 gguf_path = await self._resolve_gguf_path(model_id)
                 if not gguf_path:
@@ -132,19 +144,19 @@ class LLMLifecycleManager:
 
                 ollama_name = model_id_to_ollama_name(model_id)
                 logger.info(f"Creating Ollama model '{ollama_name}' from {gguf_path}")
-                success = await ollama_client.create_model(ollama_name, gguf_path)
+                success = await ollama_client.create_model(ollama_name, gguf_path, node=target_node)
                 if success:
                     llm_model_registry.register_ollama_alias(ollama_name, model_id)
-                    success = await ollama_client.load_model(ollama_name, keep_alive)
+                    success = await ollama_client.load_model(ollama_name, keep_alive, node=target_node)
 
             if success:
-                llm_model_registry.update_model_state(model_id, ModelState.available, "ollama")
+                llm_model_registry.update_model_state(model_id, ModelState.available, backend_id)
                 llm_gpu_tracker.record_allocation(
-                    model_id, "ollama", estimated_memory, node_name=target_node
+                    model_id, backend_id, estimated_memory, node_name=target_node
                 )
                 return ModelLoadResponse(
                     model_id=model_id, state=ModelState.available,
-                    message="Model loaded successfully", backend_id="ollama"
+                    message="Model loaded successfully", backend_id=backend_id
                 )
             else:
                 llm_model_registry.update_model_state(model_id, ModelState.deployable)
@@ -201,14 +213,20 @@ class LLMLifecycleManager:
                 message=f"Model is not loaded (state: {entry.state.value})"
             )
 
-        if entry.backend_id == "ollama":
-            llm_model_registry.update_model_state(model_id, ModelState.unloading, "ollama")
-            models = await ollama_client.list_models()
+        if entry.backend_id and entry.backend_id.startswith("ollama"):
+            node = None
+            if "-" in entry.backend_id:
+                node = entry.backend_id.split("-", 1)[1]
+
+            llm_model_registry.update_model_state(model_id, ModelState.unloading, entry.backend_id)
+
+            models = await ollama_client.list_models(node=node)
             model_names = [m.get("name", "") for m in models]
             ollama_name = self._find_ollama_name(model_id, model_names)
             if not ollama_name:
                 ollama_name = model_id_to_ollama_name(model_id)
-            success = await ollama_client.delete_model(ollama_name)
+
+            success = await ollama_client.unload_model(ollama_name, node=node)
             if success:
                 llm_model_registry.update_model_state(model_id, ModelState.deployable)
                 llm_gpu_tracker.release_allocation(model_id)
@@ -217,7 +235,7 @@ class LLMLifecycleManager:
                     message="Model unloaded successfully"
                 )
             else:
-                llm_model_registry.update_model_state(model_id, ModelState.available, "ollama")
+                llm_model_registry.update_model_state(model_id, ModelState.available, entry.backend_id)
                 return ModelLoadResponse(
                     model_id=model_id, state=ModelState.available,
                     message="Failed to unload model from Ollama"
@@ -389,13 +407,19 @@ class LLMLifecycleManager:
         except ValueError:
             return None
 
-    def _select_eviction_candidate(self) -> Optional[str]:
+    def _select_eviction_candidate(self, target_node: Optional[str] = None) -> Optional[str]:
         from app.services.llm_gpu_tracker import llm_gpu_tracker
 
         candidates = llm_gpu_tracker.get_eviction_candidates()
-        flexible_candidates = [c for c in candidates if c.backend_id == "ollama"]
-        if flexible_candidates:
-            return flexible_candidates[0].model_id
+        if target_node:
+            flexible = [
+                c for c in candidates
+                if c.backend_id.startswith("ollama") and c.node_name == target_node
+            ]
+        else:
+            flexible = [c for c in candidates if c.backend_id.startswith("ollama")]
+        if flexible:
+            return flexible[0].model_id
         return None
 
 

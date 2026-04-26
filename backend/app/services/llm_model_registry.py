@@ -72,6 +72,22 @@ class LLMModelRegistry:
                 error=f"Model '{entry.id}' is {entry.state.value}",
             )
 
+        if entry.backend_id and entry.state == ModelState.available:
+            backend = llm_backend_discovery.get_backend(entry.backend_id)
+            if backend and backend.status == "healthy":
+                resolved_tier = (
+                    ModelTier.performance
+                    if backend.type in ("vllm", "tensorrt-llm")
+                    else ModelTier.flexible
+                )
+                return ModelResolveResponse(
+                    backend_url=backend.url,
+                    api_path=backend.api_path,
+                    model_id=entry.id,
+                    model_state=ModelState.available,
+                    tier=resolved_tier,
+                )
+
         backends = llm_backend_discovery.get_backends_serving(entry.id)
 
         if tier == "performance":
@@ -182,7 +198,6 @@ class LLMModelRegistry:
             )
             updated[model_id] = model
 
-        # Keep any models that are currently loaded but not in catalog (e.g. fine-tuned)
         for model_id, existing in self._models.items():
             if model_id not in updated and existing.state in (ModelState.available, ModelState.loading):
                 updated[model_id] = existing
@@ -215,7 +230,6 @@ class LLMModelRegistry:
 
         self._poll_catalog()
 
-        # Wait briefly for backend discovery to finish its initial probe
         await asyncio.sleep(2)
         self._reconcile_states()
 
@@ -242,7 +256,8 @@ class LLMModelRegistry:
         for backend in llm_backend_discovery.list_backends():
             if backend.status == "healthy":
                 for model_name in backend.models:
-                    backend_models[model_name] = backend.id
+                    if model_name not in backend_models:
+                        backend_models[model_name] = backend.id
 
         matched_serving = set()
 
@@ -285,10 +300,10 @@ class LLMModelRegistry:
             self._models[model_name] = ModelEntry(
                 id=model_name,
                 name=model_name,
-                server_type=["ollama"] if backend_id == "ollama" else [],
+                server_type=["ollama"] if backend_id.startswith("ollama") else [],
                 state=ModelState.available,
                 backend_id=backend_id,
-                tier=ModelTier.flexible if backend_id == "ollama" else ModelTier.performance,
+                tier=ModelTier.flexible if backend_id.startswith("ollama") else ModelTier.performance,
             )
 
     def _sync_gpu_allocation(self, model_id, backend_id, gpu_tracker, lifecycle):
@@ -297,7 +312,10 @@ class LLMModelRegistry:
             return
         entry = self._models.get(model_id)
         estimated = lifecycle._estimate_memory(entry) if entry else 4.0
-        gpu_tracker.record_allocation(model_id, backend_id, estimated)
+        node_name = None
+        if backend_id and "-" in backend_id:
+            node_name = backend_id.split("-", 1)[1]
+        gpu_tracker.record_allocation(model_id, backend_id, estimated, node_name=node_name)
 
 
 llm_model_registry = LLMModelRegistry()

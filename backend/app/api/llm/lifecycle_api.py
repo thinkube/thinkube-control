@@ -30,6 +30,7 @@ async def get_load_options(model_id: str):
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
 
     backends = []
+    relevant_node_names = set()
     for b in llm_backend_discovery.list_backends():
         if b.type in (entry.server_type or []):
             backends.append(LoadOptionBackend(
@@ -37,15 +38,23 @@ async def get_load_options(model_id: str):
                 name=b.name,
                 type=b.type,
                 status=b.status,
+                node=b.node,
             ))
+            if b.node:
+                relevant_node_names.add(b.node)
 
     gpu_status = llm_gpu_tracker.get_status()
+    if relevant_node_names:
+        gpu_nodes = [n for n in gpu_status.nodes if n.name in relevant_node_names]
+    else:
+        gpu_nodes = gpu_status.nodes
+
     estimated_memory = llm_lifecycle._estimate_memory(entry)
 
     return LoadOptionsResponse(
         model_id=model_id,
         compatible_backends=backends,
-        gpu_nodes=gpu_status.nodes,
+        gpu_nodes=gpu_nodes,
         estimated_memory_gb=estimated_memory,
     )
 

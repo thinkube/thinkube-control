@@ -3,6 +3,7 @@ LLM Backend Discovery
 
 Discovers model-serving backends via Kubernetes ConfigMaps and static configuration.
 Periodically probes backend health and served models.
+Discovers per-node Ollama DaemonSet pods for node-specific routing.
 """
 
 import asyncio
@@ -34,6 +35,9 @@ class LLMBackendDiscovery:
     def list_backends(self) -> List[BackendEntry]:
         return list(self._backends.values())
 
+    def get_backend(self, backend_id: str) -> Optional[BackendEntry]:
+        return self._backends.get(backend_id)
+
     def get_backends_serving(self, model_id: str) -> List[BackendEntry]:
         return [
             b
@@ -47,7 +51,7 @@ class LLMBackendDiscovery:
 
     async def _discover_all(self):
         self._discover_static()
-        self._discover_ollama_entry()
+        await self._discover_ollama_pods()
         await self._discover_from_configmaps()
         await self._probe_all()
 
@@ -71,16 +75,75 @@ class LLMBackendDiscovery:
         except Exception as e:
             logger.warning(f"Failed to parse LLM_STATIC_BACKENDS: {e}")
 
-    def _discover_ollama_entry(self):
-        if self._ollama_url:
-            self._backends["ollama"] = BackendEntry(
-                id="ollama",
-                name="Ollama",
-                url=self._ollama_url,
-                type="ollama",
-                api_path="/v1",
-                status="unknown",
+    async def _discover_ollama_pods(self):
+        from app.services.llm_ollama_client import ollama_client
+
+        try:
+            from kubernetes import client, config as k8s_config
+
+            try:
+                k8s_config.load_incluster_config()
+            except k8s_config.ConfigException:
+                k8s_config.load_kube_config()
+
+            v1 = client.CoreV1Api()
+            namespace = os.getenv("LLM_OLLAMA_NAMESPACE", "ollama")
+            pods = v1.list_namespaced_pod(
+                namespace, label_selector="app.kubernetes.io/name=ollama"
             )
+
+            discovered = set()
+            for pod in pods.items:
+                if pod.status.phase != "Running" or not pod.status.pod_ip:
+                    continue
+                node_name = pod.spec.node_name
+                if not node_name:
+                    continue
+
+                pod_ip = pod.status.pod_ip
+                pod_name = pod.metadata.name
+                backend_id = f"ollama-{node_name}"
+                discovered.add(backend_id)
+
+                self._backends[backend_id] = BackendEntry(
+                    id=backend_id,
+                    name=f"Ollama ({node_name})",
+                    url=f"http://{pod_ip}:11434",
+                    type="ollama",
+                    api_path="/v1",
+                    status="unknown",
+                    node=node_name,
+                )
+                ollama_client.register_node(node_name, pod_ip, pod_name)
+
+            stale = [
+                bid for bid in list(self._backends)
+                if bid.startswith("ollama-")
+                and self._backends[bid].type == "ollama"
+                and bid not in discovered
+            ]
+            for bid in stale:
+                node = self._backends[bid].node
+                if node:
+                    ollama_client.unregister_node(node)
+                del self._backends[bid]
+
+            if discovered:
+                self._backends.pop("ollama", None)
+
+        except Exception as e:
+            logger.warning(f"Ollama pod discovery failed, using static URL: {e}")
+            if self._ollama_url and not any(
+                bid.startswith("ollama") for bid in self._backends
+            ):
+                self._backends["ollama"] = BackendEntry(
+                    id="ollama",
+                    name="Ollama",
+                    url=self._ollama_url,
+                    type="ollama",
+                    api_path="/v1",
+                    status="unknown",
+                )
 
     async def _discover_from_configmaps(self):
         try:
@@ -103,7 +166,6 @@ class LLMBackendDiscovery:
                     continue
 
                 svc_data = yaml.safe_load(cm.data["service.yaml"])
-                svc_type = cm.metadata.labels.get("thinkube.io/service-type", "")
                 namespace = cm.metadata.namespace
 
                 endpoints = svc_data.get("endpoints", {})
@@ -161,13 +223,9 @@ class LLMBackendDiscovery:
             backend.models = []
             return
 
-        data = resp.json()
-        model_names = []
-        for m in data.get("models", []):
-            name = m.get("name", "")
-            if name:
-                model_names.append(name)
-
+        # Use /api/ps to get models loaded in VRAM (not just on disk).
+        # With shared JuiceFS storage, /api/tags returns the same models on all
+        # nodes. /api/ps reflects what is actually loaded per node.
         ps_resp = await self._client.get(f"{backend.url}/api/ps")
         running = []
         if ps_resp.status_code == 200:
@@ -177,7 +235,7 @@ class LLMBackendDiscovery:
                     running.append(name)
 
         backend.status = "healthy"
-        backend.models = model_names
+        backend.models = running
         from datetime import datetime
 
         backend.last_probe = datetime.utcnow().isoformat()
