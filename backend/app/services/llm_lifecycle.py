@@ -108,9 +108,8 @@ class LLMLifecycleManager:
                     )
 
                 ollama_name = self._model_id_to_ollama_name(model_id)
-                modelfile = f"FROM {gguf_path}"
                 logger.info(f"Creating Ollama model '{ollama_name}' from {gguf_path}")
-                success = await ollama_client.create_model(ollama_name, modelfile)
+                success = await ollama_client.create_model(ollama_name, gguf_path)
                 if success:
                     success = await ollama_client.load_model(ollama_name, keep_alive)
 

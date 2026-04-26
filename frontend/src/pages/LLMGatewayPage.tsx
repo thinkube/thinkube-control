@@ -118,8 +118,12 @@ export default function LLMGatewayPage() {
 
   const handleLoad = async (modelId: string) => {
     setActionLoading(prev => ({ ...prev, [modelId]: true }));
+    setError(null);
     try {
-      await api.post(`/llm/models/${modelId}/load`, {});
+      const resp = await api.post(`/llm/models/${encodeURIComponent(modelId)}/load`, {});
+      if (resp.data?.state !== 'available' && resp.data?.state !== 'loading') {
+        setError(resp.data?.message || `Failed to load ${modelId}`);
+      }
       await fetchAll();
     } catch (err: any) {
       setError(err.response?.data?.detail || `Failed to load ${modelId}`);
@@ -130,8 +134,12 @@ export default function LLMGatewayPage() {
 
   const handleUnload = async (modelId: string) => {
     setActionLoading(prev => ({ ...prev, [modelId]: true }));
+    setError(null);
     try {
-      await api.post(`/llm/models/${modelId}/unload`, {});
+      const resp = await api.post(`/llm/models/${encodeURIComponent(modelId)}/unload`, {});
+      if (resp.data?.state === 'available') {
+        setError(resp.data?.message || `Failed to unload ${modelId}`);
+      }
       await fetchAll();
     } catch (err: any) {
       setError(err.response?.data?.detail || `Failed to unload ${modelId}`);

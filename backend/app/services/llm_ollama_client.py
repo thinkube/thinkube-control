@@ -1,11 +1,14 @@
 import asyncio
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+_k8s_executor = ThreadPoolExecutor(max_workers=2)
 
 
 class OllamaClient:
@@ -52,14 +55,41 @@ class OllamaClient:
             logger.error(f"Ollama pull failed for {name}: {e}")
             return False
 
-    async def create_model(self, name: str, modelfile: str) -> bool:
+    async def create_model(self, name: str, gguf_path: str) -> bool:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _k8s_executor, self._create_model_via_exec, name, gguf_path
+        )
+
+    def _create_model_via_exec(self, name: str, gguf_path: str) -> bool:
         try:
-            resp = await self._client.post(
-                "/api/create",
-                json={"name": name, "modelfile": modelfile},
-                timeout=httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0),
+            from kubernetes import client, config
+            from kubernetes.stream import stream
+
+            config.load_incluster_config()
+            v1 = client.CoreV1Api()
+
+            namespace = os.getenv("LLM_OLLAMA_NAMESPACE", "ollama")
+            pod_name = os.getenv("LLM_OLLAMA_POD", "ollama-0")
+            cmd = [
+                "sh", "-c",
+                f'printf "FROM {gguf_path}" > /tmp/Modelfile && '
+                f"ollama create {name} -f /tmp/Modelfile && "
+                f"rm -f /tmp/Modelfile",
+            ]
+
+            resp = stream(
+                v1.connect_get_namespaced_pod_exec,
+                name=pod_name,
+                namespace=namespace,
+                command=cmd,
+                stderr=True,
+                stdin=False,
+                stdout=True,
+                tty=False,
+                _request_timeout=300,
             )
-            resp.raise_for_status()
+            logger.info(f"Ollama create '{name}' completed")
             return True
         except Exception as e:
             logger.error(f"Ollama create failed for {name}: {e}")

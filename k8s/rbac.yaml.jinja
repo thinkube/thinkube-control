@@ -26,6 +26,12 @@ rules:
     - serviceaccounts
   verbs: ["get", "list", "watch"]
 
+# Pod exec (LLM model creation via Ollama CLI)
+- apiGroups: [""]
+  resources:
+    - pods/exec
+  verbs: ["get", "create"]
+
 # Node management (cordon/uncordon/drain/delete)
 - apiGroups: [""]
   resources:
