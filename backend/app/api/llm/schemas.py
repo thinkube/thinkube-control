@@ -20,6 +20,7 @@ class ModelEntry(BaseModel):
     id: str
     name: str
     server_type: List[str] = Field(default_factory=list)
+    serving_name: Optional[str] = None
     task: str = "text-generation"
     quantization: Optional[str] = None
     size: Optional[str] = None
@@ -160,6 +161,11 @@ class RefreshResponse(BaseModel):
 
 
 def model_id_to_ollama_name(model_id: str) -> str:
+    """Derive an Ollama serving name from a model ID.
+
+    Only used as a fallback for dynamically registered models that lack an
+    explicit serving_name.  Catalog models should always declare serving_name.
+    """
     name = model_id.split("/")[-1].lower()
     for suffix in ["-gguf", "-ggml"]:
         if name.endswith(suffix):

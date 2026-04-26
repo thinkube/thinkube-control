@@ -148,9 +148,14 @@ class LLMLifecycleManager:
         self._loading_locks[model_id] = event
 
         try:
+            entry = llm_model_registry.get_model(model_id)
+            catalog_serving = entry.serving_name if entry else None
+
             models = await ollama_client.list_models(node=target_node)
             model_names = [m.get("name", "") for m in models]
             ollama_name = self._find_ollama_name(model_id, model_names)
+            if not ollama_name and catalog_serving:
+                ollama_name = self._find_ollama_name(catalog_serving, model_names)
 
             load_error = None
             if ollama_name:
@@ -165,7 +170,7 @@ class LLMLifecycleManager:
                     logger.error(f"Could not find GGUF artifact for '{model_id}' in MLflow")
                     return
 
-                ollama_name = model_id_to_ollama_name(model_id)
+                ollama_name = catalog_serving or model_id_to_ollama_name(model_id)
                 logger.info(f"Creating Ollama model '{ollama_name}' from {gguf_path}")
                 success = await ollama_client.create_model(ollama_name, gguf_path, node=target_node)
                 if success:
@@ -332,8 +337,10 @@ class LLMLifecycleManager:
             models = await ollama_client.list_models(node=node)
             model_names = [m.get("name", "") for m in models]
             ollama_name = self._find_ollama_name(model_id, model_names)
+            if not ollama_name and entry.serving_name:
+                ollama_name = self._find_ollama_name(entry.serving_name, model_names)
             if not ollama_name:
-                ollama_name = model_id_to_ollama_name(model_id)
+                ollama_name = entry.serving_name or model_id_to_ollama_name(model_id)
 
             success = await ollama_client.unload_model(ollama_name, node=node)
             if success:

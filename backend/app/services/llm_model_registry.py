@@ -16,7 +16,6 @@ from app.api.llm.schemas import (
     ModelResolveResponse,
     ModelState,
     ModelTier,
-    model_id_to_ollama_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -192,6 +191,7 @@ class LLMModelRegistry:
                 id=model_id,
                 name=entry.get("name", model_id),
                 server_type=entry.get("server_type", []),
+                serving_name=entry.get("serving_name"),
                 task=entry.get("task", "text-generation"),
                 quantization=entry.get("quantization"),
                 size=size,
@@ -219,9 +219,8 @@ class LLMModelRegistry:
         self._models = updated
 
         for model_id, model in updated.items():
-            if "ollama" in model.server_type:
-                ollama_name = model_id_to_ollama_name(model_id)
-                self.register_ollama_alias(ollama_name, model_id)
+            if model.serving_name and "ollama" in model.server_type:
+                self.register_ollama_alias(model.serving_name, model_id)
 
         logger.debug(f"Model registry refreshed: {len(updated)} models mirrored to MLflow")
         return len(updated)
@@ -268,59 +267,71 @@ class LLMModelRegistry:
         from app.services.llm_gpu_tracker import llm_gpu_tracker
         from app.services.llm_lifecycle import llm_lifecycle
 
-        backend_models: dict[str, str] = {}
+        # Build composite keys: "backend_type:serving_base" -> (raw_name, backend_id)
+        # e.g. "ollama:qwen3.5-4b" -> ("qwen3.5-4b:latest", "ollama-vilanova2")
+        composite_map: dict[str, tuple[str, str]] = {}
+        raw_backend_models: dict[str, str] = {}
         for backend in llm_backend_discovery.list_backends():
             if backend.status == "healthy":
                 for model_name in backend.models:
-                    if model_name not in backend_models:
-                        backend_models[model_name] = backend.id
+                    raw_backend_models[model_name] = backend.id
+                    base = model_name.split(":")[0]
+                    key = f"{backend.type}:{base}"
+                    if key not in composite_map:
+                        composite_map[key] = (model_name, backend.id)
 
-        matched_serving = set()
+        matched_keys = set()
 
         for model_id, entry in self._models.items():
-            serving_name = None
-            if model_id in backend_models:
-                serving_name = model_id
-            else:
-                ollama_name = model_id_to_ollama_name(model_id)
-                for bm_name in backend_models:
-                    bm_base = bm_name.split(":")[0]
-                    if bm_base == ollama_name:
-                        serving_name = bm_name
+            matched_backend_id = None
+
+            if entry.serving_name and entry.server_type:
+                for stype in entry.server_type:
+                    key = f"{stype}:{entry.serving_name}"
+                    if key in composite_map:
+                        _, matched_backend_id = composite_map[key]
+                        matched_keys.add(key)
                         break
 
-            if serving_name and entry.state != ModelState.loading:
+            if matched_backend_id and entry.state != ModelState.loading:
                 entry.state = ModelState.available
-                entry.backend_id = backend_models[serving_name]
-                matched_serving.add(serving_name)
+                entry.backend_id = matched_backend_id
                 self._sync_gpu_allocation(
-                    model_id, backend_models[serving_name],
+                    model_id, matched_backend_id,
                     llm_gpu_tracker, llm_lifecycle,
                 )
             elif (
-                serving_name is None
+                matched_backend_id is None
                 and entry.state == ModelState.available
             ):
                 entry.state = ModelState.deployable
                 entry.backend_id = None
                 llm_gpu_tracker.release_allocation(model_id)
 
-        for model_name, backend_id in backend_models.items():
-            if model_name in matched_serving:
+        # Register unmatched backend models (e.g. manually loaded Ollama models)
+        for backend in llm_backend_discovery.list_backends():
+            if backend.status != "healthy":
                 continue
-            registry_id = self.resolve_ollama_alias(model_name)
-            if registry_id and registry_id in self._models:
-                continue
-            if model_name in self._models:
-                continue
-            self._models[model_name] = ModelEntry(
-                id=model_name,
-                name=model_name,
-                server_type=["ollama"] if backend_id.startswith("ollama") else [],
-                state=ModelState.available,
-                backend_id=backend_id,
-                tier=ModelTier.flexible if backend_id.startswith("ollama") else ModelTier.performance,
-            )
+            for model_name in backend.models:
+                base = model_name.split(":")[0]
+                key = f"{backend.type}:{base}"
+                if key in matched_keys:
+                    continue
+                registry_id = self.resolve_ollama_alias(model_name)
+                if registry_id and registry_id in self._models:
+                    continue
+                if model_name in self._models:
+                    continue
+                stype = backend.type if backend.type else "ollama"
+                self._models[model_name] = ModelEntry(
+                    id=model_name,
+                    name=model_name,
+                    server_type=[stype],
+                    serving_name=base,
+                    state=ModelState.available,
+                    backend_id=backend.id,
+                    tier=ModelTier.flexible if stype == "ollama" else ModelTier.performance,
+                )
 
     def _sync_gpu_allocation(self, model_id, backend_id, gpu_tracker, lifecycle):
         existing = gpu_tracker.get_eviction_candidates()

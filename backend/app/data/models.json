@@ -1,10 +1,11 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Thinkube model catalog — available models for mirroring and deployment",
   "models": [
     {
       "id": "openai/gpt-oss-20b",
       "name": "GPT-OSS 20B",
+      "serving_name": "openai/gpt-oss-20b",
       "size": "~20GB",
       "quantization": "FP8",
       "description": "OpenAI GPT-OSS 20B model optimized for TensorRT-LLM",
@@ -14,6 +15,7 @@
     {
       "id": "openai/gpt-oss-120b",
       "name": "GPT-OSS 120B",
+      "serving_name": "openai/gpt-oss-120b",
       "size": "~70GB",
       "quantization": "FP4",
       "description": "OpenAI GPT-OSS 120B model optimized for TensorRT-LLM",
@@ -23,6 +25,7 @@
     {
       "id": "nvidia/Llama-3.1-8B-Instruct-FP8",
       "name": "Llama 3.1 8B Instruct",
+      "serving_name": "nvidia/Llama-3.1-8B-Instruct-FP8",
       "size": "~8GB",
       "quantization": "FP8",
       "description": "Meta Llama 3.1 8B instruction-tuned model",
@@ -32,6 +35,7 @@
     {
       "id": "nvidia/Llama-3.1-8B-Instruct-FP4",
       "name": "Llama 3.1 8B Instruct",
+      "serving_name": "nvidia/Llama-3.1-8B-Instruct-FP4",
       "size": "~4GB",
       "quantization": "FP4",
       "description": "Meta Llama 3.1 8B instruction-tuned model",
@@ -41,6 +45,7 @@
     {
       "id": "nvidia/Llama-3.3-70B-Instruct-FP4",
       "name": "Llama 3.3 70B Instruct",
+      "serving_name": "nvidia/Llama-3.3-70B-Instruct-FP4",
       "size": "~35GB",
       "quantization": "FP4",
       "description": "Meta Llama 3.3 70B instruction-tuned model",
@@ -50,6 +55,7 @@
     {
       "id": "nvidia/Llama-3_3-Nemotron-Super-49B-v1_5-FP8",
       "name": "Llama 3.3 Nemotron Super 49B",
+      "serving_name": "nvidia/Llama-3_3-Nemotron-Super-49B-v1_5-FP8",
       "size": "~49GB",
       "quantization": "FP8",
       "description": "NVIDIA Nemotron variant of Llama 3.3",
@@ -59,6 +65,7 @@
     {
       "id": "nvidia/Llama-4-Scout-17B-16E-Instruct-FP4",
       "name": "Llama 4 Scout 17B-16E Instruct",
+      "serving_name": "nvidia/Llama-4-Scout-17B-16E-Instruct-FP4",
       "size": "~9GB",
       "quantization": "FP4",
       "description": "Meta Llama 4 Scout model",
@@ -68,6 +75,7 @@
     {
       "id": "nvidia/Qwen3-8B-FP8",
       "name": "Qwen3 8B",
+      "serving_name": "nvidia/Qwen3-8B-FP8",
       "size": "~8GB",
       "quantization": "FP8",
       "description": "Alibaba Qwen3 8B model",
@@ -77,6 +85,7 @@
     {
       "id": "nvidia/Qwen3-8B-FP4",
       "name": "Qwen3 8B",
+      "serving_name": "nvidia/Qwen3-8B-FP4",
       "size": "~4GB",
       "quantization": "FP4",
       "description": "Alibaba Qwen3 8B model",
@@ -86,6 +95,7 @@
     {
       "id": "nvidia/Qwen3-14B-FP8",
       "name": "Qwen3 14B",
+      "serving_name": "nvidia/Qwen3-14B-FP8",
       "size": "~14GB",
       "quantization": "FP8",
       "description": "Alibaba Qwen3 14B model",
@@ -95,6 +105,7 @@
     {
       "id": "nvidia/Qwen3-14B-FP4",
       "name": "Qwen3 14B",
+      "serving_name": "nvidia/Qwen3-14B-FP4",
       "size": "~7GB",
       "quantization": "FP4",
       "description": "Alibaba Qwen3 14B model",
@@ -104,6 +115,7 @@
     {
       "id": "nvidia/Qwen3-32B-FP4",
       "name": "Qwen3 32B",
+      "serving_name": "nvidia/Qwen3-32B-FP4",
       "size": "~16GB",
       "quantization": "FP4",
       "description": "Alibaba Qwen3 32B model",
@@ -113,6 +125,7 @@
     {
       "id": "nvidia/Qwen3-30B-A3B-FP4",
       "name": "Qwen3 30B-A3B",
+      "serving_name": "nvidia/Qwen3-30B-A3B-FP4",
       "size": "~15GB",
       "quantization": "FP4",
       "description": "Alibaba Qwen3 30B-A3B model",
@@ -122,6 +135,7 @@
     {
       "id": "nvidia/Qwen3-235B-A22B-FP4",
       "name": "Qwen3 235B-A22B",
+      "serving_name": "nvidia/Qwen3-235B-A22B-FP4",
       "size": "~120GB",
       "quantization": "FP4",
       "description": "Alibaba Qwen3 235B-A22B large model",
@@ -131,6 +145,7 @@
     {
       "id": "nvidia/Qwen2.5-VL-7B-Instruct-FP8",
       "name": "Qwen2.5 VL 7B Instruct",
+      "serving_name": "nvidia/Qwen2.5-VL-7B-Instruct-FP8",
       "size": "~7GB",
       "quantization": "FP8",
       "description": "Alibaba Qwen2.5 Vision-Language model",
@@ -140,6 +155,7 @@
     {
       "id": "nvidia/Qwen2.5-VL-7B-Instruct-FP4",
       "name": "Qwen2.5 VL 7B Instruct",
+      "serving_name": "nvidia/Qwen2.5-VL-7B-Instruct-FP4",
       "size": "~4GB",
       "quantization": "FP4",
       "description": "Alibaba Qwen2.5 Vision-Language model",
@@ -149,6 +165,7 @@
     {
       "id": "nvidia/Phi-4-multimodal-instruct-FP8",
       "name": "Phi-4 Multimodal Instruct",
+      "serving_name": "nvidia/Phi-4-multimodal-instruct-FP8",
       "size": "~6GB",
       "quantization": "FP8",
       "description": "Microsoft Phi-4 multimodal instruction-tuned model",
@@ -158,6 +175,7 @@
     {
       "id": "nvidia/Phi-4-multimodal-instruct-FP4",
       "name": "Phi-4 Multimodal Instruct",
+      "serving_name": "nvidia/Phi-4-multimodal-instruct-FP4",
       "size": "~3GB",
       "quantization": "FP4",
       "description": "Microsoft Phi-4 multimodal instruction-tuned model",
@@ -167,6 +185,7 @@
     {
       "id": "nvidia/Phi-4-reasoning-plus-FP8",
       "name": "Phi-4 Reasoning Plus",
+      "serving_name": "nvidia/Phi-4-reasoning-plus-FP8",
       "size": "~6GB",
       "quantization": "FP8",
       "description": "Microsoft Phi-4 reasoning-focused model",
@@ -176,6 +195,7 @@
     {
       "id": "nvidia/Phi-4-reasoning-plus-FP4",
       "name": "Phi-4 Reasoning Plus",
+      "serving_name": "nvidia/Phi-4-reasoning-plus-FP4",
       "size": "~3GB",
       "quantization": "FP4",
       "description": "Microsoft Phi-4 reasoning-focused model",
@@ -183,8 +203,37 @@
       "task": "text-generation"
     },
     {
+      "id": "Qwen/Qwen3.5-4B",
+      "name": "Qwen 3.5 4B",
+      "serving_name": "Qwen/Qwen3.5-4B",
+      "size": "~9GB",
+      "quantization": "BF16",
+      "description": "Qwen 3.5 4B dense model. 262K context, thinking mode. Apache 2.0.",
+      "server_type": ["vllm"],
+      "task": "text-generation",
+      "context_length": 262144,
+      "params_b": 4.7,
+      "reasoning_format": "qwen3",
+      "license": "apache-2.0"
+    },
+    {
+      "id": "nvidia/NVIDIA-Nemotron-Nano-9B-v2-NVFP4",
+      "name": "Nemotron Nano 9B v2",
+      "serving_name": "nvidia/NVIDIA-Nemotron-Nano-9B-v2-NVFP4",
+      "size": "~4GB",
+      "quantization": "NVFP4",
+      "description": "NVIDIA Nemotron Nano 9B v2, code and math focused",
+      "server_type": ["tensorrt-llm"],
+      "task": "text-generation",
+      "context_length": 131072,
+      "params_b": 9,
+      "tool_use": true,
+      "license": "nvidia-open"
+    },
+    {
       "id": "unsloth/Qwen3-30B-A3B",
       "name": "Qwen3 30B-A3B (Unsloth)",
+      "serving_name": "unsloth/Qwen3-30B-A3B",
       "size": "~60GB",
       "quantization": "BF16",
       "description": "Qwen3 30B MoE model (3B active params) for QLoRA fine-tuning. Supports GGUF export to Ollama.",
@@ -194,6 +243,7 @@
     {
       "id": "unsloth/Llama-3.3-70B-Instruct",
       "name": "Llama 3.3 70B Instruct (Unsloth)",
+      "serving_name": "unsloth/Llama-3.3-70B-Instruct",
       "size": "~140GB",
       "quantization": "BF16",
       "description": "Meta Llama 3.3 70B for QLoRA fine-tuning. Supports GGUF export to Ollama.",
@@ -203,6 +253,7 @@
     {
       "id": "nomic-ai/nomic-embed-text-v1.5",
       "name": "Nomic Embed Text v1.5",
+      "serving_name": "nomic-ai/nomic-embed-text-v1.5",
       "size": "~550MB",
       "quantization": "FP16",
       "description": "Nomic's embedding model with 8192 token context and Matryoshka embedding support (256, 512, 768 dimensions). Apache 2.0 license.",
@@ -212,6 +263,7 @@
     {
       "id": "BAAI/bge-base-en-v1.5",
       "name": "BGE Base English v1.5",
+      "serving_name": "BAAI/bge-base-en-v1.5",
       "size": "~440MB",
       "quantization": "FP16",
       "description": "BAAI's BGE base model. 768 dimensions, 512 token context. Top performer on MTEB benchmark. MIT license.",
@@ -221,6 +273,7 @@
     {
       "id": "BAAI/bge-large-en-v1.5",
       "name": "BGE Large English v1.5",
+      "serving_name": "BAAI/bge-large-en-v1.5",
       "size": "~1.3GB",
       "quantization": "FP16",
       "description": "BAAI's BGE large model. 1024 dimensions, 512 token context. Higher quality than base. MIT license.",
@@ -230,6 +283,7 @@
     {
       "id": "Alibaba-NLP/gte-large-en-v1.5",
       "name": "GTE Large English v1.5",
+      "serving_name": "Alibaba-NLP/gte-large-en-v1.5",
       "size": "~1.6GB",
       "quantization": "FP16",
       "description": "Alibaba's GTE large model. 1024 dimensions, 8192 token context. State-of-the-art on MTEB. Apache 2.0 license.",
@@ -239,6 +293,7 @@
     {
       "id": "jinaai/jina-embeddings-v2-base-code",
       "name": "Jina Code Embeddings v2",
+      "serving_name": "jinaai/jina-embeddings-v2-base-code",
       "size": "~560MB",
       "quantization": "FP16",
       "description": "Jina's code embedding model. 768 dimensions, 8192 token context. Trained on code and documentation. Apache 2.0 license.",
@@ -248,6 +303,7 @@
     {
       "id": "jinaai/jina-embeddings-v3",
       "name": "Jina Embeddings v3",
+      "serving_name": "jinaai/jina-embeddings-v3",
       "size": "~2.3GB",
       "quantization": "FP16",
       "description": "Jina's latest multilingual model. 1024 dimensions, 8192 token context. Excellent for code and 89 languages. Apache 2.0 license.",
@@ -255,34 +311,66 @@
       "task": "feature-extraction"
     },
     {
+      "id": "Qwen/Qwen3-Embedding-0.6B",
+      "name": "Qwen3 Embedding 0.6B",
+      "serving_name": "Qwen/Qwen3-Embedding-0.6B",
+      "size": "~1GB",
+      "quantization": "BF16",
+      "description": "Alibaba Qwen3 embedding model (0.6B). 1024 dimensions, 8192 token context. 100+ languages. TEI-native (Qwen3 architecture). Apache 2.0 license.",
+      "server_type": ["text-embeddings"],
+      "task": "feature-extraction",
+      "context_length": 8192,
+      "params_b": 0.6,
+      "license": "apache-2.0"
+    },
+    {
       "id": "unsloth/Qwen3.5-4B-GGUF",
       "name": "Qwen 3.5 4B (GGUF/Ollama)",
+      "serving_name": "qwen3.5-4b",
       "size": "2.74GB",
       "quantization": "Q4_K_M",
       "description": "Qwen 3.5 4B for structured extraction (NER/POS). 262K context, 201 languages. Apache 2.0.",
       "server_type": ["ollama"],
       "task": "text-generation",
-      "allow_patterns": ["*Q4_K_M.gguf", "README.md"]
+      "allow_patterns": ["*Q4_K_M.gguf", "README.md"],
+      "context_length": 262144,
+      "params_b": 4.7,
+      "reasoning_format": "qwen3",
+      "tool_use": true,
+      "license": "apache-2.0"
     },
     {
       "id": "unsloth/Qwen3.5-27B-GGUF",
       "name": "Qwen 3.5 27B (GGUF/Ollama)",
+      "serving_name": "qwen3.5-27b",
       "size": "16.7GB",
       "quantization": "Q4_K_M",
       "description": "Qwen 3.5 27B dense model for translation. 262K context, 201 languages. Apache 2.0.",
       "server_type": ["ollama"],
       "task": "text-generation",
-      "allow_patterns": ["*Q4_K_M.gguf", "README.md"]
+      "allow_patterns": ["*Q4_K_M.gguf", "README.md"],
+      "context_length": 262144,
+      "params_b": 27,
+      "reasoning_format": "qwen3",
+      "tool_use": true,
+      "license": "apache-2.0"
     },
     {
       "id": "unsloth/gemma-4-26B-A4B-it-GGUF",
       "name": "Gemma 4 26B-A4B Instruct (GGUF/Ollama)",
+      "serving_name": "gemma-4-26b-a4b-it",
       "size": "16.9GB",
       "quantization": "Q4_K_M",
       "description": "Google Gemma 4 26B MoE (4B active). 256K context. 140+ languages. Gemma license.",
       "server_type": ["ollama"],
       "task": "text-generation",
-      "allow_patterns": ["*Q4_K_M.gguf", "README.md"]
+      "allow_patterns": ["*Q4_K_M.gguf", "README.md"],
+      "context_length": 262144,
+      "params_b": 26.5,
+      "active_params_b": 4,
+      "reasoning_format": "gemma4",
+      "tool_use": true,
+      "license": "apache-2.0"
     }
   ]
 }
