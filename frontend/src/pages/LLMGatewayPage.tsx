@@ -173,6 +173,7 @@ export default function LLMGatewayPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const gatewayModels = models.filter(m => isModelLoadable(m.server_type));
   const availableModels = models.filter(m => m.state === 'available');
   const healthyBackends = backends.filter(b => b.status === 'healthy');
   const memoryUsedPct = gpuStatus
@@ -218,7 +219,7 @@ export default function LLMGatewayPage() {
         <TkStatCard
           title="Available Models"
           value={availableModels.length}
-          description={`${models.length} total in registry`}
+          description={`${gatewayModels.length} loadable, ${models.length} total in registry`}
           icon={Cpu}
           variant="primary"
         />
@@ -375,9 +376,9 @@ export default function LLMGatewayPage() {
           <TkCardTitle>Models</TkCardTitle>
         </TkCardHeader>
         <TkCardContent>
-          {models.length === 0 ? (
+          {gatewayModels.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-              No models in registry
+              No loadable models in registry
             </div>
           ) : (
             <TkTable>
@@ -393,7 +394,7 @@ export default function LLMGatewayPage() {
                 </TkTableRow>
               </TkTableHeader>
               <TkTableBody>
-                {models.map(model => (
+                {gatewayModels.map(model => (
                   <TkTableRow key={model.id}>
                     <TkTableCell className="font-medium">
                       <div>
