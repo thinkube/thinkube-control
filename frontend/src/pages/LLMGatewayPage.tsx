@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { TkCard, TkCardContent, TkCardHeader, TkCardTitle, TkStatCard } from 'thinkube-style/components/cards-data';
 import { TkButton, TkBadge } from 'thinkube-style/components/buttons-badges';
-import { TkErrorAlert, TkInfoAlert } from 'thinkube-style/components/feedback';
+import { TkErrorAlert } from 'thinkube-style/components/feedback';
 import { TkPageWrapper } from 'thinkube-style/components/utilities';
+import { TkSemicircularGauge } from 'thinkube-style/components/data-viz';
 import {
   TkTable,
   TkTableBody,
@@ -25,6 +26,7 @@ import {
   Check,
 } from 'lucide-react';
 import api from '../lib/axios';
+import LoadModelDialog from '../components/LoadModelDialog';
 
 interface ModelEntry {
   id: string;
@@ -52,13 +54,22 @@ interface BackendEntry {
 interface GPUAllocation {
   model_id: string;
   backend_id: string;
+  node_name: string;
   estimated_memory_gb: number;
+  slots: number;
 }
 
 interface GPUNode {
   name: string;
+  gpu_product: string | null;
+  gpu_family: string | null;
+  gpu_count: number;
+  gpu_replicas: number;
+  total_slots: number;
+  available_slots: number;
   total_memory_gb: number;
   used_memory_gb: number;
+  shared_memory: boolean;
   allocations: GPUAllocation[];
 }
 
@@ -70,6 +81,28 @@ interface GPUStatus {
   can_accept_new_model: boolean;
 }
 
+const LOADABLE_TYPES = new Set(['ollama', 'vllm', 'tensorrt-llm']);
+const NON_LOADABLE_LABELS: Record<string, string> = {
+  unsloth: 'Fine-tuning',
+  'text-embeddings': 'Embeddings',
+};
+
+function isModelLoadable(serverTypes: string[]): boolean {
+  return serverTypes.some((t) => LOADABLE_TYPES.has(t));
+}
+
+function getNonLoadableLabel(serverTypes: string[]): string | null {
+  for (const t of serverTypes) {
+    if (NON_LOADABLE_LABELS[t]) return NON_LOADABLE_LABELS[t];
+  }
+  return null;
+}
+
+function formatGpuProduct(product: string | null): string {
+  if (!product) return 'GPU';
+  return product.replace('NVIDIA-', '').replace('NVIDIA ', '').replace(/-/g, ' ');
+}
+
 export default function LLMGatewayPage() {
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [backends, setBackends] = useState<BackendEntry[]>([]);
@@ -78,6 +111,7 @@ export default function LLMGatewayPage() {
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({});
   const [copied, setCopied] = useState(false);
+  const [loadDialog, setLoadDialog] = useState<ModelEntry | null>(null);
 
   const gatewayUrl = `https://llm.${window.location.hostname.split('.').slice(-2).join('.')}`;
 
@@ -116,22 +150,6 @@ export default function LLMGatewayPage() {
     }
   };
 
-  const handleLoad = async (modelId: string) => {
-    setActionLoading(prev => ({ ...prev, [modelId]: true }));
-    setError(null);
-    try {
-      const resp = await api.post(`/llm/models/${encodeURIComponent(modelId)}/load`, {});
-      if (resp.data?.state !== 'available' && resp.data?.state !== 'loading') {
-        setError(resp.data?.message || `Failed to load ${modelId}`);
-      }
-      await fetchAll();
-    } catch (err: any) {
-      setError(err.response?.data?.detail || `Failed to load ${modelId}`);
-    } finally {
-      setActionLoading(prev => ({ ...prev, [modelId]: false }));
-    }
-  };
-
   const handleUnload = async (modelId: string) => {
     setActionLoading(prev => ({ ...prev, [modelId]: true }));
     setError(null);
@@ -155,7 +173,6 @@ export default function LLMGatewayPage() {
   };
 
   const availableModels = models.filter(m => m.state === 'available');
-  const loadedOnBackends = backends.filter(b => b.models.length > 0);
   const healthyBackends = backends.filter(b => b.status === 'healthy');
   const memoryUsedPct = gpuStatus
     ? Math.round((gpuStatus.used_memory_gb / gpuStatus.total_memory_gb) * 100)
@@ -227,42 +244,59 @@ export default function LLMGatewayPage() {
         />
       </div>
 
-      {/* GPU Allocations */}
+      {/* GPU Nodes */}
       {gpuStatus && gpuStatus.nodes.length > 0 && (
-        <TkCard className="mb-6">
-          <TkCardHeader>
-            <TkCardTitle>GPU Allocations</TkCardTitle>
-          </TkCardHeader>
-          <TkCardContent>
-            {gpuStatus.nodes.map(node => (
-              <div key={node.name} className="mb-4 last:mb-0">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-medium">{node.name}</span>
-                  <span className="text-sm text-muted-foreground">
-                    {node.used_memory_gb.toFixed(1)} / {node.total_memory_gb.toFixed(1)} GB
-                  </span>
-                </div>
-                <div className="w-full bg-muted rounded-full h-3 mb-2">
-                  <div
-                    className="bg-primary rounded-full h-3 transition-all"
-                    style={{ width: `${Math.min(100, (node.used_memory_gb / node.total_memory_gb) * 100)}%` }}
-                  />
-                </div>
-                {node.allocations.length > 0 ? (
-                  <div className="flex flex-wrap gap-2 mt-2">
-                    {node.allocations.map(alloc => (
-                      <TkBadge key={alloc.model_id} appearance="muted">
-                        {alloc.model_id} ({alloc.estimated_memory_gb.toFixed(1)} GB on {alloc.backend_id})
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+          {gpuStatus.nodes.map(node => (
+            <TkCard key={node.name}>
+              <TkCardContent className="pt-6">
+                <div className="flex items-start justify-between">
+                  <div className="space-y-1.5 flex-1">
+                    <div className="font-medium text-lg">{node.name}</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <TkBadge appearance="outlined">
+                        {formatGpuProduct(node.gpu_product)}
                       </TkBadge>
-                    ))}
+                      {node.gpu_family && (
+                        <TkBadge appearance="muted">{node.gpu_family}</TkBadge>
+                      )}
+                      {node.gpu_count > 1 && (
+                        <TkBadge appearance="muted">{node.gpu_count}x GPU</TkBadge>
+                      )}
+                      {node.shared_memory && (
+                        <TkBadge appearance="muted">Time-sliced</TkBadge>
+                      )}
+                    </div>
+                    <div className="text-sm text-muted-foreground pt-1">
+                      {node.used_memory_gb.toFixed(1)} / {node.total_memory_gb.toFixed(0)} GB used
+                    </div>
+                    <div className="text-sm text-muted-foreground">
+                      Slots: {node.available_slots} / {node.total_slots} available
+                    </div>
+                    {node.allocations.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 pt-2">
+                        {node.allocations.map(alloc => (
+                          <TkBadge key={alloc.model_id} status="healthy">
+                            {alloc.model_id.split('/').pop()} ({alloc.estimated_memory_gb.toFixed(1)} GB)
+                          </TkBadge>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <div className="text-sm text-muted-foreground">No models loaded</div>
-                )}
-              </div>
-            ))}
-          </TkCardContent>
-        </TkCard>
+                  <div className="ml-4 flex-shrink-0">
+                    <TkSemicircularGauge
+                      value={node.used_memory_gb}
+                      max={node.total_memory_gb}
+                      label="Memory"
+                      unit="GB"
+                      size={120}
+                    />
+                  </div>
+                </div>
+              </TkCardContent>
+            </TkCard>
+          ))}
+        </div>
       )}
 
       {/* Backends */}
@@ -397,46 +431,12 @@ export default function LLMGatewayPage() {
                       )}
                     </TkTableCell>
                     <TkTableCell className="text-right">
-                      <div className="flex gap-2 justify-end">
-                        {model.state === 'available' ? (
-                          <TkButton
-                            intent="secondary"
-                            size="sm"
-                            onClick={() => handleUnload(model.id)}
-                            disabled={!!actionLoading[model.id]}
-                          >
-                            {actionLoading[model.id] ? (
-                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                            ) : (
-                              <Square className="w-4 h-4 mr-2" />
-                            )}
-                            Unload
-                          </TkButton>
-                        ) : model.state === 'loading' ? (
-                          <TkBadge status="active">
-                            <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                            Loading...
-                          </TkBadge>
-                        ) : model.state === 'unloading' ? (
-                          <TkBadge status="pending">
-                            <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                            Unloading...
-                          </TkBadge>
-                        ) : (model.state === 'deployable' || model.state === 'registered') ? (
-                          <TkButton
-                            size="sm"
-                            onClick={() => handleLoad(model.id)}
-                            disabled={!!actionLoading[model.id]}
-                          >
-                            {actionLoading[model.id] ? (
-                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                            ) : (
-                              <Play className="w-4 h-4 mr-2" />
-                            )}
-                            Load
-                          </TkButton>
-                        ) : null}
-                      </div>
+                      <ModelActions
+                        model={model}
+                        actionLoading={!!actionLoading[model.id]}
+                        onLoad={() => setLoadDialog(model)}
+                        onUnload={() => handleUnload(model.id)}
+                      />
                     </TkTableCell>
                   </TkTableRow>
                 ))}
@@ -445,8 +445,100 @@ export default function LLMGatewayPage() {
           )}
         </TkCardContent>
       </TkCard>
+
+      {/* Load Model Dialog */}
+      {loadDialog && (
+        <LoadModelDialog
+          modelId={loadDialog.id}
+          modelName={loadDialog.name}
+          size={loadDialog.size}
+          quantization={loadDialog.quantization}
+          open={!!loadDialog}
+          onOpenChange={(open) => {
+            if (!open) setLoadDialog(null);
+          }}
+          onLoaded={() => {
+            setLoadDialog(null);
+            fetchAll();
+          }}
+        />
+      )}
     </TkPageWrapper>
   );
+}
+
+function ModelActions({
+  model,
+  actionLoading,
+  onLoad,
+  onUnload,
+}: {
+  model: ModelEntry;
+  actionLoading: boolean;
+  onLoad: () => void;
+  onUnload: () => void;
+}) {
+  if (model.state === 'available') {
+    return (
+      <div className="flex gap-2 justify-end">
+        <TkButton
+          intent="secondary"
+          size="sm"
+          onClick={onUnload}
+          disabled={actionLoading}
+        >
+          {actionLoading ? (
+            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+          ) : (
+            <Square className="w-4 h-4 mr-2" />
+          )}
+          Unload
+        </TkButton>
+      </div>
+    );
+  }
+
+  if (model.state === 'loading') {
+    return (
+      <TkBadge status="active">
+        <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+        Loading...
+      </TkBadge>
+    );
+  }
+
+  if (model.state === 'unloading') {
+    return (
+      <TkBadge status="pending">
+        <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+        Unloading...
+      </TkBadge>
+    );
+  }
+
+  if (model.state === 'deployable' || model.state === 'registered') {
+    if (!isModelLoadable(model.server_type)) {
+      const label = getNonLoadableLabel(model.server_type);
+      return label ? (
+        <TkBadge appearance="muted">{label}</TkBadge>
+      ) : null;
+    }
+
+    return (
+      <div className="flex gap-2 justify-end">
+        <TkButton size="sm" onClick={onLoad} disabled={actionLoading}>
+          {actionLoading ? (
+            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+          ) : (
+            <Play className="w-4 h-4 mr-2" />
+          )}
+          Load
+        </TkButton>
+      </div>
+    );
+  }
+
+  return null;
 }
 
 function ModelStateBadge({ state }: { state: string }) {

@@ -1,13 +1,7 @@
-"""
-LLM GPU Resource Tracker
-
-Tracks GPU memory usage and allocation for model lifecycle decisions.
-Supports both shared memory (DGX Spark) and dedicated GPU (consumer cards) topologies.
-"""
-
+import json
 import logging
 import os
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from app.api.llm.schemas import (
     GPUAllocation,
@@ -20,20 +14,28 @@ logger = logging.getLogger(__name__)
 
 class LLMGPUTracker:
     def __init__(self):
-        self._total_memory_gb = float(
-            os.getenv("LLM_GPU_TOTAL_MEMORY_GB", "128")
-        )
-        self._shared_memory = os.getenv("LLM_GPU_SHARED_MEMORY", "true").lower() == "true"
         self._memory_threshold = float(
             os.getenv("LLM_GPU_MEMORY_THRESHOLD", "0.85")
         )
-        self._idle_timeout_minutes = int(
-            os.getenv("LLM_MODEL_IDLE_TIMEOUT_MINUTES", "30")
+        self._memory_map = self._parse_memory_map()
+        self._fallback_memory_gb = float(
+            os.getenv("LLM_GPU_TOTAL_MEMORY_GB", "128")
         )
-        self._allocations: List[GPUAllocation] = []
-        self._total_slots = self._detect_gpu_slots()
+        self._gpu_nodes: Dict[str, GPUNode] = {}
+        self._allocations: Dict[str, List[GPUAllocation]] = {}
+        self._discover_gpu_nodes()
 
-    def _detect_gpu_slots(self) -> int:
+    def _parse_memory_map(self) -> Dict[str, float]:
+        raw = os.getenv("LLM_GPU_MEMORY_MAP", "")
+        if not raw:
+            return {}
+        try:
+            return json.loads(raw)
+        except Exception as e:
+            logger.warning(f"Failed to parse LLM_GPU_MEMORY_MAP: {e}")
+            return {}
+
+    def _discover_gpu_nodes(self):
         try:
             from kubernetes import client, config as k8s_config
 
@@ -44,95 +46,183 @@ class LLMGPUTracker:
 
             v1 = client.CoreV1Api()
             nodes = v1.list_node()
-            total_slots = 0
+
             for node in nodes.items:
                 allocatable = node.status.allocatable or {}
-                gpu_str = allocatable.get("nvidia.com/gpu", "0")
-                total_slots += int(gpu_str)
-            return max(total_slots, 1)
+                gpu_slots = int(allocatable.get("nvidia.com/gpu", "0"))
+                if gpu_slots == 0:
+                    continue
+
+                labels = node.metadata.labels or {}
+                name = node.metadata.name
+                product = labels.get("nvidia.com/gpu.product", "")
+                family = labels.get("nvidia.com/gpu.family", "")
+                gpu_count = int(labels.get("nvidia.com/gpu.count", "1"))
+                gpu_replicas = int(labels.get("nvidia.com/gpu.replicas", "1"))
+                gpu_memory_mb = labels.get("nvidia.com/gpu.memory", "")
+                sharing = labels.get("nvidia.com/gpu.sharing-strategy", "none")
+
+                if gpu_memory_mb:
+                    total_memory = float(gpu_memory_mb) / 1024.0 * gpu_count
+                elif product in self._memory_map:
+                    total_memory = self._memory_map[product]
+                else:
+                    total_memory = self._fallback_memory_gb
+
+                self._gpu_nodes[name] = GPUNode(
+                    name=name,
+                    gpu_product=product or None,
+                    gpu_family=family or None,
+                    gpu_count=gpu_count,
+                    gpu_replicas=gpu_replicas,
+                    total_slots=gpu_slots,
+                    available_slots=gpu_slots,
+                    total_memory_gb=total_memory,
+                    used_memory_gb=0.0,
+                    shared_memory=(sharing == "time-slicing"),
+                    allocations=[],
+                )
+                self._allocations[name] = []
+                logger.info(
+                    f"GPU node discovered: {name} — {product} "
+                    f"({gpu_count}x, {total_memory:.0f}GB, {gpu_slots} slots)"
+                )
+
         except Exception as e:
-            logger.warning(f"Could not detect GPU slots: {e}")
-            return 4
+            logger.warning(f"GPU node discovery failed, using fallback: {e}")
+            self._gpu_nodes["gpu-pool"] = GPUNode(
+                name="gpu-pool",
+                total_slots=4,
+                available_slots=4,
+                total_memory_gb=self._fallback_memory_gb,
+                used_memory_gb=0.0,
+            )
+            self._allocations["gpu-pool"] = []
+
+    def list_nodes(self) -> List[GPUNode]:
+        return list(self._gpu_nodes.values())
+
+    def get_node(self, node_name: str) -> Optional[GPUNode]:
+        return self._gpu_nodes.get(node_name)
 
     def get_status(self) -> GPUStatusResponse:
-        used_memory = sum(a.estimated_memory_gb for a in self._allocations)
-        available_slots = self._total_slots - sum(a.slots for a in self._allocations)
+        nodes = []
+        total_mem = 0.0
+        used_mem = 0.0
 
-        node = GPUNode(
-            name="gpu-pool",
-            total_slots=self._total_slots,
-            available_slots=max(available_slots, 0),
-            total_memory_gb=self._total_memory_gb,
-            used_memory_gb=used_memory,
-            shared_memory=self._shared_memory,
-            allocations=list(self._allocations),
-        )
+        for name, node in self._gpu_nodes.items():
+            allocs = self._allocations.get(name, [])
+            node_used = sum(a.estimated_memory_gb for a in allocs)
+            node_slots_used = sum(a.slots for a in allocs)
 
-        can_accept = (
-            used_memory / self._total_memory_gb < self._memory_threshold
-            if self._total_memory_gb > 0
-            else False
+            updated = node.model_copy(update={
+                "used_memory_gb": node_used,
+                "available_slots": max(node.total_slots - node_slots_used, 0),
+                "allocations": list(allocs),
+            })
+            nodes.append(updated)
+            total_mem += node.total_memory_gb
+            used_mem += node_used
+
+        can_accept = any(
+            n.used_memory_gb / n.total_memory_gb < self._memory_threshold
+            for n in nodes
+            if n.total_memory_gb > 0
         )
 
         return GPUStatusResponse(
-            nodes=[node],
-            total_memory_gb=self._total_memory_gb,
-            used_memory_gb=used_memory,
+            nodes=nodes,
+            total_memory_gb=total_mem,
+            used_memory_gb=used_mem,
             memory_threshold=self._memory_threshold,
             can_accept_new_model=can_accept,
         )
 
     def check_can_load(
-        self, estimated_memory_gb: float, slots_needed: int = 1
+        self,
+        estimated_memory_gb: float,
+        node_name: Optional[str] = None,
+        slots_needed: int = 1,
     ) -> Tuple[bool, str]:
-        status = self.get_status()
-        node = status.nodes[0]
+        if node_name:
+            return self._check_node(node_name, estimated_memory_gb, slots_needed)
 
-        if node.available_slots < slots_needed:
-            return False, f"Not enough GPU slots: need {slots_needed}, have {node.available_slots}"
+        for name in self._gpu_nodes:
+            ok, reason = self._check_node(name, estimated_memory_gb, slots_needed)
+            if ok:
+                return True, name
+        return False, "No GPU node has sufficient resources"
 
-        projected_usage = (
-            status.used_memory_gb + estimated_memory_gb
-        ) / self._total_memory_gb
-        if projected_usage > self._memory_threshold:
+    def _check_node(
+        self, node_name: str, estimated_memory_gb: float, slots_needed: int
+    ) -> Tuple[bool, str]:
+        node = self._gpu_nodes.get(node_name)
+        if not node:
+            return False, f"Node '{node_name}' not found"
+
+        allocs = self._allocations.get(node_name, [])
+        used = sum(a.estimated_memory_gb for a in allocs)
+        used_slots = sum(a.slots for a in allocs)
+
+        if node.total_slots - used_slots < slots_needed:
+            return False, f"Not enough slots on {node_name}: need {slots_needed}, have {node.total_slots - used_slots}"
+
+        projected = (used + estimated_memory_gb) / node.total_memory_gb
+        if projected > self._memory_threshold:
             return False, (
-                f"Would exceed memory threshold: "
-                f"{status.used_memory_gb:.1f} + {estimated_memory_gb:.1f} = "
-                f"{status.used_memory_gb + estimated_memory_gb:.1f}GB "
-                f"(threshold: {self._memory_threshold * self._total_memory_gb:.1f}GB)"
+                f"Would exceed memory on {node_name}: "
+                f"{used:.1f} + {estimated_memory_gb:.1f} = {used + estimated_memory_gb:.1f}GB "
+                f"(limit: {self._memory_threshold * node.total_memory_gb:.1f}GB)"
             )
-
         return True, "ok"
 
     def record_allocation(
-        self, model_id: str, backend_id: str, estimated_memory_gb: float, slots: int = 1
+        self,
+        model_id: str,
+        backend_id: str,
+        estimated_memory_gb: float,
+        node_name: Optional[str] = None,
+        slots: int = 1,
     ):
-        self._allocations = [
-            a for a in self._allocations if a.model_id != model_id
+        target = node_name or self._pick_default_node()
+        if target not in self._allocations:
+            self._allocations[target] = []
+
+        self._allocations[target] = [
+            a for a in self._allocations[target] if a.model_id != model_id
         ]
-        self._allocations.append(
+        self._allocations[target].append(
             GPUAllocation(
                 model_id=model_id,
                 backend_id=backend_id,
+                node_name=target,
                 estimated_memory_gb=estimated_memory_gb,
                 slots=slots,
             )
         )
         logger.info(
-            f"GPU allocation recorded: {model_id} on {backend_id} "
+            f"GPU allocation: {model_id} on {backend_id}@{target} "
             f"({estimated_memory_gb:.1f}GB, {slots} slot(s))"
         )
 
     def release_allocation(self, model_id: str):
-        before = len(self._allocations)
-        self._allocations = [
-            a for a in self._allocations if a.model_id != model_id
-        ]
-        if len(self._allocations) < before:
-            logger.info(f"GPU allocation released: {model_id}")
+        for name, allocs in self._allocations.items():
+            before = len(allocs)
+            self._allocations[name] = [a for a in allocs if a.model_id != model_id]
+            if len(self._allocations[name]) < before:
+                logger.info(f"GPU allocation released: {model_id} from {name}")
+                return
 
     def get_eviction_candidates(self) -> List[GPUAllocation]:
-        return sorted(self._allocations, key=lambda a: a.estimated_memory_gb, reverse=True)
+        all_allocs = []
+        for allocs in self._allocations.values():
+            all_allocs.extend(allocs)
+        return sorted(all_allocs, key=lambda a: a.estimated_memory_gb, reverse=True)
+
+    def _pick_default_node(self) -> str:
+        if self._gpu_nodes:
+            return next(iter(self._gpu_nodes))
+        return "gpu-pool"
 
 
 llm_gpu_tracker = LLMGPUTracker()

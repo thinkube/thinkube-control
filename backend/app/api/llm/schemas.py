@@ -75,12 +75,17 @@ class ModelResolveResponse(BaseModel):
 class GPUAllocation(BaseModel):
     model_id: str
     backend_id: str
+    node_name: str = ""
     estimated_memory_gb: float
     slots: int = 1
 
 
 class GPUNode(BaseModel):
     name: str
+    gpu_product: Optional[str] = None
+    gpu_family: Optional[str] = None
+    gpu_count: int = 1
+    gpu_replicas: int = 1
     total_slots: int
     available_slots: int
     total_memory_gb: float
@@ -97,9 +102,26 @@ class GPUStatusResponse(BaseModel):
     can_accept_new_model: bool
 
 
+class LoadOptionBackend(BaseModel):
+    id: str
+    name: str
+    type: str
+    status: str
+    node: Optional[str] = None
+
+
+class LoadOptionsResponse(BaseModel):
+    model_id: str
+    compatible_backends: List[LoadOptionBackend] = Field(default_factory=list)
+    gpu_nodes: List[GPUNode] = Field(default_factory=list)
+    estimated_memory_gb: float = 0.0
+
+
 class ModelLoadRequest(BaseModel):
     tier: Optional[ModelTier] = None
     keep_alive: Optional[str] = None
+    backend: Optional[str] = None
+    node: Optional[str] = None
 
 
 class ModelLoadResponse(BaseModel):
@@ -117,3 +139,11 @@ class RefreshResponse(BaseModel):
     models_refreshed: int
     backends_refreshed: int
     message: str = "ok"
+
+
+def model_id_to_ollama_name(model_id: str) -> str:
+    name = model_id.split("/")[-1].lower()
+    for suffix in ["-gguf", "-ggml"]:
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+    return name

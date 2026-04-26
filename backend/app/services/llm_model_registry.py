@@ -16,6 +16,7 @@ from app.api.llm.schemas import (
     ModelResolveResponse,
     ModelState,
     ModelTier,
+    model_id_to_ollama_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 class LLMModelRegistry:
     def __init__(self):
         self._models: Dict[str, ModelEntry] = {}
+        self._ollama_aliases: Dict[str, str] = {}
         self._lock = asyncio.Lock()
         self._refresh_interval = int(
             os.getenv("LLM_MODEL_REFRESH_INTERVAL_SECONDS", "60")
@@ -35,6 +37,15 @@ class LLMModelRegistry:
 
     def get_model(self, model_id: str) -> Optional[ModelEntry]:
         return self._models.get(model_id)
+
+    def register_ollama_alias(self, ollama_name: str, registry_id: str):
+        base = ollama_name.split(":")[0]
+        self._ollama_aliases[base] = registry_id
+        self._ollama_aliases[ollama_name] = registry_id
+
+    def resolve_ollama_alias(self, ollama_name: str) -> Optional[str]:
+        base = ollama_name.split(":")[0]
+        return self._ollama_aliases.get(base) or self._ollama_aliases.get(ollama_name)
 
     def get_backends_for_model(self, model_id: str) -> List[str]:
         from app.services.llm_backend_discovery import llm_backend_discovery
@@ -109,6 +120,10 @@ class LLMModelRegistry:
         if alias in self._models:
             return self._models[alias]
 
+        registry_id = self.resolve_ollama_alias(alias)
+        if registry_id and registry_id in self._models:
+            return self._models[registry_id]
+
         matches = [m for m in self._models.values() if m.name.lower() == alias.lower()]
         if len(matches) == 1:
             return matches[0]
@@ -173,6 +188,12 @@ class LLMModelRegistry:
                 updated[model_id] = existing
 
         self._models = updated
+
+        for model_id, model in updated.items():
+            if "ollama" in model.server_type:
+                ollama_name = model_id_to_ollama_name(model_id)
+                self.register_ollama_alias(ollama_name, model_id)
+
         logger.debug(f"Model registry refreshed: {len(updated)} models mirrored to MLflow")
         return len(updated)
 
@@ -220,27 +241,44 @@ class LLMModelRegistry:
         matched_serving = set()
 
         for model_id, entry in self._models.items():
-            if model_id in backend_models and entry.state != ModelState.loading:
+            serving_name = None
+            if model_id in backend_models:
+                serving_name = model_id
+            else:
+                ollama_name = model_id_to_ollama_name(model_id)
+                for bm_name in backend_models:
+                    bm_base = bm_name.split(":")[0]
+                    if bm_base == ollama_name:
+                        serving_name = bm_name
+                        break
+
+            if serving_name and entry.state != ModelState.loading:
                 entry.state = ModelState.available
-                entry.backend_id = backend_models[model_id]
-                matched_serving.add(model_id)
+                entry.backend_id = backend_models[serving_name]
+                matched_serving.add(serving_name)
             elif (
-                model_id not in backend_models
+                serving_name is None
                 and entry.state == ModelState.available
             ):
                 entry.state = ModelState.deployable
                 entry.backend_id = None
 
         for model_name, backend_id in backend_models.items():
-            if model_name not in matched_serving and model_name not in self._models:
-                self._models[model_name] = ModelEntry(
-                    id=model_name,
-                    name=model_name,
-                    server_type=["ollama"] if backend_id == "ollama" else [],
-                    state=ModelState.available,
-                    backend_id=backend_id,
-                    tier=ModelTier.flexible if backend_id == "ollama" else ModelTier.performance,
-                )
+            if model_name in matched_serving:
+                continue
+            registry_id = self.resolve_ollama_alias(model_name)
+            if registry_id and registry_id in self._models:
+                continue
+            if model_name in self._models:
+                continue
+            self._models[model_name] = ModelEntry(
+                id=model_name,
+                name=model_name,
+                server_type=["ollama"] if backend_id == "ollama" else [],
+                state=ModelState.available,
+                backend_id=backend_id,
+                tier=ModelTier.flexible if backend_id == "ollama" else ModelTier.performance,
+            )
 
 
 llm_model_registry = LLMModelRegistry()

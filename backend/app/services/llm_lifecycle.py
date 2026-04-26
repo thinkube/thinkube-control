@@ -5,7 +5,7 @@ from typing import Optional
 
 import httpx
 
-from app.api.llm.schemas import ModelLoadResponse, ModelState, ModelTier
+from app.api.llm.schemas import ModelLoadResponse, ModelState, ModelTier, model_id_to_ollama_name
 
 logger = logging.getLogger(__name__)
 
@@ -17,8 +17,15 @@ class LLMLifecycleManager:
         self._load_timeout = int(os.getenv("LLM_MODEL_LOAD_TIMEOUT_SECONDS", "300"))
         self._loading_locks: dict[str, asyncio.Event] = {}
 
+    LOADABLE_TYPES = {"ollama", "vllm", "tensorrt-llm"}
+
     async def load_model(
-        self, model_id: str, tier: Optional[ModelTier] = None, keep_alive: Optional[str] = None
+        self,
+        model_id: str,
+        tier: Optional[ModelTier] = None,
+        keep_alive: Optional[str] = None,
+        backend: Optional[str] = None,
+        node: Optional[str] = None,
     ) -> ModelLoadResponse:
         from app.services.llm_model_registry import llm_model_registry
         from app.services.llm_gpu_tracker import llm_gpu_tracker
@@ -27,6 +34,12 @@ class LLMLifecycleManager:
         if entry is None:
             return ModelLoadResponse(
                 model_id=model_id, state=ModelState.registered, message=f"Model '{model_id}' not found"
+            )
+
+        if not any(st in self.LOADABLE_TYPES for st in entry.server_type):
+            return ModelLoadResponse(
+                model_id=model_id, state=entry.state,
+                message=f"Model type {entry.server_type} cannot be loaded dynamically"
             )
 
         if entry.state == ModelState.available:
@@ -40,26 +53,30 @@ class LLMLifecycleManager:
                 model_id=model_id, state=ModelState.loading, message="Model is already loading"
             )
 
-        resolved_tier = tier or (
-            ModelTier.performance if any(t in ("vllm", "tensorrt-llm") for t in entry.server_type)
-            else ModelTier.flexible
-        )
+        resolved_backend = backend
+        if not resolved_backend:
+            resolved_tier = tier or (
+                ModelTier.performance if any(t in ("vllm", "tensorrt-llm") for t in entry.server_type)
+                else ModelTier.flexible
+            )
+            if resolved_tier == ModelTier.flexible and "ollama" in entry.server_type:
+                resolved_backend = "ollama"
+            elif resolved_tier == ModelTier.performance:
+                return await self._load_performance(model_id)
+            elif "ollama" in entry.server_type:
+                resolved_backend = "ollama"
 
-        if resolved_tier == ModelTier.flexible and "ollama" in entry.server_type:
-            return await self._load_ollama(model_id, keep_alive)
-
-        if resolved_tier == ModelTier.performance:
-            return await self._load_performance(model_id)
-
-        if "ollama" in entry.server_type:
-            return await self._load_ollama(model_id, keep_alive)
+        if resolved_backend == "ollama":
+            return await self._load_ollama(model_id, keep_alive, node)
 
         return ModelLoadResponse(
             model_id=model_id, state=entry.state,
             message=f"No supported backend for model '{model_id}' with server_type={entry.server_type}"
         )
 
-    async def _load_ollama(self, model_id: str, keep_alive: Optional[str] = None) -> ModelLoadResponse:
+    async def _load_ollama(
+        self, model_id: str, keep_alive: Optional[str] = None, node: Optional[str] = None
+    ) -> ModelLoadResponse:
         from app.services.llm_model_registry import llm_model_registry
         from app.services.llm_gpu_tracker import llm_gpu_tracker
         from app.services.llm_ollama_client import ollama_client
@@ -73,19 +90,25 @@ class LLMLifecycleManager:
         entry = llm_model_registry.get_model(model_id)
         estimated_memory = self._estimate_memory(entry)
 
-        can_load, reason = llm_gpu_tracker.check_can_load(estimated_memory)
+        can_load, reason = llm_gpu_tracker.check_can_load(
+            estimated_memory, node_name=node
+        )
         if not can_load:
             candidate = self._select_eviction_candidate()
             if candidate:
                 logger.info(f"Evicting {candidate} to make room for {model_id}")
                 await self.unload_model(candidate)
-                can_load, reason = llm_gpu_tracker.check_can_load(estimated_memory)
+                can_load, reason = llm_gpu_tracker.check_can_load(
+                    estimated_memory, node_name=node
+                )
 
             if not can_load:
                 return ModelLoadResponse(
                     model_id=model_id, state=ModelState.deployable,
                     message=f"Insufficient GPU resources: {reason}"
                 )
+
+        target_node = reason if can_load and not node else node
 
         llm_model_registry.update_model_state(model_id, ModelState.loading, "ollama")
         event = asyncio.Event()
@@ -107,15 +130,18 @@ class LLMLifecycleManager:
                         message=f"Could not find GGUF artifact for '{model_id}' in MLflow"
                     )
 
-                ollama_name = self._model_id_to_ollama_name(model_id)
+                ollama_name = model_id_to_ollama_name(model_id)
                 logger.info(f"Creating Ollama model '{ollama_name}' from {gguf_path}")
                 success = await ollama_client.create_model(ollama_name, gguf_path)
                 if success:
+                    llm_model_registry.register_ollama_alias(ollama_name, model_id)
                     success = await ollama_client.load_model(ollama_name, keep_alive)
 
             if success:
                 llm_model_registry.update_model_state(model_id, ModelState.available, "ollama")
-                llm_gpu_tracker.record_allocation(model_id, "ollama", estimated_memory)
+                llm_gpu_tracker.record_allocation(
+                    model_id, "ollama", estimated_memory, node_name=target_node
+                )
                 return ModelLoadResponse(
                     model_id=model_id, state=ModelState.available,
                     message="Model loaded successfully", backend_id="ollama"
@@ -181,7 +207,7 @@ class LLMLifecycleManager:
             model_names = [m.get("name", "") for m in models]
             ollama_name = self._find_ollama_name(model_id, model_names)
             if not ollama_name:
-                ollama_name = self._model_id_to_ollama_name(model_id)
+                ollama_name = model_id_to_ollama_name(model_id)
             success = await ollama_client.delete_model(ollama_name)
             if success:
                 llm_model_registry.update_model_state(model_id, ModelState.deployable)
@@ -311,13 +337,6 @@ class LLMLifecycleManager:
         except Exception as e:
             logger.error(f"Failed to get MLflow token: {e}")
             return None
-
-    def _model_id_to_ollama_name(self, model_id: str) -> str:
-        name = model_id.split("/")[-1].lower()
-        for suffix in ["-gguf", "-ggml"]:
-            if name.endswith(suffix):
-                name = name[: -len(suffix)]
-        return name
 
     def _find_ollama_name(self, model_id: str, available: list[str]) -> Optional[str]:
         for name in available:
