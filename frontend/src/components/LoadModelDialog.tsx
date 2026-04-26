@@ -248,28 +248,30 @@ export default function LoadModelDialog({
                   No GPU nodes discovered
                 </div>
               ) : (
-                <TkSelect
-                  value={selectedNode}
-                  onValueChange={handleNodeChange}
-                  disabled={nodeIsLocked}
-                >
-                  <TkSelectTrigger>
-                    <TkSelectValue placeholder="Select GPU node" />
-                  </TkSelectTrigger>
-                  <TkSelectContent>
-                    {options.gpu_nodes.map((n) => (
-                      <TkSelectItem key={n.name} value={n.name}>
-                        {n.name} — {formatGpuProduct(n.gpu_product)} (
-                        {n.used_memory_gb.toFixed(1)} / {n.total_memory_gb.toFixed(0)} GB)
-                      </TkSelectItem>
-                    ))}
-                  </TkSelectContent>
-                </TkSelect>
-                {nodeIsLocked && (
-                  <p className="text-xs text-muted-foreground">
-                    Node is determined by the selected backend
-                  </p>
-                )}
+                <>
+                  <TkSelect
+                    value={selectedNode}
+                    onValueChange={handleNodeChange}
+                    disabled={nodeIsLocked}
+                  >
+                    <TkSelectTrigger>
+                      <TkSelectValue placeholder="Select GPU node" />
+                    </TkSelectTrigger>
+                    <TkSelectContent>
+                      {options.gpu_nodes.map((n) => (
+                        <TkSelectItem key={n.name} value={n.name}>
+                          {n.name} — {formatGpuProduct(n.gpu_product)} (
+                          {n.used_memory_gb.toFixed(1)} / {n.total_memory_gb.toFixed(0)} GB)
+                        </TkSelectItem>
+                      ))}
+                    </TkSelectContent>
+                  </TkSelect>
+                  {nodeIsLocked && (
+                    <p className="text-xs text-muted-foreground">
+                      Node is determined by the selected backend
+                    </p>
+                  )}
+                </>
               )}
             </div>
 
