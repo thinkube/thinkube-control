@@ -149,12 +149,16 @@ class LLMLifecycleManager:
             model_names = [m.get("name", "") for m in models]
             ollama_name = self._find_ollama_name(model_id, model_names)
 
+            load_error = None
             if ollama_name:
-                success = await ollama_client.load_model(ollama_name, keep_alive, node=target_node)
+                success, load_error = await ollama_client.load_model(ollama_name, keep_alive, node=target_node)
             else:
                 gguf_path = await self._resolve_gguf_path(model_id)
                 if not gguf_path:
-                    llm_model_registry.update_model_state(model_id, ModelState.deployable)
+                    llm_model_registry.update_model_state(
+                        model_id, ModelState.deployable,
+                        error=f"GGUF artifact not found for '{model_id}' in MLflow",
+                    )
                     logger.error(f"Could not find GGUF artifact for '{model_id}' in MLflow")
                     return
 
@@ -163,7 +167,10 @@ class LLMLifecycleManager:
                 success = await ollama_client.create_model(ollama_name, gguf_path, node=target_node)
                 if success:
                     llm_model_registry.register_ollama_alias(ollama_name, model_id)
-                    success = await ollama_client.load_model(ollama_name, keep_alive, node=target_node)
+                    success, load_error = await ollama_client.load_model(ollama_name, keep_alive, node=target_node)
+                else:
+                    success = False
+                    load_error = f"Failed to create Ollama model from GGUF"
 
             if success:
                 llm_model_registry.update_model_state(model_id, ModelState.available, backend_id)
@@ -172,11 +179,15 @@ class LLMLifecycleManager:
                 )
                 logger.info(f"Model '{model_id}' loaded successfully on {backend_id}")
             else:
-                llm_model_registry.update_model_state(model_id, ModelState.deployable)
-                logger.error(f"Failed to load model '{model_id}' on Ollama")
+                llm_model_registry.update_model_state(
+                    model_id, ModelState.deployable, error=load_error,
+                )
+                logger.error(f"Failed to load model '{model_id}' on Ollama: {load_error}")
         except Exception as e:
             logger.error(f"Background load failed for {model_id}: {e}")
-            llm_model_registry.update_model_state(model_id, ModelState.deployable)
+            llm_model_registry.update_model_state(
+                model_id, ModelState.deployable, error=str(e),
+            )
         finally:
             event.set()
             self._loading_locks.pop(model_id, None)

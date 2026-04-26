@@ -31,6 +31,7 @@ class ModelEntry(BaseModel):
     backend_id: Optional[str] = None
     tier: Optional[ModelTier] = None
     is_finetuned: bool = False
+    last_error: Optional[str] = None
 
 
 class ModelsListResponse(BaseModel):

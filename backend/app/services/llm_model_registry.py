@@ -213,12 +213,14 @@ class LLMModelRegistry:
         return len(updated)
 
     def update_model_state(
-        self, model_id: str, state: ModelState, backend_id: Optional[str] = None
+        self, model_id: str, state: ModelState, backend_id: Optional[str] = None,
+        error: Optional[str] = None,
     ):
         if model_id in self._models:
             self._models[model_id].state = state
             if backend_id is not None:
                 self._models[model_id].backend_id = backend_id
+            self._models[model_id].last_error = error
 
     async def start_polling(self):
         if self._is_running:

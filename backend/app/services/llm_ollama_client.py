@@ -151,7 +151,7 @@ class OllamaClient:
 
     async def load_model(
         self, name: str, keep_alive: Optional[str] = None, node: Optional[str] = None
-    ) -> bool:
+    ) -> tuple[bool, Optional[str]]:
         payload: Dict[str, Any] = {"model": name, "prompt": ""}
         payload["keep_alive"] = keep_alive if keep_alive else -1
 
@@ -165,10 +165,16 @@ class OllamaClient:
                 ),
             )
             resp.raise_for_status()
-            return True
+            return True, None
+        except httpx.HTTPStatusError as e:
+            body = e.response.text[:200] if e.response else ""
+            reason = f"Ollama returned {e.response.status_code}: {body}"
+            logger.error(f"Ollama load failed for {name}: {reason}")
+            return False, reason
         except Exception as e:
-            logger.error(f"Ollama load failed for {name}: {e}")
-            return False
+            reason = str(e)
+            logger.error(f"Ollama load failed for {name}: {reason}")
+            return False, reason
 
     async def unload_model(self, name: str, node: Optional[str] = None) -> bool:
         """Unload model from VRAM only (keeps model on disk for shared storage)."""

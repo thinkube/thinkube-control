@@ -39,6 +39,7 @@ interface ModelEntry {
   backend_id: string | null;
   tier: string | null;
   is_finetuned: boolean;
+  last_error: string | null;
 }
 
 interface BackendEntry {
@@ -529,7 +530,7 @@ function ModelActions({
     }
 
     return (
-      <div className="flex gap-2 justify-end">
+      <div className="flex flex-col items-end gap-1">
         <TkButton size="sm" onClick={onLoad} disabled={actionLoading}>
           {actionLoading ? (
             <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -538,6 +539,11 @@ function ModelActions({
           )}
           Load
         </TkButton>
+        {model.last_error && (
+          <span className="text-xs text-destructive max-w-[200px] text-right">
+            {model.last_error}
+          </span>
+        )}
       </div>
     );
   }
