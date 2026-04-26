@@ -212,9 +212,22 @@ class LLMModelRegistry:
             )
             updated[model_id] = model
 
+        catalog_serving = set()
+        for model in updated.values():
+            if model.serving_name and model.server_type:
+                for stype in model.server_type:
+                    catalog_serving.add(f"{stype}:{model.serving_name}")
+
         for model_id, existing in self._models.items():
             if model_id not in updated and existing.state in (ModelState.available, ModelState.loading):
-                updated[model_id] = existing
+                covered = False
+                if existing.serving_name and existing.server_type:
+                    for stype in existing.server_type:
+                        if f"{stype}:{existing.serving_name}" in catalog_serving:
+                            covered = True
+                            break
+                if not covered:
+                    updated[model_id] = existing
 
         self._models = updated
 
