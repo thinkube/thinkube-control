@@ -273,7 +273,7 @@ class LLMPodManager:
                 k8s_config.load_kube_config()
 
             v1 = client.CoreV1Api()
-            selector = f"app={base_name},thinkube.io/target-node={node_name}"
+            selector = f"{GATEWAY_LABEL}={GATEWAY_LABEL_VALUE},thinkube.io/target-node={node_name}"
             pods = v1.list_namespaced_pod(namespace, label_selector=selector)
 
             for pod in pods.items:
