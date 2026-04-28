@@ -4,7 +4,8 @@ Supports two modes:
 - Overlay (ZeroTier): queries the ZeroTier Central API for authorized+online members
 - Local: ping sweeps the network CIDR and checks SSH banners for Ubuntu hosts
 
-In both modes, existing cluster nodes and MetalLB VIP ranges are filtered out.
+ZeroTier Central is the source of truth for IP allocation — all assigned IPs
+(members, MetalLB, infrastructure) are tracked there.
 """
 
 import asyncio
@@ -76,73 +77,47 @@ class NetworkDiscovery:
     def get_network_mode(self) -> str:
         return self._get_inventory_vars().get("network_mode", "overlay")
 
-    def get_excluded_ips(self) -> Set[str]:
-        """Get all IPs that should be excluded from discovery results.
+    async def get_excluded_ips(self) -> Set[str]:
+        """Get all IPs already assigned in the ZeroTier network.
 
-        Excludes:
-        - Nodes actually joined to the k8s cluster (from k8s API)
-        - MetalLB VIP range
-        - Gateway IP
+        Queries ZeroTier Central for all member IP assignments, then adds
+        MetalLB VIP range and gateway. This is the authoritative source for
+        IP allocation — no need to query k8s separately.
         """
         excluded = set()
-        inventory = node_manager.read_inventory()
-        inv_vars = inventory.get("all", {}).get("vars", {})
+        inv_vars = self._get_inventory_vars()
+        network_id = inv_vars.get("zerotier_network_id")
+        api_token = inv_vars.get("zerotier_api_token")
 
-        # Only exclude nodes that are actually in the k8s cluster
-        try:
-            from kubernetes import client
-            v1 = client.CoreV1Api()
-            k8s_nodes = v1.list_node()
-            for node in k8s_nodes.items:
-                for addr in (node.status.addresses or []):
-                    if addr.type in ("InternalIP", "ExternalIP"):
-                        excluded.add(addr.address)
-                # Also exclude the inventory IPs for this k8s node
-                node_name = node.metadata.name
-                inv_children = inventory.get("all", {}).get("children", {})
-                for section in inv_children.values():
+        if network_id and api_token:
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    response = await client.get(
+                        f"{ZEROTIER_API_BASE}/network/{network_id}/member",
+                        headers={"Authorization": f"bearer {api_token}"},
+                    )
+                    response.raise_for_status()
+                    for member in response.json():
+                        for ip in member.get("config", {}).get("ipAssignments", []):
+                            excluded.add(ip)
+            except Exception as e:
+                logger.warning(f"Could not query ZeroTier Central for exclusion: {e}")
+                # Fallback: exclude all inventory IPs
+                inventory = node_manager.read_inventory()
+                children = inventory.get("all", {}).get("children", {})
+                for section in children.values():
                     if not isinstance(section, dict):
                         continue
-                    hosts = section.get("hosts") or {}
-                    if node_name in hosts and isinstance(hosts[node_name], dict):
-                        for key in ("ansible_host", "lan_ip", "zerotier_ip"):
-                            if hosts[node_name].get(key):
-                                excluded.add(hosts[node_name][key])
-                    for sub in (section.get("children") or {}).values():
-                        if not isinstance(sub, dict):
-                            continue
-                        sub_hosts = sub.get("hosts") or {}
-                        if node_name in sub_hosts and isinstance(sub_hosts[node_name], dict):
+                    for host_vars in (section.get("hosts") or {}).values():
+                        if isinstance(host_vars, dict):
                             for key in ("ansible_host", "lan_ip", "zerotier_ip"):
-                                if sub_hosts[node_name].get(key):
-                                    excluded.add(sub_hosts[node_name][key])
-        except Exception as e:
-            logger.warning(f"Could not query k8s nodes for exclusion: {e}")
-            # Fallback: exclude all inventory IPs
-            children = inventory.get("all", {}).get("children", {})
-            for section in children.values():
-                if not isinstance(section, dict):
-                    continue
-                for host_vars in (section.get("hosts") or {}).values():
-                    if isinstance(host_vars, dict):
-                        for key in ("ansible_host", "lan_ip", "zerotier_ip"):
-                            if host_vars.get(key):
-                                excluded.add(host_vars[key])
+                                if host_vars.get(key):
+                                    excluded.add(host_vars[key])
 
         # MetalLB VIP range
-        network_mode = inv_vars["network_mode"]
-        start_octet = int(inv_vars["metallb_ip_start_octet"])
-        end_octet = int(inv_vars["metallb_ip_end_octet"])
-
-        if network_mode == "overlay":
-            prefix = inv_vars["zerotier_subnet_prefix"]
-        else:
-            cidr = inv_vars.get("network_cidr", "")
-            if cidr:
-                net = ipaddress.ip_network(cidr, strict=False)
-                prefix = ".".join(str(net.network_address).split(".")[:3]) + "."
-            else:
-                prefix = ""
+        prefix = inv_vars.get("zerotier_subnet_prefix", "")
+        start_octet = int(inv_vars.get("metallb_ip_start_octet", 200))
+        end_octet = int(inv_vars.get("metallb_ip_end_octet", 220))
 
         if prefix:
             for octet in range(start_octet, end_octet + 1):
@@ -157,13 +132,13 @@ class NetworkDiscovery:
         excluded.discard(None)
         return {ip for ip in excluded if ip}
 
-    def get_next_available_zerotier_ip(self) -> Optional[str]:
+    async def get_next_available_zerotier_ip(self) -> Optional[str]:
         """Find the next available IP in the ZeroTier subnet.
 
-        Skips IPs used by existing nodes and the MetalLB VIP range.
-        Starts from .10 (reserving .1-.9 for infrastructure).
+        Queries ZeroTier Central for all assigned IPs, then finds the first
+        gap starting from .10 (reserving .1-.9 for infrastructure).
         """
-        excluded = self.get_excluded_ips()
+        excluded = await self.get_excluded_ips()
         inv_vars = self._get_inventory_vars()
         prefix = inv_vars.get("zerotier_subnet_prefix", "192.168.191.")
 
@@ -183,7 +158,7 @@ class NetworkDiscovery:
             logger.error("ZeroTier network_id or api_token not in inventory")
             return []
 
-        excluded = self.get_excluded_ips()
+        excluded = await self.get_excluded_ips()
         nodes = []
 
         try:
@@ -304,7 +279,7 @@ class NetworkDiscovery:
                 return []
             scan_cidrs = [network_cidr]
 
-        excluded = self.get_excluded_ips()
+        excluded = await self.get_excluded_ips()
         candidate_ips = []
         for cidr in scan_cidrs:
             try:

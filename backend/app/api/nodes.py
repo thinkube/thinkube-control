@@ -722,7 +722,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                         "task_number": step,
                     })
 
-                    assigned_ip = network_discovery.get_next_available_zerotier_ip()
+                    assigned_ip = await network_discovery.get_next_available_zerotier_ip()
                     if not assigned_ip:
                         await websocket.send_json({
                             "type": "error",
