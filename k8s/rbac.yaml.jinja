@@ -38,14 +38,14 @@ rules:
     - nodes
   verbs: ["get", "list", "watch", "patch", "update", "delete"]
 
-# Apps resources
+# Apps resources (create/delete needed for LLM Gateway pod management)
 - apiGroups: ["apps"]
   resources:
     - deployments
     - statefulsets
     - daemonsets
     - replicasets
-  verbs: ["get", "list", "watch", "patch", "update"]
+  verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
 
 # Batch resources
 - apiGroups: ["batch"]
