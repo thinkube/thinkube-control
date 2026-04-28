@@ -259,31 +259,8 @@ class LLMLifecycleManager:
         estimated_memory = self._estimate_memory(entry)
         gpu_count = self._gpus_needed(estimated_memory, node)
 
-        success, managed_pod = await llm_pod_manager.ensure_pod(perf_type, node, gpu_count=gpu_count)
-        if not success:
-            return ModelLoadResponse(
-                model_id=model_id, state=ModelState.deployable,
-                message=f"Failed to start {perf_type} pod on {node}"
-            )
-
-        await llm_backend_discovery.refresh()
-
-        all_backends = llm_backend_discovery.list_backends()
-        compatible = [
-            b for b in all_backends
-            if b.type == perf_type and b.node == node and b.status == "healthy"
-        ]
-
-        if not compatible:
-            return ModelLoadResponse(
-                model_id=model_id, state=ModelState.deployable,
-                message=f"Backend pod started on {node} but not yet healthy. Try again shortly."
-            )
-
-        target_backend = compatible[0]
-
         can_load, reason = llm_gpu_tracker.check_can_load(
-            estimated_memory, node_name=target_backend.node
+            estimated_memory, node_name=node
         )
         if not can_load:
             return ModelLoadResponse(
@@ -303,26 +280,56 @@ class LLMLifecycleManager:
 
         asyncio.create_task(
             self._load_performance_background(
-                model_id, target_backend, payload, estimated_memory
+                model_id, perf_type, node, gpu_count, payload, estimated_memory
             )
         )
 
         return ModelLoadResponse(
             model_id=model_id, state=ModelState.loading,
-            message="Loading model on performance backend — this may take several minutes",
-            backend_id=target_backend.id
+            message="Loading model — this may take several minutes",
         )
 
     async def _load_performance_background(
-        self, model_id: str, backend, payload: dict, estimated_memory: float,
+        self, model_id: str, perf_type: str, node: str,
+        gpu_count: int, payload: dict, estimated_memory: float,
     ):
         from app.services.llm_model_registry import llm_model_registry
         from app.services.llm_gpu_tracker import llm_gpu_tracker
+        from app.services.llm_pod_manager import llm_pod_manager
+        from app.services.llm_backend_discovery import llm_backend_discovery
 
         event = asyncio.Event()
         self._loading_locks[model_id] = event
 
         try:
+            success, managed_pod = await llm_pod_manager.ensure_pod(
+                perf_type, node, gpu_count=gpu_count
+            )
+            if not success:
+                llm_model_registry.update_model_state(
+                    model_id, ModelState.deployable,
+                    error=f"Failed to start {perf_type} pod on {node}",
+                )
+                return
+
+            backend = None
+            for _ in range(18):
+                await llm_backend_discovery.refresh()
+                for b in llm_backend_discovery.list_backends():
+                    if b.type == perf_type and b.node == node and b.status == "healthy":
+                        backend = b
+                        break
+                if backend:
+                    break
+                await asyncio.sleep(10)
+
+            if not backend:
+                llm_model_registry.update_model_state(
+                    model_id, ModelState.deployable,
+                    error=f"Backend pod on {node} did not become healthy",
+                )
+                return
+
             async with httpx.AsyncClient(
                 verify=False, timeout=httpx.Timeout(660.0, connect=10.0)
             ) as client:
