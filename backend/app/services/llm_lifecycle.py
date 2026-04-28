@@ -89,11 +89,25 @@ class LLMLifecycleManager:
         from app.services.llm_model_registry import llm_model_registry
         from app.services.llm_gpu_tracker import llm_gpu_tracker
         from app.services.llm_ollama_client import ollama_client
+        from app.services.llm_pod_manager import llm_pod_manager
+
+        if not node:
+            return ModelLoadResponse(
+                model_id=model_id, state=ModelState.deployable,
+                message="A target node is required to load a model"
+            )
+
+        success, managed_pod = await llm_pod_manager.ensure_pod("ollama", node)
+        if not success:
+            return ModelLoadResponse(
+                model_id=model_id, state=ModelState.deployable,
+                message=f"Failed to start Ollama pod on {node}"
+            )
 
         if not await ollama_client.is_available(node):
             return ModelLoadResponse(
                 model_id=model_id, state=ModelState.deployable,
-                message="Ollama backend is not available"
+                message=f"Ollama pod on {node} is not responding"
             )
 
         entry = llm_model_registry.get_model(model_id)
@@ -117,18 +131,11 @@ class LLMLifecycleManager:
                     message=f"Insufficient GPU resources: {reason}"
                 )
 
-        if node:
-            target_node = node
-        elif can_load and reason not in ("ok",):
-            target_node = reason
-        else:
-            target_node = None
-
-        backend_id = f"ollama-{target_node}" if target_node else "ollama"
+        backend_id = f"ollama-{node}"
         llm_model_registry.update_model_state(model_id, ModelState.loading, backend_id)
 
         asyncio.create_task(
-            self._load_ollama_background(model_id, keep_alive, target_node, backend_id, estimated_memory)
+            self._load_ollama_background(model_id, keep_alive, node, backend_id, estimated_memory)
         )
 
         return ModelLoadResponse(
@@ -207,6 +214,7 @@ class LLMLifecycleManager:
         from app.services.llm_backend_discovery import llm_backend_discovery
         from app.services.llm_model_registry import llm_model_registry
         from app.services.llm_gpu_tracker import llm_gpu_tracker
+        from app.services.llm_pod_manager import llm_pod_manager
 
         entry = llm_model_registry.get_model(model_id)
         if entry is None:
@@ -215,21 +223,45 @@ class LLMLifecycleManager:
                 message=f"Model '{model_id}' not found"
             )
 
+        if not node:
+            return ModelLoadResponse(
+                model_id=model_id, state=ModelState.deployable,
+                message="A target node is required to load a model"
+            )
+
+        perf_type = None
+        for st in entry.server_type:
+            if st in ("vllm", "tensorrt-llm"):
+                perf_type = st
+                break
+        if backend and backend in ("vllm", "tensorrt-llm"):
+            perf_type = backend
+
+        if not perf_type:
+            return ModelLoadResponse(
+                model_id=model_id, state=ModelState.deployable,
+                message=f"No performance backend type found for {entry.server_type}"
+            )
+
+        success, managed_pod = await llm_pod_manager.ensure_pod(perf_type, node)
+        if not success:
+            return ModelLoadResponse(
+                model_id=model_id, state=ModelState.deployable,
+                message=f"Failed to start {perf_type} pod on {node}"
+            )
+
+        await llm_backend_discovery.refresh()
+
         all_backends = llm_backend_discovery.list_backends()
         compatible = [
             b for b in all_backends
-            if b.type in (entry.server_type or []) and b.status == "healthy"
+            if b.type == perf_type and b.node == node and b.status == "healthy"
         ]
-
-        if backend:
-            compatible = [b for b in compatible if b.id == backend]
-        if node:
-            compatible = [b for b in compatible if b.node == node]
 
         if not compatible:
             return ModelLoadResponse(
                 model_id=model_id, state=ModelState.deployable,
-                message="No compatible healthy backends available. Deploy a vLLM or TRT-LLM component first."
+                message=f"Backend pod started on {node} but not yet healthy. Try again shortly."
             )
 
         target_backend = compatible[0]
@@ -313,6 +345,7 @@ class LLMLifecycleManager:
         from app.services.llm_model_registry import llm_model_registry
         from app.services.llm_gpu_tracker import llm_gpu_tracker
         from app.services.llm_ollama_client import ollama_client
+        from app.services.llm_pod_manager import llm_pod_manager
 
         entry = llm_model_registry.get_model(model_id)
         if entry is None:
@@ -327,13 +360,13 @@ class LLMLifecycleManager:
                 message=f"Model is not loaded (state: {entry.state.value})"
             )
 
-        if entry.backend_id and entry.backend_id.startswith("ollama"):
-            node = None
-            if "-" in entry.backend_id:
-                node = entry.backend_id.split("-", 1)[1]
+        backend_id = entry.backend_id or ""
+        backend_type = backend_id.split("-")[0] if "-" in backend_id else backend_id
+        node = backend_id.split("-", 1)[1] if "-" in backend_id else None
 
-            llm_model_registry.update_model_state(model_id, ModelState.unloading, entry.backend_id)
+        llm_model_registry.update_model_state(model_id, ModelState.unloading, backend_id)
 
+        if backend_type == "ollama" and node:
             models = await ollama_client.list_models(node=node)
             model_names = [m.get("name", "") for m in models]
             ollama_name = self._find_ollama_name(model_id, model_names)
@@ -343,23 +376,29 @@ class LLMLifecycleManager:
                 ollama_name = entry.serving_name or model_id_to_ollama_name(model_id)
 
             success = await ollama_client.unload_model(ollama_name, node=node)
-            if success:
-                llm_model_registry.update_model_state(model_id, ModelState.deployable)
-                llm_gpu_tracker.release_allocation(model_id)
-                return ModelLoadResponse(
-                    model_id=model_id, state=ModelState.deployable,
-                    message="Model unloaded successfully"
-                )
-            else:
-                llm_model_registry.update_model_state(model_id, ModelState.available, entry.backend_id)
+            if not success:
+                llm_model_registry.update_model_state(model_id, ModelState.available, backend_id)
                 return ModelLoadResponse(
                     model_id=model_id, state=ModelState.available,
                     message="Failed to unload model from Ollama"
                 )
 
+        llm_model_registry.update_model_state(model_id, ModelState.deployable)
+        llm_gpu_tracker.release_allocation(model_id)
+
+        if node:
+            remaining = [
+                a for allocs in llm_gpu_tracker._allocations.values()
+                for a in allocs
+                if a.backend_id == backend_id
+            ]
+            if not remaining:
+                logger.info(f"No models left on {backend_id}, deleting pod")
+                await llm_pod_manager.delete_pod(backend_type, node)
+
         return ModelLoadResponse(
-            model_id=model_id, state=entry.state,
-            message="Unloading performance-tier models is not supported via API"
+            model_id=model_id, state=ModelState.deployable,
+            message="Model unloaded successfully"
         )
 
     async def auto_load_on_resolve(self, model_id: str, timeout: Optional[int] = None) -> bool:

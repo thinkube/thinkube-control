@@ -1,9 +1,9 @@
 """
 LLM Backend Discovery
 
-Discovers model-serving backends via Kubernetes ConfigMaps and static configuration.
+Discovers model-serving backends via Kubernetes pods and ConfigMaps.
 Periodically probes backend health and served models.
-Discovers per-node Ollama DaemonSet pods for node-specific routing.
+Discovers gateway-managed pods (created by llm_pod_manager) for all backend types.
 """
 
 import asyncio
@@ -51,7 +51,7 @@ class LLMBackendDiscovery:
 
     async def _discover_all(self):
         self._discover_static()
-        await self._discover_ollama_pods()
+        await self._discover_gateway_pods()
         await self._discover_from_configmaps()
         await self._probe_all()
 
@@ -75,8 +75,14 @@ class LLMBackendDiscovery:
         except Exception as e:
             logger.warning(f"Failed to parse LLM_STATIC_BACKENDS: {e}")
 
-    async def _discover_ollama_pods(self):
+    async def _discover_gateway_pods(self):
+        """Discover pods created by the LLM Gateway pod manager.
+
+        Scans all backend namespaces for Running pods with the gateway-managed
+        label. Registers Ollama pods with the Ollama client for per-node routing.
+        """
         from app.services.llm_ollama_client import ollama_client
+        from app.services.llm_pod_manager import GATEWAY_LABEL, GATEWAY_LABEL_VALUE, BACKEND_NAMESPACES
 
         try:
             from kubernetes import client, config as k8s_config
@@ -87,63 +93,80 @@ class LLMBackendDiscovery:
                 k8s_config.load_kube_config()
 
             v1 = client.CoreV1Api()
-            namespace = os.getenv("LLM_OLLAMA_NAMESPACE", "ollama")
-            pods = v1.list_namespaced_pod(
-                namespace, label_selector="app.kubernetes.io/name=ollama"
-            )
-
             discovered = set()
-            for pod in pods.items:
-                if pod.status.phase != "Running" or not pod.status.pod_ip:
-                    continue
-                node_name = pod.spec.node_name
-                if not node_name:
-                    continue
 
-                pod_ip = pod.status.pod_ip
-                pod_name = pod.metadata.name
-                backend_id = f"ollama-{node_name}"
-                discovered.add(backend_id)
-
-                self._backends[backend_id] = BackendEntry(
-                    id=backend_id,
-                    name=f"Ollama ({node_name})",
-                    url=f"http://{pod_ip}:11434",
-                    type="ollama",
-                    api_path="/v1",
-                    status="unknown",
-                    node=node_name,
+            for backend_type, default_ns in BACKEND_NAMESPACES.items():
+                namespace = os.getenv(
+                    {
+                        "ollama": "LLM_OLLAMA_NAMESPACE",
+                        "vllm": "LLM_VLLM_NAMESPACE",
+                        "tensorrt-llm": "LLM_TENSORRT_NAMESPACE",
+                    }.get(backend_type, ""),
+                    default_ns,
                 )
-                ollama_client.register_node(node_name, pod_ip, pod_name)
+
+                try:
+                    pods = v1.list_namespaced_pod(
+                        namespace,
+                        label_selector=f"{GATEWAY_LABEL}={GATEWAY_LABEL_VALUE}",
+                    )
+                except Exception:
+                    continue
+
+                port = self._get_backend_port(backend_type)
+
+                for pod in pods.items:
+                    if pod.status.phase != "Running" or not pod.status.pod_ip:
+                        continue
+                    node_name = pod.spec.node_name
+                    if not node_name:
+                        continue
+
+                    pod_ip = pod.status.pod_ip
+                    pod_name = pod.metadata.name
+                    backend_id = f"{backend_type}-{node_name}"
+                    discovered.add(backend_id)
+
+                    api_path = "/v1"
+                    if backend_type == "ollama":
+                        url = f"http://{pod_ip}:11434"
+                        display = f"Ollama ({node_name})"
+                        ollama_client.register_node(node_name, pod_ip, pod_name)
+                    elif backend_type == "vllm":
+                        url = f"http://{pod_ip}:{port}"
+                        display = f"vLLM ({node_name})"
+                    else:
+                        url = f"http://{pod_ip}:{port}"
+                        display = f"TRT-LLM ({node_name})"
+
+                    self._backends[backend_id] = BackendEntry(
+                        id=backend_id,
+                        name=display,
+                        url=url,
+                        type=backend_type,
+                        api_path=api_path,
+                        status="unknown",
+                        node=node_name,
+                    )
 
             stale = [
                 bid for bid in list(self._backends)
-                if bid.startswith("ollama-")
-                and self._backends[bid].type == "ollama"
+                if any(bid.startswith(f"{bt}-") for bt in BACKEND_NAMESPACES)
                 and bid not in discovered
+                and self._backends[bid].node
             ]
             for bid in stale:
-                node = self._backends[bid].node
-                if node:
-                    ollama_client.unregister_node(node)
+                backend = self._backends[bid]
+                if backend.type == "ollama" and backend.node:
+                    ollama_client.unregister_node(backend.node)
                 del self._backends[bid]
 
-            if discovered:
-                self._backends.pop("ollama", None)
-
         except Exception as e:
-            logger.warning(f"Ollama pod discovery failed, using static URL: {e}")
-            if self._ollama_url and not any(
-                bid.startswith("ollama") for bid in self._backends
-            ):
-                self._backends["ollama"] = BackendEntry(
-                    id="ollama",
-                    name="Ollama",
-                    url=self._ollama_url,
-                    type="ollama",
-                    api_path="/v1",
-                    status="unknown",
-                )
+            logger.warning(f"Gateway pod discovery failed: {e}")
+
+    def _get_backend_port(self, backend_type: str) -> int:
+        ports = {"ollama": 11434, "vllm": 7860, "tensorrt-llm": 7860}
+        return ports.get(backend_type, 8080)
 
     async def _discover_from_configmaps(self):
         try:

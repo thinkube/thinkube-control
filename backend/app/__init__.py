@@ -22,6 +22,7 @@ from app.services import health_checker, ServiceDiscovery
 from app.services.llm_model_registry import llm_model_registry
 from app.services.llm_backend_discovery import llm_backend_discovery
 from app.services.llm_ollama_client import ollama_client
+from app.services.llm_pod_manager import llm_pod_manager
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,10 @@ async def app_lifespan(app: FastAPI):
 
     discovery_task = asyncio.create_task(periodic_discovery())
     logger.info("Started periodic discovery task (5 minute interval)")
+
+    # Reconcile gateway-managed pods before backend discovery starts
+    await llm_pod_manager.reconcile()
+    logger.info("LLM pod manager reconciled")
 
     # Start LLM backend discovery first so registry reconciliation has backend data
     llm_discovery_task = asyncio.create_task(llm_backend_discovery.start_polling())
