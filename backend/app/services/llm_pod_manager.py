@@ -181,10 +181,14 @@ class LLMPodManager:
                     container.resources.requests = requests
                     container.resources.limits = limits
 
+            selector_labels = {
+                GATEWAY_LABEL: GATEWAY_LABEL_VALUE,
+                BACKEND_TYPE_LABEL: backend_type,
+                "thinkube.io/target-node": node_name,
+            }
+
             labels = pod_template.metadata.labels or {}
-            labels[GATEWAY_LABEL] = GATEWAY_LABEL_VALUE
-            labels[BACKEND_TYPE_LABEL] = backend_type
-            labels["thinkube.io/target-node"] = node_name
+            labels.update(selector_labels)
             pod_template.metadata.labels = labels
 
             deployment = client.V1Deployment(
@@ -193,13 +197,9 @@ class LLMPodManager:
                 metadata=client.V1ObjectMeta(
                     name=deploy_name,
                     namespace=namespace,
-                    labels={
-                        "app": base_name,
+                    labels=dict(selector_labels, **{
                         "app.kubernetes.io/name": base_name,
-                        GATEWAY_LABEL: GATEWAY_LABEL_VALUE,
-                        BACKEND_TYPE_LABEL: backend_type,
-                        "thinkube.io/target-node": node_name,
-                    },
+                    }),
                     annotations={
                         "argocd.argoproj.io/compare-options": "IgnoreExtraneous",
                     },
@@ -207,10 +207,7 @@ class LLMPodManager:
                 spec=client.V1DeploymentSpec(
                     replicas=1,
                     selector=client.V1LabelSelector(
-                        match_labels={
-                            "app": base_name,
-                            "thinkube.io/target-node": node_name,
-                        }
+                        match_labels=selector_labels,
                     ),
                     template=pod_template,
                 ),
