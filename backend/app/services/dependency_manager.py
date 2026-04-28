@@ -305,6 +305,13 @@ class DependencyManager:
                     True,
                     f"Component '{name}' already exists and will be redeployed",
                 )
+            elif existing.type == "user_app" and service_type == "component":
+                existing.type = "component"
+                self.db.commit()
+                return (
+                    True,
+                    f"'{name}' upgraded from user_app to component and will be redeployed",
+                )
             else:
                 return (
                     False,

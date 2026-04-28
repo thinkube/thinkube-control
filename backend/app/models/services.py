@@ -31,7 +31,7 @@ class Service(Base):
     __tablename__ = "services"
     __table_args__ = (
         CheckConstraint(
-            "type IN ('core', 'optional', 'user_app')", name="check_service_type"
+            "type IN ('core', 'optional', 'user_app', 'component')", name="check_service_type"
         ),
     )
 
