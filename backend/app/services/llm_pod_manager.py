@@ -71,8 +71,8 @@ class LLMPodManager:
     def _get_base_deployment_name(self, backend_type: str) -> str:
         names = {
             "ollama": "ollama",
-            "vllm": "vllm",
-            "tensorrt-llm": "tensorrt",
+            "vllm": "vllm-inference",
+            "tensorrt-llm": "tensorrt-inference",
         }
         return names.get(backend_type, backend_type)
 
