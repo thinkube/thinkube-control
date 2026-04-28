@@ -20,7 +20,11 @@ from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
 sys.path.insert(0, '/home/thinkube-control/scripts')
-from thinkube_yaml_validator import validate_knative_constraints as _validate_knative_constraints
+from thinkube_yaml_validator import (
+    validate_knative_constraints as _validate_knative_constraints,
+    validate_component_constraints as _validate_component_constraints,
+    validate_replicas as _validate_replicas,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -204,9 +208,18 @@ class ManifestGenerator:
 
         # Validate Knative portability constraints
         violations = _validate_knative_constraints(self.thinkube_config)
+        violations.extend(_validate_component_constraints(self.thinkube_config))
+        violations.extend(_validate_replicas(self.thinkube_config))
         if violations:
             msg = "thinkube.yaml validation failed:\n" + "\n".join(f"  - {v}" for v in violations)
             raise ValueError(msg)
+
+        # Set replicas default at parse time (not in Jinja2 templates)
+        deployment = self.thinkube_config.get('spec', {}).get('deployment', {})
+        if 'replicas' not in deployment:
+            if 'deployment' not in self.thinkube_config.get('spec', {}):
+                self.thinkube_config['spec']['deployment'] = {}
+            self.thinkube_config['spec']['deployment']['replicas'] = 1
 
         # Fetch cluster secrets
         self._fetch_secrets()

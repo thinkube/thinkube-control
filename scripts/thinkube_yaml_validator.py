@@ -95,3 +95,29 @@ def validate_component_constraints(config: Dict[str, Any]) -> List[str]:
         )
 
     return errors
+
+
+def validate_replicas(config: Dict[str, Any]) -> List[str]:
+    """Return a list of constraint violations for the replicas field.
+
+    - replicas must be a non-negative integer when present
+    - replicas is forbidden when type is knative (use minScale/maxScale instead)
+    """
+    spec = config.get('spec', {})
+    deployment = spec.get('deployment', {})
+    errors = []
+
+    if 'replicas' in deployment:
+        replicas = deployment['replicas']
+        if not isinstance(replicas, int) or replicas < 0:
+            errors.append(
+                f"spec.deployment.replicas must be a non-negative integer, "
+                f"got: {replicas}"
+            )
+        if deployment.get('type') == 'knative':
+            errors.append(
+                "spec.deployment.replicas is not allowed for Knative services. "
+                "Use minScale/maxScale instead."
+            )
+
+    return errors

@@ -13,7 +13,7 @@ metadata:
     app.kubernetes.io/component: {{ container.name }}
     app.kubernetes.io/managed-by: argocd
 spec:
-  replicas: 1
+  replicas: {{ thinkube_spec.spec.deployment.replicas }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ project_name }}

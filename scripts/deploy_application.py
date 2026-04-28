@@ -362,7 +362,7 @@ git reset --hard origin/main
 
     async def parse_thinkube_yaml(self):
         """Parse and validate thinkube.yaml configuration."""
-        from thinkube_yaml_validator import validate_knative_constraints, validate_component_constraints
+        from thinkube_yaml_validator import validate_knative_constraints, validate_component_constraints, validate_replicas
 
         config_path = Path(self.local_repo_path) / "thinkube.yaml"
         try:
@@ -376,6 +376,7 @@ git reset --hard origin/main
 
             violations = validate_knative_constraints(self.thinkube_config)
             violations.extend(validate_component_constraints(self.thinkube_config))
+            violations.extend(validate_replicas(self.thinkube_config))
             if violations:
                 msg = "thinkube.yaml validation failed:\n" + "\n".join(f"  - {v}" for v in violations)
                 DeploymentLogger.error(msg)
@@ -388,6 +389,12 @@ git reset --hard origin/main
                         f"Component name mismatch: manifest declares '{manifest_name}' "
                         f"but deployment was requested as '{self.app_name}'"
                     )
+
+            deployment = self.thinkube_config.get('spec', {}).get('deployment', {})
+            if 'replicas' not in deployment:
+                if 'deployment' not in self.thinkube_config.get('spec', {}):
+                    self.thinkube_config['spec']['deployment'] = {}
+                self.thinkube_config['spec']['deployment']['replicas'] = 1
 
             DeploymentLogger.log("Parsed and validated thinkube.yaml configuration")
         except ValueError:
