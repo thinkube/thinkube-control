@@ -22,6 +22,7 @@ interface Component {
   icon?: string
   is_installed?: boolean
   installed?: boolean  // Legacy support
+  component_version?: string
   requirements?: string[]
   requirements_met?: boolean
   missing_requirements?: string[]
@@ -79,6 +80,11 @@ export function ComponentCard({
                 </TkBadge>
               ) : (
                 <TkBadge appearance="outlined">Not Installed</TkBadge>
+              )}
+              {component.component_version && (
+                <TkBadge appearance="outlined" className="text-xs">
+                  v{component.component_version}
+                </TkBadge>
               )}
             </div>
           </div>

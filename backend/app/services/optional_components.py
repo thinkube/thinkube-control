@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+import yaml
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 from datetime import datetime
@@ -112,10 +113,12 @@ class OptionalComponentService:
         
         catalog = get_components_catalog()
         for name, info in catalog.items():
+            installed = self._check_if_installed(name)
             component = {
                 **info,
                 "name": name,
-                "installed": self._check_if_installed(name),
+                "installed": installed,
+                "component_version": self._get_component_version(name) if installed else None,
                 "requirements_met": self._check_requirements(info["requirements"]),
                 "missing_requirements": self._get_missing_requirements(info["requirements"])
             }
@@ -138,10 +141,12 @@ class OptionalComponentService:
             return None
 
         info = catalog[component_name]
+        installed = self._check_if_installed(component_name)
         return {
             **info,
             "name": component_name,
-            "installed": self._check_if_installed(component_name),
+            "installed": installed,
+            "component_version": self._get_component_version(component_name) if installed else None,
             "requirements_met": self._check_requirements(info["requirements"]),
             "missing_requirements": self._get_missing_requirements(info["requirements"]),
             "status": self._get_component_status(component_name)
@@ -185,6 +190,32 @@ class OptionalComponentService:
         except ApiException:
             return False
             
+    def _get_component_version(self, component_name: str) -> Optional[str]:
+        """Read component_version from the thinkube-service-config ConfigMap"""
+        if not self.core_v1:
+            return None
+
+        try:
+            catalog = get_components_catalog()
+            if component_name not in catalog:
+                return None
+            namespace = catalog[component_name]["namespace"]
+
+            configmap = self.core_v1.read_namespaced_config_map(
+                name="thinkube-service-config",
+                namespace=namespace
+            )
+
+            service_yaml = configmap.data.get("service.yaml") if configmap.data else None
+            if service_yaml:
+                parsed = yaml.safe_load(service_yaml)
+                service = parsed.get("service", parsed)
+                return service.get("component_version")
+        except (ApiException, Exception):
+            pass
+
+        return None
+
     def _check_requirements(self, requirements: List[str]) -> bool:
         """
         Check if all requirements for a component are met

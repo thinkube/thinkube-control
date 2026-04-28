@@ -36,6 +36,7 @@ class ComponentResponse(BaseModel):
     category: str
     icon: str
     installed: bool
+    component_version: Optional[str] = None
     requirements_met: bool
     missing_requirements: List[str]
     estimated_time: int
@@ -77,6 +78,7 @@ async def list_optional_components(
                 category=comp["category"],
                 icon=comp["icon"],
                 installed=comp["installed"],
+                component_version=comp.get("component_version"),
                 requirements_met=comp["requirements_met"],
                 missing_requirements=comp["missing_requirements"],
                 estimated_time=comp.get("estimated_time", 10)
