@@ -103,7 +103,20 @@ class LLMPodManager:
 
         existing = self._managed.get(key)
         if existing and existing.ready and existing.pod_ip:
-            return True, existing
+            loop = asyncio.get_event_loop()
+            pod_info = await loop.run_in_executor(
+                _k8s_executor,
+                self._find_pod_for_deployment,
+                existing.namespace,
+                self._get_base_deployment_name(backend_type),
+                node_name,
+            )
+            if pod_info and pod_info[2]:
+                existing.pod_ip = pod_info[0]
+                existing.pod_name = pod_info[1]
+                return True, existing
+            logger.info(f"Cached pod for {key} no longer exists, recreating")
+            self._managed.pop(key, None)
 
         if key in self._creating:
             event = self._creating[key]

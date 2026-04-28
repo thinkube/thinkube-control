@@ -145,7 +145,7 @@ class LLMLifecycleManager:
                 )
 
         backend_id = f"ollama-{node}"
-        llm_model_registry.update_model_state(model_id, ModelState.loading, backend_id)
+        llm_model_registry.update_model_state(model_id, ModelState.loading)
 
         asyncio.create_task(
             self._load_ollama_background(model_id, keep_alive, node, backend_id, estimated_memory)
@@ -299,7 +299,7 @@ class LLMLifecycleManager:
         if entry.tool_use:
             payload["tool_use"] = entry.tool_use
 
-        llm_model_registry.update_model_state(model_id, ModelState.loading, target_backend.id)
+        llm_model_registry.update_model_state(model_id, ModelState.loading)
 
         asyncio.create_task(
             self._load_performance_background(
