@@ -132,6 +132,7 @@ class ServiceDiscovery:
                 ]
 
             # Get deployment status if resources exist
+            is_gateway_managed = scaling.get("gateway_managed", False)
             total_replicas = 0
             total_ready_replicas = 0
 
@@ -144,9 +145,19 @@ class ServiceDiscovery:
                 total_replicas += replicas
                 total_ready_replicas += ready_replicas
 
+            if is_gateway_managed:
+                gw_replicas, gw_ready = self._count_gateway_pods(
+                    scaling.get("namespace", configmap.metadata.namespace)
+                )
+                total_replicas += gw_replicas
+                total_ready_replicas += gw_ready
+
             # Use totals for multi-container apps
             replicas = total_replicas
             ready_replicas = total_ready_replicas
+
+            # Gateway-managed services are always "enabled" even with 0 base replicas
+            is_enabled = replicas > 0 or is_gateway_managed
 
             # Create service model
             service = ServiceModel(
@@ -159,8 +170,8 @@ class ServiceDiscovery:
                 icon=svc.get("icon", "mdi-server"),
                 url=None,  # Will be set from primary endpoint
                 health_endpoint=None,  # Will be set from primary endpoint
-                is_enabled=replicas > 0,
-                original_replicas=replicas or 1,
+                is_enabled=is_enabled,
+                original_replicas=replicas if replicas > 0 else (0 if is_gateway_managed else 1),
                 dependencies=svc.get("dependencies", []),
                 resource_type=(
                     resources[0].get("resource_type", "deployment")
@@ -172,14 +183,15 @@ class ServiceDiscovery:
                     if resources
                     else svc["name"]
                 ),
-                min_replicas=scaling.get("min_replicas", 1),
+                min_replicas=scaling.get("min_replicas", 0 if is_gateway_managed else 1),
                 can_disable=scaling.get("can_disable", True),
                 service_metadata={
                     "configmap": configmap.metadata.name,
                     "configmap_namespace": configmap.metadata.namespace,
                     "replicas": replicas,
                     "ready_replicas": ready_replicas,
-                    "resources": resources,  # Store all resources for enable/disable operations
+                    "resources": resources,
+                    "gateway_managed": is_gateway_managed,
                 },
             )
 
@@ -270,6 +282,26 @@ class ServiceDiscovery:
                 f"Error getting replicas for {resource_type}/{resource_name} in {namespace}: {e}"
             )
         return 0, 0
+
+    def _count_gateway_pods(self, namespace: str) -> tuple[int, int]:
+        """Count gateway-managed pods in a namespace."""
+        try:
+            pods = self.core_v1.list_namespaced_pod(
+                namespace,
+                label_selector="thinkube.io/managed-by=llm-gateway",
+            )
+            total = 0
+            ready = 0
+            for pod in pods.items:
+                if pod.status.phase in ("Running", "Pending"):
+                    total += 1
+                    conditions = pod.status.conditions or []
+                    if any(c.type == "Ready" and c.status == "True" for c in conditions):
+                        ready += 1
+            return total, ready
+        except Exception as e:
+            logger.debug(f"Gateway pod count failed for {namespace}: {e}")
+            return 0, 0
 
     def _sync_services(self, discovered: Dict[str, List[ServiceModel]]):
         """Sync discovered services with database using UPSERT pattern"""

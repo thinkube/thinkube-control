@@ -112,7 +112,7 @@ class ServiceHealth(Base):
     __tablename__ = "service_health"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('healthy', 'unhealthy', 'unknown', 'disabled')",
+            "status IN ('healthy', 'unhealthy', 'unknown', 'disabled', 'idle')",
             name="check_health_status",
         ),
     )
@@ -202,7 +202,7 @@ class ServiceEndpoint(Base):
             name="check_endpoint_type",
         ),
         CheckConstraint(
-            "health_status IN ('healthy', 'unhealthy', 'unknown')",
+            "health_status IN ('healthy', 'unhealthy', 'unknown', 'idle')",
             name="check_endpoint_health_status",
         ),
     )

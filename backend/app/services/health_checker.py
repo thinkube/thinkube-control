@@ -268,6 +268,20 @@ class HealthCheckService:
                 db.add(health_record)
                 return
 
+            # Gateway-managed services with no active pods are idle, not unhealthy
+            metadata = service.service_metadata or {}
+            if metadata.get("gateway_managed"):
+                gw_replicas = metadata.get("replicas", 0)
+                gw_ready = metadata.get("ready_replicas", 0)
+                if gw_replicas == 0:
+                    health_record.status = "idle"
+                    health_record.details = {"gateway_managed": True, "active_pods": 0}
+                    db.add(health_record)
+                    for ep in service.endpoints:
+                        ep.last_health_check = datetime.utcnow()
+                        ep.health_status = "idle"
+                    return
+
             # Check primary endpoint first, fallback to others
             primary_endpoint = None
             for ep in service.endpoints:

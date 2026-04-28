@@ -43,6 +43,7 @@ export function ServiceCard({
     unhealthy: 'var(--color-error)',
     unknown: 'var(--color-warning)',
     disabled: 'var(--muted-foreground)',
+    idle: 'var(--muted-foreground)',
   }[healthStatus] || 'var(--muted-foreground)';
 
   const statusBadgeStatus = {
@@ -50,6 +51,7 @@ export function ServiceCard({
     unhealthy: 'unhealthy' as const,
     unknown: 'warning' as const,
     disabled: 'pending' as const,
+    idle: 'pending' as const,
   }[healthStatus] || 'pending' as const;
 
   const statusLabel = {
@@ -57,6 +59,7 @@ export function ServiceCard({
     unhealthy: 'Unhealthy',
     unknown: 'Unknown',
     disabled: 'Disabled',
+    idle: 'Idle',
   }[healthStatus] || 'Unknown';
 
   // Type badge category
