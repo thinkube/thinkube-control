@@ -507,6 +507,7 @@ export default function LLMGatewayPage() {
         <LoadModelDialog
           modelId={loadDialog.id}
           modelName={loadDialog.name}
+          serverType={loadDialog.server_type || []}
           size={loadDialog.size}
           quantization={loadDialog.quantization}
           params_b={loadDialog.params_b}
