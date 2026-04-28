@@ -83,6 +83,18 @@ class LLMLifecycleManager:
             message=f"No supported backend for model '{model_id}' with server_type={entry.server_type}"
         )
 
+    def _gpus_needed(self, estimated_memory_gb: float, node_name: str) -> int:
+        import math
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+
+        node = llm_gpu_tracker.get_node(node_name)
+        if not node or node.shared_memory:
+            return 1
+        per_gpu = node.per_gpu_memory_gb
+        if per_gpu <= 0:
+            return 1
+        return math.ceil(estimated_memory_gb / (per_gpu * llm_gpu_tracker._memory_threshold))
+
     async def _load_ollama(
         self, model_id: str, keep_alive: Optional[str] = None, node: Optional[str] = None
     ) -> ModelLoadResponse:
@@ -97,7 +109,11 @@ class LLMLifecycleManager:
                 message="A target node is required to load a model"
             )
 
-        success, managed_pod = await llm_pod_manager.ensure_pod("ollama", node)
+        entry = llm_model_registry.get_model(model_id)
+        estimated_memory = self._estimate_memory(entry)
+        gpu_count = self._gpus_needed(estimated_memory, node)
+
+        success, managed_pod = await llm_pod_manager.ensure_pod("ollama", node, gpu_count=gpu_count)
         if not success:
             return ModelLoadResponse(
                 model_id=model_id, state=ModelState.deployable,
@@ -109,9 +125,6 @@ class LLMLifecycleManager:
                 model_id=model_id, state=ModelState.deployable,
                 message=f"Ollama pod on {node} is not responding"
             )
-
-        entry = llm_model_registry.get_model(model_id)
-        estimated_memory = self._estimate_memory(entry)
 
         can_load, reason = llm_gpu_tracker.check_can_load(
             estimated_memory, node_name=node
@@ -243,7 +256,10 @@ class LLMLifecycleManager:
                 message=f"No performance backend type found for {entry.server_type}"
             )
 
-        success, managed_pod = await llm_pod_manager.ensure_pod(perf_type, node)
+        estimated_memory = self._estimate_memory(entry)
+        gpu_count = self._gpus_needed(estimated_memory, node)
+
+        success, managed_pod = await llm_pod_manager.ensure_pod(perf_type, node, gpu_count=gpu_count)
         if not success:
             return ModelLoadResponse(
                 model_id=model_id, state=ModelState.deployable,
@@ -266,7 +282,6 @@ class LLMLifecycleManager:
 
         target_backend = compatible[0]
 
-        estimated_memory = self._estimate_memory(entry)
         can_load, reason = llm_gpu_tracker.check_can_load(
             estimated_memory, node_name=target_backend.node
         )

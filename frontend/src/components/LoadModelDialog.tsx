@@ -36,6 +36,7 @@ interface GPUNode {
   total_slots: number;
   available_slots: number;
   total_memory_gb: number;
+  per_gpu_memory_gb: number;
   used_memory_gb: number;
   shared_memory: boolean;
   allocations: GPUAllocation[];
@@ -171,9 +172,13 @@ export default function LoadModelDialog({
   const selectedNodeData = options?.gpu_nodes.find(
     (n) => n.name === selectedNode
   );
+  const estimatedMem = options?.estimated_memory_gb || 0;
   const projectedUsage = selectedNodeData
-    ? selectedNodeData.used_memory_gb + (options?.estimated_memory_gb || 0)
+    ? selectedNodeData.used_memory_gb + estimatedMem
     : 0;
+  const gpusNeeded = selectedNodeData && selectedNodeData.per_gpu_memory_gb > 0 && !selectedNodeData.shared_memory
+    ? Math.ceil(estimatedMem / (selectedNodeData.per_gpu_memory_gb * 0.85))
+    : 1;
 
   return (
     <TkDialogRoot open={open} onOpenChange={onOpenChange}>
@@ -238,8 +243,7 @@ export default function LoadModelDialog({
                   <TkSelectContent>
                     {options.gpu_nodes.map((n) => (
                       <TkSelectItem key={n.name} value={n.name}>
-                        {n.name} — {formatGpuProduct(n.gpu_product)} (
-                        {n.used_memory_gb.toFixed(1)} / {n.total_memory_gb.toFixed(0)} GB)
+                        {n.name} — {n.gpu_count > 1 ? `${n.gpu_count}x ` : ''}{formatGpuProduct(n.gpu_product)} ({n.per_gpu_memory_gb.toFixed(0)}GB{n.gpu_count > 1 ? ' each' : ''})
                       </TkSelectItem>
                     ))}
                   </TkSelectContent>
@@ -276,29 +280,46 @@ export default function LoadModelDialog({
                   <div>
                     <div className="font-medium">{selectedNodeData.name}</div>
                     <div className="text-sm text-muted-foreground">
-                      {formatGpuProduct(selectedNodeData.gpu_product)}
                       {selectedNodeData.gpu_count > 1
-                        ? ` (${selectedNodeData.gpu_count}x)`
+                        ? `${selectedNodeData.gpu_count}x `
                         : ''}
+                      {formatGpuProduct(selectedNodeData.gpu_product)}
+                      {' '}({selectedNodeData.per_gpu_memory_gb.toFixed(0)}GB{selectedNodeData.gpu_count > 1 ? ' each' : ''})
                       {selectedNodeData.shared_memory ? ' — Time-sliced' : ''}
                     </div>
                   </div>
                   <TkSemicircularGauge
-                    value={projectedUsage}
-                    max={selectedNodeData.total_memory_gb}
-                    label="After Load"
+                    value={estimatedMem}
+                    max={selectedNodeData.shared_memory
+                      ? selectedNodeData.total_memory_gb
+                      : selectedNodeData.per_gpu_memory_gb * gpusNeeded}
+                    label="Model"
                     unit="GB"
                     size={100}
                   />
                 </div>
+                {!selectedNodeData.shared_memory && gpusNeeded > 1 && (
+                  <div className="text-sm text-warning mb-1">
+                    Requires {gpusNeeded} GPUs (tensor parallelism)
+                  </div>
+                )}
+                {!selectedNodeData.shared_memory && gpusNeeded > selectedNodeData.available_slots && (
+                  <div className="text-sm text-destructive mb-1">
+                    Not enough GPUs available ({selectedNodeData.available_slots} free)
+                  </div>
+                )}
                 <div className="text-sm text-muted-foreground">
-                  Current: {selectedNodeData.used_memory_gb.toFixed(1)} GB
-                  {' → '}
-                  Projected: {projectedUsage.toFixed(1)} /{' '}
-                  {selectedNodeData.total_memory_gb.toFixed(0)} GB
+                  Model: {estimatedMem.toFixed(1)}GB
+                  {' / '}
+                  {selectedNodeData.shared_memory
+                    ? `${selectedNodeData.total_memory_gb.toFixed(0)}GB pool`
+                    : gpusNeeded > 1
+                      ? `${gpusNeeded}x ${selectedNodeData.per_gpu_memory_gb.toFixed(0)}GB`
+                      : `${selectedNodeData.per_gpu_memory_gb.toFixed(0)}GB GPU`
+                  }
                 </div>
                 <div className="text-sm text-muted-foreground">
-                  Slots: {selectedNodeData.available_slots} /{' '}
+                  GPUs: {selectedNodeData.available_slots} /{' '}
                   {selectedNodeData.total_slots} available
                 </div>
               </div>

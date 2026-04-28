@@ -17,9 +17,6 @@ class LLMGPUTracker:
         self._memory_threshold = float(
             os.getenv("LLM_GPU_MEMORY_THRESHOLD", "0.85")
         )
-        self._system_reserved_gb = float(
-            os.getenv("LLM_GPU_SYSTEM_RESERVED_GB", "10")
-        )
         self._memory_map = self._parse_memory_map()
         self._fallback_memory_gb = float(
             os.getenv("LLM_GPU_TOTAL_MEMORY_GB", "128")
@@ -65,14 +62,15 @@ class LLMGPUTracker:
                 gpu_memory_mb = labels.get("nvidia.com/gpu.memory", "")
                 sharing = labels.get("nvidia.com/gpu.sharing-strategy", "none")
 
+                # gpu.memory label and memory_map values are per-GPU
                 if gpu_memory_mb:
-                    raw_memory = float(gpu_memory_mb) / 1024.0 * gpu_count
+                    per_gpu_memory = float(gpu_memory_mb) / 1024.0
                 elif product in self._memory_map:
-                    raw_memory = self._memory_map[product]
+                    per_gpu_memory = self._memory_map[product]
                 else:
-                    raw_memory = self._fallback_memory_gb
+                    per_gpu_memory = self._fallback_memory_gb
 
-                total_memory = max(raw_memory - self._system_reserved_gb, 1.0)
+                total_memory = per_gpu_memory * gpu_count
 
                 self._gpu_nodes[name] = GPUNode(
                     name=name,
@@ -83,6 +81,7 @@ class LLMGPUTracker:
                     total_slots=gpu_slots,
                     available_slots=gpu_slots,
                     total_memory_gb=total_memory,
+                    per_gpu_memory_gb=per_gpu_memory,
                     used_memory_gb=0.0,
                     shared_memory=(sharing == "time-slicing"),
                     allocations=[],
@@ -90,17 +89,19 @@ class LLMGPUTracker:
                 self._allocations[name] = []
                 logger.info(
                     f"GPU node discovered: {name} — {product} "
-                    f"({gpu_count}x, {raw_memory:.0f}GB raw, "
-                    f"{total_memory:.0f}GB usable, {gpu_slots} slots)"
+                    f"({gpu_count}x, {per_gpu_memory:.0f}GB/GPU, "
+                    f"{total_memory:.0f}GB total, {gpu_slots} slots)"
                 )
 
         except Exception as e:
             logger.warning(f"GPU node discovery failed, using fallback: {e}")
+            fallback_total = max(self._fallback_memory_gb, 1.0)
             self._gpu_nodes["gpu-pool"] = GPUNode(
                 name="gpu-pool",
                 total_slots=4,
                 available_slots=4,
-                total_memory_gb=max(self._fallback_memory_gb - self._system_reserved_gb, 1.0),
+                total_memory_gb=fallback_total,
+                per_gpu_memory_gb=fallback_total,
                 used_memory_gb=0.0,
             )
             self._allocations["gpu-pool"] = []
@@ -162,6 +163,8 @@ class LLMGPUTracker:
     def _check_node(
         self, node_name: str, estimated_memory_gb: float, slots_needed: int
     ) -> Tuple[bool, str]:
+        import math
+
         node = self._gpu_nodes.get(node_name)
         if not node:
             return False, f"Node '{node_name}' not found"
@@ -170,16 +173,36 @@ class LLMGPUTracker:
         used = sum(a.estimated_memory_gb for a in allocs)
         used_slots = sum(a.slots for a in allocs)
 
-        if node.total_slots - used_slots < slots_needed:
-            return False, f"Not enough slots on {node_name}: need {slots_needed}, have {node.total_slots - used_slots}"
+        per_gpu = node.per_gpu_memory_gb
+        if per_gpu <= 0:
+            per_gpu = node.total_memory_gb / max(node.gpu_count, 1)
 
-        projected = (used + estimated_memory_gb) / node.total_memory_gb
-        if projected > self._memory_threshold:
-            return False, (
-                f"Would exceed memory on {node_name}: "
-                f"{used:.1f} + {estimated_memory_gb:.1f} = {used + estimated_memory_gb:.1f}GB "
-                f"(limit: {self._memory_threshold * node.total_memory_gb:.1f}GB)"
-            )
+        if node.shared_memory:
+            # Time-sliced: models share physical memory pool
+            projected = (used + estimated_memory_gb) / node.total_memory_gb
+            if projected > self._memory_threshold:
+                return False, (
+                    f"Would exceed memory on {node_name}: "
+                    f"{used:.1f} + {estimated_memory_gb:.1f} = {used + estimated_memory_gb:.1f}GB "
+                    f"(limit: {self._memory_threshold * node.total_memory_gb:.1f}GB)"
+                )
+            if node.total_slots - used_slots < slots_needed:
+                return False, f"Not enough slots on {node_name}: need {slots_needed}, have {node.total_slots - used_slots}"
+        else:
+            # Discrete GPUs: model must fit within N GPUs (tensor parallelism)
+            gpus_needed = math.ceil(estimated_memory_gb / (per_gpu * self._memory_threshold))
+            if gpus_needed > node.gpu_count:
+                return False, (
+                    f"Model needs ~{estimated_memory_gb:.1f}GB but {node_name} only has "
+                    f"{node.gpu_count}x {per_gpu:.0f}GB GPUs ({node.total_memory_gb:.0f}GB total)"
+                )
+            actual_slots_needed = max(slots_needed, gpus_needed)
+            if node.total_slots - used_slots < actual_slots_needed:
+                return False, (
+                    f"Not enough GPU slots on {node_name}: need {actual_slots_needed}, "
+                    f"have {node.total_slots - used_slots}"
+                )
+
         return True, "ok"
 
     def record_allocation(
