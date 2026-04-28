@@ -57,6 +57,7 @@ class ModelsListResponse(BaseModel):
     available: int
     deployable: int
     registered: int
+    installed_backend_types: List[str] = Field(default_factory=list)
 
 
 class ModelStatusResponse(BaseModel):

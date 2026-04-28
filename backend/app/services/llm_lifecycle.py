@@ -526,14 +526,44 @@ class LLMLifecycleManager:
             return 4.0
 
         if getattr(entry, "params_b", None):
-            return self._estimate_from_params(entry.params_b, entry.quantization)
+            weight_gb = self._estimate_weight_gb(entry.params_b, entry.quantization)
+        else:
+            weight_gb = self._estimate_weight_from_size(entry)
+            if weight_gb is None:
+                return 4.0
 
+        kv_cache_gb = self._estimate_kv_cache_gb(entry)
+
+        # CUDA context + framework overhead
+        overhead_gb = 1.0
+
+        return round(weight_gb + kv_cache_gb + overhead_gb, 1)
+
+    def _estimate_weight_gb(self, params_b: float, quantization: Optional[str]) -> float:
+        quant = (quantization or "BF16").upper()
+        if "FP4" in quant or "NVFP4" in quant:
+            bpp = 0.5
+        elif "FP8" in quant:
+            bpp = 1.0
+        elif "BF16" in quant or "FP16" in quant or "F16" in quant:
+            bpp = 2.0
+        elif "Q4" in quant:
+            bpp = 0.56
+        elif "Q8" in quant:
+            bpp = 1.0
+        elif "1.58" in quant:
+            bpp = 0.2
+        else:
+            bpp = 1.0
+        return params_b * bpp
+
+    def _estimate_weight_from_size(self, entry) -> Optional[float]:
         size = entry.size or ""
         quant = (entry.quantization or "").lower()
 
         size_gb = self._parse_size_gb(size)
         if not size_gb:
-            return 4.0
+            return None
 
         is_gguf = any(
             st in ("ollama",) for st in (entry.server_type or [])
@@ -550,24 +580,35 @@ class LLMLifecycleManager:
             return size_gb * 0.55
         return size_gb * 0.35
 
-    def _estimate_from_params(self, params_b: float, quantization: Optional[str]) -> float:
-        quant = (quantization or "BF16").upper()
-        if "FP4" in quant or "NVFP4" in quant:
-            bpp = 0.5
-        elif "FP8" in quant:
-            bpp = 1.0
-        elif "BF16" in quant or "FP16" in quant or "F16" in quant:
-            bpp = 2.0
-        elif "Q4" in quant:
-            bpp = 0.56
-        elif "Q8" in quant:
-            bpp = 1.0
-        elif "1.58" in quant:
-            bpp = 0.2
-        else:
-            bpp = 1.0
-        weight_gb = params_b * bpp
-        return round(weight_gb * 1.2, 1)
+    def _estimate_kv_cache_gb(self, entry) -> float:
+        """Estimate KV cache memory from model params and context length.
+
+        Uses an empirical power-law fit against known transformer architectures
+        (Llama, Qwen, Gemma) to approximate KV bytes per token, then scales
+        by context length.  Ollama uses Q8 KV cache by default; vLLM/TensorRT
+        use FP16.
+        """
+        context = getattr(entry, "context_length", None)
+        if not context:
+            return 0.0
+
+        # Use active_params for MoE models (KV cache scales with hidden size,
+        # not total expert params)
+        params = getattr(entry, "active_params_b", None) or getattr(entry, "params_b", None)
+        if not params:
+            return 0.0
+
+        # Empirical fit: KV bytes/token ≈ 48000 × params^0.45 (FP16 basis)
+        #   7B → ~127KB (actual Llama 3 8B: 128KB)
+        #   70B → ~330KB (actual Llama 3 70B: 320KB)
+        kv_bytes_per_token = 48000 * (params ** 0.45)
+
+        # Ollama quantizes KV cache to Q8 by default
+        server_types = getattr(entry, "server_type", []) or []
+        if "ollama" in server_types and "vllm" not in server_types:
+            kv_bytes_per_token *= 0.5
+
+        return kv_bytes_per_token * context / 1e9
 
     def _parse_size_gb(self, size: str) -> Optional[float]:
         s = size.lower().replace(" ", "").lstrip("~")

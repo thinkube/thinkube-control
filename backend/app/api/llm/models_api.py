@@ -2,6 +2,8 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from kubernetes import client, config
+from kubernetes.client.rest import ApiException
 
 from app.api.llm.schemas import (
     ModelState,
@@ -13,6 +15,43 @@ from app.services.llm_model_registry import llm_model_registry
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+BACKEND_TYPE_NAMESPACES = {
+    "ollama": "ollama",
+    "vllm": "vllm",
+    "tensorrt-llm": "tensorrt",
+}
+
+_k8s_core_v1 = None
+
+
+def _get_k8s_client():
+    global _k8s_core_v1
+    if _k8s_core_v1 is None:
+        try:
+            config.load_incluster_config()
+        except config.ConfigException:
+            config.load_kube_config()
+        _k8s_core_v1 = client.CoreV1Api()
+    return _k8s_core_v1
+
+
+def _get_installed_backend_types() -> list[str]:
+    try:
+        v1 = _get_k8s_client()
+        installed = []
+        for backend_type, namespace in BACKEND_TYPE_NAMESPACES.items():
+            try:
+                v1.read_namespaced_config_map(
+                    name="thinkube-service-config", namespace=namespace
+                )
+                installed.append(backend_type)
+            except ApiException:
+                pass
+        return installed
+    except Exception as e:
+        logger.warning(f"Could not check installed backend types: {e}")
+        return []
 
 
 @router.get(
@@ -31,12 +70,15 @@ async def list_models(
     if server_type:
         models = [m for m in models if server_type in m.server_type]
 
+    installed = _get_installed_backend_types()
+
     return ModelsListResponse(
         models=models,
         total=len(models),
         available=sum(1 for m in models if m.state == ModelState.available),
         deployable=sum(1 for m in models if m.state == ModelState.deployable),
         registered=sum(1 for m in models if m.state == ModelState.registered),
+        installed_backend_types=installed,
     )
 
 

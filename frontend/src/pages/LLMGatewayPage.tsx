@@ -139,6 +139,7 @@ export default function LLMGatewayPage() {
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({});
   const [copied, setCopied] = useState(false);
   const [loadDialog, setLoadDialog] = useState<ModelEntry | null>(null);
+  const [installedBackendTypes, setInstalledBackendTypes] = useState<string[]>([]);
 
   const gatewayUrl = `https://llm.${window.location.hostname.split('.').slice(-2).join('.')}`;
 
@@ -152,6 +153,7 @@ export default function LLMGatewayPage() {
       setModels(modelsRes.data.models || []);
       setBackends(backendsRes.data.backends || []);
       setGpuStatus(gpuRes.data);
+      setInstalledBackendTypes(modelsRes.data.installed_backend_types || []);
       setError(null);
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || 'Failed to fetch LLM data');
@@ -490,6 +492,7 @@ export default function LLMGatewayPage() {
                       <ModelActions
                         model={model}
                         actionLoading={!!actionLoading[model.id]}
+                        installedBackendTypes={installedBackendTypes}
                         onLoad={() => setLoadDialog(model)}
                         onUnload={() => handleUnload(model.id)}
                       />
@@ -532,11 +535,13 @@ export default function LLMGatewayPage() {
 function ModelActions({
   model,
   actionLoading,
+  installedBackendTypes,
   onLoad,
   onUnload,
 }: {
   model: ModelEntry;
   actionLoading: boolean;
+  installedBackendTypes: string[];
   onLoad: () => void;
   onUnload: () => void;
 }) {
@@ -584,6 +589,18 @@ function ModelActions({
       return label ? (
         <TkBadge appearance="muted">{label}</TkBadge>
       ) : null;
+    }
+
+    const hasInstalledBackend = model.server_type.some(t => installedBackendTypes.includes(t));
+    if (!hasInstalledBackend) {
+      const missing = model.server_type
+        .filter(t => LOADABLE_TYPES.has(t))
+        .join(', ');
+      return (
+        <span className="text-xs text-muted-foreground max-w-[200px] text-right">
+          Requires {missing}
+        </span>
+      );
     }
 
     return (

@@ -17,6 +17,9 @@ class LLMGPUTracker:
         self._memory_threshold = float(
             os.getenv("LLM_GPU_MEMORY_THRESHOLD", "0.85")
         )
+        self._system_reserved_gb = float(
+            os.getenv("LLM_GPU_SYSTEM_RESERVED_GB", "10")
+        )
         self._memory_map = self._parse_memory_map()
         self._fallback_memory_gb = float(
             os.getenv("LLM_GPU_TOTAL_MEMORY_GB", "128")
@@ -63,11 +66,13 @@ class LLMGPUTracker:
                 sharing = labels.get("nvidia.com/gpu.sharing-strategy", "none")
 
                 if gpu_memory_mb:
-                    total_memory = float(gpu_memory_mb) / 1024.0 * gpu_count
+                    raw_memory = float(gpu_memory_mb) / 1024.0 * gpu_count
                 elif product in self._memory_map:
-                    total_memory = self._memory_map[product]
+                    raw_memory = self._memory_map[product]
                 else:
-                    total_memory = self._fallback_memory_gb
+                    raw_memory = self._fallback_memory_gb
+
+                total_memory = max(raw_memory - self._system_reserved_gb, 1.0)
 
                 self._gpu_nodes[name] = GPUNode(
                     name=name,
@@ -85,7 +90,8 @@ class LLMGPUTracker:
                 self._allocations[name] = []
                 logger.info(
                     f"GPU node discovered: {name} — {product} "
-                    f"({gpu_count}x, {total_memory:.0f}GB, {gpu_slots} slots)"
+                    f"({gpu_count}x, {raw_memory:.0f}GB raw, "
+                    f"{total_memory:.0f}GB usable, {gpu_slots} slots)"
                 )
 
         except Exception as e:
@@ -94,7 +100,7 @@ class LLMGPUTracker:
                 name="gpu-pool",
                 total_slots=4,
                 available_slots=4,
-                total_memory_gb=self._fallback_memory_gb,
+                total_memory_gb=max(self._fallback_memory_gb - self._system_reserved_gb, 1.0),
                 used_memory_gb=0.0,
             )
             self._allocations["gpu-pool"] = []
