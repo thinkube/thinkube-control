@@ -54,11 +54,6 @@ class LLMLifecycleManager:
             )
 
         resolved_backend = backend
-        if resolved_backend and "-" in resolved_backend:
-            parts = resolved_backend.split("-", 1)
-            if not node:
-                node = parts[1]
-            resolved_backend = parts[0]
 
         if not resolved_backend:
             resolved_tier = tier or (
