@@ -362,11 +362,15 @@ class LLMLifecycleManager:
                 logger.error(f"Failed to load '{model_id}' on {backend.id}: {error}")
                 await self._cleanup_empty_pod(llm_gpu_tracker, llm_pod_manager, perf_type, node)
         except Exception as e:
-            logger.error(f"Performance load failed for {model_id}: {e}")
+            body = ""
+            if hasattr(e, "response") and e.response is not None:
+                body = e.response.text[:500]
+            logger.error(f"Performance load failed for {model_id}: {e} | body={body}")
             llm_model_registry.update_model_state(
                 model_id, ModelState.deployable, error=str(e)
             )
-            await self._cleanup_empty_pod(llm_gpu_tracker, llm_pod_manager, perf_type, node)
+            # Cleanup temporarily disabled for debugging
+            # await self._cleanup_empty_pod(llm_gpu_tracker, llm_pod_manager, perf_type, node)
         finally:
             event.set()
             self._loading_locks.pop(model_id, None)
