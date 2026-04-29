@@ -333,6 +333,7 @@ class LLMLifecycleManager:
                     model_id, ModelState.deployable,
                     error=f"Backend pod on {node} did not become healthy",
                 )
+                await self._cleanup_empty_pod(llm_gpu_tracker, llm_pod_manager, perf_type, node)
                 return
 
             async with httpx.AsyncClient(
@@ -359,14 +360,26 @@ class LLMLifecycleManager:
                     model_id, ModelState.deployable, error=error
                 )
                 logger.error(f"Failed to load '{model_id}' on {backend.id}: {error}")
+                await self._cleanup_empty_pod(llm_gpu_tracker, llm_pod_manager, perf_type, node)
         except Exception as e:
             logger.error(f"Performance load failed for {model_id}: {e}")
             llm_model_registry.update_model_state(
                 model_id, ModelState.deployable, error=str(e)
             )
+            await self._cleanup_empty_pod(llm_gpu_tracker, llm_pod_manager, perf_type, node)
         finally:
             event.set()
             self._loading_locks.pop(model_id, None)
+
+    async def _cleanup_empty_pod(self, gpu_tracker, pod_manager, perf_type: str, node: str):
+        """Delete a pod only if no models are allocated on this backend type + node."""
+        node_allocs = gpu_tracker._allocations.get(node, [])
+        backend_allocs = [a for a in node_allocs if perf_type in a.backend_id]
+        if not backend_allocs:
+            logger.info(f"No models on {perf_type}/{node}, deleting pod")
+            await pod_manager.delete_pod(perf_type, node)
+        else:
+            logger.info(f"Pod {perf_type}/{node} still has {len(backend_allocs)} model(s), keeping it")
 
     async def unload_model(self, model_id: str, force: bool = False) -> ModelLoadResponse:
         from app.services.llm_model_registry import llm_model_registry
