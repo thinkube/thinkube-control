@@ -229,6 +229,7 @@ class LLMBackendDiscovery:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _probe_backend(self, backend: BackendEntry):
+        from datetime import datetime
         try:
             if backend.type == "ollama":
                 await self._probe_ollama(backend)
@@ -238,6 +239,8 @@ class LLMBackendDiscovery:
             backend.status = "unhealthy"
             backend.models = []
             logger.debug(f"Backend {backend.id} probe failed: {e}")
+        finally:
+            backend.last_probe = datetime.utcnow().isoformat()
 
     async def _probe_ollama(self, backend: BackendEntry):
         resp = await self._client.get(f"{backend.url}/api/tags")
@@ -259,9 +262,6 @@ class LLMBackendDiscovery:
 
         backend.status = "healthy"
         backend.models = running
-        from datetime import datetime
-
-        backend.last_probe = datetime.utcnow().isoformat()
 
     async def _probe_openai_compatible(self, backend: BackendEntry):
         health_url = f"{backend.url}/health"
@@ -291,9 +291,6 @@ class LLMBackendDiscovery:
             backend.models = []
 
         backend.status = "healthy"
-        from datetime import datetime
-
-        backend.last_probe = datetime.utcnow().isoformat()
 
     async def start_polling(self):
         if self._is_running:

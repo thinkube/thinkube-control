@@ -369,7 +369,8 @@ class LLMLifecycleManager:
             llm_model_registry.update_model_state(
                 model_id, ModelState.deployable, error=str(e)
             )
-            await self._cleanup_empty_pod(llm_gpu_tracker, llm_pod_manager, perf_type, node)
+            # Cleanup temporarily disabled — need to read pod logs after failure
+            # await self._cleanup_empty_pod(llm_gpu_tracker, llm_pod_manager, perf_type, node)
         finally:
             event.set()
             self._loading_locks.pop(model_id, None)
