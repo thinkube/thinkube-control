@@ -10,7 +10,9 @@
       "quantization": "FP8",
       "description": "OpenAI GPT-OSS 20B model optimized for TensorRT-LLM",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 128000,
+      "params_b": 20
     },
     {
       "id": "openai/gpt-oss-120b",
@@ -20,7 +22,9 @@
       "quantization": "FP4",
       "description": "OpenAI GPT-OSS 120B model optimized for TensorRT-LLM",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 128000,
+      "params_b": 120
     },
     {
       "id": "nvidia/Llama-3.1-8B-Instruct-FP8",
@@ -30,7 +34,9 @@
       "quantization": "FP8",
       "description": "Meta Llama 3.1 8B instruction-tuned model",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 128000,
+      "params_b": 8
     },
     {
       "id": "nvidia/Llama-3.1-8B-Instruct-FP4",
@@ -40,7 +46,9 @@
       "quantization": "FP4",
       "description": "Meta Llama 3.1 8B instruction-tuned model",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 128000,
+      "params_b": 8
     },
     {
       "id": "nvidia/Llama-3.3-70B-Instruct-FP4",
@@ -50,7 +58,9 @@
       "quantization": "FP4",
       "description": "Meta Llama 3.3 70B instruction-tuned model",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 128000,
+      "params_b": 70
     },
     {
       "id": "nvidia/Llama-3_3-Nemotron-Super-49B-v1_5-FP8",
@@ -60,7 +70,9 @@
       "quantization": "FP8",
       "description": "NVIDIA Nemotron variant of Llama 3.3",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 128000,
+      "params_b": 49
     },
     {
       "id": "nvidia/Llama-4-Scout-17B-16E-Instruct-FP4",
@@ -70,7 +82,10 @@
       "quantization": "FP4",
       "description": "Meta Llama 4 Scout model",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 512000,
+      "params_b": 109,
+      "active_params_b": 17
     },
     {
       "id": "nvidia/Qwen3-8B-FP8",
@@ -80,7 +95,9 @@
       "quantization": "FP8",
       "description": "Alibaba Qwen3 8B model",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 128000,
+      "params_b": 8
     },
     {
       "id": "nvidia/Qwen3-8B-FP4",
@@ -90,7 +107,9 @@
       "quantization": "FP4",
       "description": "Alibaba Qwen3 8B model",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 128000,
+      "params_b": 8
     },
     {
       "id": "nvidia/Qwen3-14B-FP8",
@@ -100,7 +119,9 @@
       "quantization": "FP8",
       "description": "Alibaba Qwen3 14B model",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 128000,
+      "params_b": 14
     },
     {
       "id": "nvidia/Qwen3-14B-FP4",
@@ -110,7 +131,9 @@
       "quantization": "FP4",
       "description": "Alibaba Qwen3 14B model",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 128000,
+      "params_b": 14
     },
     {
       "id": "nvidia/Qwen3-32B-FP4",
@@ -120,7 +143,9 @@
       "quantization": "FP4",
       "description": "Alibaba Qwen3 32B model",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 128000,
+      "params_b": 32
     },
     {
       "id": "nvidia/Qwen3-30B-A3B-FP4",
@@ -130,7 +155,10 @@
       "quantization": "FP4",
       "description": "Alibaba Qwen3 30B-A3B model",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 128000,
+      "params_b": 30,
+      "active_params_b": 3
     },
     {
       "id": "nvidia/Qwen3-235B-A22B-FP4",
@@ -140,7 +168,10 @@
       "quantization": "FP4",
       "description": "Alibaba Qwen3 235B-A22B large model",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 128000,
+      "params_b": 235,
+      "active_params_b": 22
     },
     {
       "id": "nvidia/Qwen2.5-VL-7B-Instruct-FP8",
@@ -150,7 +181,9 @@
       "quantization": "FP8",
       "description": "Alibaba Qwen2.5 Vision-Language model",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 32768,
+      "params_b": 7
     },
     {
       "id": "nvidia/Qwen2.5-VL-7B-Instruct-FP4",
@@ -160,7 +193,9 @@
       "quantization": "FP4",
       "description": "Alibaba Qwen2.5 Vision-Language model",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 32768,
+      "params_b": 7
     },
     {
       "id": "nvidia/Phi-4-multimodal-instruct-FP8",
@@ -170,7 +205,9 @@
       "quantization": "FP8",
       "description": "Microsoft Phi-4 multimodal instruction-tuned model",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 128000,
+      "params_b": 5.6
     },
     {
       "id": "nvidia/Phi-4-multimodal-instruct-FP4",
@@ -180,7 +217,9 @@
       "quantization": "FP4",
       "description": "Microsoft Phi-4 multimodal instruction-tuned model",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 128000,
+      "params_b": 5.6
     },
     {
       "id": "nvidia/Phi-4-reasoning-plus-FP8",
@@ -190,7 +229,9 @@
       "quantization": "FP8",
       "description": "Microsoft Phi-4 reasoning-focused model",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 32768,
+      "params_b": 14
     },
     {
       "id": "nvidia/Phi-4-reasoning-plus-FP4",
@@ -200,7 +241,9 @@
       "quantization": "FP4",
       "description": "Microsoft Phi-4 reasoning-focused model",
       "server_type": ["tensorrt-llm"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 32768,
+      "params_b": 14
     },
     {
       "id": "Qwen/Qwen3.5-4B",
@@ -238,7 +281,10 @@
       "quantization": "BF16",
       "description": "Qwen3 30B MoE model (3B active params) for QLoRA fine-tuning. Supports GGUF export to Ollama.",
       "server_type": ["unsloth"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 128000,
+      "params_b": 30,
+      "active_params_b": 3
     },
     {
       "id": "unsloth/Llama-3.3-70B-Instruct",
@@ -248,7 +294,9 @@
       "quantization": "BF16",
       "description": "Meta Llama 3.3 70B for QLoRA fine-tuning. Supports GGUF export to Ollama.",
       "server_type": ["unsloth"],
-      "task": "text-generation"
+      "task": "text-generation",
+      "context_length": 128000,
+      "params_b": 70
     },
     {
       "id": "nomic-ai/nomic-embed-text-v1.5",
@@ -258,7 +306,9 @@
       "quantization": "FP16",
       "description": "Nomic's embedding model with 8192 token context and Matryoshka embedding support (256, 512, 768 dimensions). Apache 2.0 license.",
       "server_type": ["text-embeddings"],
-      "task": "feature-extraction"
+      "task": "feature-extraction",
+      "context_length": 8192,
+      "params_b": 0.14
     },
     {
       "id": "BAAI/bge-base-en-v1.5",
@@ -268,7 +318,9 @@
       "quantization": "FP16",
       "description": "BAAI's BGE base model. 768 dimensions, 512 token context. Top performer on MTEB benchmark. MIT license.",
       "server_type": ["text-embeddings"],
-      "task": "feature-extraction"
+      "task": "feature-extraction",
+      "context_length": 512,
+      "params_b": 0.11
     },
     {
       "id": "BAAI/bge-large-en-v1.5",
@@ -278,7 +330,9 @@
       "quantization": "FP16",
       "description": "BAAI's BGE large model. 1024 dimensions, 512 token context. Higher quality than base. MIT license.",
       "server_type": ["text-embeddings"],
-      "task": "feature-extraction"
+      "task": "feature-extraction",
+      "context_length": 512,
+      "params_b": 0.33
     },
     {
       "id": "Alibaba-NLP/gte-large-en-v1.5",
@@ -288,7 +342,9 @@
       "quantization": "FP16",
       "description": "Alibaba's GTE large model. 1024 dimensions, 8192 token context. State-of-the-art on MTEB. Apache 2.0 license.",
       "server_type": ["text-embeddings"],
-      "task": "feature-extraction"
+      "task": "feature-extraction",
+      "context_length": 8192,
+      "params_b": 0.43
     },
     {
       "id": "jinaai/jina-embeddings-v2-base-code",
@@ -298,7 +354,9 @@
       "quantization": "FP16",
       "description": "Jina's code embedding model. 768 dimensions, 8192 token context. Trained on code and documentation. Apache 2.0 license.",
       "server_type": ["text-embeddings"],
-      "task": "feature-extraction"
+      "task": "feature-extraction",
+      "context_length": 8192,
+      "params_b": 0.14
     },
     {
       "id": "jinaai/jina-embeddings-v3",
@@ -308,7 +366,9 @@
       "quantization": "FP16",
       "description": "Jina's latest multilingual model. 1024 dimensions, 8192 token context. Excellent for code and 89 languages. Apache 2.0 license.",
       "server_type": ["text-embeddings"],
-      "task": "feature-extraction"
+      "task": "feature-extraction",
+      "context_length": 8192,
+      "params_b": 0.57
     },
     {
       "id": "Qwen/Qwen3-Embedding-0.6B",

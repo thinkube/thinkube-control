@@ -26,6 +26,7 @@ class LLMLifecycleManager:
         keep_alive: Optional[str] = None,
         backend: Optional[str] = None,
         node: Optional[str] = None,
+        max_context_length: Optional[int] = None,
     ) -> ModelLoadResponse:
         from app.services.llm_model_registry import llm_model_registry
         from app.services.llm_gpu_tracker import llm_gpu_tracker
@@ -63,15 +64,15 @@ class LLMLifecycleManager:
             if resolved_tier == ModelTier.flexible and "ollama" in entry.server_type:
                 resolved_backend = "ollama"
             elif resolved_tier == ModelTier.performance:
-                return await self._load_performance(model_id, backend=backend, node=node)
+                return await self._load_performance(model_id, backend=backend, node=node, max_context_length=max_context_length)
             elif "ollama" in entry.server_type:
                 resolved_backend = "ollama"
 
         if resolved_backend == "ollama":
-            return await self._load_ollama(model_id, keep_alive, node)
+            return await self._load_ollama(model_id, keep_alive, node, max_context_length=max_context_length)
 
         if resolved_backend in ("vllm", "tensorrt-llm"):
-            return await self._load_performance(model_id, backend=backend, node=node)
+            return await self._load_performance(model_id, backend=backend, node=node, max_context_length=max_context_length)
 
         return ModelLoadResponse(
             model_id=model_id, state=entry.state,
@@ -93,7 +94,8 @@ class LLMLifecycleManager:
         return math.ceil(estimated_memory_gb / (per_gpu * llm_gpu_tracker._memory_threshold))
 
     async def _load_ollama(
-        self, model_id: str, keep_alive: Optional[str] = None, node: Optional[str] = None
+        self, model_id: str, keep_alive: Optional[str] = None, node: Optional[str] = None,
+        max_context_length: Optional[int] = None,
     ) -> ModelLoadResponse:
         from app.services.llm_model_registry import llm_model_registry
         from app.services.llm_gpu_tracker import llm_gpu_tracker
@@ -145,7 +147,9 @@ class LLMLifecycleManager:
         llm_model_registry.update_model_state(model_id, ModelState.loading)
 
         asyncio.create_task(
-            self._load_ollama_background(model_id, keep_alive, node, backend_id, estimated_memory)
+            self._load_ollama_background(
+                model_id, keep_alive, node, backend_id, estimated_memory, max_context_length
+            )
         )
 
         return ModelLoadResponse(
@@ -156,6 +160,7 @@ class LLMLifecycleManager:
     async def _load_ollama_background(
         self, model_id: str, keep_alive: Optional[str],
         target_node: Optional[str], backend_id: str, estimated_memory: float,
+        max_context_length: Optional[int] = None,
     ):
         from app.services.llm_model_registry import llm_model_registry
         from app.services.llm_gpu_tracker import llm_gpu_tracker
@@ -176,7 +181,7 @@ class LLMLifecycleManager:
 
             load_error = None
             if ollama_name:
-                success, load_error = await ollama_client.load_model(ollama_name, keep_alive, node=target_node)
+                success, load_error = await ollama_client.load_model(ollama_name, keep_alive, node=target_node, max_context_length=max_context_length)
             else:
                 gguf_path = await self._resolve_gguf_path(model_id)
                 if not gguf_path:
@@ -192,7 +197,7 @@ class LLMLifecycleManager:
                 success = await ollama_client.create_model(ollama_name, gguf_path, node=target_node)
                 if success:
                     llm_model_registry.register_ollama_alias(ollama_name, model_id)
-                    success, load_error = await ollama_client.load_model(ollama_name, keep_alive, node=target_node)
+                    success, load_error = await ollama_client.load_model(ollama_name, keep_alive, node=target_node, max_context_length=max_context_length)
                 else:
                     success = False
                     load_error = f"Failed to create Ollama model from GGUF"
@@ -220,6 +225,7 @@ class LLMLifecycleManager:
     async def _load_performance(
         self, model_id: str,
         backend: Optional[str] = None, node: Optional[str] = None,
+        max_context_length: Optional[int] = None,
     ) -> ModelLoadResponse:
         from app.services.llm_backend_discovery import llm_backend_discovery
         from app.services.llm_model_registry import llm_model_registry
@@ -253,7 +259,7 @@ class LLMLifecycleManager:
                 message=f"No performance backend type found for {entry.server_type}"
             )
 
-        estimated_memory = self._estimate_memory(entry)
+        estimated_memory = self._estimate_memory(entry, max_context_length)
         gpu_count = self._gpus_needed(estimated_memory, node)
 
         can_load, reason = await llm_gpu_tracker.check_can_load(
@@ -272,6 +278,8 @@ class LLMLifecycleManager:
             payload["reasoning_format"] = entry.reasoning_format
         if entry.tool_use:
             payload["tool_use"] = entry.tool_use
+        if max_context_length:
+            payload["max_context_length"] = max_context_length
 
         llm_model_registry.update_model_state(model_id, ModelState.loading)
 
@@ -540,7 +548,7 @@ class LLMLifecycleManager:
                 return name
         return None
 
-    def _estimate_memory(self, entry) -> float:
+    def _estimate_memory(self, entry, max_context_length: Optional[int] = None) -> float:
         if entry is None:
             return 4.0
 
@@ -551,9 +559,8 @@ class LLMLifecycleManager:
             if weight_gb is None:
                 return 4.0
 
-        kv_cache_gb = self._estimate_kv_cache_gb(entry)
+        kv_cache_gb = self._estimate_kv_cache_gb(entry, max_context_length)
 
-        # CUDA context + framework overhead
         overhead_gb = 1.0
 
         return round(weight_gb + kv_cache_gb + overhead_gb, 1)
@@ -599,7 +606,7 @@ class LLMLifecycleManager:
             return size_gb * 0.55
         return size_gb * 0.35
 
-    def _estimate_kv_cache_gb(self, entry) -> float:
+    def _estimate_kv_cache_gb(self, entry, max_context_length: Optional[int] = None) -> float:
         """Estimate KV cache memory from model params and context length.
 
         Uses an empirical power-law fit against known transformer architectures
@@ -607,7 +614,7 @@ class LLMLifecycleManager:
         by context length.  Ollama uses Q8 KV cache by default; vLLM/TensorRT
         use FP16.
         """
-        context = getattr(entry, "context_length", None)
+        context = max_context_length or getattr(entry, "context_length", None)
         if not context:
             return 0.0
 

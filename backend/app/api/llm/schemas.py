@@ -139,6 +139,7 @@ class LoadOptionsResponse(BaseModel):
     compatible_backends: List[LoadOptionBackend] = Field(default_factory=list)
     gpu_nodes: List[GPUNode] = Field(default_factory=list)
     estimated_memory_gb: float = 0.0
+    context_length: Optional[int] = None
 
 
 class ModelLoadRequest(BaseModel):
@@ -146,6 +147,7 @@ class ModelLoadRequest(BaseModel):
     keep_alive: Optional[str] = None
     backend: Optional[str] = None
     node: Optional[str] = None
+    max_context_length: Optional[int] = None
 
 
 class ModelLoadResponse(BaseModel):

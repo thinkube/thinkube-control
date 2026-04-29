@@ -150,10 +150,13 @@ class OllamaClient:
             return False
 
     async def load_model(
-        self, name: str, keep_alive: Optional[str] = None, node: Optional[str] = None
+        self, name: str, keep_alive: Optional[str] = None, node: Optional[str] = None,
+        max_context_length: Optional[int] = None,
     ) -> tuple[bool, Optional[str]]:
         payload: Dict[str, Any] = {"model": name, "prompt": ""}
         payload["keep_alive"] = keep_alive if keep_alive else -1
+        if max_context_length:
+            payload["options"] = {"num_ctx": max_context_length}
 
         try:
             client = self._get_client(node)

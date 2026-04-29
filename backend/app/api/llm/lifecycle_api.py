@@ -50,6 +50,7 @@ async def get_load_options(model_id: str):
         compatible_backends=backends,
         gpu_nodes=gpu_nodes,
         estimated_memory_gb=estimated_memory,
+        context_length=entry.context_length,
     )
 
 
@@ -69,6 +70,7 @@ async def load_model(model_id: str, request: ModelLoadRequest = ModelLoadRequest
         keep_alive=request.keep_alive,
         backend=request.backend,
         node=request.node,
+        max_context_length=request.max_context_length,
     )
     return result
 
