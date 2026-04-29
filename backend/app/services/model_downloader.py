@@ -270,23 +270,22 @@ os.makedirs(staging_base, exist_ok=True)
 staging_model_path = f'{{staging_base}}/{{model_name}}'
 
 print(f'Downloading model from HuggingFace to staging: {{staging_model_path}}', flush=True)
-print(f'Note: Files persist across pod restarts, resume_download=True will skip existing files', flush=True)
 
 allow_patterns = {repr(allow_patterns)}
 snapshot_download(
     repo_id=model_id,
     local_dir=staging_model_path,
-    resume_download=True,
     **({{'allow_patterns': allow_patterns}} if allow_patterns else {{}})
 )
 print(f'✓ Model downloaded to staging area', flush=True)
 
 # ============================================================
-# PHASE 1b: Fetch external custom code referenced by auto_map
+# PHASE 1b: Localize external custom code referenced by auto_map
 # ============================================================
-# Some models' config.json has an auto_map field pointing to .py files
-# in a DIFFERENT repo. Without these files, offline loading fails because
-# transformers tries to download them at runtime.
+# Some models' config.json has auto_map entries like:
+#   "AutoConfig": "nvidia/OTHER-REPO--configuration_foo.FooConfig"
+# transformers resolves the repo prefix via hf_hub_download, which fails offline.
+# Fix: download the .py files AND rewrite auto_map to local references.
 config_path = os.path.join(staging_model_path, 'config.json')
 if os.path.exists(config_path):
     with open(config_path) as _f:
@@ -299,27 +298,37 @@ if os.path.exists(config_path):
             if '/' in repo_part and repo_part != model_id:
                 external_repos.add(repo_part)
 
-    for ext_repo in external_repos:
-        print(f'auto_map references external repo: {{ext_repo}}', flush=True)
-        print(f'Downloading all .py files from {{ext_repo}} into model directory...', flush=True)
-        try:
-            repo_files = list_repo_files(ext_repo)
-            py_files = [f for f in repo_files if f.endswith('.py')]
-            for py_file in py_files:
-                dest = os.path.join(staging_model_path, py_file)
-                if not os.path.exists(dest):
-                    hf_hub_download(
-                        repo_id=ext_repo,
-                        filename=py_file,
-                        local_dir=staging_model_path,
-                    )
-                    print(f'  Downloaded: {{py_file}}', flush=True)
-                else:
-                    print(f'  Already exists: {{py_file}}', flush=True)
-            print(f'✓ Fetched {{len(py_files)}} .py file(s) from {{ext_repo}}', flush=True)
-        except Exception as ext_err:
-            print(f'⚠ Warning: Could not fetch custom code from {{ext_repo}}: {{ext_err}}', flush=True)
-            print(f'  Model may fail to load in offline mode if it requires custom code', flush=True)
+    if external_repos:
+        for ext_repo in external_repos:
+            print(f'auto_map references external repo: {{ext_repo}}', flush=True)
+            try:
+                repo_files = list_repo_files(ext_repo)
+                py_files = [f for f in repo_files if f.endswith('.py')]
+                for py_file in py_files:
+                    dest = os.path.join(staging_model_path, py_file)
+                    if not os.path.exists(dest):
+                        hf_hub_download(
+                            repo_id=ext_repo,
+                            filename=py_file,
+                            local_dir=staging_model_path,
+                        )
+                        print(f'  Downloaded: {{py_file}}', flush=True)
+                    else:
+                        print(f'  Already exists: {{py_file}}', flush=True)
+                print(f'✓ Fetched {{len(py_files)}} .py file(s) from {{ext_repo}}', flush=True)
+            except Exception as ext_err:
+                print(f'⚠ Warning: Could not fetch custom code from {{ext_repo}}: {{ext_err}}', flush=True)
+
+        new_auto_map = {{}}
+        for key, value in auto_map.items():
+            if '--' in value:
+                new_auto_map[key] = value.split('--', 1)[1]
+            else:
+                new_auto_map[key] = value
+        config_data['auto_map'] = new_auto_map
+        with open(config_path, 'w') as _f:
+            _json.dump(config_data, _f, indent=2)
+        print(f'✓ Rewrote auto_map to local references: {{new_auto_map}}', flush=True)
 
 # ============================================================
 # PHASE 2: Register in MLflow (authenticate NOW, after download)
