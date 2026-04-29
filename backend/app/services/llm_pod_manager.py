@@ -171,16 +171,16 @@ class LLMPodManager:
             base_name = self._get_base_deployment_name(backend_type)
             deploy_name = self._make_deployment_name(backend_type, node_name)
 
+            base = apps_v1.read_namespaced_deployment(base_name, namespace)
+
             try:
                 existing = apps_v1.read_namespaced_deployment(deploy_name, namespace)
                 if existing:
-                    logger.info(f"Deployment {deploy_name} already exists in {namespace}")
+                    self._sync_deployment_image(apps_v1, existing, base, namespace)
                     return True
             except client.rest.ApiException as e:
                 if e.status != 404:
                     raise
-
-            base = apps_v1.read_namespaced_deployment(base_name, namespace)
             pod_template = base.spec.template
 
             pod_template.spec.node_selector = {"kubernetes.io/hostname": node_name}
@@ -236,6 +236,26 @@ class LLMPodManager:
         except Exception as e:
             logger.error(f"Failed to create Deployment for {backend_type} on {node_name}: {e}")
             return False
+
+    def _sync_deployment_image(self, apps_v1, node_deploy, base_deploy, namespace: str):
+        """Patch node deployment if its container images don't match the base."""
+        base_images = {c.name: c.image for c in base_deploy.spec.template.spec.containers}
+        patches = []
+        for container in node_deploy.spec.template.spec.containers:
+            base_image = base_images.get(container.name)
+            if base_image and container.image != base_image:
+                patches.append({"name": container.name, "image": base_image})
+                logger.info(
+                    f"Image drift: {node_deploy.metadata.name}/{container.name} "
+                    f"{container.image} → {base_image}"
+                )
+        if patches:
+            apps_v1.patch_namespaced_deployment(
+                node_deploy.metadata.name,
+                namespace,
+                {"spec": {"template": {"spec": {"containers": patches}}}},
+            )
+            logger.info(f"Synced images for {node_deploy.metadata.name}")
 
     async def _wait_for_pod_ready(
         self, backend_type: str, node_name: str, timeout: int = 300
@@ -346,10 +366,10 @@ class LLMPodManager:
             return False
 
     async def reconcile(self):
-        """Discover existing gateway-managed Deployments on startup."""
+        """Discover existing gateway-managed Deployments and sync images on startup."""
         try:
             loop = asyncio.get_event_loop()
-            pods = await loop.run_in_executor(_k8s_executor, self._list_gateway_deployments)
+            pods = await loop.run_in_executor(_k8s_executor, self._reconcile_sync)
             for pod in pods:
                 key = f"{pod.backend_type}-{pod.node_name}"
                 self._managed[key] = pod
@@ -358,7 +378,8 @@ class LLMPodManager:
         except Exception as e:
             logger.error(f"Pod reconciliation failed: {e}")
 
-    def _list_gateway_deployments(self) -> List[ManagedPod]:
+    def _reconcile_sync(self) -> List[ManagedPod]:
+        """List gateway deployments and sync their images with base deployments."""
         results = []
         try:
             from kubernetes import client, config as k8s_config
@@ -369,10 +390,16 @@ class LLMPodManager:
                 k8s_config.load_kube_config()
 
             apps_v1 = client.AppsV1Api()
-            v1 = client.CoreV1Api()
 
-            for backend_type, namespace in BACKEND_NAMESPACES.items():
+            for backend_type in BACKEND_NAMESPACES:
                 ns = self._get_namespace(backend_type)
+                base_name = self._get_base_deployment_name(backend_type)
+
+                try:
+                    base = apps_v1.read_namespaced_deployment(base_name, ns)
+                except Exception:
+                    continue
+
                 try:
                     deploys = apps_v1.list_namespaced_deployment(
                         ns, label_selector=f"{GATEWAY_LABEL}={GATEWAY_LABEL_VALUE}"
@@ -385,7 +412,8 @@ class LLMPodManager:
                     if not node:
                         continue
 
-                    base_name = self._get_base_deployment_name(backend_type)
+                    self._sync_deployment_image(apps_v1, deploy, base, ns)
+
                     pod_info = self._find_pod_for_deployment(ns, base_name, node)
                     pod_ip = pod_info[0] if pod_info else None
                     pod_name = pod_info[1] if pod_info else None
