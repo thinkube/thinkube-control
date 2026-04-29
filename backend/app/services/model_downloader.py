@@ -218,7 +218,8 @@ import sys
 import tempfile
 import shutil
 from pathlib import Path
-from huggingface_hub import snapshot_download
+from huggingface_hub import snapshot_download, list_repo_files, hf_hub_download
+import json as _json
 import mlflow
 import mlflow.transformers
 import boto3
@@ -279,6 +280,46 @@ snapshot_download(
     **({{'allow_patterns': allow_patterns}} if allow_patterns else {{}})
 )
 print(f'✓ Model downloaded to staging area', flush=True)
+
+# ============================================================
+# PHASE 1b: Fetch external custom code referenced by auto_map
+# ============================================================
+# Some models' config.json has an auto_map field pointing to .py files
+# in a DIFFERENT repo. Without these files, offline loading fails because
+# transformers tries to download them at runtime.
+config_path = os.path.join(staging_model_path, 'config.json')
+if os.path.exists(config_path):
+    with open(config_path) as _f:
+        config_data = _json.load(_f)
+    auto_map = config_data.get('auto_map', {{}})
+    external_repos = set()
+    for value in auto_map.values():
+        if '--' in value:
+            repo_part = value.split('--')[0]
+            if '/' in repo_part and repo_part != model_id:
+                external_repos.add(repo_part)
+
+    for ext_repo in external_repos:
+        print(f'auto_map references external repo: {{ext_repo}}', flush=True)
+        print(f'Downloading all .py files from {{ext_repo}} into model directory...', flush=True)
+        try:
+            repo_files = list_repo_files(ext_repo)
+            py_files = [f for f in repo_files if f.endswith('.py')]
+            for py_file in py_files:
+                dest = os.path.join(staging_model_path, py_file)
+                if not os.path.exists(dest):
+                    hf_hub_download(
+                        repo_id=ext_repo,
+                        filename=py_file,
+                        local_dir=staging_model_path,
+                    )
+                    print(f'  Downloaded: {{py_file}}', flush=True)
+                else:
+                    print(f'  Already exists: {{py_file}}', flush=True)
+            print(f'✓ Fetched {{len(py_files)}} .py file(s) from {{ext_repo}}', flush=True)
+        except Exception as ext_err:
+            print(f'⚠ Warning: Could not fetch custom code from {{ext_repo}}: {{ext_err}}', flush=True)
+            print(f'  Model may fail to load in offline mode if it requires custom code', flush=True)
 
 # ============================================================
 # PHASE 2: Register in MLflow (authenticate NOW, after download)
