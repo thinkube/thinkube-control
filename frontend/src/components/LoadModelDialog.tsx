@@ -47,6 +47,7 @@ interface LoadOptions {
   compatible_backends: { id: string; name: string; type: string; status: string; node: string | null }[];
   gpu_nodes: GPUNode[];
   estimated_memory_gb: number;
+  context_length: number | null;
 }
 
 const BACKEND_TYPE_LABELS: Record<string, string> = {
@@ -54,6 +55,18 @@ const BACKEND_TYPE_LABELS: Record<string, string> = {
   vllm: 'vLLM',
   'tensorrt-llm': 'TensorRT-LLM',
 };
+
+const CONTEXT_OPTIONS = [
+  { value: 2048, label: '2K' },
+  { value: 4096, label: '4K' },
+  { value: 8192, label: '8K' },
+  { value: 16384, label: '16K' },
+  { value: 32768, label: '32K' },
+  { value: 65536, label: '64K' },
+  { value: 131072, label: '128K' },
+  { value: 262144, label: '256K' },
+  { value: 524288, label: '512K' },
+];
 
 interface Props {
   modelId: string;
@@ -115,6 +128,7 @@ export default function LoadModelDialog({
   const [loadingOptions, setLoadingOptions] = useState(false);
   const [selectedBackendType, setSelectedBackendType] = useState<string>('');
   const [selectedNode, setSelectedNode] = useState<string>('');
+  const [selectedContext, setSelectedContext] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -135,6 +149,10 @@ export default function LoadModelDialog({
         if (opts.gpu_nodes.length > 0) {
           setSelectedNode(opts.gpu_nodes[0].name);
         }
+        const ctx = opts.context_length || context_length;
+        if (ctx) {
+          setSelectedContext(String(ctx));
+        }
       })
       .catch((err) => {
         setError(err.response?.data?.detail || 'Failed to fetch load options');
@@ -146,11 +164,14 @@ export default function LoadModelDialog({
     setLoading(true);
     setError(null);
     try {
+      const maxCtx = selectedContext ? parseInt(selectedContext, 10) : undefined;
+      const modelCtx = options?.context_length || context_length;
       const resp = await api.post(
         `/llm/models/${encodeURIComponent(modelId)}/load`,
         {
           backend: selectedBackendType || undefined,
           node: selectedNode || undefined,
+          max_context_length: maxCtx && modelCtx && maxCtx < modelCtx ? maxCtx : undefined,
         }
       );
       if (
@@ -270,6 +291,36 @@ export default function LoadModelDialog({
                     ))}
                   </TkSelectContent>
                 </TkSelect>
+              </div>
+            )}
+
+            {/* Context length selector */}
+            {(options?.context_length || context_length) && (options?.context_length || context_length)! > 4096 && (
+              <div className="space-y-2">
+                <TkLabel>Context Length</TkLabel>
+                <TkSelect
+                  value={selectedContext}
+                  onValueChange={setSelectedContext}
+                >
+                  <TkSelectTrigger>
+                    <TkSelectValue placeholder="Select context length" />
+                  </TkSelectTrigger>
+                  <TkSelectContent>
+                    {CONTEXT_OPTIONS
+                      .filter((opt) => opt.value <= (options?.context_length || context_length || 0))
+                      .map((opt) => (
+                        <TkSelectItem key={opt.value} value={String(opt.value)}>
+                          {opt.label} tokens
+                          {opt.value === (options?.context_length || context_length) ? ' (max)' : ''}
+                        </TkSelectItem>
+                      ))}
+                  </TkSelectContent>
+                </TkSelect>
+                {selectedContext && parseInt(selectedContext, 10) < (options?.context_length || context_length || 0) && (
+                  <p className="text-xs text-muted-foreground">
+                    Reduced context uses less GPU memory (less KV cache)
+                  </p>
+                )}
               </div>
             )}
 
