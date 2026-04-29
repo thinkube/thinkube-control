@@ -27,7 +27,7 @@ _METRICS_CACHE_TTL: float = 2.0
 
 
 async def fetch_node_metrics() -> Dict[str, Any]:
-    """Fetch system memory and CPU from node-metrics DaemonSet."""
+    """Fetch system memory, CPU, and GPU allocatable from node-metrics DaemonSet."""
     try:
         async with httpx.AsyncClient(timeout=NODE_METRICS_TIMEOUT) as client:
             response = await client.get(NODE_METRICS_URL)
@@ -36,7 +36,15 @@ async def fetch_node_metrics() -> Dict[str, Any]:
             return {
                 "memory_bytes": data["memory_used_bytes"],
                 "memory_total_bytes": data["memory_total_bytes"],
+                "memory_available_bytes": data.get("memory_available_bytes", 0),
+                "swap_total_bytes": data.get("swap_total_bytes", 0),
+                "swap_free_bytes": data.get("swap_free_bytes", 0),
                 "cpu_percent": data.get("cpu_percent", 0),
+                "is_uma": data.get("is_uma", False),
+                "gpu_allocatable_bytes": data.get("gpu_allocatable_bytes", 0),
+                "gpu_utilization": data.get("gpu_utilization", 0),
+                "gpu_temp": data.get("gpu_temp", 0),
+                "gpu_power": data.get("gpu_power", 0),
             }
     except Exception as e:
         logger.warning(f"node-metrics unavailable: {e}")
@@ -82,6 +90,9 @@ async def get_gpu_metrics(
     system_memory_percent = 0.0
     cpu_percent = 0.0
 
+    gpu_allocatable_gb = 0.0
+    is_uma = False
+
     if node:
         total = node.get("memory_total_bytes", 0)
         used = node.get("memory_bytes", 0)
@@ -90,18 +101,20 @@ async def get_gpu_metrics(
             system_memory_used_gb = used / (1024 ** 3)
             system_memory_percent = (system_memory_used_gb / system_memory_total_gb) * 100
         cpu_percent = node.get("cpu_percent", 0.0)
+        is_uma = node.get("is_uma", False)
+        gpu_allocatable_gb = node.get("gpu_allocatable_bytes", 0) / (1024 ** 3)
 
     # GPU capacity from kube-state-metrics
     gpu_capacity = await PrometheusClient.get_gpu_capacity()
 
     result = {
         "monitoring_available": True,
-        # GPU metrics from DCGM via Prometheus
-        "gpu_utilization": gpu_data.get("gpu_utilization", 0) if gpu_data else 0,
+        # GPU metrics from DCGM via Prometheus or node-metrics
+        "gpu_utilization": gpu_data.get("gpu_utilization", 0) if gpu_data else node.get("gpu_utilization", 0),
         "memory_bandwidth": gpu_data.get("memory_bandwidth", 0) if gpu_data else 0,
-        "gpu_temp": gpu_data.get("gpu_temp", 0) if gpu_data else 0,
+        "gpu_temp": gpu_data.get("gpu_temp", 0) if gpu_data else node.get("gpu_temp", 0),
         "memory_temp": gpu_data.get("memory_temp", 0) if gpu_data else 0,
-        "power_usage": gpu_data.get("power_usage", 0) if gpu_data else 0,
+        "power_usage": gpu_data.get("power_usage", 0) if gpu_data else node.get("gpu_power", 0),
         "sm_clock": gpu_data.get("sm_clock", 0) if gpu_data else 0,
         # GPU capacity from kube-state-metrics
         "total_gpus": gpu_capacity.get("total_gpus", 0) if gpu_capacity else 0,
@@ -111,9 +124,11 @@ async def get_gpu_metrics(
         "system_memory_total_gb": round(system_memory_total_gb, 1),
         "system_memory_percent": round(system_memory_percent, 1),
         "cpu_percent": round(cpu_percent, 1),
+        # GPU memory (real data from node-metrics)
+        "gpu_allocatable_gb": round(gpu_allocatable_gb, 1),
+        "unified_memory": is_uma,
         # Metadata
         "timestamp": datetime.utcnow().isoformat() + "Z",
-        "unified_memory": True,
     }
 
     _metrics_cache = result

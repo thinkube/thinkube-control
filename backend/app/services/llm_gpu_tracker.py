@@ -1,7 +1,8 @@
-import json
 import logging
 import os
 from typing import Dict, List, Optional, Tuple
+
+import httpx
 
 from app.api.llm.schemas import (
     GPUAllocation,
@@ -11,29 +12,20 @@ from app.api.llm.schemas import (
 
 logger = logging.getLogger(__name__)
 
+NODE_METRICS_PORT = 9100
+NODE_METRICS_NAMESPACE = "thinkube-control"
+
 
 class LLMGPUTracker:
     def __init__(self):
         self._memory_threshold = float(
             os.getenv("LLM_GPU_MEMORY_THRESHOLD", "0.85")
         )
-        self._memory_map = self._parse_memory_map()
-        self._fallback_memory_gb = float(
-            os.getenv("LLM_GPU_TOTAL_MEMORY_GB", "128")
-        )
         self._gpu_nodes: Dict[str, GPUNode] = {}
         self._allocations: Dict[str, List[GPUAllocation]] = {}
+        self._node_pod_ips: Dict[str, str] = {}
+        self._pod_ips_discovered = False
         self._discover_gpu_nodes()
-
-    def _parse_memory_map(self) -> Dict[str, float]:
-        raw = os.getenv("LLM_GPU_MEMORY_MAP", "")
-        if not raw:
-            return {}
-        try:
-            return json.loads(raw)
-        except Exception as e:
-            logger.warning(f"Failed to parse LLM_GPU_MEMORY_MAP: {e}")
-            return {}
 
     def _discover_gpu_nodes(self):
         try:
@@ -62,13 +54,10 @@ class LLMGPUTracker:
                 gpu_memory_mb = labels.get("nvidia.com/gpu.memory", "")
                 sharing = labels.get("nvidia.com/gpu.sharing-strategy", "none")
 
-                # gpu.memory label and memory_map values are per-GPU
-                if gpu_memory_mb:
+                if gpu_memory_mb and gpu_memory_mb != "0":
                     per_gpu_memory = float(gpu_memory_mb) / 1024.0
-                elif product in self._memory_map:
-                    per_gpu_memory = self._memory_map[product]
                 else:
-                    per_gpu_memory = self._fallback_memory_gb
+                    per_gpu_memory = 0.0
 
                 total_memory = per_gpu_memory * gpu_count
 
@@ -89,22 +78,59 @@ class LLMGPUTracker:
                 self._allocations[name] = []
                 logger.info(
                     f"GPU node discovered: {name} — {product} "
-                    f"({gpu_count}x, {per_gpu_memory:.0f}GB/GPU, "
-                    f"{total_memory:.0f}GB total, {gpu_slots} slots)"
+                    f"({gpu_count}x, {gpu_slots} slots)"
                 )
 
         except Exception as e:
-            logger.warning(f"GPU node discovery failed, using fallback: {e}")
-            fallback_total = max(self._fallback_memory_gb, 1.0)
-            self._gpu_nodes["gpu-pool"] = GPUNode(
-                name="gpu-pool",
-                total_slots=4,
-                available_slots=4,
-                total_memory_gb=fallback_total,
-                per_gpu_memory_gb=fallback_total,
-                used_memory_gb=0.0,
+            logger.error(f"GPU node discovery failed: {e}")
+
+    async def _ensure_pod_ips(self):
+        if not self._pod_ips_discovered:
+            self._discover_node_metrics_pods()
+
+    def _discover_node_metrics_pods(self):
+        try:
+            from kubernetes import client, config as k8s_config
+
+            try:
+                k8s_config.load_incluster_config()
+            except k8s_config.ConfigException:
+                k8s_config.load_kube_config()
+
+            v1 = client.CoreV1Api()
+            pods = v1.list_namespaced_pod(
+                NODE_METRICS_NAMESPACE,
+                label_selector="app=node-metrics",
             )
-            self._allocations["gpu-pool"] = []
+            for pod in pods.items:
+                if (
+                    pod.status.phase == "Running"
+                    and pod.status.pod_ip
+                    and pod.spec.node_name
+                ):
+                    self._node_pod_ips[pod.spec.node_name] = pod.status.pod_ip
+                    logger.info(
+                        f"Node-metrics pod: {pod.spec.node_name} -> {pod.status.pod_ip}"
+                    )
+            self._pod_ips_discovered = True
+        except Exception as e:
+            logger.warning(f"Failed to discover node-metrics pods: {e}")
+
+    async def fetch_node_metrics(self, node_name: str) -> Optional[dict]:
+        await self._ensure_pod_ips()
+        pod_ip = self._node_pod_ips.get(node_name)
+        if not pod_ip:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(
+                    f"http://{pod_ip}:{NODE_METRICS_PORT}/metrics"
+                )
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:
+            logger.warning(f"Failed to fetch metrics from {node_name} ({pod_ip}): {e}")
+            return None
 
     def list_nodes(self) -> List[GPUNode]:
         return list(self._gpu_nodes.values())
@@ -112,97 +138,120 @@ class LLMGPUTracker:
     def get_node(self, node_name: str) -> Optional[GPUNode]:
         return self._gpu_nodes.get(node_name)
 
-    def get_status(self) -> GPUStatusResponse:
+    def is_uma(self, node_name: str) -> bool:
+        node = self._gpu_nodes.get(node_name)
+        if node:
+            return node.is_uma
+        return False
+
+    async def get_status(self) -> GPUStatusResponse:
         nodes = []
         total_mem = 0.0
         used_mem = 0.0
 
         for name, node in self._gpu_nodes.items():
             allocs = self._allocations.get(name, [])
-            node_used = sum(a.estimated_memory_gb for a in allocs)
-            node_slots_used = sum(a.slots for a in allocs)
+            slots_used = sum(a.slots for a in allocs)
+            metrics = await self.fetch_node_metrics(name)
 
-            updated = node.model_copy(update={
-                "used_memory_gb": node_used,
-                "available_slots": max(node.total_slots - node_slots_used, 0),
-                "allocations": list(allocs),
-            })
+            if metrics:
+                is_uma = metrics.get("is_uma", False)
+                allocatable_bytes = metrics.get("gpu_allocatable_bytes", 0)
+                real_available_gb = round(allocatable_bytes / (1024**3), 1)
+
+                if is_uma:
+                    real_total_gb = round(
+                        metrics.get("memory_total_bytes", 0) / (1024**3), 1
+                    )
+                else:
+                    gpu_total_mb = metrics.get("gpu_memory_total_mb", 0)
+                    real_total_gb = (
+                        round(gpu_total_mb / 1024.0, 1)
+                        if gpu_total_mb > 0
+                        else node.total_memory_gb
+                    )
+
+                real_used_gb = round(max(real_total_gb - real_available_gb, 0), 1)
+
+                updated = node.model_copy(
+                    update={
+                        "total_memory_gb": real_total_gb,
+                        "used_memory_gb": real_used_gb,
+                        "is_uma": is_uma,
+                        "real_available_gb": real_available_gb,
+                        "metrics_available": True,
+                        "allocations": list(allocs),
+                        "available_slots": max(node.total_slots - slots_used, 0),
+                    }
+                )
+            else:
+                est_used = sum(a.estimated_memory_gb for a in allocs)
+                updated = node.model_copy(
+                    update={
+                        "used_memory_gb": est_used,
+                        "available_slots": max(node.total_slots - slots_used, 0),
+                        "allocations": list(allocs),
+                        "metrics_available": False,
+                    }
+                )
+
             nodes.append(updated)
-            total_mem += node.total_memory_gb
-            used_mem += node_used
+            total_mem += updated.total_memory_gb
+            used_mem += updated.used_memory_gb
 
         can_accept = any(
-            n.used_memory_gb / n.total_memory_gb < self._memory_threshold
+            n.metrics_available and (n.real_available_gb or 0) > 4.0
             for n in nodes
-            if n.total_memory_gb > 0
         )
 
         return GPUStatusResponse(
             nodes=nodes,
-            total_memory_gb=total_mem,
-            used_memory_gb=used_mem,
+            total_memory_gb=round(total_mem, 1),
+            used_memory_gb=round(used_mem, 1),
             memory_threshold=self._memory_threshold,
             can_accept_new_model=can_accept,
         )
 
-    def check_can_load(
+    async def check_can_load(
         self,
         estimated_memory_gb: float,
         node_name: Optional[str] = None,
         slots_needed: int = 1,
     ) -> Tuple[bool, str]:
         if node_name:
-            return self._check_node(node_name, estimated_memory_gb, slots_needed)
+            return await self._check_node(node_name, estimated_memory_gb)
 
         for name in self._gpu_nodes:
-            ok, reason = self._check_node(name, estimated_memory_gb, slots_needed)
+            ok, reason = await self._check_node(name, estimated_memory_gb)
             if ok:
                 return True, name
         return False, "No GPU node has sufficient resources"
 
-    def _check_node(
-        self, node_name: str, estimated_memory_gb: float, slots_needed: int
+    async def _check_node(
+        self, node_name: str, estimated_memory_gb: float
     ) -> Tuple[bool, str]:
-        import math
-
         node = self._gpu_nodes.get(node_name)
         if not node:
             return False, f"Node '{node_name}' not found"
 
-        allocs = self._allocations.get(node_name, [])
-        used = sum(a.estimated_memory_gb for a in allocs)
-        used_slots = sum(a.slots for a in allocs)
+        metrics = await self.fetch_node_metrics(node_name)
+        if metrics is None:
+            return False, (
+                f"Cannot verify GPU resources on {node_name}: "
+                f"metrics unavailable — refusing to load"
+            )
 
-        per_gpu = node.per_gpu_memory_gb
-        if per_gpu <= 0:
-            per_gpu = node.total_memory_gb / max(node.gpu_count, 1)
+        allocatable_bytes = metrics.get("gpu_allocatable_bytes", 0)
+        allocatable_gb = allocatable_bytes / (1024**3)
+        usable_gb = allocatable_gb * self._memory_threshold
 
-        if node.shared_memory:
-            # Time-sliced: models share physical memory pool
-            projected = (used + estimated_memory_gb) / node.total_memory_gb
-            if projected > self._memory_threshold:
-                return False, (
-                    f"Would exceed memory on {node_name}: "
-                    f"{used:.1f} + {estimated_memory_gb:.1f} = {used + estimated_memory_gb:.1f}GB "
-                    f"(limit: {self._memory_threshold * node.total_memory_gb:.1f}GB)"
-                )
-            if node.total_slots - used_slots < slots_needed:
-                return False, f"Not enough slots on {node_name}: need {slots_needed}, have {node.total_slots - used_slots}"
-        else:
-            # Discrete GPUs: model must fit within N GPUs (tensor parallelism)
-            gpus_needed = math.ceil(estimated_memory_gb / (per_gpu * self._memory_threshold))
-            if gpus_needed > node.gpu_count:
-                return False, (
-                    f"Model needs ~{estimated_memory_gb:.1f}GB but {node_name} only has "
-                    f"{node.gpu_count}x {per_gpu:.0f}GB GPUs ({node.total_memory_gb:.0f}GB total)"
-                )
-            actual_slots_needed = max(slots_needed, gpus_needed)
-            if node.total_slots - used_slots < actual_slots_needed:
-                return False, (
-                    f"Not enough GPU slots on {node_name}: need {actual_slots_needed}, "
-                    f"have {node.total_slots - used_slots}"
-                )
-
+        if estimated_memory_gb > usable_gb:
+            return False, (
+                f"Insufficient GPU memory on {node_name}: "
+                f"model needs ~{estimated_memory_gb:.1f} GB, "
+                f"allocatable {allocatable_gb:.1f} GB "
+                f"(usable at {self._memory_threshold * 100:.0f}%: {usable_gb:.1f} GB)"
+            )
         return True, "ok"
 
     def record_allocation(
@@ -230,8 +279,8 @@ class LLMGPUTracker:
             )
         )
         logger.info(
-            f"GPU allocation: {model_id} on {backend_id}@{target} "
-            f"({estimated_memory_gb:.1f}GB, {slots} slot(s))"
+            f"GPU allocation recorded: {model_id} on {backend_id}@{target} "
+            f"({estimated_memory_gb:.1f} GB, {slots} slot(s))"
         )
 
     def release_allocation(self, model_id: str):
@@ -251,7 +300,7 @@ class LLMGPUTracker:
     def _pick_default_node(self) -> str:
         if self._gpu_nodes:
             return next(iter(self._gpu_nodes))
-        return "gpu-pool"
+        return "unknown"
 
 
 llm_gpu_tracker = LLMGPUTracker()

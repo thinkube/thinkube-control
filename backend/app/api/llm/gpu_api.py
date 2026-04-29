@@ -15,4 +15,4 @@ router = APIRouter()
     operation_id="get_llm_gpu_status",
 )
 async def get_gpu_status():
-    return llm_gpu_tracker.get_status()
+    return await llm_gpu_tracker.get_status()

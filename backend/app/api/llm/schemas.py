@@ -112,6 +112,9 @@ class GPUNode(BaseModel):
     per_gpu_memory_gb: float = 0.0
     used_memory_gb: float
     shared_memory: bool = False
+    is_uma: bool = False
+    real_available_gb: Optional[float] = None
+    metrics_available: bool = False
     allocations: List[GPUAllocation] = Field(default_factory=list)
 
 

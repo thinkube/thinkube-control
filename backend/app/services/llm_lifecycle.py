@@ -82,6 +82,8 @@ class LLMLifecycleManager:
         import math
         from app.services.llm_gpu_tracker import llm_gpu_tracker
 
+        if llm_gpu_tracker.is_uma(node_name):
+            return 1
         node = llm_gpu_tracker.get_node(node_name)
         if not node or node.shared_memory:
             return 1
@@ -121,7 +123,7 @@ class LLMLifecycleManager:
                 message=f"Ollama pod on {node} is not responding"
             )
 
-        can_load, reason = llm_gpu_tracker.check_can_load(
+        can_load, reason = await llm_gpu_tracker.check_can_load(
             estimated_memory, node_name=node
         )
         if not can_load:
@@ -129,7 +131,7 @@ class LLMLifecycleManager:
             if candidate:
                 logger.info(f"Evicting {candidate} to make room for {model_id}")
                 await self.unload_model(candidate)
-                can_load, reason = llm_gpu_tracker.check_can_load(
+                can_load, reason = await llm_gpu_tracker.check_can_load(
                     estimated_memory, node_name=node
                 )
 
@@ -254,7 +256,7 @@ class LLMLifecycleManager:
         estimated_memory = self._estimate_memory(entry)
         gpu_count = self._gpus_needed(estimated_memory, node)
 
-        can_load, reason = llm_gpu_tracker.check_can_load(
+        can_load, reason = await llm_gpu_tracker.check_can_load(
             estimated_memory, node_name=node
         )
         if not can_load:
