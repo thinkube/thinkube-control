@@ -274,7 +274,7 @@ spec:
         command: ["/bin/sh", "-c"]
         args:
           - |
-            git clone --depth 1 https://gitea.{{ domain_name }}/{{ gitea_org | default('thinkube') }}/{{ project_name }}.git /workspace
+            git clone --depth 1 https://{{ admin_username }}:{{ admin_password }}@gitea.{{ domain_name }}/{{ gitea_org | default('thinkube-deployments') }}/{{ project_name }}.git /workspace
         volumeMounts:
           - name: workspace
             mountPath: /workspace
