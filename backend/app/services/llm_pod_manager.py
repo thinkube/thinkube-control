@@ -112,6 +112,20 @@ class LLMPodManager:
                 node_name,
             )
             if pod_info and pod_info[2]:
+                restarted = await loop.run_in_executor(
+                    _k8s_executor,
+                    self._check_and_sync_image,
+                    backend_type,
+                    node_name,
+                )
+                if restarted:
+                    logger.info(f"Image updated for {key}, waiting for new pod")
+                    self._managed.pop(key, None)
+                    pod = await self._wait_for_pod_ready(backend_type, node_name)
+                    if pod:
+                        self._managed[key] = pod
+                        return True, pod
+                    return False, None
                 existing.pod_ip = pod_info[0]
                 existing.pod_name = pod_info[1]
                 return True, existing
@@ -235,6 +249,50 @@ class LLMPodManager:
 
         except Exception as e:
             logger.error(f"Failed to create Deployment for {backend_type} on {node_name}: {e}")
+            return False
+
+    def _check_and_sync_image(self, backend_type: str, node_name: str) -> bool:
+        """Check if the node deployment image matches the base and patch if not.
+
+        Returns True if the image was updated (pod will restart).
+        """
+        try:
+            from kubernetes import client, config as k8s_config
+
+            try:
+                k8s_config.load_incluster_config()
+            except k8s_config.ConfigException:
+                k8s_config.load_kube_config()
+
+            apps_v1 = client.AppsV1Api()
+            namespace = self._get_namespace(backend_type)
+            base_name = self._get_base_deployment_name(backend_type)
+            deploy_name = self._make_deployment_name(backend_type, node_name)
+
+            base = apps_v1.read_namespaced_deployment(base_name, namespace)
+            node_deploy = apps_v1.read_namespaced_deployment(deploy_name, namespace)
+
+            base_images = {c.name: c.image for c in base.spec.template.spec.containers}
+            patches = []
+            for container in node_deploy.spec.template.spec.containers:
+                base_image = base_images.get(container.name)
+                if base_image and container.image != base_image:
+                    patches.append({"name": container.name, "image": base_image})
+                    logger.info(
+                        f"Image drift: {deploy_name}/{container.name} "
+                        f"{container.image} → {base_image}"
+                    )
+            if patches:
+                apps_v1.patch_namespaced_deployment(
+                    deploy_name,
+                    namespace,
+                    {"spec": {"template": {"spec": {"containers": patches}}}},
+                )
+                logger.info(f"Synced images for {deploy_name}")
+                return True
+            return False
+        except Exception as e:
+            logger.warning(f"Image sync check failed for {backend_type}/{node_name}: {e}")
             return False
 
     def _sync_deployment_image(self, apps_v1, node_deploy, base_deploy, namespace: str):
