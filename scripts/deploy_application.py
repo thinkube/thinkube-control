@@ -713,7 +713,7 @@ git reset --hard origin/main
             DeploymentLogger.error(f"CREATE DATABASE {db_name} failed: {e}")
             raise RuntimeError(f"CREATE DATABASE {db_name} failed: {e}")
 
-    def _generate_workflow_template(self) -> dict:
+    async def _generate_workflow_template(self) -> dict:
         """Generate a WorkflowTemplate using the Jinja2 template from templates/k8s/build-workflow.j2."""
         # Template path - inside container it's at /home/thinkube/thinkube-control/templates
         template_path = Path("/home/thinkube/thinkube-control/templates/k8s/build-workflow.j2")
@@ -741,8 +741,15 @@ git reset --hard origin/main
             raise ValueError("master_node_name not in params and MASTER_NODE_NAME env var not set")
         admin_password = self._decode_secret_data(self.secrets['admin'], 'admin-password')
 
-        # Render template with all required variables (matching Ansible)
-        rendered = template.render(
+        # Detect unique architectures across cluster nodes
+        nodes = await self.k8s_core.list_node()
+        architectures = sorted({
+            n.metadata.labels.get('kubernetes.io/arch', 'amd64')
+            for n in nodes.items
+        })
+        DeploymentLogger.log(f"Cluster architectures: {architectures}")
+
+        render_vars = dict(
             project_name=self.app_name,
             k8s_namespace=self.namespace,
             master_node_name=master_node_name,
@@ -751,8 +758,12 @@ git reset --hard origin/main
             domain_name=self.domain,
             admin_username=self.admin_username,
             admin_password=admin_password,
-            thinkube_spec=self.thinkube_config
+            thinkube_spec=self.thinkube_config,
         )
+        if len(architectures) > 1:
+            render_vars['build_architectures'] = architectures
+
+        rendered = template.render(**render_vars)
 
         # Parse the rendered YAML
         workflow_spec = yaml.safe_load(rendered)
@@ -1151,7 +1162,7 @@ spec:
             DeploymentLogger.log("Using custom workflow template from k8s/build-workflow.yaml")
         else:
             # Generate workflow template from thinkube.yaml
-            workflow_spec = self._generate_workflow_template()
+            workflow_spec = await self._generate_workflow_template()
             DeploymentLogger.log("Generated workflow template from thinkube.yaml")
 
         template_name = workflow_spec['metadata']['name']

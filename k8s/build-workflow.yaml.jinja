@@ -261,7 +261,6 @@ spec:
   - name: build-on-arch
     nodeSelector:
       kubernetes.io/arch: "{% raw %}{{inputs.parameters.target-arch}}{% endraw %}"
-      thinkube.io/build-node: "true"
     inputs:
       parameters:
       - name: image-tag

@@ -218,7 +218,6 @@ spec:
     - name: kaniko-build-on-arch
       nodeSelector:
         kubernetes.io/arch: "{{ "{{" }}inputs.parameters.target_arch{{ "}}" }}"
-        thinkube.io/build-node: "true"
       inputs:
         parameters:
           - name: container_name
