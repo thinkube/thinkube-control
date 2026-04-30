@@ -123,7 +123,7 @@ async def list_available_templates(
             catalog_name="repositories",
             file_name="repositories.json",
             extract_key="repositories",
-            bundled_path=None,
+
             merge_strategy="list",
             dedup_key="name",
         )
@@ -327,7 +327,7 @@ async def deploy_template_async(
             catalog_name="repositories",
             file_name="repositories.json",
             extract_key="repositories",
-            bundled_path=None,
+
             merge_strategy="list",
             dedup_key="name",
         )

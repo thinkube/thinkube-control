@@ -10,7 +10,6 @@ import logging
 import time
 from typing import List, Dict, Optional
 from datetime import datetime
-from pathlib import Path
 
 import aiohttp
 
@@ -24,19 +23,15 @@ from app.services.metadata_fetcher import fetch_merged_catalog
 
 logger = logging.getLogger(__name__)
 
-_BUNDLED_MODELS = Path(__file__).parent.parent / "data" / "models.json"
-
-
 def get_model_catalog() -> List[Dict]:
     """
     Get the model catalog from platform + user metadata repos.
-    Fallback chain: memory cache → fetch → stale memory → persistent cache → bundled copy.
+    Fallback chain: memory cache → fetch → stale memory → persistent cache.
     """
     return fetch_merged_catalog(
         catalog_name="models",
         file_name="models.json",
         extract_key="models",
-        bundled_path=_BUNDLED_MODELS,
         merge_strategy="list",
         dedup_key="id",
     )

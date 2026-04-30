@@ -6,7 +6,7 @@ Fetches catalog JSON files from two sources:
 2. {GITHUB_ORG}/{GITHUB_ORG}-metadata (user catalog, private, authenticated)
 
 Merges results and caches with the standard fallback chain:
-memory cache (5min TTL) → fetch → stale memory → persistent cache → bundled fallback.
+memory cache (5min TTL) → fetch → stale memory → persistent cache.
 """
 
 import json
@@ -70,16 +70,6 @@ def _load_persistent_cache(filename: str) -> Optional[dict]:
     return None
 
 
-def _load_bundled(bundled_path: Optional[Path], extract_key: str) -> Any:
-    if bundled_path and bundled_path.exists():
-        try:
-            with open(bundled_path) as f:
-                data = json.load(f)
-                return data.get(extract_key, [] if isinstance(data.get(extract_key), list) else {})
-        except Exception as e:
-            logger.warning(f"Failed to load bundled fallback {bundled_path}: {e}")
-    return None
-
 
 def _merge_list(platform: List[Dict], user: List[Dict], dedup_key: str) -> List[Dict]:
     """Merge two lists, user entries win on dedup_key collision."""
@@ -126,7 +116,6 @@ def fetch_merged_catalog(
     catalog_name: str,
     file_name: str,
     extract_key: str,
-    bundled_path: Optional[Path],
     merge_strategy: str = "list",
     dedup_key: str = "id",
 ) -> Union[List, Dict]:
@@ -137,7 +126,6 @@ def fetch_merged_catalog(
         catalog_name: Cache key (e.g. "models", "repositories", "optional_components")
         file_name: JSON filename in the metadata repo (e.g. "models.json")
         extract_key: Key to extract from the JSON (e.g. "models", "repositories", "components")
-        bundled_path: Path to bundled fallback JSON file (or None)
         merge_strategy: "list" for list append+dedup, "dict" for dict merge
         dedup_key: Key to deduplicate list entries by (default "id")
 
@@ -219,13 +207,6 @@ def fetch_merged_catalog(
             _memory_cache[catalog_name] = {"data": items, "time": now}
             logger.info(f"Using persistent cached {catalog_name} catalog: {len(items)} entries")
             return items
-
-    # Final fallback to bundled copy
-    bundled = _load_bundled(bundled_path, extract_key)
-    if bundled:
-        _memory_cache[catalog_name] = {"data": bundled, "time": now}
-        logger.info(f"Using bundled {catalog_name} fallback: {len(bundled)} entries")
-        return bundled
 
     empty = [] if merge_strategy == "list" else {}
     logger.error(f"No {catalog_name} catalog available")

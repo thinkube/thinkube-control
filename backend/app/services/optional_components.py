@@ -8,7 +8,6 @@ import os
 import time
 import yaml
 from typing import Dict, List, Any, Optional
-from pathlib import Path
 from datetime import datetime
 
 from sqlalchemy.orm import Session
@@ -24,15 +23,6 @@ _COMPONENTS_CATALOG_CACHE: Optional[Dict[str, Any]] = None
 _COMPONENTS_CATALOG_CACHE_TIME: float = 0
 _COMPONENTS_CATALOG_TTL: float = 300  # 5 minutes
 
-
-def _load_bundled_components() -> Dict[str, Any]:
-    """Load bundled optional_components.json fallback shipped with thinkube-control"""
-    bundled = Path(__file__).parent.parent / "data" / "optional_components.json"
-    if bundled.exists():
-        with open(bundled) as f:
-            data = json.load(f)
-            return data.get("components", {})
-    return {}
 
 
 def get_components_catalog() -> Dict[str, Any]:
@@ -64,16 +54,9 @@ def get_components_catalog() -> Dict[str, Any]:
         logger.info("Using stale cached components catalog")
         return _COMPONENTS_CATALOG_CACHE
 
-    # Final fallback to bundled copy
-    components = _load_bundled_components()
-    if components:
-        _COMPONENTS_CATALOG_CACHE = components
-        _COMPONENTS_CATALOG_CACHE_TIME = now
-        logger.info(f"Using bundled components catalog fallback: {len(components)} components")
-    else:
-        logger.error("No components catalog available (fetch failed, no cache, no bundled copy)")
-        _COMPONENTS_CATALOG_CACHE = {}
-        _COMPONENTS_CATALOG_CACHE_TIME = now
+    logger.error("No components catalog available (fetch failed, no cache)")
+    _COMPONENTS_CATALOG_CACHE = {}
+    _COMPONENTS_CATALOG_CACHE_TIME = now
 
     return _COMPONENTS_CATALOG_CACHE
 
