@@ -68,6 +68,9 @@ const CONTEXT_OPTIONS = [
   { value: 524288, label: '512K' },
 ];
 
+const DEFAULT_CONTEXT = 8192;
+const LARGE_CONTEXT_THRESHOLD = 32768;
+
 interface Props {
   modelId: string;
   modelName: string;
@@ -151,7 +154,7 @@ export default function LoadModelDialog({
         }
         const ctx = opts.context_length || context_length;
         if (ctx) {
-          setSelectedContext(String(ctx));
+          setSelectedContext(String(Math.min(ctx, DEFAULT_CONTEXT)));
         }
       })
       .catch((err) => {
@@ -165,13 +168,12 @@ export default function LoadModelDialog({
     setError(null);
     try {
       const maxCtx = selectedContext ? parseInt(selectedContext, 10) : undefined;
-      const modelCtx = options?.context_length || context_length;
       const resp = await api.post(
         `/llm/models/${encodeURIComponent(modelId)}/load`,
         {
           backend: selectedBackendType || undefined,
           node: selectedNode || undefined,
-          max_context_length: maxCtx && modelCtx && maxCtx < modelCtx ? maxCtx : undefined,
+          max_context_length: maxCtx || undefined,
         }
       );
       if (
@@ -316,7 +318,12 @@ export default function LoadModelDialog({
                       ))}
                   </TkSelectContent>
                 </TkSelect>
-                {selectedContext && parseInt(selectedContext, 10) < (options?.context_length || context_length || 0) && (
+                {selectedContext && parseInt(selectedContext, 10) >= LARGE_CONTEXT_THRESHOLD && (
+                  <p className="text-xs text-warning font-medium">
+                    Large context lengths require significantly more GPU memory for KV cache. 8K-16K recommended for most use cases.
+                  </p>
+                )}
+                {selectedContext && parseInt(selectedContext, 10) < (options?.context_length || context_length || 0) && parseInt(selectedContext, 10) < LARGE_CONTEXT_THRESHOLD && (
                   <p className="text-xs text-muted-foreground">
                     Reduced context uses less GPU memory (less KV cache)
                   </p>
