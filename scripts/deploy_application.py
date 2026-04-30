@@ -1153,17 +1153,8 @@ spec:
 
     async def deploy_workflow_template(self):
         """Deploy Argo Workflow template."""
-        workflow_file = Path(self.local_repo_path) / 'k8s' / 'build-workflow.yaml'
-
-        if workflow_file.exists():
-            # Use custom workflow template from app
-            with open(workflow_file, 'r') as f:
-                workflow_spec = yaml.safe_load(f)
-            DeploymentLogger.log("Using custom workflow template from k8s/build-workflow.yaml")
-        else:
-            # Generate workflow template from thinkube.yaml
-            workflow_spec = await self._generate_workflow_template()
-            DeploymentLogger.log("Generated workflow template from thinkube.yaml")
+        workflow_spec = await self._generate_workflow_template()
+        DeploymentLogger.log("Generated workflow template from thinkube.yaml")
 
         template_name = workflow_spec['metadata']['name']
 
