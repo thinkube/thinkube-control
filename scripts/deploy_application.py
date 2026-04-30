@@ -759,6 +759,7 @@ git reset --hard origin/main
             admin_username=self.admin_username,
             admin_password=admin_password,
             thinkube_spec=self.thinkube_config,
+            gitea_org="thinkube-deployments",
         )
         if len(architectures) > 1:
             render_vars['build_architectures'] = architectures
