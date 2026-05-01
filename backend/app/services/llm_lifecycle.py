@@ -121,9 +121,6 @@ class LLMLifecycleManager:
         max_context_length: Optional[int] = None,
     ) -> ModelLoadResponse:
         from app.services.llm_model_registry import llm_model_registry
-        from app.services.llm_gpu_tracker import llm_gpu_tracker
-        from app.services.llm_ollama_client import ollama_client
-        from app.services.llm_pod_manager import llm_pod_manager
 
         if not node:
             return ModelLoadResponse(
@@ -133,38 +130,6 @@ class LLMLifecycleManager:
 
         entry = llm_model_registry.get_model(model_id)
         estimated_memory = self._estimate_memory(entry)
-        gpu_count = self._gpus_needed(estimated_memory, node)
-
-        success, managed_pod = await llm_pod_manager.ensure_pod("ollama", node, gpu_count=gpu_count)
-        if not success:
-            return ModelLoadResponse(
-                model_id=model_id, state=ModelState.deployable,
-                message=f"Failed to start Ollama pod on {node}"
-            )
-
-        if not await ollama_client.is_available(node):
-            return ModelLoadResponse(
-                model_id=model_id, state=ModelState.deployable,
-                message=f"Ollama pod on {node} is not responding"
-            )
-
-        can_load, reason = await llm_gpu_tracker.check_can_load(
-            estimated_memory, node_name=node
-        )
-        if not can_load:
-            candidate = self._select_eviction_candidate(target_node=node)
-            if candidate:
-                logger.info(f"Evicting {candidate} to make room for {model_id}")
-                await self.unload_model(candidate)
-                can_load, reason = await llm_gpu_tracker.check_can_load(
-                    estimated_memory, node_name=node
-                )
-
-            if not can_load:
-                return ModelLoadResponse(
-                    model_id=model_id, state=ModelState.deployable,
-                    message=f"Insufficient GPU resources: {reason}"
-                )
 
         backend_id = f"ollama-{node}"
         llm_model_registry.update_model_state(model_id, ModelState.loading, backend_id)
@@ -188,11 +153,49 @@ class LLMLifecycleManager:
         from app.services.llm_model_registry import llm_model_registry
         from app.services.llm_gpu_tracker import llm_gpu_tracker
         from app.services.llm_ollama_client import ollama_client
+        from app.services.llm_pod_manager import llm_pod_manager
 
         event = asyncio.Event()
         self._loading_locks[model_id] = event
 
         try:
+            gpu_count = self._gpus_needed(estimated_memory, target_node)
+            success, managed_pod = await llm_pod_manager.ensure_pod("ollama", target_node, gpu_count=gpu_count)
+            if not success:
+                llm_model_registry.update_model_state(
+                    model_id, ModelState.deployable,
+                    error=f"Failed to start Ollama pod on {target_node}",
+                )
+                logger.error(f"Failed to start Ollama pod on {target_node}")
+                return
+
+            if not await ollama_client.is_available(target_node):
+                llm_model_registry.update_model_state(
+                    model_id, ModelState.deployable,
+                    error=f"Ollama pod on {target_node} is not responding",
+                )
+                logger.error(f"Ollama pod on {target_node} is not responding")
+                return
+
+            can_load, reason = await llm_gpu_tracker.check_can_load(
+                estimated_memory, node_name=target_node
+            )
+            if not can_load:
+                candidate = self._select_eviction_candidate(target_node=target_node)
+                if candidate:
+                    logger.info(f"Evicting {candidate} to make room for {model_id}")
+                    await self.unload_model(candidate)
+                    can_load, reason = await llm_gpu_tracker.check_can_load(
+                        estimated_memory, node_name=target_node
+                    )
+                if not can_load:
+                    llm_model_registry.update_model_state(
+                        model_id, ModelState.deployable,
+                        error=f"Insufficient GPU resources: {reason}",
+                    )
+                    logger.error(f"Insufficient GPU resources for {model_id}: {reason}")
+                    return
+
             entry = llm_model_registry.get_model(model_id)
             catalog_serving = entry.serving_name if entry else None
 
