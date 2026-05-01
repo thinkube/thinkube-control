@@ -102,11 +102,16 @@ class OllamaClient:
             logger.error(f"Ollama pull failed for {name}: {e}")
             return False
 
-    async def create_model(self, name: str, gguf_path: str, node: Optional[str] = None) -> bool:
+    async def create_model(
+        self, name: str, gguf_path: str, node: Optional[str] = None,
+        reasoning_format: Optional[str] = None,
+        stop_tokens: Optional[List[str]] = None,
+    ) -> bool:
         loop = asyncio.get_event_loop()
         pod_name = self._resolve_pod_name(node)
         return await loop.run_in_executor(
-            _k8s_executor, self._create_model_via_exec, name, gguf_path, pod_name
+            _k8s_executor, self._create_model_via_exec, name, gguf_path, pod_name,
+            reasoning_format, stop_tokens,
         )
 
     def _resolve_pod_name(self, node: Optional[str] = None) -> str:
@@ -116,7 +121,46 @@ class OllamaClient:
             return next(iter(self._node_pods.values()))
         return os.getenv("LLM_OLLAMA_POD", "ollama-0")
 
-    def _create_model_via_exec(self, name: str, gguf_path: str, pod_name: str) -> bool:
+    def _build_modelfile(
+        self, gguf_path: str,
+        reasoning_format: Optional[str] = None,
+        stop_tokens: Optional[List[str]] = None,
+    ) -> str:
+        lines = [f"FROM {gguf_path}"]
+
+        if reasoning_format:
+            lines.append('TEMPLATE """{{- range .Messages }}')
+            lines.append('{{- if eq .Role "system" }}')
+            lines.append("<|im_start|>system")
+            lines.append("{{ .Content }}<|im_end|>")
+            lines.append('{{- else if eq .Role "user" }}')
+            lines.append("<|im_start|>user")
+            lines.append("{{ .Content }}<|im_end|>")
+            lines.append('{{- else if eq .Role "assistant" }}')
+            lines.append("<|im_start|>assistant")
+            lines.append("{{ if .Thinking }}<think>")
+            lines.append("{{ .Thinking }}</think>")
+            lines.append("")
+            lines.append("{{ end }}{{ .Content }}<|im_end|>")
+            lines.append("{{- end }}")
+            lines.append("{{- end }}")
+            lines.append('<|im_start|>assistant')
+            lines.append('"""')
+
+        if stop_tokens:
+            for tok in stop_tokens:
+                lines.append(f"PARAMETER stop {tok}")
+        elif reasoning_format:
+            lines.append("PARAMETER stop <|im_end|>")
+            lines.append("PARAMETER stop <|im_start|>")
+
+        return "\n".join(lines)
+
+    def _create_model_via_exec(
+        self, name: str, gguf_path: str, pod_name: str,
+        reasoning_format: Optional[str] = None,
+        stop_tokens: Optional[List[str]] = None,
+    ) -> bool:
         try:
             from kubernetes import client, config
             from kubernetes.stream import stream
@@ -124,10 +168,13 @@ class OllamaClient:
             config.load_incluster_config()
             v1 = client.CoreV1Api()
 
+            modelfile = self._build_modelfile(gguf_path, reasoning_format, stop_tokens)
+            escaped = modelfile.replace("'", "'\\''")
+
             namespace = os.getenv("LLM_OLLAMA_NAMESPACE", "ollama")
             cmd = [
                 "sh", "-c",
-                f'printf "FROM {gguf_path}" > /tmp/Modelfile && '
+                f"printf '%s' '{escaped}' > /tmp/Modelfile && "
                 f"ollama create {name} -f /tmp/Modelfile && "
                 f"rm -f /tmp/Modelfile",
             ]

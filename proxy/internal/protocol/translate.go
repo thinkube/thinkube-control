@@ -403,6 +403,14 @@ func TranslateOpenAIToAnthropic(resp *OpenAIResponse, model string) (*AnthropicR
 
 	// Content
 	if choice.Message != nil {
+		// Reasoning/thinking content
+		if choice.Message.ReasoningContent != nil && *choice.Message.ReasoningContent != "" {
+			out.Content = append(out.Content, ResponseBlock{
+				Type:    "thinking",
+				Thinking: *choice.Message.ReasoningContent,
+			})
+		}
+
 		// Text content
 		if choice.Message.Content != nil {
 			if textStr, ok := choice.Message.Content.(string); ok && textStr != "" {

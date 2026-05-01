@@ -96,6 +96,7 @@ func (h *OpenAIHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) 
 		defer resp.Body.Close()
 
 		respBody, _ := io.ReadAll(resp.Body)
+		respBody = normalizeReasoning(respBody)
 
 		for k, vv := range resp.Header {
 			for _, v := range vv {

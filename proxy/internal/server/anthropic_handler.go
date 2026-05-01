@@ -138,10 +138,11 @@ func (h *AnthropicHandler) handleNonStream(r *http.Request, w http.ResponseWrite
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		// Pass through backend error with Anthropic wrapping
 		WriteError(w, "anthropic", resp.StatusCode, "api_error", fmt.Sprintf("Backend returned status %d", resp.StatusCode))
 		return
 	}
+
+	respBody = normalizeReasoning(respBody)
 
 	var openaiResp protocol.OpenAIResponse
 	if err := json.Unmarshal(respBody, &openaiResp); err != nil {

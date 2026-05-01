@@ -15,10 +15,11 @@ type OpenAIRequest struct {
 }
 
 type OpenAIMessage struct {
-	Role       string            `json:"role"`
-	Content    interface{}       `json:"content,omitempty"`
-	ToolCalls  []OpenAIToolCall  `json:"tool_calls,omitempty"`
-	ToolCallID string            `json:"tool_call_id,omitempty"`
+	Role             string            `json:"role"`
+	Content          interface{}       `json:"content,omitempty"`
+	ReasoningContent *string           `json:"reasoning_content,omitempty"`
+	ToolCalls        []OpenAIToolCall  `json:"tool_calls,omitempty"`
+	ToolCallID       string            `json:"tool_call_id,omitempty"`
 }
 
 type OpenAIContentPart struct {
@@ -94,9 +95,10 @@ type OpenAIStreamChoice struct {
 }
 
 type OpenAIStreamDelta struct {
-	Role      string                 `json:"role,omitempty"`
-	Content   *string                `json:"content,omitempty"`
-	ToolCalls []OpenAIStreamToolCall `json:"tool_calls,omitempty"`
+	Role             string                 `json:"role,omitempty"`
+	Content          *string                `json:"content,omitempty"`
+	ReasoningContent *string                `json:"reasoning_content,omitempty"`
+	ToolCalls        []OpenAIStreamToolCall `json:"tool_calls,omitempty"`
 }
 
 type OpenAIStreamToolCall struct {

@@ -220,7 +220,11 @@ class LLMLifecycleManager:
 
                 ollama_name = catalog_serving or model_id_to_ollama_name(model_id)
                 logger.info(f"Creating Ollama model '{ollama_name}' from {gguf_path}")
-                success = await ollama_client.create_model(ollama_name, gguf_path, node=target_node)
+                success = await ollama_client.create_model(
+                    ollama_name, gguf_path, node=target_node,
+                    reasoning_format=entry.reasoning_format if entry else None,
+                    stop_tokens=entry.stop_tokens if entry else None,
+                )
                 if success:
                     llm_model_registry.register_ollama_alias(ollama_name, model_id)
                     success, load_error = await ollama_client.load_model(ollama_name, keep_alive, node=target_node, max_context_length=max_context_length)
