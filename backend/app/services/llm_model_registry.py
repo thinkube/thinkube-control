@@ -62,10 +62,13 @@ class LLMModelRegistry:
         if entry is None:
             return None
 
+        serving = entry.serving_name or entry.id
+
         if entry.state not in (ModelState.available, ModelState.deployable):
             return ModelResolveResponse(
                 backend_url="",
                 model_id=entry.id,
+                serving_name=serving,
                 model_state=entry.state,
                 tier=entry.tier or ModelTier.flexible,
                 error=f"Model '{entry.id}' is {entry.state.value}",
@@ -83,6 +86,7 @@ class LLMModelRegistry:
                     backend_url=backend.url,
                     api_path=backend.api_path,
                     model_id=entry.id,
+                    serving_name=serving,
                     model_state=ModelState.available,
                     tier=resolved_tier,
                 )
@@ -103,6 +107,7 @@ class LLMModelRegistry:
                 return ModelResolveResponse(
                     backend_url="",
                     model_id=entry.id,
+                    serving_name=serving,
                     model_state=entry.state,
                     tier=ModelTier.flexible
                     if "ollama" in entry.server_type
@@ -111,6 +116,7 @@ class LLMModelRegistry:
             return ModelResolveResponse(
                 backend_url="",
                 model_id=entry.id,
+                serving_name=serving,
                 model_state=entry.state,
                 tier=entry.tier or ModelTier.flexible,
                 error=f"No healthy backend serving model '{entry.id}'",
@@ -127,6 +133,7 @@ class LLMModelRegistry:
             backend_url=backend.url,
             api_path=backend.api_path,
             model_id=entry.id,
+            serving_name=serving,
             model_state=ModelState.available,
             tier=resolved_tier,
         )

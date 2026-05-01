@@ -11,12 +11,13 @@ import (
 )
 
 type ResolveResult struct {
-	BackendURL string `json:"backend_url"`
-	APIPath    string `json:"api_path"`
-	ModelID    string `json:"model_id"`
-	ModelState string `json:"model_state"`
-	Tier       string `json:"tier"`
-	Error      string `json:"error,omitempty"`
+	BackendURL  string `json:"backend_url"`
+	APIPath     string `json:"api_path"`
+	ModelID     string `json:"model_id"`
+	ServingName string `json:"serving_name"`
+	ModelState  string `json:"model_state"`
+	Tier        string `json:"tier"`
+	Error       string `json:"error,omitempty"`
 }
 
 type Resolver struct {

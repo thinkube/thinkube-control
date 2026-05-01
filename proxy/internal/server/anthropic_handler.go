@@ -77,7 +77,7 @@ func (h *AnthropicHandler) Messages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	openaiReq.Model = resolved.ModelID
+	openaiReq.Model = resolved.ServingName
 
 	openaiBody, err := json.Marshal(openaiReq)
 	if err != nil {

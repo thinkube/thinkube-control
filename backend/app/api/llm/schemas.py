@@ -87,6 +87,7 @@ class ModelResolveResponse(BaseModel):
     backend_url: str
     api_path: str = "/v1"
     model_id: str
+    serving_name: str = ""
     model_state: ModelState
     tier: ModelTier
     error: Optional[str] = None
