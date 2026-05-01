@@ -222,7 +222,7 @@ class LLMPodManager:
                             needs_recreate = True
 
                     if not needs_recreate:
-                        pod_status = self.check_pod_status(backend_type, node_name)
+                        pod_status, _ = self.check_pod_status(backend_type, node_name)
                         if pod_status == "failed":
                             needs_recreate = True
 
@@ -434,10 +434,11 @@ class LLMPodManager:
             logger.debug(f"Pod lookup failed: {e}")
             return None
 
-    def check_pod_status(self, backend_type: str, node_name: str) -> str:
+    def check_pod_status(self, backend_type: str, node_name: str) -> tuple[str, str]:
         """Check the actual K8s pod status for a backend/node.
 
-        Returns one of: "ready", "progressing", "failed", "absent".
+        Returns (status, detail) where status is one of:
+        "ready", "progressing", "failed", "absent".
         """
         try:
             from kubernetes import client, config as k8s_config
@@ -455,7 +456,7 @@ class LLMPodManager:
                 apps_v1.read_namespaced_deployment(deploy_name, namespace)
             except client.rest.ApiException as e:
                 if e.status == 404:
-                    return "absent"
+                    return "absent", ""
                 raise
 
             v1 = client.CoreV1Api()
@@ -463,28 +464,37 @@ class LLMPodManager:
             pods = v1.list_namespaced_pod(namespace, label_selector=selector)
 
             if not pods.items:
-                return "progressing"
+                return "progressing", ""
 
             for pod in pods.items:
                 statuses = pod.status.container_statuses or []
                 for cs in statuses:
                     if cs.state and cs.state.waiting:
                         reason = cs.state.waiting.reason or ""
+                        message = cs.state.waiting.message or ""
                         if reason in ("CrashLoopBackOff", "ErrImagePull", "ImagePullBackOff", "CreateContainerError"):
-                            return "failed"
+                            detail = reason
+                            if message:
+                                detail = f"{reason}: {message}"
+                            elif cs.last_state and cs.last_state.terminated:
+                                t = cs.last_state.terminated
+                                detail = f"{reason} (exit {t.exit_code})"
+                                if t.message:
+                                    detail = f"{reason}: {t.message}"
+                            return "failed", detail
 
                 if pod.status.phase == "Running":
                     conditions = pod.status.conditions or []
                     ready = any(c.type == "Ready" and c.status == "True" for c in conditions)
                     if ready:
-                        return "ready"
+                        return "ready", ""
                 elif pod.status.phase == "Failed":
-                    return "failed"
+                    return "failed", pod.status.reason or ""
 
-            return "progressing"
+            return "progressing", ""
         except Exception as e:
             logger.debug(f"Pod status check failed for {backend_type}/{node_name}: {e}")
-            return "progressing"
+            return "progressing", ""
 
     async def delete_pod(self, backend_type: str, node_name: str) -> bool:
         """Delete a gateway-managed Deployment for a backend on a node."""

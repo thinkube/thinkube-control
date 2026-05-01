@@ -329,11 +329,11 @@ class LLMModelRegistry:
             ):
                 backend_type, node = parse_backend_id(entry.backend_id or "")
                 if backend_type and node:
-                    pod_status = llm_pod_manager.check_pod_status(backend_type, node)
+                    pod_status, pod_detail = llm_pod_manager.check_pod_status(backend_type, node)
                     if pod_status == "failed":
                         entry.state = ModelState.deployable
                         entry.backend_id = None
-                        entry.last_error = f"Pod crashed on {node}"
+                        entry.last_error = pod_detail or f"Pod failed on {node}"
                     elif pod_status == "absent":
                         logger.warning(
                             f"Model '{model_id}' was loading but deployment "
