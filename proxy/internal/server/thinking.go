@@ -1,6 +1,21 @@
 package server
 
-import "encoding/json"
+import (
+	"encoding/json"
+)
+
+func rewriteModelField(body []byte, servingName string) []byte {
+	var req map[string]any
+	if err := json.Unmarshal(body, &req); err != nil {
+		return body
+	}
+	req["model"] = servingName
+	out, err := json.Marshal(req)
+	if err != nil {
+		return body
+	}
+	return out
+}
 
 // normalizeReasoning renames Ollama's "reasoning" field to "reasoning_content"
 // in OpenAI chat completion responses for consistency across backends.

@@ -66,6 +66,10 @@ func (h *OpenAIHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) 
 
 	backendURL := resolved.BackendURL + resolved.APIPath + "/chat/completions"
 
+	if resolved.ServingName != "" && resolved.ServingName != req.Model {
+		body = rewriteModelField(body, resolved.ServingName)
+	}
+
 	userID := ""
 	if claims != nil {
 		userID = claims.Username
@@ -99,10 +103,14 @@ func (h *OpenAIHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) 
 		respBody = normalizeReasoning(respBody)
 
 		for k, vv := range resp.Header {
+			if k == "Content-Length" {
+				continue
+			}
 			for _, v := range vv {
 				w.Header().Add(k, v)
 			}
 		}
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(respBody)))
 		w.WriteHeader(resp.StatusCode)
 		w.Write(respBody)
 
