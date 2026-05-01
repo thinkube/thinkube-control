@@ -6,6 +6,7 @@ import httpx
 
 from app.api.llm.schemas import (
     GPUAllocation,
+    GPUMetricEntry,
     GPUNode,
     GPUStatusResponse,
 )
@@ -173,6 +174,11 @@ class LLMGPUTracker:
 
                 real_used_gb = round(max(real_total_gb - real_available_gb, 0), 1)
 
+                per_gpu = [
+                    GPUMetricEntry(**g)
+                    for g in metrics.get("gpus", [])
+                ]
+
                 updated = node.model_copy(
                     update={
                         "total_memory_gb": real_total_gb,
@@ -180,6 +186,7 @@ class LLMGPUTracker:
                         "is_uma": is_uma,
                         "real_available_gb": real_available_gb,
                         "metrics_available": True,
+                        "per_gpu_metrics": per_gpu,
                         "allocations": list(allocs),
                         "available_slots": max(node.total_slots - slots_used, 0),
                     }

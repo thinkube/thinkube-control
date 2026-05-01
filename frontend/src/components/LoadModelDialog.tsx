@@ -15,7 +15,6 @@ import {
   TkSelectContent,
   TkSelectItem,
 } from 'thinkube-style/components/forms-inputs';
-import { TkSemicircularGauge } from 'thinkube-style/components/data-viz';
 import { Loader2, Zap } from 'lucide-react';
 import api from '../lib/axios';
 
@@ -25,6 +24,16 @@ interface GPUAllocation {
   node_name: string;
   estimated_memory_gb: number;
   slots: number;
+}
+
+interface GPUMetricEntry {
+  index: number;
+  utilization: number;
+  memory_used_mb: number;
+  memory_total_mb: number;
+  memory_free_mb: number;
+  temp: number;
+  power: number;
 }
 
 interface GPUNode {
@@ -39,6 +48,8 @@ interface GPUNode {
   per_gpu_memory_gb: number;
   used_memory_gb: number;
   shared_memory: boolean;
+  is_uma: boolean;
+  per_gpu_metrics: GPUMetricEntry[];
   allocations: GPUAllocation[];
 }
 
@@ -333,52 +344,48 @@ export default function LoadModelDialog({
 
             {/* GPU impact preview */}
             {selectedNodeData && (
-              <div className="rounded-lg border p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <div className="font-medium">{selectedNodeData.name}</div>
-                    <div className="text-sm text-muted-foreground">
-                      {selectedNodeData.gpu_count > 1
-                        ? `${selectedNodeData.gpu_count}x `
-                        : ''}
-                      {formatGpuProduct(selectedNodeData.gpu_product)}
-                      {' '}({selectedNodeData.per_gpu_memory_gb.toFixed(0)}GB{selectedNodeData.gpu_count > 1 ? ' each' : ''})
-                      {selectedNodeData.shared_memory ? ' — Time-sliced' : ''}
-                    </div>
+              <div className="rounded-lg border p-4 space-y-3">
+                <div>
+                  <div className="font-medium">{selectedNodeData.name}</div>
+                  <div className="text-sm text-muted-foreground">
+                    {selectedNodeData.gpu_count > 1
+                      ? `${selectedNodeData.gpu_count}x `
+                      : ''}
+                    {formatGpuProduct(selectedNodeData.gpu_product)}
+                    {' '}({selectedNodeData.per_gpu_memory_gb.toFixed(0)}GB{selectedNodeData.gpu_count > 1 ? ' each' : ''})
+                    {selectedNodeData.shared_memory ? ' — Time-sliced' : ''}
                   </div>
-                  <TkSemicircularGauge
-                    value={estimatedMem}
-                    max={selectedNodeData.shared_memory
-                      ? selectedNodeData.total_memory_gb
-                      : selectedNodeData.per_gpu_memory_gb * gpusNeeded}
-                    label="Model"
-                    unit="GB"
-                    size={100}
-                  />
                 </div>
+                {selectedNodeData.is_uma || selectedNodeData.per_gpu_metrics.length === 0 ? (
+                  <LoadPreviewBar
+                    label={selectedNodeData.is_uma ? 'Shared Memory' : 'GPU Memory'}
+                    usedGb={selectedNodeData.used_memory_gb}
+                    totalGb={selectedNodeData.total_memory_gb}
+                    modelGb={estimatedMem}
+                  />
+                ) : (
+                  selectedNodeData.per_gpu_metrics.map(gpu => (
+                    <LoadPreviewBar
+                      key={gpu.index}
+                      label={`GPU ${gpu.index}`}
+                      usedGb={gpu.memory_used_mb / 1024}
+                      totalGb={gpu.memory_total_mb / 1024}
+                    />
+                  ))
+                )}
                 {!selectedNodeData.shared_memory && gpusNeeded > 1 && (
-                  <div className="text-sm text-warning mb-1">
+                  <div className="text-sm text-warning">
                     Requires {gpusNeeded} GPUs (tensor parallelism)
                   </div>
                 )}
                 {!selectedNodeData.shared_memory && gpusNeeded > selectedNodeData.available_slots && (
-                  <div className="text-sm text-destructive mb-1">
+                  <div className="text-sm text-destructive">
                     Not enough GPUs available ({selectedNodeData.available_slots} free)
                   </div>
                 )}
-                <div className="text-sm text-muted-foreground">
-                  Model: {estimatedMem.toFixed(1)}GB
-                  {' / '}
-                  {selectedNodeData.shared_memory
-                    ? `${selectedNodeData.total_memory_gb.toFixed(0)}GB pool`
-                    : gpusNeeded > 1
-                      ? `${gpusNeeded}x ${selectedNodeData.per_gpu_memory_gb.toFixed(0)}GB`
-                      : `${selectedNodeData.per_gpu_memory_gb.toFixed(0)}GB GPU`
-                  }
-                </div>
-                <div className="text-sm text-muted-foreground">
-                  GPUs: {selectedNodeData.available_slots} /{' '}
-                  {selectedNodeData.total_slots} available
+                <div className="flex items-center justify-between text-sm text-muted-foreground">
+                  <span>Model: {estimatedMem.toFixed(1)} GB</span>
+                  <span>GPUs: {selectedNodeData.available_slots} / {selectedNodeData.total_slots} available</span>
                 </div>
               </div>
             )}
@@ -417,5 +424,45 @@ export default function LoadModelDialog({
         </TkDialogFooter>
       </TkDialogContent>
     </TkDialogRoot>
+  );
+}
+
+function LoadPreviewBar({
+  label,
+  usedGb,
+  totalGb,
+  modelGb,
+}: {
+  label: string;
+  usedGb: number;
+  totalGb: number;
+  modelGb?: number;
+}) {
+  const pct = totalGb > 0 ? (usedGb / totalGb) * 100 : 0;
+  const projPct = modelGb && totalGb > 0 ? ((usedGb + modelGb) / totalGb) * 100 : 0;
+  const getColor = (p: number) => {
+    if (p < 50) return 'bg-emerald-500';
+    if (p < 75) return 'bg-amber-500';
+    return 'bg-red-500';
+  };
+  return (
+    <div className="space-y-1">
+      <div className="flex justify-between text-xs text-muted-foreground">
+        <span>{label}</span>
+        <span>{usedGb.toFixed(1)} / {totalGb.toFixed(0)} GB</span>
+      </div>
+      <div className="h-2.5 bg-muted rounded-full overflow-hidden relative">
+        {modelGb != null && projPct > 0 && (
+          <div
+            className="absolute h-full rounded-full bg-blue-500/30"
+            style={{ width: `${Math.min(projPct, 100)}%` }}
+          />
+        )}
+        <div
+          className={`relative h-full rounded-full transition-all duration-500 ${getColor(pct)}`}
+          style={{ width: `${Math.min(pct, 100)}%` }}
+        />
+      </div>
+    </div>
   );
 }

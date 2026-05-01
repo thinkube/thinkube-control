@@ -111,31 +111,39 @@ spec:
                         except (ValueError, AttributeError):
                             return default
 
-                    gpu_util = 0
-                    gpu_mem_used = 0
-                    gpu_mem_total = 0
-                    gpu_mem_free = 0
-                    gpu_temp = 0
-                    gpu_power = 0
+                    gpus = []
                     try:
                         result = subprocess.run(
                             ["nsenter", "-t", "1", "-m", "-u", "-n", "-i",
-                             "nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total,memory.free,temperature.gpu,power.draw",
+                             "nvidia-smi", "--query-gpu=index,utilization.gpu,memory.used,memory.total,memory.free,temperature.gpu,power.draw",
                              "--format=csv,noheader,nounits"],
                             capture_output=True, text=True, timeout=5
                         )
                         if result.returncode == 0:
-                            gpu_data = result.stdout.strip().split(",")
-                            gpu_util = safe_float(gpu_data[0])
-                            gpu_mem_used = safe_float(gpu_data[1])
-                            gpu_mem_total = safe_float(gpu_data[2])
-                            gpu_mem_free = safe_float(gpu_data[3])
-                            gpu_temp = safe_float(gpu_data[4])
-                            gpu_power = safe_float(gpu_data[5])
+                            for line in result.stdout.strip().split("\n"):
+                                if not line.strip():
+                                    continue
+                                fields = line.split(",")
+                                if len(fields) >= 7:
+                                    gpus.append({
+                                        "index": int(safe_float(fields[0])),
+                                        "utilization": safe_float(fields[1]),
+                                        "memory_used_mb": safe_float(fields[2]),
+                                        "memory_total_mb": safe_float(fields[3]),
+                                        "memory_free_mb": safe_float(fields[4]),
+                                        "temp": safe_float(fields[5]),
+                                        "power": safe_float(fields[6]),
+                                    })
                     except Exception:
                         pass
 
-                    # UMA detection: nvidia-smi reports 0 MiB total on unified memory systems (GB10)
+                    gpu_mem_used = sum(g["memory_used_mb"] for g in gpus)
+                    gpu_mem_total = sum(g["memory_total_mb"] for g in gpus)
+                    gpu_mem_free = sum(g["memory_free_mb"] for g in gpus)
+                    gpu_util = max((g["utilization"] for g in gpus), default=0)
+                    gpu_temp = max((g["temp"] for g in gpus), default=0)
+                    gpu_power = sum(g["power"] for g in gpus)
+
                     is_uma = (gpu_mem_total == 0)
 
                     mem_available = meminfo.get("MemAvailable", 0)
@@ -152,6 +160,8 @@ spec:
                     return {
                         "node_name": NODE_NAME,
                         "is_uma": is_uma,
+                        "gpu_count": len(gpus),
+                        "gpus": gpus,
                         "memory_total_bytes": meminfo.get("MemTotal", 0),
                         "memory_free_bytes": meminfo.get("MemFree", 0),
                         "memory_available_bytes": mem_available,

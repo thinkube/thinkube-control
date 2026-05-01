@@ -100,6 +100,16 @@ class GPUAllocation(BaseModel):
     slots: int = 1
 
 
+class GPUMetricEntry(BaseModel):
+    index: int = 0
+    utilization: float = 0
+    memory_used_mb: float = 0
+    memory_total_mb: float = 0
+    memory_free_mb: float = 0
+    temp: float = 0
+    power: float = 0
+
+
 class GPUNode(BaseModel):
     name: str
     gpu_product: Optional[str] = None
@@ -115,6 +125,7 @@ class GPUNode(BaseModel):
     is_uma: bool = False
     real_available_gb: Optional[float] = None
     metrics_available: bool = False
+    per_gpu_metrics: List[GPUMetricEntry] = Field(default_factory=list)
     allocations: List[GPUAllocation] = Field(default_factory=list)
 
 

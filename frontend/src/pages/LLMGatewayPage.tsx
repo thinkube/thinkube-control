@@ -3,7 +3,6 @@ import { TkCard, TkCardContent, TkCardHeader, TkCardTitle, TkStatCard } from 'th
 import { TkButton, TkBadge } from 'thinkube-style/components/buttons-badges';
 import { TkErrorAlert } from 'thinkube-style/components/feedback';
 import { TkPageWrapper } from 'thinkube-style/components/utilities';
-import { TkSemicircularGauge } from 'thinkube-style/components/data-viz';
 import {
   TkTable,
   TkTableBody,
@@ -68,6 +67,16 @@ interface GPUAllocation {
   slots: number;
 }
 
+interface GPUMetricEntry {
+  index: number;
+  utilization: number;
+  memory_used_mb: number;
+  memory_total_mb: number;
+  memory_free_mb: number;
+  temp: number;
+  power: number;
+}
+
 interface GPUNode {
   name: string;
   gpu_product: string | null;
@@ -79,6 +88,8 @@ interface GPUNode {
   total_memory_gb: number;
   used_memory_gb: number;
   shared_memory: boolean;
+  is_uma: boolean;
+  per_gpu_metrics: GPUMetricEntry[];
   allocations: GPUAllocation[];
 }
 
@@ -279,8 +290,8 @@ export default function LLMGatewayPage() {
           {gpuStatus.nodes.map(node => (
             <TkCard key={node.name}>
               <TkCardContent className="pt-6">
-                <div className="flex items-start justify-between">
-                  <div className="space-y-1.5 flex-1">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
                     <div className="font-medium text-lg">{node.name}</div>
                     <div className="flex flex-wrap gap-1.5">
                       <TkBadge appearance="outlined">
@@ -289,38 +300,25 @@ export default function LLMGatewayPage() {
                       {node.gpu_family && (
                         <TkBadge appearance="muted">{node.gpu_family}</TkBadge>
                       )}
-                      {node.gpu_count > 1 && (
-                        <TkBadge appearance="muted">{node.gpu_count}x GPU</TkBadge>
-                      )}
                       {node.shared_memory && (
                         <TkBadge appearance="muted">Time-sliced</TkBadge>
                       )}
                     </div>
-                    <div className="text-sm text-muted-foreground pt-1">
-                      {node.used_memory_gb.toFixed(1)} / {node.total_memory_gb.toFixed(0)} GB used
-                    </div>
-                    <div className="text-sm text-muted-foreground">
-                      Slots: {node.available_slots} / {node.total_slots} available
-                    </div>
-                    {node.allocations.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 pt-2">
-                        {node.allocations.map(alloc => (
-                          <TkBadge key={alloc.model_id} status="healthy">
-                            {alloc.model_id.split('/').pop()} ({alloc.estimated_memory_gb.toFixed(1)} GB)
-                          </TkBadge>
-                        ))}
-                      </div>
-                    )}
                   </div>
-                  <div className="ml-4 flex-shrink-0">
-                    <TkSemicircularGauge
-                      value={node.used_memory_gb}
-                      max={node.total_memory_gb}
-                      label="Memory"
-                      unit="GB"
-                      size={120}
-                    />
+                  <GPUMemoryBars node={node} />
+                  <div className="flex items-center justify-between text-sm text-muted-foreground">
+                    <span>Slots: {node.available_slots} / {node.total_slots} available</span>
+                    <span>{node.used_memory_gb.toFixed(1)} / {node.total_memory_gb.toFixed(0)} GB total</span>
                   </div>
+                  {node.allocations.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {node.allocations.map(alloc => (
+                        <TkBadge key={alloc.model_id} status="healthy">
+                          {alloc.model_id.split('/').pop()} ({alloc.estimated_memory_gb.toFixed(1)} GB)
+                        </TkBadge>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </TkCardContent>
             </TkCard>
@@ -531,6 +529,82 @@ export default function LLMGatewayPage() {
         />
       )}
     </TkPageWrapper>
+  );
+}
+
+function getBarColor(pct: number): string {
+  if (pct < 50) return 'bg-emerald-500';
+  if (pct < 75) return 'bg-amber-500';
+  return 'bg-red-500';
+}
+
+function GPUMemoryBars({ node }: { node: GPUNode }) {
+  if (node.is_uma) {
+    const pct = node.total_memory_gb > 0
+      ? (node.used_memory_gb / node.total_memory_gb) * 100
+      : 0;
+    return (
+      <div className="space-y-1">
+        <div className="flex justify-between text-xs text-muted-foreground">
+          <span>Shared Memory</span>
+          <span>{node.used_memory_gb.toFixed(1)} / {node.total_memory_gb.toFixed(0)} GB</span>
+        </div>
+        <div className="h-3 bg-muted rounded-full overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all duration-500 ${getBarColor(pct)}`}
+            style={{ width: `${Math.min(pct, 100)}%` }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (node.per_gpu_metrics.length > 0) {
+    return (
+      <div className="space-y-2">
+        {node.per_gpu_metrics.map((gpu) => {
+          const pct = gpu.memory_total_mb > 0
+            ? (gpu.memory_used_mb / gpu.memory_total_mb) * 100
+            : 0;
+          return (
+            <div key={gpu.index} className="space-y-1">
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>GPU {gpu.index}</span>
+                <span>
+                  {(gpu.memory_used_mb / 1024).toFixed(1)} / {(gpu.memory_total_mb / 1024).toFixed(0)} GB
+                  {gpu.utilization > 0 && ` · ${gpu.utilization.toFixed(0)}%`}
+                  {gpu.temp > 0 && ` · ${gpu.temp}°C`}
+                </span>
+              </div>
+              <div className="h-3 bg-muted rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${getBarColor(pct)}`}
+                  style={{ width: `${Math.min(pct, 100)}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  const pct = node.total_memory_gb > 0
+    ? (node.used_memory_gb / node.total_memory_gb) * 100
+    : 0;
+  return (
+    <div className="space-y-1">
+      <div className="flex justify-between text-xs text-muted-foreground">
+        <span>GPU Memory</span>
+        <span>{node.used_memory_gb.toFixed(1)} / {node.total_memory_gb.toFixed(0)} GB</span>
+      </div>
+      <div className="h-3 bg-muted rounded-full overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all duration-500 ${getBarColor(pct)}`}
+          style={{ width: `${Math.min(pct, 100)}%` }}
+        />
+      </div>
+    </div>
   );
 }
 
