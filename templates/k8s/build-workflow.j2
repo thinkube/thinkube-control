@@ -256,7 +256,7 @@ spec:
         parameters:
           - name: container_name
       container:
-        image: {{ container_registry }}/library/crane:latest
+        image: {{ container_registry }}/library/ci-utils:latest
         command: ["/bin/sh", "-c"]
         env:
           - name: DOCKER_CONFIG

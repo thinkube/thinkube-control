@@ -307,7 +307,7 @@ spec:
       - name: image-tag
       - name: component
     container:
-      image: {{ container_registry }}/library/crane:latest
+      image: {{ container_registry }}/library/ci-utils:latest
       command: ["/bin/sh", "-c"]
       env:
         - name: DOCKER_CONFIG
