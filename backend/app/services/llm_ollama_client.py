@@ -78,6 +78,15 @@ class OllamaClient:
         resp.raise_for_status()
         return resp.json().get("models", [])
 
+    async def get_model_template(self, name: str, node: Optional[str] = None) -> str:
+        try:
+            client = self._get_client(node)
+            resp = await client.post("/api/show", json={"name": name})
+            resp.raise_for_status()
+            return resp.json().get("template", "")
+        except Exception:
+            return ""
+
     async def list_running(self, node: Optional[str] = None) -> List[Dict[str, Any]]:
         client = self._get_client(node)
         resp = await client.get("/api/ps")

@@ -205,6 +205,13 @@ class LLMLifecycleManager:
             if not ollama_name and catalog_serving:
                 ollama_name = self._find_ollama_name(catalog_serving, model_names)
 
+            if ollama_name and entry and entry.reasoning_format:
+                template = await ollama_client.get_model_template(ollama_name, node=target_node)
+                if "Thinking" not in template:
+                    logger.info(f"Ollama model '{ollama_name}' missing thinking template, recreating")
+                    await ollama_client.delete_model(ollama_name, node=target_node)
+                    ollama_name = None
+
             load_error = None
             if ollama_name:
                 success, load_error = await ollama_client.load_model(ollama_name, keep_alive, node=target_node, max_context_length=max_context_length)
