@@ -80,6 +80,14 @@ class LLMPodManager:
         base = self._get_base_deployment_name(backend_type)
         return f"{base}-{node_name}"
 
+    def _get_container_env(self, deployment, env_name: str) -> Optional[str]:
+        for container in deployment.spec.template.spec.containers:
+            if container.env:
+                for env_var in container.env:
+                    if env_var.name == env_name:
+                        return env_var.value
+        return None
+
     def get_managed_pod(self, backend_type: str, node_name: str) -> Optional[ManagedPod]:
         key = f"{backend_type}-{node_name}"
         return self._managed.get(key)
@@ -91,7 +99,8 @@ class LLMPodManager:
         return pods
 
     async def ensure_pod(
-        self, backend_type: str, node_name: str, gpu_count: int = 1
+        self, backend_type: str, node_name: str, gpu_count: int = 1,
+        model_env: Optional[Dict[str, str]] = None,
     ) -> Tuple[bool, Optional[ManagedPod]]:
         """Ensure a pod is running for this backend on the given node.
 
@@ -151,6 +160,7 @@ class LLMPodManager:
                 backend_type,
                 node_name,
                 gpu_count,
+                model_env,
             )
             if not success:
                 return False, None
@@ -159,18 +169,27 @@ class LLMPodManager:
             if pod:
                 self._managed[key] = pod
                 return True, pod
+            logger.warning(f"Pod for {key} never became ready, deleting zombie deployment")
+            await asyncio.get_event_loop().run_in_executor(
+                _k8s_executor,
+                self._delete_deployment,
+                self._get_namespace(backend_type),
+                self._make_deployment_name(backend_type, node_name),
+            )
             return False, None
         finally:
             event.set()
             self._creating.pop(key, None)
 
     def _create_node_deployment(
-        self, backend_type: str, node_name: str, gpu_count: int
+        self, backend_type: str, node_name: str, gpu_count: int,
+        model_env: Optional[Dict[str, str]] = None,
     ) -> bool:
         """Create a single-replica Deployment targeting a specific node.
 
         Copies the pod template from the base Deployment (replicas: 0) and adds
-        nodeSelector + GPU resource requests.
+        nodeSelector + GPU resource requests. If model_env is provided, injects
+        env vars (MODEL_ID, etc.) so the container auto-loads the model on start.
         """
         try:
             from kubernetes import client, config as k8s_config
@@ -190,8 +209,27 @@ class LLMPodManager:
             try:
                 existing = apps_v1.read_namespaced_deployment(deploy_name, namespace)
                 if existing:
-                    self._sync_deployment_image(apps_v1, existing, base, namespace)
-                    return True
+                    needs_recreate = False
+                    if model_env and model_env.get("MODEL_ID"):
+                        existing_model_id = self._get_container_env(existing, "MODEL_ID")
+                        if existing_model_id and existing_model_id != model_env["MODEL_ID"]:
+                            needs_recreate = True
+                            logger.info(
+                                f"MODEL_ID mismatch on {deploy_name}: "
+                                f"{existing_model_id} != {model_env['MODEL_ID']}, recreating"
+                            )
+
+                    if needs_recreate:
+                        apps_v1.delete_namespaced_deployment(deploy_name, namespace)
+                    else:
+                        self._sync_deployment_image(apps_v1, existing, base, namespace)
+                        if (existing.spec.replicas or 0) < 1:
+                            apps_v1.patch_namespaced_deployment(
+                                deploy_name, namespace,
+                                {"spec": {"replicas": 1}}
+                            )
+                            logger.info(f"Scaled {deploy_name} to 1 replica")
+                        return True
             except client.rest.ApiException as e:
                 if e.status != 404:
                     raise
@@ -207,6 +245,15 @@ class LLMPodManager:
                     limits["nvidia.com/gpu"] = str(gpu_count)
                     container.resources.requests = requests
                     container.resources.limits = limits
+
+            if model_env:
+                for container in pod_template.spec.containers:
+                    existing_env = list(container.env or [])
+                    for env_name, env_value in model_env.items():
+                        existing_env.append(
+                            client.V1EnvVar(name=env_name, value=str(env_value))
+                        )
+                    container.env = existing_env
 
             selector_labels = {
                 GATEWAY_LABEL: GATEWAY_LABEL_VALUE,

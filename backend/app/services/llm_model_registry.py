@@ -278,7 +278,7 @@ class LLMModelRegistry:
     def _reconcile_states(self):
         from app.services.llm_backend_discovery import llm_backend_discovery
         from app.services.llm_gpu_tracker import llm_gpu_tracker
-        from app.services.llm_lifecycle import llm_lifecycle
+        from app.services.llm_lifecycle import llm_lifecycle, parse_backend_id
 
         # Build composite keys: "backend_type:serving_base" -> (raw_name, backend_id)
         # e.g. "ollama:qwen3.5-4b" -> ("qwen3.5-4b:latest", "ollama-vilanova2")
@@ -306,20 +306,32 @@ class LLMModelRegistry:
                         matched_keys.add(key)
                         break
 
-            if matched_backend_id and entry.state != ModelState.loading:
+            is_actively_loading = (
+                entry.state == ModelState.loading
+                and model_id in llm_lifecycle._loading_locks
+            )
+
+            if matched_backend_id and not is_actively_loading:
                 entry.state = ModelState.available
                 entry.backend_id = matched_backend_id
                 self._sync_gpu_allocation(
                     model_id, matched_backend_id,
                     llm_gpu_tracker, llm_lifecycle,
                 )
-            elif (
-                matched_backend_id is None
-                and entry.state == ModelState.available
-            ):
+            elif matched_backend_id is None and entry.state == ModelState.available:
                 entry.state = ModelState.deployable
                 entry.backend_id = None
                 llm_gpu_tracker.release_allocation(model_id)
+            elif (
+                matched_backend_id is None
+                and entry.state == ModelState.loading
+                and not is_actively_loading
+            ):
+                logger.warning(
+                    f"Model '{model_id}' stuck in loading with no active task, resetting"
+                )
+                entry.state = ModelState.deployable
+                entry.backend_id = None
 
         # Register unmatched backend models (e.g. manually loaded Ollama models)
         for backend in llm_backend_discovery.list_backends():
@@ -347,14 +359,13 @@ class LLMModelRegistry:
                 )
 
     def _sync_gpu_allocation(self, model_id, backend_id, gpu_tracker, lifecycle):
+        from app.services.llm_lifecycle import parse_backend_id
         existing = gpu_tracker.get_eviction_candidates()
         if any(a.model_id == model_id for a in existing):
             return
         entry = self._models.get(model_id)
         estimated = lifecycle._estimate_memory(entry) if entry else 4.0
-        node_name = None
-        if backend_id and "-" in backend_id:
-            node_name = backend_id.split("-", 1)[1]
+        _, node_name = parse_backend_id(backend_id)
         gpu_tracker.record_allocation(model_id, backend_id, estimated, node_name=node_name)
 
 

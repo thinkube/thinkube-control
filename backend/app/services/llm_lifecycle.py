@@ -3,6 +3,8 @@ import logging
 import os
 from typing import Optional
 
+import json as json_mod
+
 import httpx
 
 from app.api.llm.schemas import ModelLoadResponse, ModelState, ModelTier, model_id_to_ollama_name
@@ -10,6 +12,27 @@ from app.api.llm.schemas import ModelLoadResponse, ModelState, ModelTier, model_
 logger = logging.getLogger(__name__)
 
 MLFLOW_ARTIFACT_BASE = "/mlflow-models/artifacts"
+
+KNOWN_BACKEND_TYPES = ("tensorrt-llm", "ollama", "vllm")
+
+
+def parse_backend_id(backend_id: str) -> tuple[str, Optional[str]]:
+    """Parse 'backend_type-node_name' into (backend_type, node_name).
+
+    Handles compound types like 'tensorrt-llm'.
+    """
+    if not backend_id:
+        return backend_id, None
+    for prefix in KNOWN_BACKEND_TYPES:
+        if backend_id == prefix:
+            return prefix, None
+        if backend_id.startswith(prefix + "-"):
+            node = backend_id[len(prefix) + 1:]
+            return prefix, node if node else None
+    if "-" in backend_id:
+        parts = backend_id.split("-", 1)
+        return parts[0], parts[1]
+    return backend_id, None
 
 
 class LLMLifecycleManager:
@@ -307,8 +330,18 @@ class LLMLifecycleManager:
         self._loading_locks[model_id] = event
 
         try:
+            model_env = {"MODEL_ID": model_id}
+            if payload.get("stop_tokens"):
+                model_env["STOP_TOKENS"] = json_mod.dumps(payload["stop_tokens"])
+            if payload.get("reasoning_format"):
+                model_env["REASONING_FORMAT"] = payload["reasoning_format"]
+            if payload.get("tool_use"):
+                model_env["TOOL_USE"] = "true"
+            if payload.get("max_context_length"):
+                model_env["MAX_CONTEXT_LENGTH"] = str(payload["max_context_length"])
+
             success, managed_pod = await llm_pod_manager.ensure_pod(
-                perf_type, node, gpu_count=gpu_count
+                perf_type, node, gpu_count=gpu_count, model_env=model_env
             )
             if not success:
                 llm_model_registry.update_model_state(
@@ -318,7 +351,7 @@ class LLMLifecycleManager:
                 return
 
             backend = None
-            for _ in range(18):
+            for _ in range(60):
                 await llm_backend_discovery.refresh()
                 for b in llm_backend_discovery.list_backends():
                     if b.type == perf_type and b.node == node and b.status == "healthy":
@@ -331,41 +364,20 @@ class LLMLifecycleManager:
             if not backend:
                 llm_model_registry.update_model_state(
                     model_id, ModelState.deployable,
-                    error=f"Backend pod on {node} did not become healthy",
+                    error=f"Backend pod on {node} did not become healthy within timeout",
                 )
                 await self._cleanup_empty_pod(llm_gpu_tracker, llm_pod_manager, perf_type, node)
                 return
 
-            async with httpx.AsyncClient(
-                verify=False, timeout=httpx.Timeout(660.0, connect=10.0)
-            ) as client:
-                resp = await client.post(
-                    f"{backend.url}/admin/switch-model",
-                    json=payload,
-                )
-                resp.raise_for_status()
-                result = resp.json()
-
-            if result.get("status") == "serving" or result.get("current_model"):
-                llm_model_registry.update_model_state(
-                    model_id, ModelState.available, backend.id
-                )
-                llm_gpu_tracker.record_allocation(
-                    model_id, backend.id, estimated_memory, node_name=backend.node
-                )
-                logger.info(f"Model '{model_id}' loaded on {backend.id}")
-            else:
-                error = result.get("error", "Backend returned non-serving status")
-                llm_model_registry.update_model_state(
-                    model_id, ModelState.deployable, error=error
-                )
-                logger.error(f"Failed to load '{model_id}' on {backend.id}: {error}")
-                await self._cleanup_empty_pod(llm_gpu_tracker, llm_pod_manager, perf_type, node)
+            llm_model_registry.update_model_state(
+                model_id, ModelState.available, backend.id
+            )
+            llm_gpu_tracker.record_allocation(
+                model_id, backend.id, estimated_memory, node_name=backend.node
+            )
+            logger.info(f"Model '{model_id}' loaded on {backend.id}")
         except Exception as e:
-            body = ""
-            if hasattr(e, "response") and e.response is not None:
-                body = e.response.text[:500]
-            logger.error(f"Performance load failed for {model_id}: {e} | body={body}")
+            logger.error(f"Performance load failed for {model_id}: {e}")
             llm_model_registry.update_model_state(
                 model_id, ModelState.deployable, error=str(e)
             )
@@ -404,8 +416,7 @@ class LLMLifecycleManager:
             )
 
         backend_id = entry.backend_id or ""
-        backend_type = backend_id.split("-")[0] if "-" in backend_id else backend_id
-        node = backend_id.split("-", 1)[1] if "-" in backend_id else None
+        backend_type, node = parse_backend_id(backend_id)
 
         llm_model_registry.update_model_state(model_id, ModelState.unloading, backend_id)
 
@@ -455,8 +466,19 @@ class LLMLifecycleManager:
             entry = llm_model_registry.get_model(model_id)
             return entry is not None and entry.state == ModelState.available
 
-        result = await self.load_model(model_id)
+        node = self._pick_node_for_auto_load()
+        if not node:
+            logger.warning(f"auto_load_on_resolve: no node available for {model_id}")
+            return False
+        result = await self.load_model(model_id, node=node)
         return result.state == ModelState.available
+
+    def _pick_node_for_auto_load(self) -> Optional[str]:
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+        nodes = llm_gpu_tracker.list_nodes()
+        if not nodes:
+            return None
+        return nodes[0].name
 
     async def _resolve_gguf_path(self, model_id: str) -> Optional[str]:
         mlflow_url = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000")
