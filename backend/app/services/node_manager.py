@@ -304,7 +304,7 @@ fi
         hostname: str,
         ip: str,
         architecture: str,
-        zerotier_ip: Optional[str] = None,
+        overlay_ip: Optional[str] = None,
         lan_ip: Optional[str] = None,
         gpu_detected: bool = False,
         gpu_count: int = 0,
@@ -325,15 +325,14 @@ fi
         inv_arch_group = "arm64" if architecture.lower() in ("aarch64", "arm64") else "x86_64"
 
         host_def = {
-            "ansible_host": zerotier_ip if network_mode == "overlay" and zerotier_ip else ip,
+            "ansible_host": overlay_ip if network_mode == "overlay" and overlay_ip else ip,
             "lan_ip": lan_ip or ip,
             "arch": inv_arch_group,
-            "zerotier_enabled": network_mode == "overlay",
             "configure_gpu_passthrough": False,
         }
 
-        if network_mode == "overlay" and zerotier_ip:
-            host_def["zerotier_ip"] = zerotier_ip
+        if network_mode == "overlay" and overlay_ip:
+            host_def["overlay_ip"] = overlay_ip
 
         if children["baremetal"].get("hosts") is None:
             children["baremetal"]["hosts"] = {}
@@ -618,7 +617,7 @@ fi
                 hosts = section.get("hosts") or {}
                 for hostname, host_vars in hosts.items():
                     if isinstance(host_vars, dict):
-                        for key in ("ansible_host", "lan_ip", "zerotier_ip"):
+                        for key in ("ansible_host", "lan_ip", "overlay_ip"):
                             val = host_vars.get(key)
                             if val:
                                 ips.add(val)
@@ -627,7 +626,7 @@ fi
                         continue
                     for hostname, host_vars in (sub_section.get("hosts") or {}).items():
                         if isinstance(host_vars, dict):
-                            for key in ("ansible_host", "lan_ip", "zerotier_ip"):
+                            for key in ("ansible_host", "lan_ip", "overlay_ip"):
                                 val = host_vars.get(key)
                                 if val:
                                     ips.add(val)
@@ -646,7 +645,7 @@ fi
             mode = inv_vars["network_mode"]
 
             if mode == "overlay":
-                prefix = inv_vars["zerotier_subnet_prefix"]
+                prefix = inv_vars["overlay_subnet_prefix"]
             else:
                 cidr = inv_vars.get("network_cidr", "")
                 if cidr:
@@ -768,17 +767,17 @@ fi
             baremetal_hosts = (inventory.get("all", {}).get("children", {})
                               .get("baremetal", {}).get("hosts", {}))
             cp_vars = baremetal_hosts.get(cp_name, {}) if cp_name else {}
-            control_plane_zt_ip = (cp_vars.get("zerotier_ip")
+            control_plane_zt_ip = (cp_vars.get("overlay_ip")
                                    or cp_vars.get("ansible_host"))
 
             if not control_plane_zt_ip:
-                raise ValueError(f"Could not find control plane ZeroTier IP for {cp_name}")
+                raise ValueError(f"Could not find control plane overlay IP for {cp_name}")
 
-            prefix = inv_vars.get("zerotier_subnet_prefix")
+            prefix = inv_vars.get("overlay_subnet_prefix")
             start_octet_str = inv_vars.get("metallb_ip_start_octet")
             end_octet_str = inv_vars.get("metallb_ip_end_octet")
             if not prefix or not start_octet_str or not end_octet_str:
-                raise ValueError("Missing zerotier_subnet_prefix, metallb_ip_start_octet, or metallb_ip_end_octet in inventory")
+                raise ValueError("Missing overlay_subnet_prefix, metallb_ip_start_octet, or metallb_ip_end_octet in inventory")
             start_octet = int(start_octet_str)
             end_octet = int(end_octet_str)
 
@@ -884,7 +883,7 @@ echo "NONE"
                     return {
                         "success": True,
                         "zerotier_node_id": existing_node_id,
-                        "zerotier_ip": existing_zt_ip,
+                        "overlay_ip": existing_zt_ip,
                     }
         except Exception:
             pass
@@ -1027,8 +1026,97 @@ fi
         return {
             "success": True,
             "zerotier_node_id": node_id,
-            "zerotier_ip": assigned_zt_ip,
+            "overlay_ip": assigned_zt_ip,
         }
+
+    async def setup_tailscale_on_node(
+        self, ip: str, hostname: str
+    ) -> Dict[str, Any]:
+        """Install Tailscale on a remote node, authenticate, and return its overlay IP.
+
+        Steps:
+        1. SSH to node, install Tailscale via official install script
+        2. Enable and start the tailscaled service
+        3. Authenticate with an auth key and set the hostname
+        4. Parse the assigned Tailscale IP from `tailscale status --json`
+        """
+        ssh_key_path = ansible_env.get_ssh_key_path()
+        username = os.environ["SYSTEM_USERNAME"]
+        inventory = self.read_inventory()
+        inv_vars = inventory.get("all", {}).get("vars", {})
+        auth_key = inv_vars.get("tailscale_auth_key")
+
+        if not auth_key:
+            return {"success": False, "error": "tailscale_auth_key not in inventory"}
+
+        password = os.environ.get("ANSIBLE_BECOME_PASSWORD", "")
+        ssh_opts = f"-o StrictHostKeyChecking=no -o ConnectTimeout=10 -i {ssh_key_path}"
+        cmd = f"ssh {ssh_opts} {username}@{ip} bash -s"
+
+        # Step 1: Install Tailscale, enable service, authenticate, read back IP
+        install_script = f"""
+set -e
+echo '{password}' | sudo -S bash -c '
+set -e
+if ! command -v tailscale >/dev/null 2>&1; then
+    curl -fsSL https://tailscale.com/install.sh | sh
+fi
+systemctl enable --now tailscaled
+sleep 2
+tailscale up --authkey={auth_key} --hostname={hostname} --accept-routes
+sleep 2
+tailscale status --json
+'
+"""
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd.split(),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(input=install_script.encode()), timeout=120
+            )
+
+            if process.returncode != 0:
+                error = stderr.decode("utf-8", errors="replace").strip()
+                return {"success": False, "error": f"Tailscale install failed: {error}"}
+
+            # Parse the JSON output from `tailscale status --json`
+            output = stdout.decode("utf-8", errors="replace").strip()
+            # The JSON output may be preceded by sudo/install noise — find the
+            # last JSON object in the output.
+            json_start = output.rfind("{")
+            if json_start < 0:
+                return {"success": False, "error": f"Could not find JSON in tailscale status output"}
+
+            status_json = json.loads(output[json_start:])
+            self_node = status_json.get("Self", {})
+            tailscale_ips = self_node.get("TailscaleIPs", [])
+            if not tailscale_ips:
+                return {"success": False, "error": "No TailscaleIPs found in status output"}
+
+            # Use the first IPv4 address
+            overlay_ip = None
+            for tip in tailscale_ips:
+                if "." in tip:  # IPv4
+                    overlay_ip = tip
+                    break
+            if not overlay_ip:
+                overlay_ip = tailscale_ips[0]
+
+            return {
+                "success": True,
+                "overlay_ip": overlay_ip,
+            }
+
+        except asyncio.TimeoutError:
+            return {"success": False, "error": "Tailscale installation timed out"}
+        except json.JSONDecodeError as e:
+            return {"success": False, "error": f"Failed to parse tailscale status JSON: {e}"}
+        except Exception as e:
+            return {"success": False, "error": f"Tailscale install error: {e}"}
 
     async def expand_lvm(self, ip: str, lv_path: str) -> Dict[str, Any]:
         """Expand an LVM logical volume to use all free space in its volume group."""
@@ -1059,8 +1147,8 @@ df -BG / 2>/dev/null | tail -1 | awk '{{print $2}}' | tr -d 'G'
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    async def detect_zerotier_ip(self, lan_ip: str) -> Optional[str]:
-        """Check if a node already has a ZeroTier IP configured. Returns the IP or None."""
+    async def detect_overlay_ip(self, lan_ip: str) -> Optional[str]:
+        """Check if a node already has an overlay IP configured. Returns the IP or None."""
         ssh_key_path = ansible_env.get_ssh_key_path()
         username = os.environ["SYSTEM_USERNAME"]
         try:

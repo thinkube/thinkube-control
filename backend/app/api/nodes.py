@@ -565,8 +565,8 @@ async def add_nodes_batch(request: AddNodesBatchRequest):
 async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
     """Stream batch node addition progress via WebSocket.
 
-    Handles the full pipeline: SSH key distribution, ZeroTier setup (if overlay),
-    hardware detection, inventory update, and k8s join.
+    Handles the full pipeline: SSH key distribution, overlay network setup
+    (ZeroTier or Tailscale), hardware detection, inventory update, and k8s join.
 
     Expected query params: nodes (JSON array of node objects), password (optional)
     """
@@ -607,8 +607,11 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             "job_id": job_id,
         })
 
+        # Determine overlay provider from inventory
+        overlay_provider = inv_vars.get("overlay_provider", "zerotier")
+
         # Ensure MetalLB VIP routes in ZeroTier (once, before node loop)
-        if network_mode == "overlay":
+        if network_mode == "overlay" and overlay_provider == "zerotier":
             zt_network_id = inv_vars.get("zerotier_network_id")
             zt_api_token = inv_vars.get("zerotier_api_token")
             if not zt_network_id or not zt_api_token:
@@ -703,64 +706,83 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     break
                 step += 1
 
-            # Step: ZeroTier setup (if overlay mode)
-            zerotier_ip = node_info.get("zerotier_ip")
-            if network_mode == "overlay" and not zerotier_ip:
-                # Check if ZeroTier is already configured on the node
-                existing_zt_ip = await node_manager.detect_zerotier_ip(ip)
-                if existing_zt_ip and await node_manager.wait_for_ssh(existing_zt_ip, retries=2, interval=3):
-                    zerotier_ip = existing_zt_ip
+            # Step: Overlay network setup (ZeroTier or Tailscale)
+            overlay_ip = node_info.get("overlay_ip")
+            if network_mode == "overlay" and not overlay_ip:
+                # Check if an overlay IP is already configured on the node
+                existing_overlay_ip = await node_manager.detect_overlay_ip(ip)
+                if existing_overlay_ip and await node_manager.wait_for_ssh(existing_overlay_ip, retries=2, interval=3):
+                    overlay_ip = existing_overlay_ip
                     await websocket.send_json({
                         "type": "ok",
-                        "message": f"[{hostname or ip}] ZeroTier already configured ({zerotier_ip})",
+                        "message": f"[{hostname or ip}] Overlay network already configured ({overlay_ip})",
                     })
                     step += 1
                 else:
+                    provider_name = overlay_provider.capitalize()
                     await websocket.send_json({
                         "type": "task",
-                        "task_name": f"[{hostname or ip}] Setup ZeroTier",
+                        "task_name": f"[{hostname or ip}] Setup {provider_name}",
                         "task_number": step,
                     })
 
-                    assigned_ip = await network_discovery.get_next_available_zerotier_ip()
-                    if not assigned_ip:
+                    if overlay_provider == "tailscale":
+                        ts_result = await node_manager.setup_tailscale_on_node(ip, hostname or ip)
+                        if not ts_result["success"]:
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": f"[{hostname or ip}] Tailscale setup failed: {ts_result.get('error')}. Aborting batch.",
+                            })
+                            batch_failed = True
+                            failed_hostname = hostname or ip
+                            break
+
+                        overlay_ip = ts_result["overlay_ip"]
+                        await websocket.send_json({
+                            "type": "ok",
+                            "message": f"[{hostname or ip}] Tailscale configured with IP {overlay_ip}, waiting for tunnel...",
+                        })
+                    else:
+                        # ZeroTier (default)
+                        assigned_ip = await network_discovery.get_next_available_overlay_ip()
+                        if not assigned_ip:
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": f"[{hostname or ip}] No available overlay IPs. Aborting batch.",
+                            })
+                            batch_failed = True
+                            failed_hostname = hostname or ip
+                            break
+
+                        zt_result = await node_manager.setup_zerotier_on_node(ip, assigned_ip)
+                        if not zt_result["success"]:
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": f"[{hostname or ip}] ZeroTier setup failed: {zt_result.get('error')}. Aborting batch.",
+                            })
+                            batch_failed = True
+                            failed_hostname = hostname or ip
+                            break
+
+                        overlay_ip = zt_result["overlay_ip"]
+                        await websocket.send_json({
+                            "type": "ok",
+                            "message": f"[{hostname or ip}] ZeroTier configured with IP {overlay_ip}, waiting for tunnel...",
+                        })
+
+                    overlay_reachable = await node_manager.wait_for_ssh(overlay_ip, retries=12, interval=5)
+                    if not overlay_reachable:
                         await websocket.send_json({
                             "type": "error",
-                            "message": f"[{hostname or ip}] No available ZeroTier IPs. Aborting batch.",
+                            "message": f"[{hostname or ip}] Overlay tunnel to {overlay_ip} not reachable after 60s. Aborting batch.",
                         })
                         batch_failed = True
                         failed_hostname = hostname or ip
                         break
 
-                    zt_result = await node_manager.setup_zerotier_on_node(ip, assigned_ip)
-                    if not zt_result["success"]:
-                        await websocket.send_json({
-                            "type": "error",
-                            "message": f"[{hostname or ip}] ZeroTier setup failed: {zt_result.get('error')}. Aborting batch.",
-                        })
-                        batch_failed = True
-                        failed_hostname = hostname or ip
-                        break
-
-                    zerotier_ip = zt_result["zerotier_ip"]
                     await websocket.send_json({
                         "type": "ok",
-                        "message": f"[{hostname or ip}] ZeroTier configured with IP {zerotier_ip}, waiting for tunnel...",
-                    })
-
-                    zt_reachable = await node_manager.wait_for_ssh(zerotier_ip, retries=12, interval=5)
-                    if not zt_reachable:
-                        await websocket.send_json({
-                            "type": "error",
-                            "message": f"[{hostname or ip}] ZeroTier tunnel to {zerotier_ip} not reachable after 60s. Aborting batch.",
-                        })
-                        batch_failed = True
-                        failed_hostname = hostname or ip
-                        break
-
-                    await websocket.send_json({
-                        "type": "ok",
-                        "message": f"[{hostname or ip}] ZeroTier tunnel established",
+                        "message": f"[{hostname or ip}] Overlay tunnel established",
                     })
                     step += 1
 
@@ -776,7 +798,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     "task_name": f"[{hostname or ip}] Detect hardware",
                     "task_number": step,
                 })
-                connect_ip = zerotier_ip if network_mode == "overlay" and zerotier_ip else ip
+                connect_ip = overlay_ip if network_mode == "overlay" and overlay_ip else ip
                 hw = await node_manager.discover_node(connect_ip)
                 if "error" in hw:
                     await websocket.send_json({
@@ -799,7 +821,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                 step += 1
 
             # Step: Prepare Ansible Python environment
-            connect_ip = zerotier_ip if network_mode == "overlay" and zerotier_ip else ip
+            connect_ip = overlay_ip if network_mode == "overlay" and overlay_ip else ip
             await websocket.send_json({
                 "type": "task",
                 "task_name": f"[{hostname}] Prepare Python environment",
@@ -832,7 +854,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     hostname=hostname,
                     ip=ip,
                     architecture=architecture,
-                    zerotier_ip=zerotier_ip or None,
+                    overlay_ip=overlay_ip or None,
                     lan_ip=lan_ip or None,
                     gpu_detected=gpu_detected,
                     gpu_count=gpu_count,

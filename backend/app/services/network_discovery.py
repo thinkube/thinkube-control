@@ -1,11 +1,11 @@
 """Network discovery service for finding nodes available to join the cluster.
 
 Supports two modes:
-- Overlay (ZeroTier): queries the ZeroTier Central API for authorized+online members
+- Overlay (ZeroTier/Tailscale): queries the overlay provider API for members
 - Local: ping sweeps the network CIDR and checks SSH banners for Ubuntu hosts
 
-ZeroTier Central is the source of truth for IP allocation — all assigned IPs
-(members, MetalLB, infrastructure) are tracked there.
+The overlay provider's API is the source of truth for IP allocation — all
+assigned IPs (members, MetalLB, infrastructure) are tracked there.
 """
 
 import asyncio
@@ -35,7 +35,7 @@ class DiscoveredNetworkNode:
         self,
         ip: str,
         hostname: Optional[str] = None,
-        zerotier_ip: Optional[str] = None,
+        overlay_ip: Optional[str] = None,
         zerotier_node_id: Optional[str] = None,
         ssh_available: bool = False,
         ssh_banner: Optional[str] = None,
@@ -44,7 +44,7 @@ class DiscoveredNetworkNode:
     ):
         self.ip = ip
         self.hostname = hostname
-        self.zerotier_ip = zerotier_ip
+        self.overlay_ip = overlay_ip
         self.zerotier_node_id = zerotier_node_id
         self.ssh_available = ssh_available
         self.ssh_banner = ssh_banner
@@ -55,7 +55,7 @@ class DiscoveredNetworkNode:
         return {
             "ip": self.ip,
             "hostname": self.hostname,
-            "zerotier_ip": self.zerotier_ip,
+            "overlay_ip": self.overlay_ip,
             "zerotier_node_id": self.zerotier_node_id,
             "ssh_available": self.ssh_available,
             "ssh_banner": self.ssh_banner,
@@ -78,9 +78,9 @@ class NetworkDiscovery:
         return self._get_inventory_vars().get("network_mode", "overlay")
 
     async def _get_all_assigned_ips(self) -> Set[str]:
-        """Query ZeroTier Central for all assigned IPs in the network.
+        """Query the overlay provider API for all assigned IPs in the network.
 
-        ZeroTier Central is the source of truth for IP allocation.
+        The overlay provider's API is the source of truth for IP allocation.
         """
         inv_vars = self._get_inventory_vars()
         network_id = inv_vars.get("zerotier_network_id")
@@ -117,15 +117,15 @@ class NetworkDiscovery:
             logger.warning(f"Could not query k8s nodes: {e}")
         return cluster_ips
 
-    async def get_next_available_zerotier_ip(self) -> Optional[str]:
-        """Find the next available IP in the ZeroTier subnet.
+    async def get_next_available_overlay_ip(self) -> Optional[str]:
+        """Find the next available IP in the overlay subnet.
 
-        Queries ZeroTier Central for all assigned IPs, then finds the first
-        gap starting from .10.
+        Queries the overlay provider API for all assigned IPs, then finds
+        the first gap starting from .10.
         """
         assigned = await self._get_all_assigned_ips()
         inv_vars = self._get_inventory_vars()
-        prefix = inv_vars.get("zerotier_subnet_prefix", "192.168.191.")
+        prefix = inv_vars.get("overlay_subnet_prefix", "192.168.191.")
 
         for octet in range(10, 250):
             ip = f"{prefix}{octet}"
@@ -171,7 +171,7 @@ class NetworkDiscovery:
                 node = DiscoveredNetworkNode(
                     ip=zt_ip,
                     hostname=member.get("name") or None,
-                    zerotier_ip=zt_ip,
+                    overlay_ip=zt_ip,
                     zerotier_node_id=member.get("nodeId"),
                     confidence="possible",
                 )
