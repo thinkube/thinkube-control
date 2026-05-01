@@ -230,6 +230,8 @@ class LLMPodManager:
                         apps_v1.delete_namespaced_deployment(deploy_name, namespace)
                     else:
                         self._sync_deployment_image(apps_v1, existing, base, namespace)
+                        if model_env:
+                            self._sync_deployment_env(apps_v1, existing, namespace, model_env)
                         if (existing.spec.replicas or 0) < 1:
                             apps_v1.patch_namespaced_deployment(
                                 deploy_name, namespace,
@@ -368,6 +370,24 @@ class LLMPodManager:
                 {"spec": {"template": {"spec": {"containers": patches}}}},
             )
             logger.info(f"Synced images for {node_deploy.metadata.name}")
+
+    def _sync_deployment_env(self, apps_v1, node_deploy, namespace: str, model_env: Dict[str, str]):
+        """Update env vars on an existing deployment to match the requested model_env."""
+        container = node_deploy.spec.template.spec.containers[0]
+        existing_env = {e.name: e.value for e in (container.env or []) if e.value is not None}
+        patch_vars = []
+        for env_name, env_value in model_env.items():
+            if existing_env.get(env_name) != str(env_value):
+                patch_vars.append({"name": env_name, "value": str(env_value)})
+        if patch_vars:
+            apps_v1.patch_namespaced_deployment(
+                node_deploy.metadata.name,
+                namespace,
+                {"spec": {"template": {"spec": {"containers": [
+                    {"name": container.name, "env": patch_vars}
+                ]}}}},
+            )
+            logger.info(f"Synced env vars for {node_deploy.metadata.name}: {[v['name'] for v in patch_vars]}")
 
     async def _wait_for_pod_ready(
         self, backend_type: str, node_name: str, timeout: int = 600
