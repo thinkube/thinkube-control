@@ -319,10 +319,7 @@ spec:
           TAG="{% raw %}{{inputs.parameters.image-tag}}{% endraw %}"
 
           echo "Creating multi-arch manifest for ${IMAGE}:${TAG}"
-          crane index append --tag "${IMAGE}:${TAG}" \
-{% for arch in build_architectures %}
-            --manifest "${IMAGE}:${TAG}-{{ arch }}"{{ " \\" if not loop.last else "" }}
-{% endfor %}
+          crane index append --tag "${IMAGE}:${TAG}"{% for arch in build_architectures %} --manifest "${IMAGE}:${TAG}-{{ arch }}"{% endfor %}
 
           crane tag "${IMAGE}:${TAG}" latest
           echo "Multi-arch manifest pushed"

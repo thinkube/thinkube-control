@@ -728,7 +728,9 @@ git reset --hard origin/main
         # Create Jinja2 environment
         env = jinja2.Environment(
             loader=jinja2.BaseLoader(),
-            undefined=jinja2.StrictUndefined
+            undefined=jinja2.StrictUndefined,
+            trim_blocks=True,
+            lstrip_blocks=True
         )
         template = env.from_string(template_content)
 

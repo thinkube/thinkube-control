@@ -270,10 +270,7 @@ spec:
             echo "Creating multi-arch manifest for ${IMAGE}:${TAG}"
 
             # Create manifest list from per-arch images
-            crane index append --tag "${IMAGE}:${TAG}" \
-{% for arch in build_architectures %}
-              --manifest "${IMAGE}:${TAG}-{{ arch }}"{{ " \\" if not loop.last else "" }}
-{% endfor %}
+            crane index append --tag "${IMAGE}:${TAG}"{% for arch in build_architectures %} --manifest "${IMAGE}:${TAG}-{{ arch }}"{% endfor %}
 
             # Also tag as :latest
             crane tag "${IMAGE}:${TAG}" latest
