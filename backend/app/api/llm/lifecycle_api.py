@@ -43,7 +43,8 @@ async def get_load_options(model_id: str):
     gpu_status = await llm_gpu_tracker.get_status()
     gpu_nodes = gpu_status.nodes
 
-    estimated_memory = llm_lifecycle._estimate_memory(entry)
+    default_context = 8192
+    estimated_memory = llm_lifecycle._estimate_memory(entry, default_context)
 
     return LoadOptionsResponse(
         model_id=model_id,
