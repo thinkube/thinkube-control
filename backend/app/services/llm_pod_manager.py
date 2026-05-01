@@ -101,12 +101,12 @@ class LLMPodManager:
     async def ensure_pod(
         self, backend_type: str, node_name: str, gpu_count: int = 1,
         model_env: Optional[Dict[str, str]] = None,
+        wait_ready: bool = True,
     ) -> Tuple[bool, Optional[ManagedPod]]:
         """Ensure a pod is running for this backend on the given node.
 
-        Returns (success, managed_pod). If a pod already exists and is ready,
-        returns immediately. Otherwise creates a new Deployment and waits for
-        the pod to become ready.
+        Returns (success, managed_pod). If wait_ready is False, creates the
+        Deployment and returns immediately without waiting for pod readiness.
         """
         key = f"{backend_type}-{node_name}"
 
@@ -130,6 +130,8 @@ class LLMPodManager:
                 if restarted:
                     logger.info(f"Image updated for {key}, waiting for new pod")
                     self._managed.pop(key, None)
+                    if not wait_ready:
+                        return True, None
                     pod = await self._wait_for_pod_ready(backend_type, node_name)
                     if pod:
                         self._managed[key] = pod
@@ -164,6 +166,10 @@ class LLMPodManager:
             )
             if not success:
                 return False, None
+
+            if not wait_ready:
+                logger.info(f"Deployment created for {key}, not waiting for readiness")
+                return True, None
 
             pod = await self._wait_for_pod_ready(backend_type, node_name)
             if pod:
@@ -214,10 +220,11 @@ class LLMPodManager:
                         existing_model_id = self._get_container_env(existing, "MODEL_ID")
                         if existing_model_id and existing_model_id != model_env["MODEL_ID"]:
                             needs_recreate = True
-                            logger.info(
-                                f"MODEL_ID mismatch on {deploy_name}: "
-                                f"{existing_model_id} != {model_env['MODEL_ID']}, recreating"
-                            )
+
+                    if not needs_recreate:
+                        pod_status = self.check_pod_status(backend_type, node_name)
+                        if pod_status == "failed":
+                            needs_recreate = True
 
                     if needs_recreate:
                         apps_v1.delete_namespaced_deployment(deploy_name, namespace)
@@ -363,7 +370,7 @@ class LLMPodManager:
             logger.info(f"Synced images for {node_deploy.metadata.name}")
 
     async def _wait_for_pod_ready(
-        self, backend_type: str, node_name: str, timeout: int = 300
+        self, backend_type: str, node_name: str, timeout: int = 600
     ) -> Optional[ManagedPod]:
         namespace = self._get_namespace(backend_type)
         deploy_name = self._make_deployment_name(backend_type, node_name)
@@ -426,6 +433,58 @@ class LLMPodManager:
         except Exception as e:
             logger.debug(f"Pod lookup failed: {e}")
             return None
+
+    def check_pod_status(self, backend_type: str, node_name: str) -> str:
+        """Check the actual K8s pod status for a backend/node.
+
+        Returns one of: "ready", "progressing", "failed", "absent".
+        """
+        try:
+            from kubernetes import client, config as k8s_config
+
+            try:
+                k8s_config.load_incluster_config()
+            except k8s_config.ConfigException:
+                k8s_config.load_kube_config()
+
+            apps_v1 = client.AppsV1Api()
+            namespace = self._get_namespace(backend_type)
+            deploy_name = self._make_deployment_name(backend_type, node_name)
+
+            try:
+                apps_v1.read_namespaced_deployment(deploy_name, namespace)
+            except client.rest.ApiException as e:
+                if e.status == 404:
+                    return "absent"
+                raise
+
+            v1 = client.CoreV1Api()
+            selector = f"{GATEWAY_LABEL}={GATEWAY_LABEL_VALUE},thinkube.io/target-node={node_name}"
+            pods = v1.list_namespaced_pod(namespace, label_selector=selector)
+
+            if not pods.items:
+                return "progressing"
+
+            for pod in pods.items:
+                statuses = pod.status.container_statuses or []
+                for cs in statuses:
+                    if cs.state and cs.state.waiting:
+                        reason = cs.state.waiting.reason or ""
+                        if reason in ("CrashLoopBackOff", "ErrImagePull", "ImagePullBackOff", "CreateContainerError"):
+                            return "failed"
+
+                if pod.status.phase == "Running":
+                    conditions = pod.status.conditions or []
+                    ready = any(c.type == "Ready" and c.status == "True" for c in conditions)
+                    if ready:
+                        return "ready"
+                elif pod.status.phase == "Failed":
+                    return "failed"
+
+            return "progressing"
+        except Exception as e:
+            logger.debug(f"Pod status check failed for {backend_type}/{node_name}: {e}")
+            return "progressing"
 
     async def delete_pod(self, backend_type: str, node_name: str) -> bool:
         """Delete a gateway-managed Deployment for a backend on a node."""

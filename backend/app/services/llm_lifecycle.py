@@ -167,7 +167,7 @@ class LLMLifecycleManager:
                 )
 
         backend_id = f"ollama-{node}"
-        llm_model_registry.update_model_state(model_id, ModelState.loading)
+        llm_model_registry.update_model_state(model_id, ModelState.loading, backend_id)
 
         asyncio.create_task(
             self._load_ollama_background(
@@ -304,7 +304,8 @@ class LLMLifecycleManager:
         if max_context_length:
             payload["max_context_length"] = max_context_length
 
-        llm_model_registry.update_model_state(model_id, ModelState.loading)
+        backend_id = f"{perf_type}-{node}"
+        llm_model_registry.update_model_state(model_id, ModelState.loading, backend_id)
 
         asyncio.create_task(
             self._load_performance_background(
@@ -315,19 +316,16 @@ class LLMLifecycleManager:
         return ModelLoadResponse(
             model_id=model_id, state=ModelState.loading,
             message="Loading model — this may take several minutes",
+            backend_id=backend_id,
         )
 
     async def _load_performance_background(
         self, model_id: str, perf_type: str, node: str,
         gpu_count: int, payload: dict, estimated_memory: float,
     ):
+        """Create the deployment and return. Reconciliation handles the rest."""
         from app.services.llm_model_registry import llm_model_registry
-        from app.services.llm_gpu_tracker import llm_gpu_tracker
         from app.services.llm_pod_manager import llm_pod_manager
-        from app.services.llm_backend_discovery import llm_backend_discovery
-
-        event = asyncio.Event()
-        self._loading_locks[model_id] = event
 
         try:
             model_env = {"MODEL_ID": model_id}
@@ -340,51 +338,26 @@ class LLMLifecycleManager:
             if payload.get("max_context_length"):
                 model_env["MAX_CONTEXT_LENGTH"] = str(payload["max_context_length"])
 
-            success, managed_pod = await llm_pod_manager.ensure_pod(
-                perf_type, node, gpu_count=gpu_count, model_env=model_env
+            success, _ = await llm_pod_manager.ensure_pod(
+                perf_type, node, gpu_count=gpu_count, model_env=model_env,
+                wait_ready=False,
             )
             if not success:
                 llm_model_registry.update_model_state(
                     model_id, ModelState.deployable,
-                    error=f"Failed to start {perf_type} pod on {node}",
+                    error=f"Failed to create {perf_type} deployment on {node}",
                 )
                 return
 
-            backend = None
-            for _ in range(60):
-                await llm_backend_discovery.refresh()
-                for b in llm_backend_discovery.list_backends():
-                    if b.type == perf_type and b.node == node and b.status == "healthy":
-                        backend = b
-                        break
-                if backend:
-                    break
-                await asyncio.sleep(10)
-
-            if not backend:
-                llm_model_registry.update_model_state(
-                    model_id, ModelState.deployable,
-                    error=f"Backend pod on {node} did not become healthy within timeout",
-                )
-                await self._cleanup_empty_pod(llm_gpu_tracker, llm_pod_manager, perf_type, node)
-                return
-
-            llm_model_registry.update_model_state(
-                model_id, ModelState.available, backend.id
+            logger.info(
+                f"Deployment created for {model_id} on {perf_type}/{node}, "
+                f"reconciliation will promote to available"
             )
-            llm_gpu_tracker.record_allocation(
-                model_id, backend.id, estimated_memory, node_name=backend.node
-            )
-            logger.info(f"Model '{model_id}' loaded on {backend.id}")
         except Exception as e:
             logger.error(f"Performance load failed for {model_id}: {e}")
             llm_model_registry.update_model_state(
                 model_id, ModelState.deployable, error=str(e)
             )
-            await self._cleanup_empty_pod(llm_gpu_tracker, llm_pod_manager, perf_type, node)
-        finally:
-            event.set()
-            self._loading_locks.pop(model_id, None)
 
     async def _cleanup_empty_pod(self, gpu_tracker, pod_manager, perf_type: str, node: str):
         """Delete a pod only if no models are allocated on this backend type + node."""
@@ -456,13 +429,19 @@ class LLMLifecycleManager:
         )
 
     async def auto_load_on_resolve(self, model_id: str, timeout: Optional[int] = None) -> bool:
+        from app.services.llm_model_registry import llm_model_registry
+
+        entry = llm_model_registry.get_model(model_id)
+
+        if entry and entry.state == ModelState.loading:
+            return await self._wait_for_model_available(model_id, timeout)
+
         if model_id in self._loading_locks:
             event = self._loading_locks[model_id]
             try:
                 await asyncio.wait_for(event.wait(), timeout=timeout or self._load_timeout)
             except asyncio.TimeoutError:
                 return False
-            from app.services.llm_model_registry import llm_model_registry
             entry = llm_model_registry.get_model(model_id)
             return entry is not None and entry.state == ModelState.available
 
@@ -471,7 +450,24 @@ class LLMLifecycleManager:
             logger.warning(f"auto_load_on_resolve: no node available for {model_id}")
             return False
         result = await self.load_model(model_id, node=node)
+        if result.state == ModelState.loading:
+            return await self._wait_for_model_available(model_id, timeout)
         return result.state == ModelState.available
+
+    async def _wait_for_model_available(self, model_id: str, timeout: Optional[int] = None) -> bool:
+        from app.services.llm_model_registry import llm_model_registry
+
+        deadline = asyncio.get_event_loop().time() + (timeout or self._load_timeout)
+        while asyncio.get_event_loop().time() < deadline:
+            entry = llm_model_registry.get_model(model_id)
+            if entry is None:
+                return False
+            if entry.state == ModelState.available:
+                return True
+            if entry.state in (ModelState.deployable, ModelState.registered):
+                return False
+            await asyncio.sleep(5)
+        return False
 
     def _pick_node_for_auto_load(self) -> Optional[str]:
         from app.services.llm_gpu_tracker import llm_gpu_tracker

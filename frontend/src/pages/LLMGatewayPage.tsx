@@ -58,7 +58,6 @@ interface BackendEntry {
   type: string;
   status: string;
   models: string[];
-  last_probe: string | null;
 }
 
 interface GPUAllocation {
@@ -254,7 +253,7 @@ export default function LLMGatewayPage() {
         <TkStatCard
           title="Backends"
           value={healthyBackends.length}
-          description={`${backends.length} total, ${healthyBackends.length} healthy`}
+          description={`${backends.length} total, ${healthyBackends.length} active`}
           icon={Server}
           variant="primary"
         />
@@ -351,7 +350,6 @@ export default function LLMGatewayPage() {
                   <TkTableHead>Type</TkTableHead>
                   <TkTableHead>Status</TkTableHead>
                   <TkTableHead>Loaded Models</TkTableHead>
-                  <TkTableHead>Last Probe</TkTableHead>
                 </TkTableRow>
               </TkTableHeader>
               <TkTableBody>
@@ -367,14 +365,21 @@ export default function LLMGatewayPage() {
                       <TkBadge appearance="outlined">{backend.type}</TkBadge>
                     </TkTableCell>
                     <TkTableCell>
-                      <TkBadge status={backend.status === 'healthy' ? 'healthy' : 'unhealthy'}>
-                        {backend.status === 'healthy' ? (
+                      {backend.status === 'healthy' ? (
+                        <TkBadge status="healthy">
                           <CheckCircle2 className="w-3 h-3 mr-1" />
-                        ) : (
-                          <XCircle className="w-3 h-3 mr-1" />
-                        )}
-                        {backend.status}
-                      </TkBadge>
+                          Healthy
+                        </TkBadge>
+                      ) : ['switching', 'starting', 'loading'].includes(backend.status) ? (
+                        <TkBadge status="active">
+                          <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                          Provisioning
+                        </TkBadge>
+                      ) : backend.status === 'idle' ? (
+                        <TkBadge appearance="muted">Idle</TkBadge>
+                      ) : (
+                        <TkBadge status="warning">Unavailable</TkBadge>
+                      )}
                     </TkTableCell>
                     <TkTableCell>
                       {backend.models.length > 0 ? (
@@ -386,9 +391,6 @@ export default function LLMGatewayPage() {
                       ) : (
                         <span className="text-muted-foreground">None</span>
                       )}
-                    </TkTableCell>
-                    <TkTableCell className="text-sm text-muted-foreground">
-                      {backend.last_probe ? formatTimeAgo(backend.last_probe) : '-'}
                     </TkTableCell>
                   </TkTableRow>
                 ))}
@@ -657,16 +659,4 @@ function ModelStateBadge({ state }: { state: string }) {
   }
 }
 
-function formatTimeAgo(isoString: string): string {
-  const date = new Date(isoString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
 
-  if (diffMins < 1) return 'just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  const diffHours = Math.floor(diffMins / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  const diffDays = Math.floor(diffHours / 24);
-  return `${diffDays}d ago`;
-}

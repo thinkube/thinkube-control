@@ -279,9 +279,8 @@ class LLMModelRegistry:
         from app.services.llm_backend_discovery import llm_backend_discovery
         from app.services.llm_gpu_tracker import llm_gpu_tracker
         from app.services.llm_lifecycle import llm_lifecycle, parse_backend_id
+        from app.services.llm_pod_manager import llm_pod_manager
 
-        # Build composite keys: "backend_type:serving_base" -> (raw_name, backend_id)
-        # e.g. "ollama:qwen3.5-4b" -> ("qwen3.5-4b:latest", "ollama-vilanova2")
         composite_map: dict[str, tuple[str, str]] = {}
         raw_backend_models: dict[str, str] = {}
         for backend in llm_backend_discovery.list_backends():
@@ -306,14 +305,16 @@ class LLMModelRegistry:
                         matched_keys.add(key)
                         break
 
-            is_actively_loading = (
-                entry.state == ModelState.loading
-                and model_id in llm_lifecycle._loading_locks
-            )
-
-            if matched_backend_id and not is_actively_loading:
+            if matched_backend_id and entry.state in (ModelState.loading, ModelState.deployable):
                 entry.state = ModelState.available
                 entry.backend_id = matched_backend_id
+                self._sync_gpu_allocation(
+                    model_id, matched_backend_id,
+                    llm_gpu_tracker, llm_lifecycle,
+                )
+            elif matched_backend_id and entry.state == ModelState.available:
+                if entry.backend_id != matched_backend_id:
+                    entry.backend_id = matched_backend_id
                 self._sync_gpu_allocation(
                     model_id, matched_backend_id,
                     llm_gpu_tracker, llm_lifecycle,
@@ -325,13 +326,25 @@ class LLMModelRegistry:
             elif (
                 matched_backend_id is None
                 and entry.state == ModelState.loading
-                and not is_actively_loading
             ):
-                logger.warning(
-                    f"Model '{model_id}' stuck in loading with no active task, resetting"
-                )
-                entry.state = ModelState.deployable
-                entry.backend_id = None
+                backend_type, node = parse_backend_id(entry.backend_id or "")
+                if backend_type and node:
+                    pod_status = llm_pod_manager.check_pod_status(backend_type, node)
+                    if pod_status == "failed":
+                        entry.state = ModelState.deployable
+                        entry.backend_id = None
+                        entry.last_error = f"Pod crashed on {node}"
+                    elif pod_status == "absent":
+                        logger.warning(
+                            f"Model '{model_id}' was loading but deployment "
+                            f"{backend_type}/{node} disappeared"
+                        )
+                        entry.state = ModelState.deployable
+                        entry.backend_id = None
+                        entry.last_error = f"Deployment disappeared on {node}"
+                elif not backend_type:
+                    entry.state = ModelState.deployable
+                    entry.backend_id = None
 
         # Register unmatched backend models (e.g. manually loaded Ollama models)
         for backend in llm_backend_discovery.list_backends():
