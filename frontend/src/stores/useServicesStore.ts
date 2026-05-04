@@ -86,6 +86,8 @@ interface ServicesState {
   reorderFavorites: (serviceIds: string[]) => Promise<void>;
   describePod: (serviceId: string, podName: string) => Promise<any>;
   getContainerLogs: (serviceId: string, podName: string, containerName: string, lines?: number) => Promise<any>;
+  getPodResources: (serviceId: string, podName: string) => Promise<any>;
+  resizePodResources: (serviceId: string, podName: string, containerName: string, resources: { cpu_request?: string; cpu_limit?: string; memory_request?: string; memory_limit?: string }) => Promise<any>;
 }
 
 export const useServicesStore = create<ServicesState>((set, get) => ({
@@ -407,6 +409,29 @@ export const useServicesStore = create<ServicesState>((set, get) => ({
       return response.data;
     } catch (err) {
       console.error('Failed to get container logs:', err);
+      throw err;
+    }
+  },
+
+  getPodResources: async (serviceId: string, podName: string) => {
+    try {
+      const response = await api.get(`/services/${serviceId}/pods/${podName}/resources`);
+      return response.data;
+    } catch (err) {
+      console.error('Failed to get pod resources:', err);
+      throw err;
+    }
+  },
+
+  resizePodResources: async (serviceId: string, podName: string, containerName: string, resources: { cpu_request?: string; cpu_limit?: string; memory_request?: string; memory_limit?: string }) => {
+    try {
+      const response = await api.patch(
+        `/services/${serviceId}/pods/${podName}/containers/${containerName}/resources`,
+        resources
+      );
+      return response.data;
+    } catch (err) {
+      console.error('Failed to resize pod resources:', err);
       throw err;
     }
   }

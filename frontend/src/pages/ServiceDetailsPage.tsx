@@ -28,6 +28,7 @@ import { TkCodeBlock } from 'thinkube-style/components/feedback';
 import { TkFolderTabs, TkFolderTabsList, TkFolderTabsTrigger } from 'thinkube-style/components/navigation';
 import { toast } from 'sonner';
 import { HealthHistoryChart } from '@/components/HealthHistoryChart';
+import { PodResourceEditor } from '@/components/PodResourceEditor';
 
 // Type interfaces
 interface HealthData {
@@ -128,6 +129,7 @@ export default function ServiceDetailsPage() {
   const [expandedPods, setExpandedPods] = useState<Record<string, boolean>>({});
   const [selectedContainer, setSelectedContainer] = useState<{ podName: string; containerName: string } | null>(null);
   const [containerLogs, setContainerLogs] = useState<string>('');
+  const [resizeTarget, setResizeTarget] = useState<{ podName: string; containerName: string; resources?: any } | null>(null);
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [logLines, setLogLines] = useState(100);
   const [selectedPod, setSelectedPod] = useState<string | null>(null);
@@ -799,13 +801,27 @@ export default function ServiceDetailsPage() {
                                       </TkBadge>
                                     )}
                                   </div>
-                                  <TkButton
-                                    size="sm"
-                                    intent="secondary"
-                                    onClick={() => handleViewContainerLogs(pod.name, container.name)}
-                                  >
-                                    View Logs
-                                  </TkButton>
+                                  <div className="flex gap-1">
+                                    <TkButton
+                                      size="sm"
+                                      intent="secondary"
+                                      onClick={() => handleViewContainerLogs(pod.name, container.name)}
+                                    >
+                                      View Logs
+                                    </TkButton>
+                                    <TkButton
+                                      size="sm"
+                                      intent="secondary"
+                                      onClick={() => setResizeTarget({
+                                        podName: pod.name,
+                                        containerName: container.name,
+                                        resources: container.resources,
+                                      })}
+                                    >
+                                      <Cpu className="h-3 w-3 mr-1" />
+                                      Resize
+                                    </TkButton>
+                                  </div>
                                 </div>
                                 <div className="text-xs text-muted-foreground space-y-1">
                                   <div>Image: {container.image}</div>
@@ -828,6 +844,16 @@ export default function ServiceDetailsPage() {
                                 </div>
                               </TkCardContent>
                             </TkCard>
+                            {resizeTarget?.podName === pod.name && resizeTarget?.containerName === container.name && (
+                              <PodResourceEditor
+                                serviceId={serviceDetails.id}
+                                podName={pod.name}
+                                containerName={container.name}
+                                currentResources={container.resources}
+                                onClose={() => setResizeTarget(null)}
+                                onResized={() => fetchServiceDetails(serviceDetails.id)}
+                              />
+                            )}
                           ))}
                         </div>
                       )}

@@ -19,6 +19,7 @@ spec:
       labels:
         app.kubernetes.io/name: {{ project_name }}
     spec:
+      priorityClassName: thinkube-workload
       imagePullSecrets:
         - name: app-pull-secret
       containers:
@@ -86,9 +87,8 @@ spec:
               memory: "4Gi"
               cpu: "1000m"
             limits:
-              # xlarge is for ML/AI workloads - 80Gi covers most LLM inference scenarios
-              # on unified memory systems (DGX Spark) where GPU+CPU share memory pool
-              memory: "80Gi"
+              # xlarge is for ML/AI workloads - use dynamic resize API for larger allocations
+              memory: "16Gi"
               cpu: "4000m"
             {% else %}
             # Default to small if size is not recognized
@@ -100,6 +100,11 @@ spec:
               cpu: "500m"
             {% endif %}
           {% endif %}
+          resizePolicy:
+            - resourceName: cpu
+              restartPolicy: NotRequired
+            - resourceName: memory
+              restartPolicy: RestartContainer
           {% if container.health is defined %}
           livenessProbe:
             httpGet:

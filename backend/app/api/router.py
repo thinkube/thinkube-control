@@ -12,6 +12,7 @@ from app.api import (
     knative_services,
     debug,
     services,
+    pod_resources,
     service_discovery_config,
     secrets,
     resource_status,
@@ -34,6 +35,7 @@ api_router = APIRouter()
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(dashboards.router, prefix="/dashboards", tags=["dashboards"])
 api_router.include_router(services.router, prefix="/services", tags=["services"])
+api_router.include_router(pod_resources.router, prefix="/services", tags=["services"])
 api_router.include_router(cicd.router, prefix="/cicd", tags=["cicd"])
 api_router.include_router(tokens.router, prefix="/tokens", tags=["api-tokens"])
 api_router.include_router(templates.router, prefix="/templates", tags=["templates"])

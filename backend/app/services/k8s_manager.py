@@ -1196,5 +1196,309 @@ class K8sServiceManager:
             logger.error(f"Failed to get container logs: {e}")
             return f"Error retrieving logs: {str(e)}"
 
+    # =========================================================================
+    # In-Place Pod Resource Resize (K8s 1.35 GA)
+    # =========================================================================
+
+    def get_pod_resource_details(
+        self, namespace: str, pod_name: str
+    ) -> Optional[Dict[str, Any]]:
+        """Get detailed resource information for a pod including resize status.
+
+        Returns current spec resources, allocated resources from status,
+        and any pending resize conditions.
+        """
+        try:
+            pod = self.core_v1.read_namespaced_pod(pod_name, namespace)
+
+            containers = []
+            for container in pod.spec.containers:
+                container_info = {
+                    "name": container.name,
+                    "resources": {
+                        "requests": {},
+                        "limits": {},
+                    },
+                    "allocated_resources": {},
+                    "resize_policy": [],
+                }
+
+                if container.resources:
+                    if container.resources.requests:
+                        container_info["resources"]["requests"] = dict(container.resources.requests)
+                    if container.resources.limits:
+                        container_info["resources"]["limits"] = dict(container.resources.limits)
+
+                if container.resize_policy:
+                    container_info["resize_policy"] = [
+                        {"resource_name": rp.resource_name, "restart_policy": rp.restart_policy}
+                        for rp in container.resize_policy
+                    ]
+
+                containers.append(container_info)
+
+            # Get allocated resources from status
+            if pod.status and pod.status.container_statuses:
+                for cs in pod.status.container_statuses:
+                    for c in containers:
+                        if c["name"] == cs.name:
+                            if hasattr(cs, 'resources') and cs.resources:
+                                c["allocated_resources"] = {
+                                    "requests": dict(cs.resources.requests) if cs.resources.requests else {},
+                                    "limits": dict(cs.resources.limits) if cs.resources.limits else {},
+                                }
+                            if hasattr(cs, 'allocated_resources') and cs.allocated_resources:
+                                c["allocated_resources"]["allocated"] = dict(cs.allocated_resources)
+
+            # Check resize conditions (K8s 1.35 GA uses conditions instead of status.resize)
+            resize_conditions = []
+            if pod.status and pod.status.conditions:
+                for cond in pod.status.conditions:
+                    if cond.type in ("PodResizePending", "PodResizeInProgress"):
+                        resize_conditions.append({
+                            "type": cond.type,
+                            "status": cond.status,
+                            "reason": cond.reason,
+                            "message": cond.message,
+                        })
+
+            return {
+                "pod_name": pod_name,
+                "namespace": namespace,
+                "qos_class": pod.status.qos_class if pod.status else None,
+                "containers": containers,
+                "resize_conditions": resize_conditions,
+                "generation": pod.metadata.generation,
+                "observed_generation": (
+                    pod.status.observed_generation
+                    if pod.status and hasattr(pod.status, 'observed_generation')
+                    else None
+                ),
+            }
+
+        except ApiException as e:
+            logger.error(f"Failed to get pod resource details: {e}")
+            return None
+
+    def resize_pod_resources(
+        self,
+        namespace: str,
+        pod_name: str,
+        container_name: str,
+        cpu_request: Optional[str] = None,
+        cpu_limit: Optional[str] = None,
+        memory_request: Optional[str] = None,
+        memory_limit: Optional[str] = None,
+    ) -> Tuple[bool, Optional[str], Optional[Dict]]:
+        """Resize a running pod's CPU/memory resources in-place (K8s 1.35 GA).
+
+        Uses the resize subresource to patch pod resources without restart
+        (for CPU) or with container restart (for memory, depending on resizePolicy).
+
+        Also patches the parent Deployment/StatefulSet to prevent controller revert.
+
+        Returns:
+            Tuple of (success, error_message, result_details)
+        """
+        try:
+            # Read current pod to get existing resources and owner
+            pod = self.core_v1.read_namespaced_pod(pod_name, namespace)
+
+            # Find the target container
+            target_idx = None
+            for i, container in enumerate(pod.spec.containers):
+                if container.name == container_name:
+                    target_idx = i
+                    break
+
+            if target_idx is None:
+                return False, f"Container '{container_name}' not found in pod '{pod_name}'", None
+
+            # Build the resource patch
+            current = pod.spec.containers[target_idx].resources or client.V1ResourceRequirements()
+            current_requests = dict(current.requests) if current.requests else {}
+            current_limits = dict(current.limits) if current.limits else {}
+
+            # Capture previous values for response
+            previous_resources = {
+                "requests": dict(current_requests),
+                "limits": dict(current_limits),
+            }
+
+            new_requests = dict(current_requests)
+            new_limits = dict(current_limits)
+
+            if cpu_request is not None:
+                new_requests["cpu"] = cpu_request
+            if cpu_limit is not None:
+                new_limits["cpu"] = cpu_limit
+            if memory_request is not None:
+                new_requests["memory"] = memory_request
+            if memory_limit is not None:
+                new_limits["memory"] = memory_limit
+
+            # Build patch body for the resize subresource
+            patch_body = {
+                "spec": {
+                    "containers": [
+                        {
+                            "name": container_name,
+                            "resources": {
+                                "requests": new_requests,
+                                "limits": new_limits,
+                            },
+                        }
+                    ]
+                }
+            }
+
+            # Patch the pod using the resize subresource (K8s 1.35 GA)
+            self.core_v1.patch_namespaced_pod(
+                name=pod_name,
+                namespace=namespace,
+                body=patch_body,
+                _content_type="application/strategic-merge-patch+json",
+            )
+
+            logger.info(
+                f"Resized pod {pod_name}/{container_name} in {namespace}: "
+                f"requests={new_requests}, limits={new_limits}"
+            )
+
+            # Also patch the parent Deployment/StatefulSet to prevent controller revert
+            self._patch_owner_resources(
+                pod, container_name, new_requests, new_limits
+            )
+
+            # Check resize status
+            import time
+            resize_status = "Completed"
+            for _ in range(5):
+                time.sleep(1)
+                updated_pod = self.core_v1.read_namespaced_pod(pod_name, namespace)
+                if updated_pod.status and updated_pod.status.conditions:
+                    for cond in updated_pod.status.conditions:
+                        if cond.type == "PodResizePending" and cond.status == "True":
+                            resize_status = f"Pending ({cond.reason})"
+                        elif cond.type == "PodResizeInProgress" and cond.status == "True":
+                            resize_status = "InProgress"
+                    if resize_status in ("Completed",):
+                        break
+
+            return True, None, {
+                "previous_resources": previous_resources,
+                "new_resources": {
+                    "requests": new_requests,
+                    "limits": new_limits,
+                },
+                "resize_status": resize_status,
+            }
+
+        except ApiException as e:
+            error_msg = f"Failed to resize pod resources: {e.reason} - {e.body}"
+            logger.error(error_msg)
+            return False, error_msg, None
+
+    def _patch_owner_resources(
+        self,
+        pod: Any,
+        container_name: str,
+        new_requests: Dict[str, str],
+        new_limits: Dict[str, str],
+    ):
+        """Patch the parent Deployment/StatefulSet to match resized resources.
+
+        Without this, the controller would revert the pod resources on next reconciliation.
+        """
+        if not pod.metadata.owner_references:
+            return
+
+        for owner_ref in pod.metadata.owner_references:
+            try:
+                if owner_ref.kind == "ReplicaSet":
+                    # ReplicaSet -> Deployment
+                    rs = self.apps_v1.read_namespaced_replica_set(
+                        owner_ref.name, pod.metadata.namespace
+                    )
+                    if rs.metadata.owner_references:
+                        for rs_owner in rs.metadata.owner_references:
+                            if rs_owner.kind == "Deployment":
+                                self._patch_deployment_container_resources(
+                                    rs_owner.name, pod.metadata.namespace,
+                                    container_name, new_requests, new_limits,
+                                )
+                elif owner_ref.kind == "StatefulSet":
+                    self._patch_statefulset_container_resources(
+                        owner_ref.name, pod.metadata.namespace,
+                        container_name, new_requests, new_limits,
+                    )
+            except ApiException as e:
+                logger.warning(f"Failed to patch owner {owner_ref.kind}/{owner_ref.name}: {e}")
+
+    def _patch_deployment_container_resources(
+        self, name: str, namespace: str,
+        container_name: str, requests: Dict, limits: Dict,
+    ):
+        """Patch a Deployment's container resources."""
+        deployment = self.apps_v1.read_namespaced_deployment(name, namespace)
+        for container in deployment.spec.template.spec.containers:
+            if container.name == container_name:
+                if not container.resources:
+                    container.resources = client.V1ResourceRequirements()
+                container.resources.requests = requests
+                container.resources.limits = limits
+                break
+
+        self.apps_v1.patch_namespaced_deployment(
+            name, namespace,
+            body={
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "containers": [
+                                {
+                                    "name": container_name,
+                                    "resources": {
+                                        "requests": requests,
+                                        "limits": limits,
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            _content_type="application/strategic-merge-patch+json",
+        )
+        logger.info(f"Patched Deployment {name}/{container_name} resources in {namespace}")
+
+    def _patch_statefulset_container_resources(
+        self, name: str, namespace: str,
+        container_name: str, requests: Dict, limits: Dict,
+    ):
+        """Patch a StatefulSet's container resources."""
+        self.apps_v1.patch_namespaced_stateful_set(
+            name, namespace,
+            body={
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "containers": [
+                                {
+                                    "name": container_name,
+                                    "resources": {
+                                        "requests": requests,
+                                        "limits": limits,
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
+            _content_type="application/strategic-merge-patch+json",
+        )
+        logger.info(f"Patched StatefulSet {name}/{container_name} resources in {namespace}")
+
 
 # 🤖 Generated with [Claude Code](https://claude.ai/code)

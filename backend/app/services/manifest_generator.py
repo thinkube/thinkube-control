@@ -294,6 +294,35 @@ metadata:
     app.kubernetes.io/managed-by: argocd
 """
 
+        # 1b. resource-policies.yaml (LimitRange + ResourceQuota)
+        generated_files['resource-policies.yaml'] = f"""apiVersion: v1
+kind: LimitRange
+metadata:
+  name: default-resources
+  namespace: {self.namespace}
+spec:
+  limits:
+    - type: Container
+      default:
+        memory: "256Mi"
+        cpu: "250m"
+      defaultRequest:
+        memory: "64Mi"
+        cpu: "25m"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: resource-budget
+  namespace: {self.namespace}
+spec:
+  hard:
+    requests.memory: "8Gi"
+    limits.memory: "16Gi"
+    requests.cpu: "4"
+    limits.cpu: "8"
+"""
+
         # 2. mlflow-secrets.yaml
         generated_files['mlflow-secrets.yaml'] = env.get_template('mlflow-secrets.j2').render(**template_vars)
 
@@ -337,12 +366,12 @@ data:
         # kustomization.yaml
         if is_knative:
             kustomization_resources = [
-                'namespace.yaml', 'mlflow-secrets.yaml', 'app-metadata.yaml',
+                'namespace.yaml', 'resource-policies.yaml', 'mlflow-secrets.yaml', 'app-metadata.yaml',
                 'knative-service.yaml',
             ]
         else:
             kustomization_resources = [
-                'namespace.yaml', 'mlflow-secrets.yaml', 'app-metadata.yaml',
+                'namespace.yaml', 'resource-policies.yaml', 'mlflow-secrets.yaml', 'app-metadata.yaml',
                 'deployments.yaml', 'services.yaml', 'ingress.yaml',
             ]
         if has_database:

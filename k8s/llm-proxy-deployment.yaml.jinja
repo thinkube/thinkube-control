@@ -15,6 +15,7 @@ spec:
       labels:
         app: thinkube-control-llm-proxy
     spec:
+      priorityClassName: thinkube-platform
       serviceAccountName: {{ namespace }}
       nodeSelector:
         kubernetes.io/hostname: {{ master_node_name }}

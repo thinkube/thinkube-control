@@ -13,6 +13,7 @@ spec:
       labels:
         app: thinkube-control-frontend
     spec:
+      priorityClassName: thinkube-platform
       serviceAccountName: {{ namespace }}
       nodeSelector:
         kubernetes.io/hostname: {{ master_node_name }}

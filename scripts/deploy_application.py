@@ -977,6 +977,36 @@ metadata:
 """
         (k8s_dir / 'namespace.yaml').write_text(namespace_content)
 
+        # 1b. Generate resource-policies.yaml (LimitRange + ResourceQuota for namespace)
+        resource_policies_content = f"""apiVersion: v1
+kind: LimitRange
+metadata:
+  name: default-resources
+  namespace: {self.namespace}
+spec:
+  limits:
+    - type: Container
+      default:
+        memory: "256Mi"
+        cpu: "250m"
+      defaultRequest:
+        memory: "64Mi"
+        cpu: "25m"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: resource-budget
+  namespace: {self.namespace}
+spec:
+  hard:
+    requests.memory: "8Gi"
+    limits.memory: "16Gi"
+    requests.cpu: "4"
+    limits.cpu: "8"
+"""
+        (k8s_dir / 'resource-policies.yaml').write_text(resource_policies_content)
+
         # 2. Generate mlflow-secrets.yaml from template
         mlflow_template = env.get_template('mlflow-secrets.j2')
         mlflow_content = mlflow_template.render(**template_vars)
@@ -1069,6 +1099,7 @@ data:
         if is_knative:
             kustomization_resources = [
                 'namespace.yaml',
+                'resource-policies.yaml',
                 'mlflow-secrets.yaml',
                 'app-metadata.yaml',
                 'knative-service.yaml',
@@ -1076,6 +1107,7 @@ data:
         else:
             kustomization_resources = [
                 'namespace.yaml',
+                'resource-policies.yaml',
                 'mlflow-secrets.yaml',
                 'app-metadata.yaml',
                 'deployments.yaml',

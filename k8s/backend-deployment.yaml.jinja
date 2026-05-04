@@ -13,6 +13,7 @@ spec:
       labels:
         app: thinkube-control-backend
     spec:
+      priorityClassName: thinkube-platform
       serviceAccountName: {{ namespace }}
       containers:
       - name: control-backend
