@@ -97,7 +97,7 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
       ip: n.ip,
       hostname: n.hardware?.hostname || n.hostname || '',
       lan_ip: n.ip,
-      zerotier_ip: n.zerotier_ip || undefined,
+      overlay_ip: n.overlay_ip || undefined,
       architecture: n.hardware?.architecture || '',
       gpu_detected: n.hardware?.gpu_detected || false,
       gpu_count: n.hardware?.gpu_count || 0,

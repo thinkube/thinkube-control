@@ -37,11 +37,13 @@ export interface DiscoveredNode {
   error?: string;
 }
 
+export type OverlayProvider = 'zerotier' | 'tailscale';
+
 export interface NetworkDiscoveredNode {
   ip: string;
   hostname: string | null;
-  zerotier_ip: string | null;
-  zerotier_node_id: string | null;
+  overlay_ip: string | null;
+  overlay_node_id: string | null;
   ssh_available: boolean;
   ssh_banner: string | null;
   is_ubuntu: boolean;
@@ -71,6 +73,7 @@ interface NodesState {
   networkNodes: NetworkDiscoveredNode[];
   networkScanning: boolean;
   networkMode: string | null;
+  overlayProvider: OverlayProvider | null;
   hardwareDetecting: boolean;
 
   // Actions
@@ -99,6 +102,7 @@ export const useNodesStore = create<NodesState>((set, get) => ({
   networkNodes: [],
   networkScanning: false,
   networkMode: null,
+  overlayProvider: null,
   hardwareDetecting: false,
 
   listNodes: async () => {
@@ -164,6 +168,7 @@ export const useNodesStore = create<NodesState>((set, get) => ({
       set({
         networkNodes: nodes,
         networkMode: response.data.network_mode,
+        overlayProvider: response.data.overlay_provider,
         networkScanning: false,
       });
     } catch (err: any) {
@@ -241,7 +246,7 @@ export const useNodesStore = create<NodesState>((set, get) => ({
         ip: n.ip,
         hostname: n.hardware?.hostname || n.hostname || '',
         lan_ip: n.ip,
-        zerotier_ip: n.zerotier_ip || undefined,
+        overlay_ip: n.overlay_ip || undefined,
         architecture: n.hardware?.architecture || '',
         gpu_detected: n.hardware?.gpu_detected || false,
         gpu_count: n.hardware?.gpu_count || 0,
@@ -263,6 +268,7 @@ export const useNodesStore = create<NodesState>((set, get) => ({
     set({
       networkNodes: [],
       networkMode: null,
+      overlayProvider: null,
       error: null,
     }),
 }));
