@@ -1,11 +1,13 @@
 """Network discovery service for finding nodes available to join the cluster.
 
-Supports two modes:
-- Overlay (ZeroTier/Tailscale): queries the overlay provider API for members
-- Local: ping sweeps the network CIDR and checks SSH banners for Ubuntu hosts
+Pings nodes on the LAN and checks SSH banners for Ubuntu hosts. Overlay-IP
+allocation is provider-specific:
 
-The overlay provider's API is the source of truth for IP allocation — all
-assigned IPs (members, MetalLB, infrastructure) are tracked there.
+  - ZeroTier: pre-assigned by the installer; we query ZeroTier Central
+    for the next free IP in the overlay subnet so the new node joins with
+    a stable address.
+  - Tailscale: assigned at runtime by `tailscale up`; nothing to allocate
+    here, the per-node IP is read back after install.
 """
 
 import asyncio
@@ -36,7 +38,7 @@ class DiscoveredNetworkNode:
         ip: str,
         hostname: Optional[str] = None,
         overlay_ip: Optional[str] = None,
-        zerotier_node_id: Optional[str] = None,
+        overlay_node_id: Optional[str] = None,
         ssh_available: bool = False,
         ssh_banner: Optional[str] = None,
         is_ubuntu: bool = False,
@@ -45,7 +47,7 @@ class DiscoveredNetworkNode:
         self.ip = ip
         self.hostname = hostname
         self.overlay_ip = overlay_ip
-        self.zerotier_node_id = zerotier_node_id
+        self.overlay_node_id = overlay_node_id
         self.ssh_available = ssh_available
         self.ssh_banner = ssh_banner
         self.is_ubuntu = is_ubuntu
@@ -56,7 +58,7 @@ class DiscoveredNetworkNode:
             "ip": self.ip,
             "hostname": self.hostname,
             "overlay_ip": self.overlay_ip,
-            "zerotier_node_id": self.zerotier_node_id,
+            "overlay_node_id": self.overlay_node_id,
             "ssh_available": self.ssh_available,
             "ssh_banner": self.ssh_banner,
             "is_ubuntu": self.is_ubuntu,
@@ -77,17 +79,20 @@ class NetworkDiscovery:
     def get_network_mode(self) -> str:
         return self._get_inventory_vars().get("network_mode", "overlay")
 
-    async def _get_all_assigned_ips(self) -> Set[str]:
-        """Query the overlay provider API for all assigned IPs in the network.
+    def get_overlay_provider(self) -> str:
+        provider = self._get_inventory_vars().get("overlay_provider")
+        if not provider:
+            raise RuntimeError("overlay_provider missing from inventory")
+        return provider
 
-        The overlay provider's API is the source of truth for IP allocation.
-        """
-        inv_vars = self._get_inventory_vars()
+    async def _get_zerotier_assigned_ips(self, inv_vars: Dict[str, Any]) -> Set[str]:
+        """Query ZeroTier Central for every IP currently assigned in the network."""
         network_id = inv_vars.get("zerotier_network_id")
         api_token = inv_vars.get("zerotier_api_token")
-
         if not network_id or not api_token:
-            raise RuntimeError("zerotier_network_id and zerotier_api_token required in inventory")
+            raise RuntimeError(
+                "zerotier_network_id and zerotier_api_token required in inventory"
+            )
 
         assigned = set()
         async with httpx.AsyncClient(timeout=15) as client:
@@ -118,13 +123,21 @@ class NetworkDiscovery:
         return cluster_ips
 
     async def get_next_available_overlay_ip(self) -> Optional[str]:
-        """Find the next available IP in the overlay subnet.
+        """Allocate the next free IP from the overlay subnet (ZeroTier only).
 
-        Queries the overlay provider API for all assigned IPs, then finds
-        the first gap starting from .10.
+        In ZeroTier mode the installer pins each node to a stable IP from
+        the user-defined overlay CIDR; we ask ZeroTier Central which ones
+        are taken and return the first gap starting from .10.
+
+        In Tailscale mode pre-allocation is meaningless — `tailscale up`
+        assigns the IP from 100.64.0.0/10 at install time — so we return
+        None and the caller skips the allocation step.
         """
-        assigned = await self._get_all_assigned_ips()
+        if self.get_overlay_provider() != "zerotier":
+            return None
+
         inv_vars = self._get_inventory_vars()
+        assigned = await self._get_zerotier_assigned_ips(inv_vars)
         prefix = inv_vars.get("overlay_subnet_prefix", "192.168.191.")
 
         for octet in range(10, 250):
@@ -132,55 +145,6 @@ class NetworkDiscovery:
             if ip not in assigned:
                 return ip
         return None
-
-    async def discover_zerotier_nodes(self) -> List[DiscoveredNetworkNode]:
-        """Query ZeroTier Central API for authorized+online members not yet in the cluster."""
-        inv_vars = self._get_inventory_vars()
-        network_id = inv_vars.get("zerotier_network_id")
-        api_token = inv_vars.get("zerotier_api_token")
-
-        if not network_id or not api_token:
-            logger.error("ZeroTier network_id or api_token not in inventory")
-            return []
-
-        excluded = await self._get_cluster_node_ips()
-        nodes = []
-
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.get(
-                    f"{ZEROTIER_API_BASE}/network/{network_id}/member",
-                    headers={"Authorization": f"bearer {api_token}"},
-                )
-                response.raise_for_status()
-                members = response.json()
-
-            for member in members:
-                config = member.get("config", {})
-                if not config.get("authorized"):
-                    continue
-
-                ip_assignments = config.get("ipAssignments", [])
-                if not ip_assignments:
-                    continue
-
-                zt_ip = ip_assignments[0]
-                if zt_ip in excluded:
-                    continue
-
-                node = DiscoveredNetworkNode(
-                    ip=zt_ip,
-                    hostname=member.get("name") or None,
-                    overlay_ip=zt_ip,
-                    zerotier_node_id=member.get("nodeId"),
-                    confidence="possible",
-                )
-                nodes.append(node)
-
-        except Exception as e:
-            logger.error(f"ZeroTier API error: {e}")
-
-        return nodes
 
     async def _ping_host(self, ip: str) -> bool:
         """Ping a single host. Returns True if reachable."""
@@ -366,6 +330,7 @@ class NetworkDiscovery:
         return {
             "nodes": [n.to_dict() for n in eligible],
             "network_mode": network_mode,
+            "overlay_provider": self.get_overlay_provider(),
             "node_count": len(eligible),
         }
 

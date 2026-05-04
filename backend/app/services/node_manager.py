@@ -319,13 +319,25 @@ fi
 
         all_section = inventory["all"]
         children = all_section["children"]
-        network_mode = all_section.get("vars", {}).get("network_mode", "overlay")
+        all_vars = all_section.get("vars", {})
+        network_mode = all_vars.get("network_mode", "overlay")
+        overlay_provider = all_vars.get("overlay_provider")
 
         # Inventory arch groups use OS convention (x86_64/arm64)
         inv_arch_group = "arm64" if architecture.lower() in ("aarch64", "arm64") else "x86_64"
 
+        # ansible_host: ZeroTier pins each node to a stable overlay IP and
+        # delegates over the overlay link. Tailscale assigns its tailnet IP
+        # at runtime and the IP isn't stable across reboots / re-auths, so
+        # we always delegate over the LAN — same approach as the installer
+        # (utils/inventoryGenerator.js).
+        if network_mode == "overlay" and overlay_provider == "zerotier" and overlay_ip:
+            ansible_host = overlay_ip
+        else:
+            ansible_host = ip
+
         host_def = {
-            "ansible_host": overlay_ip if network_mode == "overlay" and overlay_ip else ip,
+            "ansible_host": ansible_host,
             "lan_ip": lan_ip or ip,
             "arch": inv_arch_group,
             "configure_gpu_passthrough": False,
@@ -882,7 +894,7 @@ echo "NONE"
                     await self._ensure_zerotier_vip_routes(inventory, inv_vars, network_id, api_token)
                     return {
                         "success": True,
-                        "zerotier_node_id": existing_node_id,
+                        "overlay_node_id": existing_node_id,
                         "overlay_ip": existing_zt_ip,
                     }
         except Exception:
@@ -1025,7 +1037,7 @@ fi
 
         return {
             "success": True,
-            "zerotier_node_id": node_id,
+            "overlay_node_id": node_id,
             "overlay_ip": assigned_zt_ip,
         }
 
@@ -1147,8 +1159,21 @@ df -BG / 2>/dev/null | tail -1 | awk '{{print $2}}' | tr -d 'G'
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    async def detect_overlay_ip(self, lan_ip: str) -> Optional[str]:
-        """Check if a node already has an overlay IP configured. Returns the IP or None."""
+    async def detect_overlay_ip(self, lan_ip: str, overlay_provider: str) -> Optional[str]:
+        """Check if a node already has an overlay IP configured. Returns the IP or None.
+
+        ZeroTier creates interfaces named `ztXXXXXX` (we glob with `zt+`).
+        Tailscale creates `tailscale0`. The address shape also differs
+        (10.x or user-defined for ZT, 100.64.0.0/10 for TS) but we don't
+        validate the shape here — only whether the interface has an IPv4.
+        """
+        if overlay_provider == "zerotier":
+            interface = "zt+"
+        elif overlay_provider == "tailscale":
+            interface = "tailscale0"
+        else:
+            raise RuntimeError(f"Unknown overlay_provider: {overlay_provider!r}")
+
         ssh_key_path = ansible_env.get_ssh_key_path()
         username = os.environ["SYSTEM_USERNAME"]
         try:
@@ -1156,7 +1181,7 @@ df -BG / 2>/dev/null | tail -1 | awk '{{print $2}}' | tr -d 'G'
                 "ssh", "-o", "StrictHostKeyChecking=no",
                 "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
                 "-i", str(ssh_key_path), f"{username}@{lan_ip}",
-                "ip", "-4", "-o", "addr", "show", "dev", "zt+",
+                "ip", "-4", "-o", "addr", "show", "dev", interface,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
             )

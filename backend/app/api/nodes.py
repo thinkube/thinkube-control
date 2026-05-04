@@ -543,6 +543,37 @@ async def add_nodes_batch(request: AddNodesBatchRequest):
             detail=f"Inventory validation failed: {validation.get('error')}",
         )
 
+    # The overlay provider determines which install path the WebSocket
+    # handler will run, and which credentials it needs. Fail early with a
+    # clear message instead of letting the per-node loop discover this.
+    inventory = node_manager.read_inventory()
+    inv_vars = inventory.get("all", {}).get("vars", {})
+    overlay_provider = inv_vars.get("overlay_provider")
+    if not overlay_provider:
+        raise HTTPException(
+            status_code=500,
+            detail="overlay_provider missing from inventory",
+        )
+    if overlay_provider == "zerotier":
+        for required in ("zerotier_network_id", "zerotier_api_token"):
+            if not inv_vars.get(required):
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"{required} missing from inventory (required for ZeroTier mode)",
+                )
+    elif overlay_provider == "tailscale":
+        for required in ("tailscale_auth_key", "tailscale_api_token"):
+            if not inv_vars.get(required):
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"{required} missing from inventory (required for Tailscale mode)",
+                )
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unsupported overlay_provider: {overlay_provider!r}",
+        )
+
     existing_nodes = node_manager.get_cluster_nodes()
     existing_names = {n["name"] for n in existing_nodes}
     for node_info in request.nodes:
@@ -599,6 +630,11 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             await websocket.send_json({"type": "error", "message": "network_mode not set in inventory"})
             await websocket.close()
             return
+        overlay_provider = inv_vars.get("overlay_provider")
+        if not overlay_provider:
+            await websocket.send_json({"type": "error", "message": "overlay_provider not set in inventory"})
+            await websocket.close()
+            return
         step = 1
 
         await websocket.send_json({
@@ -607,19 +643,16 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             "job_id": job_id,
         })
 
-        # Determine overlay provider from inventory
-        overlay_provider = inv_vars.get("overlay_provider", "zerotier")
-
-        # Ensure MetalLB VIP routes in ZeroTier (once, before node loop)
+        # Cilium load-balancer VIPs need static routes published into the
+        # ZeroTier network so all nodes can reach them. Tailscale's tailnet
+        # is a flat L3 mesh and the operator publishes Service IPs as
+        # tailnet devices, so no equivalent step is needed.
         if network_mode == "overlay" and overlay_provider == "zerotier":
-            zt_network_id = inv_vars.get("zerotier_network_id")
-            zt_api_token = inv_vars.get("zerotier_api_token")
-            if not zt_network_id or not zt_api_token:
-                await websocket.send_json({"type": "error", "message": "zerotier_network_id or zerotier_api_token not in inventory"})
-                await websocket.close()
-                return
             await node_manager._ensure_zerotier_vip_routes(
-                inventory, inv_vars, zt_network_id, zt_api_token
+                inventory,
+                inv_vars,
+                inv_vars["zerotier_network_id"],
+                inv_vars["zerotier_api_token"],
             )
 
         added_hostnames = []
@@ -709,9 +742,17 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             # Step: Overlay network setup (ZeroTier or Tailscale)
             overlay_ip = node_info.get("overlay_ip")
             if network_mode == "overlay" and not overlay_ip:
-                # Check if an overlay IP is already configured on the node
-                existing_overlay_ip = await node_manager.detect_overlay_ip(ip)
-                if existing_overlay_ip and await node_manager.wait_for_ssh(existing_overlay_ip, retries=2, interval=3):
+                # Check if an overlay IP is already configured on the node.
+                # In Tailscale mode we still SSH over the LAN (the tailnet
+                # IP isn't reachable until the daemon is fully online), so
+                # only run the wait_for_ssh probe in ZeroTier mode.
+                existing_overlay_ip = await node_manager.detect_overlay_ip(ip, overlay_provider)
+                already_configured = bool(existing_overlay_ip)
+                if existing_overlay_ip and overlay_provider == "zerotier":
+                    already_configured = await node_manager.wait_for_ssh(
+                        existing_overlay_ip, retries=2, interval=3
+                    )
+                if already_configured:
                     overlay_ip = existing_overlay_ip
                     await websocket.send_json({
                         "type": "ok",
@@ -770,23 +811,40 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                             "message": f"[{hostname or ip}] ZeroTier configured with IP {overlay_ip}, waiting for tunnel...",
                         })
 
-                    overlay_reachable = await node_manager.wait_for_ssh(overlay_ip, retries=12, interval=5)
-                    if not overlay_reachable:
+                    # In ZeroTier mode the controller talks to nodes over
+                    # the overlay link, so we must wait for the tunnel to
+                    # be reachable. In Tailscale mode the controller keeps
+                    # using the LAN IP for SSH (and the inventory's
+                    # ansible_host is the LAN IP too) — the tailnet IP is
+                    # captured for inventory but not used as a transport.
+                    if overlay_provider == "zerotier":
+                        overlay_reachable = await node_manager.wait_for_ssh(
+                            overlay_ip, retries=12, interval=5
+                        )
+                        if not overlay_reachable:
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": f"[{hostname or ip}] Overlay tunnel to {overlay_ip} not reachable after 60s. Aborting batch.",
+                            })
+                            batch_failed = True
+                            failed_hostname = hostname or ip
+                            break
                         await websocket.send_json({
-                            "type": "error",
-                            "message": f"[{hostname or ip}] Overlay tunnel to {overlay_ip} not reachable after 60s. Aborting batch.",
+                            "type": "ok",
+                            "message": f"[{hostname or ip}] Overlay tunnel established",
                         })
-                        batch_failed = True
-                        failed_hostname = hostname or ip
-                        break
-
-                    await websocket.send_json({
-                        "type": "ok",
-                        "message": f"[{hostname or ip}] Overlay tunnel established",
-                    })
                     step += 1
 
-            # Step: Detect hardware (if not already provided)
+            # Step: Detect hardware (if not already provided).
+            # connect_ip is the address we SSH into for in-band probes:
+            #   - ZeroTier: prefer the overlay IP (it's stable and matches
+            #     ansible_host in the generated inventory).
+            #   - Tailscale: always use the LAN IP — that's what
+            #     ansible_host is set to, and the tailnet IP isn't a
+            #     reliable transport for the controller's SSH.
+            connect_ip = (
+                overlay_ip if overlay_provider == "zerotier" and overlay_ip else ip
+            )
             architecture = node_info.get("architecture")
             gpu_detected = node_info.get("gpu_detected", False)
             gpu_count = node_info.get("gpu_count", 0)
@@ -798,7 +856,6 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     "task_name": f"[{hostname or ip}] Detect hardware",
                     "task_number": step,
                 })
-                connect_ip = overlay_ip if network_mode == "overlay" and overlay_ip else ip
                 hw = await node_manager.discover_node(connect_ip)
                 if "error" in hw:
                     await websocket.send_json({
@@ -820,8 +877,8 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                 })
                 step += 1
 
-            # Step: Prepare Ansible Python environment
-            connect_ip = overlay_ip if network_mode == "overlay" and overlay_ip else ip
+            # Step: Prepare Ansible Python environment (reuses connect_ip
+            # picked above — same provider-aware rule).
             await websocket.send_json({
                 "type": "task",
                 "task_name": f"[{hostname}] Prepare Python environment",
