@@ -62,8 +62,8 @@ Tell the user:
 ✅ Deployment initiated successfully!
 
 Monitor the deployment:
-- ArgoCD UI: https://argocd.cmxela.com (check thinkube-control app)
-- Harbor: https://registry.cmxela.com (check for new image)
+- ArgoCD UI: https://argocd.<your-domain> (check thinkube-control app)
+- Harbor: https://registry.<your-domain> (check for new image)
 - kubectl: kubectl get pods -n thinkube-control -w
 
 Build typically takes 3-5 minutes.

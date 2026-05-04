@@ -1067,7 +1067,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                 step += 1
 
             # Configure DNS on new nodes so they can resolve internal
-            # domains (e.g. registry.cmxela.com) before image pulls.
+            # domains (the cluster registry, etc.) before image pulls.
             dns_playbook = COREDNS_DIR / "15_configure_node_dns.yaml"
             if dns_playbook.exists():
                 await websocket.send_json({

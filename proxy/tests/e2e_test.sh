@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
 # LLM Gateway E2E test suite
-# Run against a deployed gateway: ./e2e_test.sh [BASE_URL] [API_KEY]
+# Run against a deployed gateway: ./e2e_test.sh BASE_URL [API_KEY]
 #
 set -euo pipefail
 
-BASE_URL="${1:-https://llm.cmxela.com}"
+BASE_URL="${1:?BASE_URL is required (e.g., https://llm.<your-domain>)}"
 API_KEY="${2:-}"
 PASS=0
 FAIL=0

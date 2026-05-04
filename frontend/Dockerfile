@@ -2,7 +2,7 @@
 # Builds static files and serves with nginx
 
 # Build stage
-FROM registry.cmxela.com/library/node-base:22-alpine AS builder
+FROM library/node-base:22-alpine AS builder
 
 WORKDIR /app
 
@@ -21,7 +21,7 @@ COPY . .
 RUN npm run build
 
 # Production stage - serve static files with nginx
-FROM registry.cmxela.com/library/nginx:stable-alpine
+FROM library/nginx:stable-alpine
 
 # Copy built files to nginx html directory
 COPY --from=builder /app/dist /usr/share/nginx/html
