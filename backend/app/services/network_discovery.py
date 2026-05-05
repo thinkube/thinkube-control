@@ -107,7 +107,13 @@ class NetworkDiscovery:
         return assigned
 
     async def _get_cluster_node_ips(self) -> Set[str]:
-        """Get IPs of nodes already in the k8s cluster (for discovery filtering)."""
+        """Get IPs of nodes already in the k8s cluster (for discovery filtering).
+
+        Collects IPs from both Kubernetes node objects and the Ansible
+        inventory.  With overlay networking the K8s InternalIP is the
+        overlay address, while the LAN scan uses physical IPs — so we
+        must also include ansible_host and lan_ip from the inventory.
+        """
         cluster_ips = set()
         try:
             from kubernetes import client as k8s_client
@@ -120,6 +126,20 @@ class NetworkDiscovery:
                         cluster_ips.add(addr.address)
         except Exception as e:
             logger.warning(f"Could not query k8s nodes: {e}")
+
+        # Also collect IPs from the inventory (ansible_host, lan_ip)
+        # so that overlay nodes are excluded by their LAN address too.
+        try:
+            inventory = node_manager.read_inventory()
+            hosts = inventory.get("all", {}).get("hosts", {})
+            for host_vars in hosts.values():
+                for key in ("ansible_host", "lan_ip", "overlay_ip"):
+                    ip = host_vars.get(key)
+                    if ip:
+                        cluster_ips.add(ip)
+        except Exception as e:
+            logger.warning(f"Could not read inventory IPs: {e}")
+
         return cluster_ips
 
     async def get_next_available_overlay_ip(self) -> Optional[str]:
