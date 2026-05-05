@@ -194,7 +194,7 @@ spec:
           cpu: "250m"
         limits:
           memory: "2Gi"
-          cpu: "2"
+          cpu: "1"
 
   # Build Frontend Template — single-arch on control plane
   - name: build-frontend
@@ -224,7 +224,7 @@ spec:
           cpu: "250m"
         limits:
           memory: "4Gi"
-          cpu: "2"
+          cpu: "1"
 
   # Build LLM Proxy Template — single-arch on control plane
   - name: build-llm-proxy
@@ -254,7 +254,7 @@ spec:
           cpu: "250m"
         limits:
           memory: "2Gi"
-          cpu: "2"
+          cpu: "1"
 
 {% if build_architectures is defined and build_architectures | length > 1 %}
   # Per-arch build with git-clone init container
@@ -298,7 +298,7 @@ spec:
           cpu: "1"
         limits:
           memory: "4Gi"
-          cpu: "2"
+          cpu: "1"
 
   # Create multi-arch manifest from per-arch images using crane
   - name: create-manifest
