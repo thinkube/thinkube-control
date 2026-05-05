@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useServicesStore } from '@/stores/useServicesStore';
 import {
@@ -783,6 +783,7 @@ export default function ServiceDetailsPage() {
                           <TkSeparator />
                           <h5 className="font-medium">Containers ({pod.containers.length})</h5>
                           {pod.containers.map((container) => (
+                            <React.Fragment key={container.name}>
                             <TkCard key={container.name}>
                               <TkCardContent standalone>
                                 <div className="flex items-center justify-between mb-2">
@@ -854,6 +855,7 @@ export default function ServiceDetailsPage() {
                                 onResized={() => fetchServiceDetails(serviceDetails.id)}
                               />
                             )}
+                            </React.Fragment>
                           ))}
                         </div>
                       )}
