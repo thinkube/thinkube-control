@@ -131,8 +131,11 @@ class NetworkDiscovery:
         # so that overlay nodes are excluded by their LAN address too.
         try:
             inventory = node_manager.read_inventory()
-            hosts = inventory.get("all", {}).get("hosts", {})
-            for host_vars in hosts.values():
+            baremetal = (inventory.get("all", {}).get("children", {})
+                        .get("baremetal", {}).get("hosts", {}))
+            for host_vars in baremetal.values():
+                if not isinstance(host_vars, dict):
+                    continue
                 for key in ("ansible_host", "lan_ip", "overlay_ip"):
                     ip = host_vars.get(key)
                     if ip:
