@@ -1098,18 +1098,14 @@ tailscale status --json
             # Parse the JSON output from `tailscale status --json`
             output = stdout.decode("utf-8", errors="replace").strip()
             # The JSON output may be preceded by sudo/install noise — find the
-            # first line starting with `{` and parse from there.
-            json_start = -1
-            offset = 0
-            for line in output.splitlines(keepends=True):
-                if line.lstrip().startswith("{"):
-                    json_start = offset + (len(line) - len(line.lstrip()))
-                    break
-                offset += len(line)
-            if json_start < 0:
+            # first '{' (start of the top-level JSON object) and the last '}'
+            # (end of it) to extract the complete JSON block.
+            json_start = output.find("{")
+            json_end = output.rfind("}")
+            if json_start < 0 or json_end < 0 or json_end <= json_start:
                 return {"success": False, "error": f"Could not find JSON in tailscale status output"}
 
-            status_json = json.loads(output[json_start:])
+            status_json = json.loads(output[json_start:json_end + 1])
             self_node = status_json.get("Self", {})
             tailscale_ips = self_node.get("TailscaleIPs", [])
             if not tailscale_ips:
