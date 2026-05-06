@@ -1169,6 +1169,42 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     })
                 step += 1
 
+            # Restart pods on new nodes that got non-Cilium IPs.
+            # DaemonSet pods scheduled before Cilium is ready get fallback
+            # IPs (10.88.0.x) that are unreachable from the cluster network.
+            # Deleting them lets the DaemonSet controller recreate them with
+            # proper Cilium-assigned IPs.
+            from kubernetes import client as k8s_client
+            try:
+                v1 = k8s_client.CoreV1Api()
+                for h in added_hostnames:
+                    pods = v1.list_pod_for_all_namespaces(
+                        field_selector=f"spec.nodeName={h}"
+                    )
+                    for pod in pods.items:
+                        pod_ip = pod.status.pod_ip or ""
+                        # Cilium pods use the cluster CIDR (10.1.x.x);
+                        # fallback IPs are 10.88.0.x from the default bridge.
+                        if pod_ip.startswith("10.88."):
+                            try:
+                                v1.delete_namespaced_pod(
+                                    pod.metadata.name, pod.metadata.namespace
+                                )
+                                await websocket.send_json({
+                                    "type": "ok",
+                                    "message": (
+                                        f"[{h}] Restarted {pod.metadata.namespace}/{pod.metadata.name} "
+                                        f"(had stale IP {pod_ip})"
+                                    ),
+                                })
+                            except Exception as e:
+                                logger.warning(
+                                    f"Could not restart pod {pod.metadata.name}: {e}"
+                                )
+            except Exception as e:
+                logger.warning(f"Failed to check for stale pod IPs: {e}")
+            step += 1
+
             # Check if images need to be rebuilt for new architectures.
             # Update inventory build platforms so the playbooks will
             # target all architectures when run manually.
