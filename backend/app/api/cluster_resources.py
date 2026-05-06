@@ -137,12 +137,21 @@ async def get_cluster_resources():
                 "gpu": max(0, capacity["gpu"] - allocated_gpu)
             }
 
+            # Effective GPU: for time-sliced nodes (virtual > physical),
+            # cap to 1 since multiple partitions share the same memory
+            # pool with no benefit (especially on unified-memory like DGX Spark)
+            physical_gpus = len(gpu_details)
+            effective_gpu = capacity["gpu"]
+            if physical_gpus > 0 and capacity["gpu"] > physical_gpus:
+                effective_gpu = 1
+
             result.append({
                 "name": node_name,
                 "capacity": {
                     "cpu": capacity["cpu"],
                     "memory": format_memory(capacity["memory"]),
-                    "gpu": capacity["gpu"]
+                    "gpu": capacity["gpu"],
+                    "effective_gpu": effective_gpu
                 },
                 "allocated": {
                     "cpu": round(allocated_cpu, 2),

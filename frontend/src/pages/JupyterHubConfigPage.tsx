@@ -14,6 +14,7 @@ interface ClusterNode {
     cpu: number
     memory: number
     gpu: number
+    effective_gpu?: number
   }
 }
 
@@ -51,7 +52,7 @@ export default function JupyterHubConfigPage() {
     return {
       cpu: Math.floor(node.capacity.cpu),
       memory: parseInt(node.capacity.memory.toString()),
-      gpu: node.capacity.gpu
+      gpu: node.capacity.effective_gpu ?? node.capacity.gpu
     }
   }, [config.default_node, clusterNodes])
 
@@ -141,7 +142,7 @@ export default function JupyterHubConfigPage() {
       const capacity = {
         cpu: Math.floor(node.capacity.cpu),
         memory: parseInt(node.capacity.memory.toString()),
-        gpu: node.capacity.gpu
+        gpu: node.capacity.effective_gpu ?? node.capacity.gpu
       }
 
       const newCpuCores = prev.default_cpu_cores && prev.default_cpu_cores > capacity.cpu
@@ -217,7 +218,7 @@ export default function JupyterHubConfigPage() {
                   <TkSelectContent>
                     {clusterNodes.map((node) => (
                       <TkSelectItem key={node.name} value={node.name}>
-                        {node.name} ({node.capacity.cpu} cores, {node.capacity.memory} GB, {node.capacity.gpu} GPUs)
+                        {node.name} ({node.capacity.cpu} cores, {node.capacity.memory} GB, {node.capacity.effective_gpu ?? node.capacity.gpu} GPUs)
                       </TkSelectItem>
                     ))}
                   </TkSelectContent>
