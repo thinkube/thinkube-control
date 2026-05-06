@@ -1091,6 +1091,32 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     })
                 step += 1
 
+            # DGX Spark unified-memory host tuning. The playbook self-detects
+            # GB10 hardware (DMI + nvidia-smi) and end_hosts on non-Spark
+            # nodes, so it's safe to run on every newly added node.
+            spark_playbook = SSH_SETUP_DIR / "16_tune_dgx_spark.yaml"
+            if spark_playbook.exists():
+                await websocket.send_json({
+                    "type": "task",
+                    "task_name": "Apply DGX Spark unified-memory tuning",
+                    "task_number": step,
+                })
+                spark_ok = await _stream_playbook(
+                    websocket=websocket,
+                    playbook_path=spark_playbook,
+                    extra_vars=extra_vars,
+                    step_name="Apply DGX Spark unified-memory tuning",
+                    step_number=step,
+                    limit=",".join(added_hostnames),
+                )
+                if not spark_ok:
+                    logger.warning("DGX Spark tuning failed on new nodes — continuing")
+                    await websocket.send_json({
+                        "type": "warning",
+                        "message": "DGX Spark tuning failed on new nodes — continuing",
+                    })
+                step += 1
+
             # GPU Operator setup — if any node has GPUs and setup fails,
             # there is no point rebuilding images for a broken cluster state.
             if any_gpu_detected:
