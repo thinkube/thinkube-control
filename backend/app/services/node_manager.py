@@ -450,6 +450,81 @@ fi
         except Exception as e:
             return False, f"Uncordon failed: {str(e)}"
 
+    def _node_ready(self, node_name: str) -> Optional[bool]:
+        try:
+            node = client.CoreV1Api().read_node(node_name)
+        except Exception:
+            return None
+        for cond in (node.status.conditions or []):
+            if cond.type == "Ready":
+                return cond.status == "True"
+        return False
+
+    def _stuck_cilium_pod_on_node(self, node_name: str) -> Optional[str]:
+        try:
+            pods = client.CoreV1Api().list_namespaced_pod(
+                namespace="kube-system",
+                label_selector="k8s-app=cilium",
+                field_selector=f"spec.nodeName={node_name}",
+            )
+        except Exception:
+            return None
+        for pod in pods.items:
+            agent = next(
+                (cs for cs in (pod.status.container_statuses or [])
+                 if cs.name == "cilium-agent"),
+                None,
+            )
+            if agent and not agent.ready and agent.restart_count >= 2:
+                return pod.metadata.name
+        return None
+
+    async def wait_for_node_ready_with_self_heal(
+        self, node_name: str, timeout: int = 300
+    ) -> Tuple[bool, str]:
+        """Wait for a freshly-joined node to become Ready, self-healing a
+        wedged cilium pod once if its emptyDir setup got stuck on first
+        schedule (kubelet recreates it cleanly on next attempt).
+
+        Returns (ready, message). Polls every 5s up to `timeout` seconds.
+        Self-heal kicks in after 60s of NotReady.
+        """
+        deadline = time.time() + timeout
+        healed = False
+        last_diag = "node never became Ready"
+        while time.time() < deadline:
+            ready = self._node_ready(node_name)
+            if ready:
+                return True, (
+                    f"{node_name} is Ready"
+                    + (" (after cilium self-heal)" if healed else "")
+                )
+            if ready is None:
+                last_diag = f"node {node_name} not yet visible to apiserver"
+            else:
+                last_diag = f"{node_name} reported NotReady"
+
+            if not healed and (deadline - time.time()) < (timeout - 60):
+                stuck = self._stuck_cilium_pod_on_node(node_name)
+                if stuck:
+                    try:
+                        client.CoreV1Api().delete_namespaced_pod(
+                            name=stuck,
+                            namespace="kube-system",
+                            grace_period_seconds=0,
+                        )
+                        healed = True
+                        last_diag = (
+                            f"deleted wedged cilium pod {stuck}; "
+                            "kubelet will recreate it"
+                        )
+                    except Exception as e:
+                        last_diag = f"failed to delete wedged cilium pod: {e}"
+
+            await asyncio.sleep(5)
+
+        return False, last_diag
+
     async def drain_node(self, node_name: str) -> Tuple[bool, str]:
         """Drain a kubernetes node (cordon + evict/force-delete pods)."""
         try:
