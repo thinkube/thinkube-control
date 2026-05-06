@@ -1150,12 +1150,16 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     "task_name": "Ensure JuiceFS CSI driver on new nodes",
                     "task_number": step,
                 })
+                # Include control plane (for Helm/StorageClass tasks) + new nodes
+                # (for kubelet directory prep). Idempotent — existing state unchanged.
+                juicefs_limit = ",".join(added_hostnames + cp_hosts)
                 juicefs_ok = await _stream_playbook(
                     websocket=websocket,
                     playbook_path=juicefs_playbook,
                     extra_vars=extra_vars,
                     step_name="Ensure JuiceFS CSI driver on new nodes",
                     step_number=step,
+                    limit=juicefs_limit,
                 )
                 if not juicefs_ok:
                     logger.warning("JuiceFS CSI setup failed on new nodes — continuing")
