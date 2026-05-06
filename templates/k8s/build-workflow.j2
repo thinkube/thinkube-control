@@ -207,6 +207,13 @@ spec:
           - "--build-arg=CONTAINER_REGISTRY={{ container_registry }}"
           - "--cache=true"
           - "--cache-ttl=24h"
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2"
         volumeMounts:
           - name: docker-config
             mountPath: /kaniko/.docker/
@@ -231,6 +238,13 @@ spec:
           args:
             - |
               git clone --depth 1 https://{{ admin_username }}:{{ admin_password }}@git.{{ domain_name }}/{{ gitea_org | default('thinkube-deployments') }}/{{ project_name }}.git /workspace
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
           volumeMounts:
             - name: workspace
               mountPath: /workspace
@@ -244,6 +258,13 @@ spec:
           - "--cache=true"
           - "--cache-ttl=24h"
           - "--custom-platform=linux/{{ "{{" }}inputs.parameters.target_arch{{ "}}" }}"
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2"
         volumeMounts:
           - name: docker-config
             mountPath: /kaniko/.docker/
@@ -258,6 +279,13 @@ spec:
       container:
         image: {{ container_registry }}/library/ci-utils:latest
         command: ["/bin/sh", "-c"]
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
         env:
           - name: DOCKER_CONFIG
             value: /kaniko/.docker
