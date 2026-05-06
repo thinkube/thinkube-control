@@ -1018,40 +1018,6 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
 
         step += 1
 
-        # Wait for each new node to actually become Ready before continuing.
-        # The join playbook returning success only means kubelet started; if
-        # the cilium pod's emptyDir is wedged on first schedule the node will
-        # stay NotReady until kubelet retries. Self-heal that one case so it
-        # never becomes a kubectl-debug task for the user.
-        await websocket.send_json({
-            "type": "task",
-            "task_name": f"Wait for node(s) Ready: {','.join(added_hostnames)}",
-            "task_number": step,
-        })
-        ready_failures = []
-        for h in added_hostnames:
-            ok, msg = await node_manager.wait_for_node_ready_with_self_heal(h)
-            if ok:
-                await websocket.send_json({"type": "ok", "message": f"[{h}] {msg}"})
-            else:
-                ready_failures.append(h)
-                await websocket.send_json({
-                    "type": "error",
-                    "message": f"[{h}] {msg}",
-                })
-        if ready_failures:
-            await websocket.send_json({
-                "type": "complete",
-                "status": "failed",
-                "message": (
-                    f"Node(s) {', '.join(ready_failures)} did not become Ready "
-                    "after join. Aborting setup; remove the node(s) and retry."
-                ),
-            })
-            await websocket.close()
-            return
-        step += 1
-
         # Cordon all new nodes immediately to prevent scheduling
         # until DNS, GPU, and image setup are complete.
         for h in added_hostnames:
