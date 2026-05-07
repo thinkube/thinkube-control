@@ -85,8 +85,11 @@ class LLMGPUTracker:
         except Exception as e:
             logger.error(f"GPU node discovery failed: {e}")
 
-    async def _ensure_pod_ips(self):
+    async def _ensure_pod_ips(self, node_name: Optional[str] = None):
         if not self._pod_ips_discovered:
+            self._discover_node_metrics_pods()
+        elif node_name and node_name not in self._node_pod_ips:
+            # Re-discover if a specific node is missing (added after startup)
             self._discover_node_metrics_pods()
 
     def _discover_node_metrics_pods(self):
@@ -118,7 +121,7 @@ class LLMGPUTracker:
             logger.warning(f"Failed to discover node-metrics pods: {e}")
 
     async def fetch_node_metrics(self, node_name: str) -> Optional[dict]:
-        await self._ensure_pod_ips()
+        await self._ensure_pod_ips(node_name)
         pod_ip = self._node_pod_ips.get(node_name)
         if not pod_ip:
             return None
