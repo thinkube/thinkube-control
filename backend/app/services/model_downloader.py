@@ -338,15 +338,18 @@ mlflow_uri = os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow.mlflow.svc.cluster.
 mlflow.set_tracking_uri(mlflow_uri)
 
 # Configure S3 client for JuiceFS Gateway
-# Disable automatic checksum calculation to avoid double-reading large files
-# from JuiceFS FUSE mount, which can cause I/O errors on large model files.
+# Disable checksum calculation and payload signing to avoid reading entire
+# files from JuiceFS FUSE mount (causes I/O errors on large model files).
 s3_client = boto3.client(
     's3',
     endpoint_url=os.environ['AWS_S3_ENDPOINT'],
     aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
     aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
     region_name=os.environ['AWS_DEFAULT_REGION'],
-    config=BotoConfig(request_checksum_calculation='when_required')
+    config=BotoConfig(
+        request_checksum_calculation='when_required',
+        payload_signing_enabled=False,
+    )
 )
 s3_bucket = 'mlflow'
 print(f'✓ S3 client configured for JuiceFS Gateway', flush=True)
@@ -1011,15 +1014,18 @@ if not (has_safetensors or has_bin):
     sys.exit(1)
 
 # Configure S3 client for JuiceFS Gateway
-# Disable automatic checksum calculation to avoid double-reading large files
-# from JuiceFS FUSE mount, which can cause I/O errors on large model files.
+# Disable checksum calculation and payload signing to avoid reading entire
+# files from JuiceFS FUSE mount (causes I/O errors on large model files).
 s3_client = boto3.client(
     's3',
     endpoint_url=os.environ['AWS_S3_ENDPOINT'],
     aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
     aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
     region_name=os.environ['AWS_DEFAULT_REGION'],
-    config=BotoConfig(request_checksum_calculation='when_required')
+    config=BotoConfig(
+        request_checksum_calculation='when_required',
+        payload_signing_enabled=False,
+    )
 )
 s3_bucket = 'mlflow'
 print(f'✓ S3 client configured for JuiceFS Gateway', flush=True)
