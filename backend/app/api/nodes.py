@@ -1203,6 +1203,14 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
         else:
             # All images already exist — uncordon immediately.
             for h in added_hostnames:
+                # Restart any pods that cached wrong-arch images before cordon took effect
+                restarted = await node_manager.restart_crashlooping_pods(h)
+                if restarted:
+                    await websocket.send_json({
+                        "type": "ok",
+                        "message": f"[{h}] Restarted {len(restarted)} crash-looping pod(s): {', '.join(restarted)}",
+                    })
+
                 ok, msg = await node_manager.uncordon_node(h)
                 if ok:
                     await websocket.send_json({

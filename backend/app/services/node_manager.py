@@ -1357,6 +1357,75 @@ echo "OK"
             logger.error(f"Failed to disable GPU operator on {hostname}: {e}")
             return False
 
+    async def restart_crashlooping_pods(self, node_name: str) -> List[str]:
+        """Fix pods on a node that are crash-looping due to wrong-arch images.
+
+        When a new-arch node joins, DaemonSet pods get scheduled before cordon
+        takes effect. They may pull wrong-architecture images from Harbor.
+        Simply deleting the pod isn't enough — containerd caches the wrong-arch
+        image and IfNotPresent reuses it. Instead, we find the owning DaemonSets,
+        patch them to imagePullPolicy: Always to force a re-pull, then restore.
+        """
+        fixed = []
+        try:
+            v1 = client.CoreV1Api()
+            apps_v1 = client.AppsV1Api()
+            pods = v1.list_pod_for_all_namespaces(field_selector=f"spec.nodeName={node_name}")
+
+            # Collect unique DaemonSets owning crash-looping pods
+            daemonsets_to_fix = set()
+            for pod in pods.items:
+                if not pod.status or not pod.status.container_statuses:
+                    continue
+
+                for cs in pod.status.container_statuses:
+                    waiting = cs.state.waiting if cs.state and cs.state.waiting else None
+                    is_crashloop = waiting and waiting.reason == "CrashLoopBackOff"
+                    high_restarts = (cs.restart_count or 0) > 10
+
+                    if (is_crashloop or high_restarts) and cs.image and "registry." in cs.image:
+                        # Find owning DaemonSet
+                        for ref in (pod.metadata.owner_references or []):
+                            if ref.kind == "DaemonSet":
+                                daemonsets_to_fix.add((pod.metadata.namespace, ref.name))
+                        break
+
+            # Patch each DaemonSet: Always → rollout → IfNotPresent → rollout
+            for ns, ds_name in daemonsets_to_fix:
+                ds_ref = f"{ns}/{ds_name}"
+                logger.info(f"Fixing wrong-arch images in DaemonSet {ds_ref}")
+                try:
+                    ds = apps_v1.read_namespaced_daemon_set(ds_name, ns)
+                    num_containers = len(ds.spec.template.spec.containers)
+
+                    # Patch to Always
+                    patch = [
+                        {"op": "replace", "path": f"/spec/template/spec/containers/{i}/imagePullPolicy", "value": "Always"}
+                        for i in range(num_containers)
+                    ]
+                    apps_v1.patch_namespaced_daemon_set(ds_name, ns, patch, _content_type="application/json-patch+json")
+
+                    # Wait briefly for rollout
+                    import asyncio
+                    await asyncio.sleep(20)
+
+                    # Restore to IfNotPresent
+                    restore_patch = [
+                        {"op": "replace", "path": f"/spec/template/spec/containers/{i}/imagePullPolicy", "value": "IfNotPresent"}
+                        for i in range(num_containers)
+                    ]
+                    apps_v1.patch_namespaced_daemon_set(ds_name, ns, restore_patch, _content_type="application/json-patch+json")
+
+                    fixed.append(ds_ref)
+                    logger.info(f"Fixed DaemonSet {ds_ref} — images re-pulled")
+                except Exception as e:
+                    logger.warning(f"Failed to fix DaemonSet {ds_ref}: {e}")
+
+        except Exception as e:
+            logger.error(f"Error fixing crash-looping pods on {node_name}: {e}")
+
+        return fixed
+
     def get_rebuild_actions(self, new_arch: str) -> List[Dict[str, str]]:
         """Return list of rebuild actions needed when a new architecture is introduced."""
         actions = [
