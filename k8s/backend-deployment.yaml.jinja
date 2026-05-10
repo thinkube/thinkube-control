@@ -123,8 +123,12 @@ spec:
               name: jupyterhub-service-token
               key: token
               optional: true
-        - name: ADMIN_USERNAME
-          value: "{{ admin_username | default('tkadmin') }}"
+        - name: JUPYTER_BASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: jupyterhub-service-token
+              key: jupyter-url
+              optional: true
         # Services not yet deployed - uncomment when ready
         # - name: OPENSEARCH_URL
         #   value: "https://osd.{{ domain_name }}"

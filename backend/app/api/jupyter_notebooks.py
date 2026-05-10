@@ -33,12 +33,11 @@ router = APIRouter(prefix="/jupyter/notebooks", tags=["jupyter-notebooks"])
 # ---------------------------------------------------------------------------
 
 def _get_jupyter_base_url() -> str:
-    """Construct the Jupyter notebook server base URL."""
-    domain = os.environ.get("DOMAIN_NAME", "")
-    user = os.environ.get("ADMIN_USERNAME", "tkadmin")
-    if not domain:
-        raise HTTPException(status_code=500, detail="DOMAIN_NAME not configured")
-    return f"https://jupyter.{domain}/user/{user}"
+    """Get the Jupyter notebook server base URL from environment."""
+    url = os.environ.get("JUPYTER_BASE_URL", "")
+    if not url:
+        raise HTTPException(status_code=500, detail="JUPYTER_BASE_URL not configured")
+    return url.rstrip("/")
 
 
 def _get_jupyter_token() -> str:

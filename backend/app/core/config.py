@@ -50,7 +50,7 @@ class Settings(BaseSettings):
 
     # JupyterHub notebook proxy (optional - Jupyter may not be deployed)
     JUPYTERHUB_API_TOKEN: str = ""
-    ADMIN_USERNAME: str = "tkadmin"
+    JUPYTER_BASE_URL: str = ""
 
     # GitHub integration
     GITHUB_TOKEN: str = ""
