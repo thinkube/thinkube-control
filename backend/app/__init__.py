@@ -354,6 +354,17 @@ def create_app() -> FastAPI:
                 "test_connectivity",           # Resource
                 "get_environment",             # Resource
                 "test_ssh",                    # Resource
+
+                # === Jupyter Notebooks (proxied to tk-ai-extension) ===
+                "jupyter_notebook_status",     # Resource
+                "jupyter_list_notebooks",      # Resource
+                "jupyter_list_cells",          # Resource
+                "jupyter_read_cell",           # Resource
+                "jupyter_execute_cell",        # Tool
+                "jupyter_insert_cell",         # Tool
+                "jupyter_overwrite_cell",      # Tool
+                "jupyter_delete_cell",         # Tool
+                "jupyter_move_cell",           # Tool
             ]
         )
 

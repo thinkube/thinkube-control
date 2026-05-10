@@ -116,6 +116,15 @@ spec:
           value: '{"NVIDIA-GB10-SHARED": 128}'
         - name: LLM_MODEL_IDLE_TIMEOUT_MINUTES
           value: "30"
+        # JupyterHub notebook proxy configuration
+        - name: JUPYTERHUB_API_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: jupyterhub-service-token
+              key: token
+              optional: true
+        - name: ADMIN_USERNAME
+          value: "{{ admin_username | default('tkadmin') }}"
         # Services not yet deployed - uncomment when ready
         # - name: OPENSEARCH_URL
         #   value: "https://osd.{{ domain_name }}"
