@@ -48,10 +48,6 @@ class Settings(BaseSettings):
         db = values.get("POSTGRES_DB")
         return f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
-    # JupyterHub notebook proxy (optional - Jupyter may not be deployed)
-    JUPYTERHUB_API_TOKEN: str = ""
-    JUPYTER_BASE_URL: str = ""
-
     # GitHub integration
     GITHUB_TOKEN: str = ""
     GITHUB_ORG: str = ""

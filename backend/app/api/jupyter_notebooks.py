@@ -32,29 +32,82 @@ router = APIRouter(prefix="/jupyter/notebooks", tags=["jupyter-notebooks"])
 # Configuration
 # ---------------------------------------------------------------------------
 
-def _get_jupyter_base_url() -> str:
-    """Get the Jupyter notebook server base URL from environment."""
-    url = os.environ.get("JUPYTER_BASE_URL", "")
-    if not url:
-        raise HTTPException(status_code=500, detail="JUPYTER_BASE_URL not configured")
-    return url.rstrip("/")
+def _get_notebook_server_access() -> tuple[str, str]:
+    """Get the notebook server URL and token by reading from the running pod.
 
+    JupyterHub service tokens don't authenticate to the single-user server.
+    Instead, we read the notebook server's own API token and pod IP from
+    Kubernetes directly.
 
-def _get_jupyter_token() -> str:
-    """Get the JupyterHub API token for authenticating to the notebook server."""
-    token = os.environ.get("JUPYTERHUB_API_TOKEN", "")
-    if not token:
-        raise HTTPException(
-            status_code=503,
-            detail="JUPYTERHUB_API_TOKEN not configured. Jupyter notebook integration is not available."
+    Returns:
+        (base_url, token) tuple
+    """
+    try:
+        from kubernetes import client, config
+        try:
+            config.load_incluster_config()
+        except config.ConfigException:
+            config.load_kube_config()
+
+        v1 = client.CoreV1Api()
+
+        # Find the notebook server pod
+        pods = v1.list_namespaced_pod(
+            "jupyterhub",
+            label_selector="component=singleuser-server"
         )
-    return token
+
+        if not pods.items:
+            # Try by pod name pattern
+            pods = v1.list_namespaced_pod("jupyterhub")
+            pods.items = [p for p in pods.items if p.metadata.name.startswith("jupyter-")]
+
+        if not pods.items:
+            raise HTTPException(
+                status_code=503,
+                detail="No Jupyter notebook server running. Start it from the JupyterHub launcher."
+            )
+
+        pod = pods.items[0]
+        pod_ip = pod.status.pod_ip
+        if not pod_ip:
+            raise HTTPException(status_code=503, detail="Notebook server pod has no IP yet (still starting).")
+
+        # Extract the JUPYTERHUB_API_TOKEN from the pod's environment
+        token = None
+        for container in pod.spec.containers:
+            for env in (container.env or []):
+                if env.name == "JUPYTERHUB_API_TOKEN":
+                    token = env.value
+                    break
+            if token:
+                break
+
+        if not token:
+            raise HTTPException(status_code=500, detail="Could not read notebook server API token")
+
+        # The notebook server listens on port 8888 with a base URL
+        # Read JUPYTERHUB_SERVICE_PREFIX for the base path
+        base_path = ""
+        for container in pod.spec.containers:
+            for env in (container.env or []):
+                if env.name == "JUPYTERHUB_SERVICE_PREFIX":
+                    base_path = env.value.rstrip("/")
+                    break
+
+        base_url = f"http://{pod_ip}:8888{base_path}"
+        return base_url, token
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get notebook server access: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to access notebook server: {str(e)}")
 
 
 async def _proxy_tool_call(tool_name: str, arguments: dict, timeout: float = 300.0) -> dict:
     """Forward a tool call to the tk-ai-extension in the notebook server."""
-    base_url = _get_jupyter_base_url()
-    token = _get_jupyter_token()
+    base_url, token = _get_notebook_server_access()
 
     url = f"{base_url}/api/tk-ai/mcp/tools/call"
     headers = {
@@ -167,11 +220,10 @@ async def jupyter_notebook_status(
 ):
     """Check if the Jupyter notebook server is running and the tk-ai-extension is accessible."""
     try:
-        base_url = _get_jupyter_base_url()
-        token = _get_jupyter_token()
+        base_url, token = _get_notebook_server_access()
     except HTTPException as e:
         return JupyterStatusResponse(
-            status="not_configured",
+            status="not_configured" if e.status_code == 500 else "unreachable",
             error=e.detail,
         )
 

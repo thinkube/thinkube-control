@@ -116,19 +116,8 @@ spec:
           value: '{"NVIDIA-GB10-SHARED": 128}'
         - name: LLM_MODEL_IDLE_TIMEOUT_MINUTES
           value: "30"
-        # JupyterHub notebook proxy configuration
-        - name: JUPYTERHUB_API_TOKEN
-          valueFrom:
-            secretKeyRef:
-              name: jupyterhub-service-token
-              key: token
-              optional: true
-        - name: JUPYTER_BASE_URL
-          valueFrom:
-            secretKeyRef:
-              name: jupyterhub-service-token
-              key: jupyter-url
-              optional: true
+        # Notebook server access is read dynamically from the running pod via K8s API
+        # (no static tokens or URLs needed)
         # Services not yet deployed - uncomment when ready
         # - name: OPENSEARCH_URL
         #   value: "https://osd.{{ domain_name }}"
