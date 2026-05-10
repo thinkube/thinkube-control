@@ -348,7 +348,7 @@ s3_client = boto3.client(
     region_name=os.environ['AWS_DEFAULT_REGION'],
     config=BotoConfig(
         request_checksum_calculation='when_required',
-        payload_signing_enabled=False,
+        s3={{'payload_signing_enabled': False}},
     )
 )
 s3_bucket = 'mlflow'
@@ -1024,7 +1024,7 @@ s3_client = boto3.client(
     region_name=os.environ['AWS_DEFAULT_REGION'],
     config=BotoConfig(
         request_checksum_calculation='when_required',
-        payload_signing_enabled=False,
+        s3={{'payload_signing_enabled': False}},
     )
 )
 s3_bucket = 'mlflow'
