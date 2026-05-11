@@ -18,6 +18,9 @@ spec:
       backendRefs:
         - name: backend
           port: 8000
+      timeouts:
+        request: "600s"
+        backendRequest: "600s"
     - matches:
         - path:
             type: PathPrefix
@@ -25,6 +28,9 @@ spec:
       backendRefs:
         - name: backend
           port: 8000
+      timeouts:
+        request: "600s"
+        backendRequest: "600s"
     - matches:
         - path:
             type: PathPrefix
