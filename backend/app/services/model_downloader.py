@@ -217,8 +217,6 @@ from huggingface_hub import snapshot_download, list_repo_files, hf_hub_download
 import json as _json
 import mlflow
 import mlflow.transformers
-import boto3
-from botocore.config import Config as BotoConfig
 
 # Force progress bars to show even without TTY
 os.environ['TQDM_DISABLE'] = '0'
@@ -337,23 +335,6 @@ print('✓ MLflow authentication successful', flush=True)
 mlflow_uri = os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow.mlflow.svc.cluster.local:5000')
 mlflow.set_tracking_uri(mlflow_uri)
 
-# Configure S3 client for JuiceFS Gateway
-# Disable checksum calculation and payload signing to avoid reading entire
-# files from JuiceFS FUSE mount (causes I/O errors on large model files).
-s3_client = boto3.client(
-    's3',
-    endpoint_url=os.environ['AWS_S3_ENDPOINT'],
-    aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
-    aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
-    region_name=os.environ['AWS_DEFAULT_REGION'],
-    config=BotoConfig(
-        request_checksum_calculation='when_required',
-        s3={{'payload_signing_enabled': False}},
-    )
-)
-s3_bucket = 'mlflow'
-print(f'✓ S3 client configured for JuiceFS Gateway', flush=True)
-
 try:
     # Set up experiment
     experiment_name = "model-registry"
@@ -399,39 +380,26 @@ try:
             "staging_path": staging_model_path
         }})
 
-        # Manual S3 upload from staging - all model files
-        # Use multipart upload for large files to avoid connection timeouts
-        from boto3.s3.transfer import TransferConfig
-        transfer_config = TransferConfig(
-            multipart_threshold=64 * 1024 * 1024,   # 64 MB
-            multipart_chunksize=64 * 1024 * 1024,   # 64 MB chunks
-            max_concurrency=4,
-        )
-        print(f'Uploading model files from staging to S3 (JuiceFS Gateway)...', flush=True)
+        # Copy model files via POSIX filesystem instead of S3 upload.
+        # Both staging and target are on the same JuiceFS mount, so a direct
+        # copy avoids FUSE I/O errors from sustained large reads through S3.
+        posix_target = f'/mnt/juicefs/{{s3_artifact_prefix}}'
+        print(f'Copying model files to {{posix_target}} (POSIX)...', flush=True)
+        os.makedirs(posix_target, exist_ok=True)
         upload_count = 0
         for root, dirs, files in os.walk(staging_model_path):
             for file in files:
                 local_path = os.path.join(root, file)
                 relative_path = os.path.relpath(local_path, staging_model_path)
-                s3_key = f'{{s3_artifact_prefix}}/{{relative_path}}'
-
+                dest_path = os.path.join(posix_target, relative_path)
+                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                 file_size = os.path.getsize(local_path)
-                if file_size > 64 * 1024 * 1024:
-                    print(f'  Uploading {{relative_path}} ({{file_size / (1024**3):.1f}} GB, multipart)...', flush=True)
-                    s3_client.upload_file(
-                        local_path, s3_bucket, s3_key,
-                        Config=transfer_config
-                    )
-                else:
-                    with open(local_path, 'rb') as f:
-                        s3_client.put_object(
-                            Bucket=s3_bucket,
-                            Key=s3_key,
-                            Body=f
-                        )
+                if file_size > 100 * 1024 * 1024:
+                    print(f'  Copying {{relative_path}} ({{file_size / (1024**3):.1f}} GB)...', flush=True)
+                shutil.copy2(local_path, dest_path)
                 upload_count += 1
 
-        print(f'✓ Uploaded {{upload_count}} model files to S3', flush=True)
+        print(f'✓ Copied {{upload_count}} model files', flush=True)
 
         # Create and upload MLflow metadata
         print(f'Creating MLflow metadata...', flush=True)
@@ -452,12 +420,9 @@ try:
                 'model_id': model_id,
             }}
             mlmodel_yaml = yaml.dump(mlmodel_content, default_flow_style=False)
-            s3_client.put_object(
-                Bucket=s3_bucket,
-                Key=f'{{s3_artifact_prefix}}/MLmodel',
-                Body=mlmodel_yaml.encode()
-            )
-            print(f'✓ Uploaded GGUF metadata ({{len(gguf_files)}} gguf files)', flush=True)
+            with open(os.path.join(posix_target, 'MLmodel'), 'w') as f:
+                f.write(mlmodel_yaml)
+            print(f'✓ Written GGUF metadata ({{len(gguf_files)}} gguf files)', flush=True)
         else:
             # Transformers models — generate full metadata
             temp_mlmodel_dir = tempfile.mkdtemp()
@@ -467,22 +432,16 @@ try:
                 task=model_task
             )
 
-            # Upload metadata files via S3
+            # Copy metadata files to target
             metadata_count = 0
             for metadata_file in ['MLmodel', 'requirements.txt', 'conda.yaml', 'python_env.yaml']:
                 metadata_path = os.path.join(temp_mlmodel_dir, metadata_file)
                 if os.path.exists(metadata_path):
-                    s3_key = f'{{s3_artifact_prefix}}/{{metadata_file}}'
-                    with open(metadata_path, 'rb') as f:
-                        s3_client.put_object(
-                            Bucket=s3_bucket,
-                            Key=s3_key,
-                            Body=f
-                        )
+                    shutil.copy2(metadata_path, os.path.join(posix_target, metadata_file))
                     metadata_count += 1
 
             shutil.rmtree(temp_mlmodel_dir)
-            print(f'✓ Uploaded {{metadata_count}} metadata files', flush=True)
+            print(f'✓ Written {{metadata_count}} metadata files', flush=True)
 
         # Verify artifacts are accessible via MLflow client
         print(f'Verifying artifacts in MLflow...', flush=True)
@@ -939,8 +898,6 @@ import shutil
 from pathlib import Path
 import mlflow
 import mlflow.transformers
-import boto3
-from botocore.config import Config as BotoConfig
 import requests
 
 # Force progress bars to show even without TTY
@@ -1028,23 +985,6 @@ if not (has_safetensors or has_bin):
     print(f'ERROR: No model weights found (.safetensors or .bin)', flush=True)
     sys.exit(1)
 
-# Configure S3 client for JuiceFS Gateway
-# Disable checksum calculation and payload signing to avoid reading entire
-# files from JuiceFS FUSE mount (causes I/O errors on large model files).
-s3_client = boto3.client(
-    's3',
-    endpoint_url=os.environ['AWS_S3_ENDPOINT'],
-    aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
-    aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
-    region_name=os.environ['AWS_DEFAULT_REGION'],
-    config=BotoConfig(
-        request_checksum_calculation='when_required',
-        s3={{'payload_signing_enabled': False}},
-    )
-)
-s3_bucket = 'mlflow'
-print(f'✓ S3 client configured for JuiceFS Gateway', flush=True)
-
 try:
     # Set up experiment for fine-tuned models
     experiment_name = "finetuned-models"
@@ -1094,48 +1034,35 @@ try:
             "username": username
         }})
 
-        # Upload model files from user's storage to S3 (JuiceFS Gateway)
-        # Use multipart upload for large files to avoid connection timeouts
-        from boto3.s3.transfer import TransferConfig
-        transfer_config = TransferConfig(
-            multipart_threshold=64 * 1024 * 1024,   # 64 MB
-            multipart_chunksize=64 * 1024 * 1024,   # 64 MB chunks
-            max_concurrency=4,
-        )
-        print(f'Uploading model files to S3 (JuiceFS Gateway)...', flush=True)
+        # Copy model files via POSIX filesystem instead of S3 upload.
+        # Both source and target are on the same JuiceFS mount, so a direct
+        # copy avoids FUSE I/O errors from sustained large reads through S3.
+        posix_target = f'/mnt/juicefs/{{s3_artifact_prefix}}'
+        print(f'Copying model files to {{posix_target}} (POSIX)...', flush=True)
+        os.makedirs(posix_target, exist_ok=True)
         upload_count = 0
         for root, dirs, files in os.walk(model_source_path):
             for file in files:
                 local_path = os.path.join(root, file)
                 relative_path = os.path.relpath(local_path, model_source_path)
-                s3_key = f'{{s3_artifact_prefix}}/{{relative_path}}'
-
+                dest_path = os.path.join(posix_target, relative_path)
+                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
                 file_size = os.path.getsize(local_path)
-                if file_size > 64 * 1024 * 1024:
-                    print(f'  Uploading {{relative_path}} ({{file_size / (1024**3):.1f}} GB, multipart)...', flush=True)
-                    s3_client.upload_file(
-                        local_path, s3_bucket, s3_key,
-                        Config=transfer_config
-                    )
-                else:
-                    with open(local_path, 'rb') as f:
-                        s3_client.put_object(
-                            Bucket=s3_bucket,
-                            Key=s3_key,
-                            Body=f
-                        )
+                if file_size > 100 * 1024 * 1024:
+                    print(f'  Copying {{relative_path}} ({{file_size / (1024**3):.1f}} GB)...', flush=True)
+                shutil.copy2(local_path, dest_path)
                 upload_count += 1
                 if upload_count % 10 == 0:
-                    print(f'  Uploaded {{upload_count}} files...', flush=True)
+                    print(f'  Copied {{upload_count}} files...', flush=True)
 
-        print(f'✓ Uploaded {{upload_count}} model files to S3', flush=True)
+        print(f'✓ Copied {{upload_count}} model files', flush=True)
 
-        # Refresh token after uploads (tokens expire after ~5-60 minutes)
+        # Refresh token after copies (tokens expire after ~5-60 minutes)
         print('Refreshing MLflow authentication token...', flush=True)
         refresh_mlflow_token()
         print('✓ Token refreshed', flush=True)
 
-        # Create and upload MLflow metadata
+        # Create and write MLflow metadata
         print(f'Creating MLflow metadata...', flush=True)
         is_gguf = any(f.endswith('.gguf') for f in os.listdir(model_source_path) if os.path.isfile(os.path.join(model_source_path, f)))
 
@@ -1155,12 +1082,9 @@ try:
                 'base_model': base_model,
             }}
             mlmodel_yaml = yaml.dump(mlmodel_content, default_flow_style=False)
-            s3_client.put_object(
-                Bucket=s3_bucket,
-                Key=f'{{s3_artifact_prefix}}/MLmodel',
-                Body=mlmodel_yaml.encode()
-            )
-            print(f'✓ Uploaded GGUF metadata ({{len(gguf_files)}} gguf files)', flush=True)
+            with open(os.path.join(posix_target, 'MLmodel'), 'w') as f:
+                f.write(mlmodel_yaml)
+            print(f'✓ Written GGUF metadata ({{len(gguf_files)}} gguf files)', flush=True)
         else:
             # Transformers models — generate full metadata
             temp_mlmodel_dir = tempfile.mkdtemp()
@@ -1170,22 +1094,16 @@ try:
                 task=model_task
             )
 
-            # Upload metadata files via S3
+            # Copy metadata files to target
             metadata_count = 0
             for metadata_file in ['MLmodel', 'requirements.txt', 'conda.yaml', 'python_env.yaml']:
                 metadata_path = os.path.join(temp_mlmodel_dir, metadata_file)
                 if os.path.exists(metadata_path):
-                    s3_key = f'{{s3_artifact_prefix}}/{{metadata_file}}'
-                    with open(metadata_path, 'rb') as f:
-                        s3_client.put_object(
-                            Bucket=s3_bucket,
-                            Key=s3_key,
-                            Body=f
-                        )
+                    shutil.copy2(metadata_path, os.path.join(posix_target, metadata_file))
                     metadata_count += 1
 
             shutil.rmtree(temp_mlmodel_dir)
-            print(f'✓ Uploaded {{metadata_count}} metadata files', flush=True)
+            print(f'✓ Written {{metadata_count}} metadata files', flush=True)
 
         # Verify artifacts are accessible via MLflow client
         print(f'Verifying artifacts in MLflow...', flush=True)
