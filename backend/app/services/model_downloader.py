@@ -400,6 +400,13 @@ try:
         }})
 
         # Manual S3 upload from staging - all model files
+        # Use multipart upload for large files to avoid connection timeouts
+        from boto3.s3.transfer import TransferConfig
+        transfer_config = TransferConfig(
+            multipart_threshold=64 * 1024 * 1024,   # 64 MB
+            multipart_chunksize=64 * 1024 * 1024,   # 64 MB chunks
+            max_concurrency=4,
+        )
         print(f'Uploading model files from staging to S3 (JuiceFS Gateway)...', flush=True)
         upload_count = 0
         for root, dirs, files in os.walk(staging_model_path):
@@ -408,12 +415,20 @@ try:
                 relative_path = os.path.relpath(local_path, staging_model_path)
                 s3_key = f'{{s3_artifact_prefix}}/{{relative_path}}'
 
-                with open(local_path, 'rb') as f:
-                    s3_client.put_object(
-                        Bucket=s3_bucket,
-                        Key=s3_key,
-                        Body=f
+                file_size = os.path.getsize(local_path)
+                if file_size > 64 * 1024 * 1024:
+                    print(f'  Uploading {{relative_path}} ({{file_size / (1024**3):.1f}} GB, multipart)...', flush=True)
+                    s3_client.upload_file(
+                        local_path, s3_bucket, s3_key,
+                        Config=transfer_config
                     )
+                else:
+                    with open(local_path, 'rb') as f:
+                        s3_client.put_object(
+                            Bucket=s3_bucket,
+                            Key=s3_key,
+                            Body=f
+                        )
                 upload_count += 1
 
         print(f'✓ Uploaded {{upload_count}} model files to S3', flush=True)
@@ -1080,6 +1095,13 @@ try:
         }})
 
         # Upload model files from user's storage to S3 (JuiceFS Gateway)
+        # Use multipart upload for large files to avoid connection timeouts
+        from boto3.s3.transfer import TransferConfig
+        transfer_config = TransferConfig(
+            multipart_threshold=64 * 1024 * 1024,   # 64 MB
+            multipart_chunksize=64 * 1024 * 1024,   # 64 MB chunks
+            max_concurrency=4,
+        )
         print(f'Uploading model files to S3 (JuiceFS Gateway)...', flush=True)
         upload_count = 0
         for root, dirs, files in os.walk(model_source_path):
@@ -1088,12 +1110,20 @@ try:
                 relative_path = os.path.relpath(local_path, model_source_path)
                 s3_key = f'{{s3_artifact_prefix}}/{{relative_path}}'
 
-                with open(local_path, 'rb') as f:
-                    s3_client.put_object(
-                        Bucket=s3_bucket,
-                        Key=s3_key,
-                        Body=f
+                file_size = os.path.getsize(local_path)
+                if file_size > 64 * 1024 * 1024:
+                    print(f'  Uploading {{relative_path}} ({{file_size / (1024**3):.1f}} GB, multipart)...', flush=True)
+                    s3_client.upload_file(
+                        local_path, s3_bucket, s3_key,
+                        Config=transfer_config
                     )
+                else:
+                    with open(local_path, 'rb') as f:
+                        s3_client.put_object(
+                            Bucket=s3_bucket,
+                            Key=s3_key,
+                            Body=f
+                        )
                 upload_count += 1
                 if upload_count % 10 == 0:
                     print(f'  Uploaded {{upload_count}} files...', flush=True)
