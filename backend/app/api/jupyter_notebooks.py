@@ -15,33 +15,16 @@ than failing silently.
 
 import logging
 import os
-from typing import Annotated, Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, GetCoreSchemaHandler, GetJsonSchemaHandler
-from pydantic.json_schema import JsonSchemaValue
-from pydantic_core import core_schema as cs
+from pydantic import BaseModel, Field
 
 
-class _FlexInt:
-    """Integer type that accepts both int and string in JSON schema.
 
-    MCP clients may send integers as strings. This type generates an
-    anyOf schema so the MCP framework's JSON schema validation passes,
-    and coerces strings to int at runtime.
-    """
-
-    @classmethod
-    def __get_pydantic_core_schema__(cls, source_type, handler: GetCoreSchemaHandler):
-        return cs.no_info_plain_validator_function(lambda v: int(v))
-
-    @classmethod
-    def __get_pydantic_json_schema__(cls, _schema, handler: GetJsonSchemaHandler) -> JsonSchemaValue:
-        return {"anyOf": [{"type": "integer"}, {"type": "string"}]}
-
-
-FlexInt = Annotated[int, _FlexInt]
+# No custom types needed — integer fields declared as str below
+# and converted to int in the proxy function
 
 from app.core.api_tokens import get_current_user_dual_auth
 
@@ -196,7 +179,7 @@ class CellReadResponse(BaseModel):
 
 
 class CellExecuteRequest(BaseModel):
-    cell_index: FlexInt = Field(..., description="Index of the cell to execute (0-based)")
+    cell_index: str = Field(..., description="Index of the cell to execute (0-based)")
     notebook_path: str = Field(..., description="Path to the notebook")
 
 
@@ -212,19 +195,19 @@ class CellInsertRequest(BaseModel):
 
 
 class CellOverwriteRequest(BaseModel):
-    cell_index: FlexInt = Field(..., description="Index of the cell to overwrite (0-based)")
+    cell_index: str = Field(..., description="Index of the cell to overwrite (0-based)")
     content: str = Field(..., description="New content for the cell")
     notebook_path: str = Field(..., description="Path to the notebook")
 
 
 class CellDeleteRequest(BaseModel):
-    cell_index: FlexInt = Field(..., description="Index of the cell to delete (0-based)")
+    cell_index: str = Field(..., description="Index of the cell to delete (0-based)")
     notebook_path: str = Field(..., description="Path to the notebook")
 
 
 class CellMoveRequest(BaseModel):
-    from_index: FlexInt = Field(..., description="Current index of the cell (0-based)")
-    to_index: FlexInt = Field(..., description="Target index for the cell (0-based)")
+    from_index: str = Field(..., description="Current index of the cell (0-based)")
+    to_index: str = Field(..., description="Target index for the cell (0-based)")
     notebook_path: str = Field(..., description="Path to the notebook")
 
 
@@ -340,7 +323,7 @@ async def jupyter_execute_cell(
     """Execute a code cell and return its output."""
     result = await _proxy_tool_call("execute_cell", {
         "notebook_path": request.notebook_path,
-        "cell_index": request.cell_index,
+        "cell_index": int(request.cell_index),
     })
     return ToolResultResponse(result=result)
 
@@ -368,7 +351,7 @@ async def jupyter_overwrite_cell(
     """Overwrite the source content of a cell."""
     result = await _proxy_tool_call("overwrite_cell", {
         "notebook_path": request.notebook_path,
-        "cell_index": request.cell_index,
+        "cell_index": int(request.cell_index),
         "content": request.content,
     })
     return ToolResultResponse(result=result)
@@ -382,7 +365,7 @@ async def jupyter_delete_cell(
     """Delete a cell from the notebook."""
     result = await _proxy_tool_call("delete_cell", {
         "notebook_path": request.notebook_path,
-        "cell_index": request.cell_index,
+        "cell_index": int(request.cell_index),
     })
     return ToolResultResponse(result=result)
 
@@ -395,8 +378,8 @@ async def jupyter_move_cell(
     """Move a cell from one position to another."""
     result = await _proxy_tool_call("move_cell", {
         "notebook_path": request.notebook_path,
-        "from_index": request.from_index,
-        "to_index": request.to_index,
+        "from_index": int(request.from_index),
+        "to_index": int(request.to_index),
     })
     return ToolResultResponse(result=result)
 
