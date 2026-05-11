@@ -15,7 +15,7 @@ than failing silently.
 
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -206,6 +206,21 @@ class CellMoveRequest(BaseModel):
     notebook_path: str = Field(..., description="Path to the notebook")
 
 
+class CreateNotebookRequest(BaseModel):
+    path: str = Field(..., description="Path for the new notebook")
+    cells: Optional[List[Dict[str, str]]] = Field(None, description="Initial cells [{cell_type, source}]")
+
+
+class InsertAndExecuteRequest(BaseModel):
+    content: str = Field(..., description="Code to insert and execute")
+    notebook_path: str = Field(..., description="Path to the notebook")
+    position: str = Field("below", description="Where to insert: above, below, end")
+
+
+class ExecuteAllRequest(BaseModel):
+    notebook_path: str = Field(..., description="Path to the notebook")
+
+
 class ToolResultResponse(BaseModel):
     result: Any = Field(..., description="Tool execution result")
 
@@ -360,5 +375,44 @@ async def jupyter_move_cell(
         "notebook_path": request.notebook_path,
         "from_index": request.from_index,
         "to_index": request.to_index,
+    })
+    return ToolResultResponse(result=result)
+
+
+@router.post("/create", response_model=ToolResultResponse, operation_id="jupyter_create_notebook")
+async def jupyter_create_notebook(
+    request: CreateNotebookRequest,
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """Create a new Jupyter notebook."""
+    args = {"path": request.path}
+    if request.cells:
+        args["cells"] = request.cells
+    result = await _proxy_tool_call("create_notebook", args)
+    return ToolResultResponse(result=result)
+
+
+@router.post("/insert-and-execute", response_model=ToolResultResponse, operation_id="jupyter_insert_and_execute_cell")
+async def jupyter_insert_and_execute_cell(
+    request: InsertAndExecuteRequest,
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """Insert a new code cell and execute it immediately."""
+    result = await _proxy_tool_call("insert_and_execute_cell", {
+        "notebook_path": request.notebook_path,
+        "content": request.content,
+        "position": request.position,
+    })
+    return ToolResultResponse(result=result)
+
+
+@router.post("/execute-all", response_model=ToolResultResponse, operation_id="jupyter_execute_all_cells")
+async def jupyter_execute_all_cells(
+    request: ExecuteAllRequest,
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """Execute all code cells in the notebook sequentially."""
+    result = await _proxy_tool_call("execute_all_cells", {
+        "notebook_path": request.notebook_path,
     })
     return ToolResultResponse(result=result)

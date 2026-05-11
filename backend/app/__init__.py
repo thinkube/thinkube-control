@@ -360,11 +360,14 @@ def create_app() -> FastAPI:
                 "jupyter_list_notebooks",      # Resource
                 "jupyter_list_cells",          # Resource
                 "jupyter_read_cell",           # Resource
+                "jupyter_create_notebook",     # Tool
                 "jupyter_execute_cell",        # Tool
                 "jupyter_insert_cell",         # Tool
                 "jupyter_overwrite_cell",      # Tool
                 "jupyter_delete_cell",         # Tool
                 "jupyter_move_cell",           # Tool
+                "jupyter_insert_and_execute_cell",  # Tool
+                "jupyter_execute_all_cells",   # Tool
             ]
         )
 
