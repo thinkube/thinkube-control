@@ -20,6 +20,16 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from typing import Annotated
+from pydantic.functional_validators import BeforeValidator
+
+
+def _coerce_int(v: Any) -> int:
+    """Coerce string to int — MCP clients may send '0' instead of 0."""
+    return int(v)
+
+
+CoercedInt = Annotated[int, BeforeValidator(_coerce_int)]
 
 from app.core.api_tokens import get_current_user_dual_auth
 
@@ -174,7 +184,7 @@ class CellReadResponse(BaseModel):
 
 
 class CellExecuteRequest(BaseModel):
-    cell_index: int = Field(..., description="Index of the cell to execute (0-based)")
+    cell_index: CoercedInt = Field(..., description="Index of the cell to execute (0-based)")
     notebook_path: str = Field(..., description="Path to the notebook")
 
 
@@ -190,19 +200,19 @@ class CellInsertRequest(BaseModel):
 
 
 class CellOverwriteRequest(BaseModel):
-    cell_index: int = Field(..., description="Index of the cell to overwrite (0-based)")
+    cell_index: CoercedInt = Field(..., description="Index of the cell to overwrite (0-based)")
     content: str = Field(..., description="New content for the cell")
     notebook_path: str = Field(..., description="Path to the notebook")
 
 
 class CellDeleteRequest(BaseModel):
-    cell_index: int = Field(..., description="Index of the cell to delete (0-based)")
+    cell_index: CoercedInt = Field(..., description="Index of the cell to delete (0-based)")
     notebook_path: str = Field(..., description="Path to the notebook")
 
 
 class CellMoveRequest(BaseModel):
-    from_index: int = Field(..., description="Current index of the cell (0-based)")
-    to_index: int = Field(..., description="Target index for the cell (0-based)")
+    from_index: CoercedInt = Field(..., description="Current index of the cell (0-based)")
+    to_index: CoercedInt = Field(..., description="Target index for the cell (0-based)")
     notebook_path: str = Field(..., description="Path to the notebook")
 
 
