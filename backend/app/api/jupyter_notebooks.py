@@ -15,21 +15,33 @@ than failing silently.
 
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Annotated, Any, Dict, List, Optional, Tuple
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
-from typing import Annotated
-from pydantic.functional_validators import BeforeValidator
+from pydantic import BaseModel, Field, GetCoreSchemaHandler, GetJsonSchemaHandler
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import core_schema as cs
 
 
-def _coerce_int(v: Any) -> int:
-    """Coerce string to int — MCP clients may send '0' instead of 0."""
-    return int(v)
+class _FlexInt:
+    """Integer type that accepts both int and string in JSON schema.
+
+    MCP clients may send integers as strings. This type generates an
+    anyOf schema so the MCP framework's JSON schema validation passes,
+    and coerces strings to int at runtime.
+    """
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type, handler: GetCoreSchemaHandler):
+        return cs.no_info_plain_validator_function(lambda v: int(v))
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, _schema, handler: GetJsonSchemaHandler) -> JsonSchemaValue:
+        return {"anyOf": [{"type": "integer"}, {"type": "string"}]}
 
 
-CoercedInt = Annotated[int, BeforeValidator(_coerce_int)]
+FlexInt = Annotated[int, _FlexInt]
 
 from app.core.api_tokens import get_current_user_dual_auth
 
@@ -184,7 +196,7 @@ class CellReadResponse(BaseModel):
 
 
 class CellExecuteRequest(BaseModel):
-    cell_index: CoercedInt = Field(..., description="Index of the cell to execute (0-based)")
+    cell_index: FlexInt = Field(..., description="Index of the cell to execute (0-based)")
     notebook_path: str = Field(..., description="Path to the notebook")
 
 
@@ -200,19 +212,19 @@ class CellInsertRequest(BaseModel):
 
 
 class CellOverwriteRequest(BaseModel):
-    cell_index: CoercedInt = Field(..., description="Index of the cell to overwrite (0-based)")
+    cell_index: FlexInt = Field(..., description="Index of the cell to overwrite (0-based)")
     content: str = Field(..., description="New content for the cell")
     notebook_path: str = Field(..., description="Path to the notebook")
 
 
 class CellDeleteRequest(BaseModel):
-    cell_index: CoercedInt = Field(..., description="Index of the cell to delete (0-based)")
+    cell_index: FlexInt = Field(..., description="Index of the cell to delete (0-based)")
     notebook_path: str = Field(..., description="Path to the notebook")
 
 
 class CellMoveRequest(BaseModel):
-    from_index: CoercedInt = Field(..., description="Current index of the cell (0-based)")
-    to_index: CoercedInt = Field(..., description="Target index for the cell (0-based)")
+    from_index: FlexInt = Field(..., description="Current index of the cell (0-based)")
+    to_index: FlexInt = Field(..., description="Target index for the cell (0-based)")
     notebook_path: str = Field(..., description="Path to the notebook")
 
 
