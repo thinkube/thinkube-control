@@ -84,7 +84,9 @@ class LLMLifecycleManager:
                 ModelTier.performance if any(t in ("vllm", "tensorrt-llm") for t in entry.server_type)
                 else ModelTier.flexible
             )
-            if resolved_tier == ModelTier.flexible and "ollama" in entry.server_type:
+            if "text-embeddings" in entry.server_type:
+                resolved_backend = "text-embeddings"
+            elif resolved_tier == ModelTier.flexible and "ollama" in entry.server_type:
                 resolved_backend = "ollama"
             elif resolved_tier == ModelTier.performance:
                 return await self._load_performance(model_id, backend=backend, node=node, max_context_length=max_context_length)
@@ -94,8 +96,8 @@ class LLMLifecycleManager:
         if resolved_backend == "ollama":
             return await self._load_ollama(model_id, keep_alive, node, max_context_length=max_context_length)
 
-        if resolved_backend in ("vllm", "tensorrt-llm"):
-            return await self._load_performance(model_id, backend=backend, node=node, max_context_length=max_context_length)
+        if resolved_backend in ("vllm", "tensorrt-llm", "text-embeddings"):
+            return await self._load_performance(model_id, backend=resolved_backend, node=node, max_context_length=max_context_length)
 
         return ModelLoadResponse(
             model_id=model_id, state=entry.state,
