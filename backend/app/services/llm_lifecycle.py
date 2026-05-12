@@ -279,10 +279,10 @@ class LLMLifecycleManager:
 
         perf_type = None
         for st in entry.server_type:
-            if st in ("vllm", "tensorrt-llm"):
+            if st in ("vllm", "tensorrt-llm", "text-embeddings"):
                 perf_type = st
                 break
-        if backend and backend in ("vllm", "tensorrt-llm"):
+        if backend and backend in ("vllm", "tensorrt-llm", "text-embeddings"):
             perf_type = backend
 
         if not perf_type:
