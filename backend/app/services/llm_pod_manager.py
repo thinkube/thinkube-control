@@ -75,7 +75,7 @@ class LLMPodManager:
             "ollama": "ollama",
             "vllm": "vllm-inference",
             "tensorrt-llm": "tensorrt-inference",
-            "text-embeddings": "tei-inference",
+            "text-embeddings": "text-embeddings-inference",
         }
         return names.get(backend_type, backend_type)
 
