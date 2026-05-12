@@ -738,6 +738,25 @@ except Exception as e:
             session_factory = SessionLocal()
             db = session_factory()
             try:
+                # Sync running jobs with Argo workflow status
+                running_jobs = db.query(ModelMirrorJob).filter(
+                    ModelMirrorJob.status.in_(["pending", "running"])
+                ).all()
+                for job in running_jobs:
+                    if job.workflow_name:
+                        try:
+                            wf_status = self.get_download_status(job.workflow_name)
+                            if wf_status["status"] == "Succeeded":
+                                job.status = "succeeded"
+                                job.error_message = None
+                            elif wf_status["status"] in ("Failed", "Error"):
+                                job.status = "failed"
+                                job.error_message = wf_status.get("message", "Workflow failed")
+                        except Exception:
+                            pass
+                if running_jobs:
+                    db.commit()
+
                 # Query all successfully completed mirror jobs
                 succeeded_jobs = db.query(ModelMirrorJob).filter(
                     ModelMirrorJob.status == "succeeded"
