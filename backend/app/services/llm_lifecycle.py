@@ -40,7 +40,7 @@ class LLMLifecycleManager:
         self._load_timeout = int(os.getenv("LLM_MODEL_LOAD_TIMEOUT_SECONDS", "300"))
         self._loading_locks: dict[str, asyncio.Event] = {}
 
-    LOADABLE_TYPES = {"ollama", "vllm", "tensorrt-llm"}
+    LOADABLE_TYPES = {"ollama", "vllm", "tensorrt-llm", "text-embeddings"}
 
     async def load_model(
         self,

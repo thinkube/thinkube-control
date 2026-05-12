@@ -222,6 +222,8 @@ class LLMBackendDiscovery:
             return "tensorrt-llm"
         if "ollama" in template_type or "ollama" in ns_lower:
             return "ollama"
+        if "text-embeddings" in template_type or "text-embeddings" in ns_lower or "tei" in ns_lower:
+            return "text-embeddings"
         return None
 
     async def _probe_all(self):

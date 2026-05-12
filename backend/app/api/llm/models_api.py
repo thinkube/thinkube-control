@@ -62,6 +62,7 @@ def _get_installed_backend_types() -> list[str]:
 async def list_models(
     state: Optional[ModelState] = Query(None, description="Filter by model state"),
     server_type: Optional[str] = Query(None, description="Filter by server type"),
+    task: Optional[str] = Query(None, description="Filter by task (e.g., text-generation, feature-extraction)"),
 ):
     models = llm_model_registry.list_models()
 
@@ -69,6 +70,8 @@ async def list_models(
         models = [m for m in models if m.state == state]
     if server_type:
         models = [m for m in models if server_type in m.server_type]
+    if task:
+        models = [m for m in models if m.task == task]
 
     installed = _get_installed_backend_types()
 

@@ -49,6 +49,7 @@ BACKEND_NAMESPACES = {
     "ollama": "ollama",
     "vllm": "vllm",
     "tensorrt-llm": "tensorrt",
+    "text-embeddings": "text-embeddings",
 }
 
 
@@ -62,6 +63,7 @@ class LLMPodManager:
             "ollama": "LLM_OLLAMA_NAMESPACE",
             "vllm": "LLM_VLLM_NAMESPACE",
             "tensorrt-llm": "LLM_TENSORRT_NAMESPACE",
+            "text-embeddings": "LLM_TEI_NAMESPACE",
         }
         env_key = ns_env.get(backend_type)
         if env_key:
@@ -73,6 +75,7 @@ class LLMPodManager:
             "ollama": "ollama",
             "vllm": "vllm-inference",
             "tensorrt-llm": "tensorrt-inference",
+            "text-embeddings": "tei-inference",
         }
         return names.get(backend_type, backend_type)
 
