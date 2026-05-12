@@ -72,6 +72,7 @@ func (s *Server) registerRoutes() {
 
 	// Authenticated endpoints
 	s.mux.Handle("POST /v1/chat/completions", authMiddleware.Wrap(http.HandlerFunc(openaiHandler.ChatCompletions)))
+	s.mux.Handle("POST /v1/embeddings", authMiddleware.Wrap(http.HandlerFunc(openaiHandler.Embeddings)))
 	s.mux.Handle("GET /v1/models", authMiddleware.Wrap(http.HandlerFunc(openaiHandler.ListModels)))
 	s.mux.Handle("POST /v1/messages", authMiddleware.Wrap(http.HandlerFunc(anthropicHandler.Messages)))
 }

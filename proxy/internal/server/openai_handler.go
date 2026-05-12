@@ -178,6 +178,96 @@ func (h *OpenAIHandler) ListModels(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type openAIEmbeddingRequest struct {
+	Model string `json:"model"`
+}
+
+func (h *OpenAIHandler) Embeddings(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	claims := auth.ClaimsFromContext(r.Context())
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, h.maxBody+1))
+	if err != nil {
+		WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		return
+	}
+	if int64(len(body)) > h.maxBody {
+		WriteError(w, "openai", http.StatusRequestEntityTooLarge, "request_too_large", "Request body exceeds maximum size")
+		return
+	}
+
+	var req openAIEmbeddingRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Invalid JSON in request body")
+		return
+	}
+
+	if req.Model == "" {
+		WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Missing required field: model")
+		return
+	}
+
+	tier := r.Header.Get("X-LLM-Tier")
+	resolved, err := h.resolver.Resolve(r.Context(), req.Model, tier)
+	if err != nil {
+		slog.Warn("embedding model resolve failed", "model", req.Model, "error", err)
+		WriteError(w, "openai", http.StatusNotFound, "not_found", fmt.Sprintf("Model '%s' not found or not available", req.Model))
+		metrics.ErrorsTotal.WithLabelValues("openai", "routing").Inc()
+		return
+	}
+
+	backendURL := resolved.BackendURL + resolved.APIPath + "/embeddings"
+
+	if resolved.ServingName != "" && resolved.ServingName != req.Model {
+		body = rewriteModelField(body, resolved.ServingName)
+	}
+
+	userID := ""
+	if claims != nil {
+		userID = claims.Username
+	}
+
+	slog.Debug("forwarding embeddings request",
+		"model", resolved.ModelID,
+		"backend", backendURL,
+		"user", userID,
+	)
+
+	resp, err := h.forwarder.Forward(r.Context(), backendURL, bytes.NewReader(body), r.Header)
+	if err != nil {
+		WriteError(w, "openai", http.StatusBadGateway, "backend_error", "Backend request failed")
+		metrics.ErrorsTotal.WithLabelValues("openai", "backend").Inc()
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	for k, vv := range resp.Header {
+		if k == "Content-Length" {
+			continue
+		}
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
+	}
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(respBody)))
+	w.WriteHeader(resp.StatusCode)
+	w.Write(respBody)
+
+	duration := time.Since(start)
+	metrics.RequestsTotal.WithLabelValues("openai", resolved.ModelID, resolved.BackendURL, "200").Inc()
+	metrics.RequestDuration.WithLabelValues("openai", resolved.ModelID, resolved.BackendURL).Observe(duration.Seconds())
+
+	slog.Info("embeddings request completed",
+		"protocol", "openai",
+		"model", resolved.ModelID,
+		"backend", resolved.BackendURL,
+		"duration_ms", duration.Milliseconds(),
+		"user_id", userID,
+	)
+}
+
 func (h *OpenAIHandler) recordUsage(body []byte, model, backend string) {
 	var resp struct {
 		Usage struct {
