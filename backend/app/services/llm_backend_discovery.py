@@ -135,9 +135,15 @@ class LLMBackendDiscovery:
                     elif backend_type == "vllm":
                         url = f"http://{pod_ip}:{port}"
                         display = f"vLLM ({node_name})"
-                    else:
+                    elif backend_type == "tensorrt-llm":
                         url = f"http://{pod_ip}:{port}"
                         display = f"TRT-LLM ({node_name})"
+                    elif backend_type == "text-embeddings":
+                        url = f"http://{pod_ip}:{port}"
+                        display = f"TEI ({node_name})"
+                    else:
+                        url = f"http://{pod_ip}:{port}"
+                        display = f"{backend_type} ({node_name})"
 
                     self._backends[backend_id] = BackendEntry(
                         id=backend_id,
@@ -165,7 +171,7 @@ class LLMBackendDiscovery:
             logger.warning(f"Gateway pod discovery failed: {e}")
 
     def _get_backend_port(self, backend_type: str) -> int:
-        ports = {"ollama": 11434, "vllm": 7860, "tensorrt-llm": 7860}
+        ports = {"ollama": 11434, "vllm": 7860, "tensorrt-llm": 7860, "text-embeddings": 7860}
         return ports.get(backend_type, 8080)
 
     async def _discover_from_configmaps(self):
