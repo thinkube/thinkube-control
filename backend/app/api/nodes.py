@@ -32,6 +32,10 @@ COREDNS_DIR = Path(
     "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
     "40_thinkube/core/infrastructure/coredns"
 )
+CODE_SERVER_DIR = Path(
+    "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
+    "40_thinkube/core/code-server"
+)
 SSH_SETUP_DIR = Path(
     "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
     "00_initial_setup"
@@ -1088,6 +1092,31 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     await websocket.send_json({
                         "type": "warning",
                         "message": "DNS configuration failed on new nodes — continuing",
+                    })
+                step += 1
+
+            # Update code-server hostAliases so the new node hostname
+            # resolves inside the code-server pod. The playbook only
+            # restarts code-server when the host list actually changed.
+            cs_playbook = CODE_SERVER_DIR / "15_configure_environment.yaml"
+            if cs_playbook.exists():
+                await websocket.send_json({
+                    "type": "task",
+                    "task_name": "Update code-server environment for new nodes",
+                    "task_number": step,
+                })
+                cs_ok = await _stream_playbook(
+                    websocket=websocket,
+                    playbook_path=cs_playbook,
+                    extra_vars=extra_vars,
+                    step_name="Update code-server environment for new nodes",
+                    step_number=step,
+                )
+                if not cs_ok:
+                    logger.warning("Code-server environment update failed — continuing")
+                    await websocket.send_json({
+                        "type": "warning",
+                        "message": "Code-server environment update failed — continuing",
                     })
                 step += 1
 
