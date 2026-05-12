@@ -20,6 +20,7 @@ BACKEND_TYPE_NAMESPACES = {
     "ollama": "ollama",
     "vllm": "vllm",
     "tensorrt-llm": "tensorrt",
+    "text-embeddings": "text-embeddings",
 }
 
 _k8s_core_v1 = None
