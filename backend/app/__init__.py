@@ -156,6 +156,47 @@ async def app_lifespan(app: FastAPI):
     llm_registry_task = asyncio.create_task(llm_model_registry.start_polling())
     logger.info("Started LLM model registry polling")
 
+    # Background poller for mirror job status
+    async def poll_mirror_jobs():
+        """Periodically sync mirror job status with Argo Workflows."""
+        await asyncio.sleep(30)  # Initial delay
+        while True:
+            try:
+                from app.db.session import SessionLocal
+                from app.models.model_mirrors import ModelMirrorJob
+                from app.services.model_downloader import ModelDownloaderService
+
+                db = SessionLocal()()
+                try:
+                    running_jobs = db.query(ModelMirrorJob).filter(
+                        ModelMirrorJob.status.in_(["pending", "running"])
+                    ).all()
+                    if running_jobs:
+                        service = ModelDownloaderService()
+                        for job in running_jobs:
+                            if job.workflow_name:
+                                try:
+                                    wf_status = service.get_download_status(job.workflow_name)
+                                    if wf_status["status"] == "Succeeded" and job.status != "succeeded":
+                                        job.status = "succeeded"
+                                        job.error_message = None
+                                        logger.info(f"Mirror job {job.model_id} completed (background sync)")
+                                    elif wf_status["status"] in ("Failed", "Error") and job.status != "failed":
+                                        job.status = "failed"
+                                        job.error_message = wf_status.get("message", "Workflow failed")
+                                        logger.info(f"Mirror job {job.model_id} failed (background sync)")
+                                except Exception:
+                                    pass
+                        db.commit()
+                finally:
+                    db.close()
+            except Exception as e:
+                logger.debug(f"Mirror job poller error: {e}")
+            await asyncio.sleep(60)
+
+    mirror_poll_task = asyncio.create_task(poll_mirror_jobs())
+    logger.info("Started mirror job status poller (60s interval)")
+
     yield
 
     # Shutdown: Clean up resources
@@ -167,6 +208,7 @@ async def app_lifespan(app: FastAPI):
     discovery_task.cancel()
     llm_registry_task.cancel()
     llm_discovery_task.cancel()
+    mirror_poll_task.cancel()
     for task in [health_check_task, discovery_task, llm_registry_task, llm_discovery_task]:
         try:
             await task

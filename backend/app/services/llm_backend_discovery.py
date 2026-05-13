@@ -20,8 +20,14 @@ logger = logging.getLogger(__name__)
 
 
 class LLMBackendDiscovery:
+    # Number of consecutive probe failures before marking a backend unhealthy.
+    # Prevents transient network hiccups from clearing the models list and
+    # causing intermittent 400 errors from the resolve endpoint.
+    PROBE_FAILURE_THRESHOLD = 2
+
     def __init__(self):
         self._backends: Dict[str, BackendEntry] = {}
+        self._probe_failures: Dict[str, int] = {}
         self._probe_interval = int(
             os.getenv("LLM_BACKEND_PROBE_INTERVAL_SECONDS", "30")
         )
@@ -243,19 +249,24 @@ class LLMBackendDiscovery:
                 await self._probe_ollama(backend)
             else:
                 await self._probe_openai_compatible(backend)
+            # Probe succeeded — reset failure counter
+            self._probe_failures[backend.id] = 0
         except Exception as e:
-            backend.status = "unhealthy"
-            backend.models = []
-            logger.debug(f"Backend {backend.id} probe failed: {e}")
+            failures = self._probe_failures.get(backend.id, 0) + 1
+            self._probe_failures[backend.id] = failures
+            if failures >= self.PROBE_FAILURE_THRESHOLD:
+                backend.status = "unhealthy"
+                backend.models = []
+                logger.warning(f"Backend {backend.id} unhealthy after {failures} consecutive probe failures: {e}")
+            else:
+                logger.debug(f"Backend {backend.id} probe failed ({failures}/{self.PROBE_FAILURE_THRESHOLD}): {e}")
         finally:
             backend.last_probe = datetime.utcnow().isoformat()
 
     async def _probe_ollama(self, backend: BackendEntry):
         resp = await self._client.get(f"{backend.url}/api/tags")
         if resp.status_code != 200:
-            backend.status = "unhealthy"
-            backend.models = []
-            return
+            raise RuntimeError(f"Ollama /api/tags returned {resp.status_code}")
 
         # Use /api/ps to get models loaded in VRAM (not just on disk).
         # With shared JuiceFS storage, /api/tags returns the same models on all
@@ -273,16 +284,9 @@ class LLMBackendDiscovery:
 
     async def _probe_openai_compatible(self, backend: BackendEntry):
         health_url = f"{backend.url}/health"
-        try:
-            resp = await self._client.get(health_url)
-            if resp.status_code != 200:
-                backend.status = "unhealthy"
-                backend.models = []
-                return
-        except Exception:
-            backend.status = "unhealthy"
-            backend.models = []
-            return
+        resp = await self._client.get(health_url)
+        if resp.status_code != 200:
+            raise RuntimeError(f"Health check returned {resp.status_code}")
 
         models_url = f"{backend.url}/v1/models"
         try:
@@ -293,10 +297,9 @@ class LLMBackendDiscovery:
                     m.get("id", "") for m in data.get("data", []) if m.get("id")
                 ]
                 backend.models = model_ids
-            else:
-                backend.models = []
+            # Don't clear models on /v1/models failure — keep last known good list
         except Exception:
-            backend.models = []
+            pass  # Keep existing models list on models endpoint failure
 
         backend.status = "healthy"
 

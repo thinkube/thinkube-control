@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 )
 
@@ -20,10 +21,17 @@ type ResolveResult struct {
 	Error       string `json:"error,omitempty"`
 }
 
+type cacheEntry struct {
+	result    *ResolveResult
+	expiresAt time.Time
+}
+
 type Resolver struct {
 	backendURL string
 	aliases    map[string]string
 	client     *http.Client
+	cache      sync.Map
+	cacheTTL   time.Duration
 }
 
 func New(backendURL string, aliases map[string]string) *Resolver {
@@ -33,6 +41,7 @@ func New(backendURL string, aliases map[string]string) *Resolver {
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
+		cacheTTL: 10 * time.Second,
 	}
 }
 
@@ -44,6 +53,16 @@ func (r *Resolver) Resolve(ctx context.Context, model string, tier string) (*Res
 	if alias, ok := r.aliases[model]; ok {
 		slog.Debug("model alias resolved", "from", model, "to", alias)
 		model = alias
+	}
+
+	// Check cache first
+	cacheKey := model + ":" + tier
+	if entry, ok := r.cache.Load(cacheKey); ok {
+		ce := entry.(*cacheEntry)
+		if time.Now().Before(ce.expiresAt) {
+			return ce.result, nil
+		}
+		r.cache.Delete(cacheKey)
 	}
 
 	params := url.Values{}
@@ -83,6 +102,12 @@ func (r *Resolver) Resolve(ctx context.Context, model string, tier string) (*Res
 	if result.Error != "" {
 		return &result, fmt.Errorf("%s", result.Error)
 	}
+
+	// Cache successful result
+	r.cache.Store(cacheKey, &cacheEntry{
+		result:    &result,
+		expiresAt: time.Now().Add(r.cacheTTL),
+	})
 
 	return &result, nil
 }

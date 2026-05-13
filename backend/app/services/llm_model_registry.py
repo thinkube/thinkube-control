@@ -322,14 +322,24 @@ class LLMModelRegistry:
             elif matched_backend_id and entry.state == ModelState.available:
                 if entry.backend_id != matched_backend_id:
                     entry.backend_id = matched_backend_id
+                entry._last_available_at = None  # Reset grace period timer
                 self._sync_gpu_allocation(
                     model_id, matched_backend_id,
                     llm_gpu_tracker, llm_lifecycle,
                 )
             elif matched_backend_id is None and entry.state == ModelState.available:
-                entry.state = ModelState.deployable
-                entry.backend_id = None
-                llm_gpu_tracker.release_allocation(model_id)
+                # Grace period: don't downgrade if model was recently available.
+                # This prevents state flapping from transient probe failures.
+                from datetime import datetime, timedelta
+                last_avail = getattr(entry, '_last_available_at', None)
+                if last_avail is None:
+                    entry._last_available_at = datetime.utcnow()
+                elif datetime.utcnow() - last_avail > timedelta(seconds=120):
+                    entry.state = ModelState.deployable
+                    entry.backend_id = None
+                    entry._last_available_at = None
+                    llm_gpu_tracker.release_allocation(model_id)
+                    logger.info(f"Model {model_id} downgraded to deployable after 120s grace period")
             elif (
                 matched_backend_id is None
                 and entry.state == ModelState.loading
