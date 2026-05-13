@@ -202,8 +202,11 @@ class OllamaClient:
     ) -> tuple[bool, Optional[str]]:
         payload: Dict[str, Any] = {"model": name, "prompt": ""}
         payload["keep_alive"] = keep_alive if keep_alive else -1
-        if max_context_length:
-            payload["options"] = {"num_ctx": max_context_length}
+        # Default to 8192 context if not specified — Ollama otherwise uses the
+        # model's full context (e.g. 262K for Qwen 3.5) which wastes memory
+        # and reduces inference throughput on memory-bandwidth-limited GPUs.
+        ctx = max_context_length or 8192
+        payload["options"] = {"num_ctx": ctx}
 
         try:
             client = self._get_client(node)
