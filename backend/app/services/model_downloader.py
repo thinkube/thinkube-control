@@ -146,10 +146,18 @@ class ModelDownloaderService:
 
     def submit_download(self, model_id: str) -> str:
         """
-        Submit a model download workflow to Argo
+        Submit a model download workflow to Argo.
+
+        Dispatches to the appropriate workflow based on the catalog entry's
+        ``source`` field:
+
+        * ``"huggingface"`` (default) – downloads from HuggingFace Hub and
+          uploads artifacts to MLflow via S3.
+        * ``"ollama"`` – pulls the model from the Ollama library and registers
+          metadata-only in MLflow.
 
         Args:
-            model_id: HuggingFace model ID (e.g., "nvidia/Phi-4-multimodal-instruct-FP8")
+            model_id: Model ID as listed in the catalog.
 
         Returns:
             Workflow name/ID
@@ -157,14 +165,15 @@ class ModelDownloaderService:
         Raises:
             ValueError: If model_id not in catalog
             ApiException: If workflow submission fails
-
-        Note:
-            HuggingFace token is read from the 'huggingface-token' k8s secret in argo namespace
         """
         # Validate model exists in catalog and get task
         model_info = next((m for m in get_model_catalog() if m["id"] == model_id), None)
         if not model_info:
             raise ValueError(f"Model '{model_id}' not found in catalog")
+
+        source = model_info.get("source", "huggingface")
+        if source == "ollama":
+            return self._submit_ollama_pull(model_id, model_info)
 
         model_task = model_info.get("task", "text-generation")  # Default to text-generation
         logger.info(f"Creating download workflow for model: {model_id} (task: {model_task})")
@@ -675,6 +684,367 @@ except Exception as e:
         workflow_name = result.metadata.name
 
         logger.info(f"Workflow submitted: {workflow_name}")
+        return workflow_name
+
+    def _submit_ollama_pull(self, model_id: str, model_info: Dict) -> str:
+        """
+        Submit an Argo Workflow that pulls a model from the Ollama library.
+
+        The workflow:
+        1. Calls POST /api/pull on the Ollama pod (streams progress)
+        2. Verifies the model exists via POST /api/show
+        3. Registers metadata-only in MLflow (no artifact upload)
+
+        Args:
+            model_id: Catalog model ID (e.g., "ollama/qwen3.5:4b")
+            model_info: Full catalog entry dict
+
+        Returns:
+            Workflow name/ID
+        """
+        serving_name = model_info.get("serving_name", model_id)
+        model_task = model_info.get("task", "text-generation")
+        safe_model_id = model_id.replace("'", "\\'")
+        safe_serving_name = serving_name.replace("'", "\\'")
+        safe_model_task = model_task.replace("'", "\\'")
+
+        logger.info(
+            f"Creating Ollama pull workflow for model: {model_id} "
+            f"(serving_name: {serving_name})"
+        )
+
+        ollama_url = os.getenv(
+            "LLM_OLLAMA_URL",
+            "http://ollama.ollama.svc.cluster.local:11434",
+        )
+
+        with Workflow(
+            generate_name="model-dl-",
+            namespace=self.workflow_namespace,
+            workflows_service=self.workflows_service,
+            service_account_name="thinkube-control",
+            entrypoint="ollama-pull",
+            parallelism=self.parallelism,
+            node_selector={"node-role.kubernetes.io/control-plane": ""},
+            labels={
+                "model-id": model_id.replace("/", "-").replace(":", "-"),
+                "workflow-type": "model-download",
+            },
+            retry_strategy=hera_models.RetryStrategy(
+                limit=10,
+                retry_policy="OnFailure",
+                backoff=hera_models.Backoff(
+                    duration="1m",
+                    factor=2,
+                    max_duration="10m",
+                ),
+            ),
+            image_pull_secrets=[
+                hera_models.LocalObjectReference(name="app-pull-secret")
+            ],
+            volumes=[
+                hera_models.Volume(
+                    name="juicefs-mlflow",
+                    persistent_volume_claim=hera_models.PersistentVolumeClaimVolumeSource(
+                        claim_name="juicefs-mlflow"
+                    ),
+                )
+            ],
+        ) as w:
+            pull_script = f"""
+import os
+import sys
+import json
+import requests
+
+# ============================================================
+# PHASE 1: Pull model from Ollama library
+# ============================================================
+ollama_url = '{ollama_url}'
+serving_name = '{safe_serving_name}'
+model_id = '{safe_model_id}'
+model_task = '{safe_model_task}'
+model_name = model_id.replace('/', '-').replace(':', '-')
+
+print(f'Pulling model from Ollama library: {{serving_name}}', flush=True)
+print(f'Ollama endpoint: {{ollama_url}}', flush=True)
+
+# Stream the pull to track progress
+resp = requests.post(
+    f'{{ollama_url}}/api/pull',
+    json={{'model': serving_name, 'stream': True}},
+    stream=True,
+    timeout=3600,
+)
+resp.raise_for_status()
+
+last_status = ''
+for line in resp.iter_lines():
+    if not line:
+        continue
+    try:
+        data = json.loads(line)
+        status = data.get('status', '')
+        if status != last_status:
+            print(f'  {{status}}', flush=True)
+            last_status = status
+        if 'error' in data:
+            print(f'ERROR: {{data["error"]}}', flush=True)
+            sys.exit(1)
+    except json.JSONDecodeError:
+        pass
+
+print(f'✓ Model pulled successfully: {{serving_name}}', flush=True)
+
+# ============================================================
+# PHASE 2: Verify model exists and check capabilities
+# ============================================================
+print(f'Verifying model...', flush=True)
+show_resp = requests.post(
+    f'{{ollama_url}}/api/show',
+    json={{'model': serving_name}},
+    timeout=30,
+)
+if show_resp.status_code != 200:
+    print(f'ERROR: Model verification failed: {{show_resp.status_code}}', flush=True)
+    sys.exit(1)
+
+show_data = show_resp.json()
+details = show_data.get('details', {{}})
+model_info = show_data.get('model_info', {{}})
+print(f'  Architecture: {{details.get("family", "unknown")}}', flush=True)
+print(f'  Parameters: {{details.get("parameter_size", "unknown")}}', flush=True)
+print(f'  Quantization: {{details.get("quantization_level", "unknown")}}', flush=True)
+
+# Check modelfile for RENDERER/PARSER (tool support indicators)
+modelfile = show_data.get('modelfile', '')
+has_renderer = 'RENDERER' in modelfile or 'renderer' in modelfile.lower()
+print(f'  Has RENDERER: {{has_renderer}}', flush=True)
+print(f'✓ Model verified', flush=True)
+
+# ============================================================
+# PHASE 3: Register metadata-only in MLflow
+# ============================================================
+print('Authenticating with MLflow...', flush=True)
+
+import mlflow
+
+token_url = os.environ['MLFLOW_KEYCLOAK_TOKEN_URL']
+client_id = os.environ['MLFLOW_KEYCLOAK_CLIENT_ID']
+client_secret = os.environ['MLFLOW_CLIENT_SECRET']
+username = os.environ['MLFLOW_AUTH_USERNAME']
+password = os.environ['MLFLOW_AUTH_PASSWORD']
+
+token_response = requests.post(
+    token_url,
+    data={{
+        'grant_type': 'password',
+        'client_id': client_id,
+        'client_secret': client_secret,
+        'username': username,
+        'password': password,
+    }},
+    verify=False,
+)
+token_response.raise_for_status()
+os.environ['MLFLOW_TRACKING_TOKEN'] = token_response.json()['access_token']
+print('✓ MLflow authentication successful', flush=True)
+
+mlflow_uri = os.getenv('MLFLOW_TRACKING_URI', 'http://mlflow.mlflow.svc.cluster.local:5000')
+mlflow.set_tracking_uri(mlflow_uri)
+
+experiment_name = 'model-registry'
+client = mlflow.MlflowClient()
+
+try:
+    experiment = mlflow.get_experiment_by_name(experiment_name)
+    if experiment is None:
+        experiment_id = mlflow.create_experiment(experiment_name)
+    elif experiment.lifecycle_stage == 'deleted':
+        client.restore_experiment(experiment.experiment_id)
+        experiment_id = experiment.experiment_id
+    else:
+        experiment_id = experiment.experiment_id
+except Exception as exp_error:
+    print(f'Warning: Could not create/get experiment: {{exp_error}}', flush=True)
+    experiment_id = None
+
+if experiment_id:
+    mlflow.set_experiment(experiment_name)
+
+with mlflow.start_run(run_name=f'mirror-{{model_name}}') as run:
+    run_id = run.info.run_id
+    print(f'Run ID: {{run_id}}', flush=True)
+
+    # Log metadata (no artifact upload — Ollama manages model files)
+    mlflow.log_params({{
+        'source': 'ollama',
+        'model_id': model_id,
+        'serving_name': serving_name,
+        'task': model_task,
+        'download_method': 'ollama_pull',
+        'has_renderer': str(has_renderer),
+    }})
+
+    # Create minimal MLmodel metadata via S3
+    import yaml
+    import boto3
+    from botocore.config import Config as BotoConfig
+
+    s3_client = boto3.client(
+        's3',
+        endpoint_url=os.environ['AWS_S3_ENDPOINT'],
+        aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+        aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
+        region_name=os.environ['AWS_DEFAULT_REGION'],
+        config=BotoConfig(
+            request_checksum_calculation='when_required',
+            s3={{'payload_signing_enabled': False}},
+        ),
+    )
+
+    artifact_uri = run.info.artifact_uri
+    s3_base_path = artifact_uri.replace('s3://mlflow/', '')
+    s3_artifact_prefix = f'{{s3_base_path}}/model'
+
+    mlmodel_content = {{
+        'flavors': {{
+            'ollama': {{
+                'serving_name': serving_name,
+                'source': 'ollama-library',
+                'format': 'ollama',
+                'task': model_task,
+            }}
+        }},
+        'model_id': model_id,
+    }}
+    s3_client.put_object(
+        Bucket='mlflow',
+        Key=f'{{s3_artifact_prefix}}/MLmodel',
+        Body=yaml.dump(mlmodel_content, default_flow_style=False).encode(),
+    )
+    print(f'✓ Uploaded Ollama metadata to MLflow', flush=True)
+
+    # Register model version
+    try:
+        client.create_registered_model(model_name)
+        print(f'✓ Created registered model: {{model_name}}', flush=True)
+    except Exception as e:
+        if 'already exists' not in str(e).lower():
+            print(f'Warning creating registered model: {{e}}', flush=True)
+        else:
+            print(f'✓ Registered model already exists: {{model_name}}', flush=True)
+
+    model_uri = f'runs:/{{run_id}}/model'
+    version = client.create_model_version(
+        name=model_name,
+        source=model_uri,
+        run_id=run_id,
+    )
+    print(f'✓ Model registered: {{model_name}} v{{version.version}}', flush=True)
+
+print(f'✓ Ollama model mirroring completed: {{serving_name}}', flush=True)
+print(f'  - Pulled from Ollama library', flush=True)
+print(f'  - Registered in MLflow (metadata-only)', flush=True)
+"""
+
+            # Environment variables — MLflow auth (same as HF), no HF_TOKEN needed
+            env_vars = [
+                hera_models.EnvVar(name="PYTHONUNBUFFERED", value="1"),
+                hera_models.EnvVar(
+                    name="MLFLOW_TRACKING_URI", value=self.mlflow_uri
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_KEYCLOAK_TOKEN_URL",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="mlflow-auth-config", key="keycloak-token-url"
+                        )
+                    ),
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_KEYCLOAK_CLIENT_ID",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="mlflow-auth-config", key="client-id"
+                        )
+                    ),
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_CLIENT_SECRET",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="mlflow-auth-config", key="client-secret"
+                        )
+                    ),
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_AUTH_USERNAME",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="mlflow-auth-config", key="username"
+                        )
+                    ),
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_AUTH_PASSWORD",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="mlflow-auth-config", key="password"
+                        )
+                    ),
+                ),
+                hera_models.EnvVar(
+                    name="AWS_ACCESS_KEY_ID", value="tkadmin"
+                ),
+                hera_models.EnvVar(
+                    name="AWS_SECRET_ACCESS_KEY",
+                    value_from=hera_models.EnvVarSource(
+                        secret_key_ref=hera_models.SecretKeySelector(
+                            name="mlflow-auth-config", key="password"
+                        )
+                    ),
+                ),
+                hera_models.EnvVar(
+                    name="AWS_S3_ENDPOINT",
+                    value="http://juicefs-mlflow-gateway.juicefs.svc.cluster.local:9001",
+                ),
+                hera_models.EnvVar(
+                    name="AWS_DEFAULT_REGION", value="us-east-1"
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_S3_ENDPOINT_URL",
+                    value="http://juicefs-mlflow-gateway.juicefs.svc.cluster.local:9001",
+                ),
+                hera_models.EnvVar(
+                    name="MLFLOW_S3_IGNORE_TLS", value="true"
+                ),
+            ]
+
+            domain_name = os.getenv("DOMAIN_NAME", "thinkube.com")
+            harbor_registry = f"registry.{domain_name}"
+            model_mirror_image = f"{harbor_registry}/library/model-mirror:latest"
+
+            Container(
+                name="ollama-pull",
+                image=model_mirror_image,
+                command=["python", "-c"],
+                args=[pull_script],
+                volume_mounts=[
+                    hera_models.VolumeMount(
+                        name="juicefs-mlflow", mount_path="/mnt/juicefs"
+                    )
+                ],
+                env=env_vars,
+                resources=hera_models.ResourceRequirements(
+                    requests={"memory": "512Mi", "cpu": "500m"},
+                    limits={"memory": "2Gi", "cpu": "1"},
+                ),
+            )
+
+        result = w.create()
+        workflow_name = result.metadata.name
+        logger.info(f"Ollama pull workflow submitted: {workflow_name}")
         return workflow_name
 
     def get_download_status(self, workflow_name: str) -> Dict:
