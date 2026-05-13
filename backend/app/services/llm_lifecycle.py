@@ -131,7 +131,7 @@ class LLMLifecycleManager:
             )
 
         entry = llm_model_registry.get_model(model_id)
-        estimated_memory = self._estimate_memory(entry)
+        estimated_memory = self._estimate_memory(entry, max_context_length)
 
         backend_id = f"ollama-{node}"
         llm_model_registry.update_model_state(model_id, ModelState.loading, backend_id)
