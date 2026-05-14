@@ -166,8 +166,12 @@ class ModelDownloaderService:
             ValueError: If model_id not in catalog
             ApiException: If workflow submission fails
         """
-        # Validate model exists in catalog and get task
+        # Validate model exists in catalog (retry with cache invalidation if not found)
         model_info = next((m for m in get_model_catalog() if m["id"] == model_id), None)
+        if not model_info:
+            from app.services.metadata_fetcher import _memory_cache
+            _memory_cache.pop("models", None)
+            model_info = next((m for m in get_model_catalog() if m["id"] == model_id), None)
         if not model_info:
             raise ValueError(f"Model '{model_id}' not found in catalog")
 
