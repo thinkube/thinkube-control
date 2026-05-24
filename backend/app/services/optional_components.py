@@ -18,7 +18,14 @@ logger = logging.getLogger(__name__)
 
 # Component catalog: fetched from thinkube-metadata at runtime, cached in memory.
 # Components require local playbooks so only the platform catalog is used — no user merge.
-_COMPONENTS_CATALOG_URL = "https://raw.githubusercontent.com/thinkube/thinkube-metadata/main/optional_components.json"
+#
+# THINKUBE_METADATA_REPO overrides the metadata repo (default
+# `thinkube/thinkube-metadata`). Contributors testing a forked metadata
+# repo set this without editing thinkube-control source. The same env
+# var is read by the installer's release_resolver — keeping the
+# convention shared across components.
+_METADATA_REPO = os.environ.get("THINKUBE_METADATA_REPO", "thinkube/thinkube-metadata")
+_COMPONENTS_CATALOG_URL = f"https://raw.githubusercontent.com/{_METADATA_REPO}/main/optional_components.json"
 _COMPONENTS_CATALOG_CACHE: Optional[Dict[str, Any]] = None
 _COMPONENTS_CATALOG_CACHE_TIME: float = 0
 _COMPONENTS_CATALOG_TTL: float = 300  # 5 minutes
