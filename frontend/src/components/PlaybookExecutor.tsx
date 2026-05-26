@@ -77,6 +77,8 @@ export const PlaybookExecutor = forwardRef<PlaybookExecutorHandle, PlaybookExecu
   const [logOutput, setLogOutput] = useState<LogEntry[]>([])
   const [autoScroll, setAutoScroll] = useState(true)
   const [copySuccess, setCopySuccess] = useState(false)
+  const [actionCommand, setActionCommand] = useState<string | null>(null)
+  const [commandCopied, setCommandCopied] = useState(false)
   const [taskSummary, setTaskSummary] = useState<TaskSummary>({
     totalTasks: 0,
     completedTasks: 0,
@@ -199,6 +201,9 @@ export const PlaybookExecutor = forwardRef<PlaybookExecutorHandle, PlaybookExecu
         setDuration(executionDuration)
         setStatus(data.status)
         setMessage(data.message)
+        if (data.tk_images_command) {
+          setActionCommand(data.tk_images_command)
+        }
         completeExecution({
           status: data.status,
           message: data.message,
@@ -286,6 +291,7 @@ export const PlaybookExecutor = forwardRef<PlaybookExecutorHandle, PlaybookExecu
       setShowResult(false)
       setStatus('running')
       setMessage('')
+      setActionCommand(null)
       setCurrentTask('Connecting...')
       setTaskCount(0)
       setDuration(null)
@@ -407,6 +413,7 @@ export const PlaybookExecutor = forwardRef<PlaybookExecutorHandle, PlaybookExecu
       setShowResult(false)
       setStatus('pending')
       setMessage('')
+      setActionCommand(null)
       setCurrentTask('')
       setTaskCount(0)
       setDuration(null)
@@ -620,9 +627,36 @@ Timestamp: ${new Date().toISOString()}
           <div className="flex flex-col gap-4"> {/* @allowed-inline */}
             {/* Success Result */}
             {status === 'success' && (
-              <TkSuccessAlert>
-                {message || successMessage || 'Playbook completed successfully'}
-              </TkSuccessAlert>
+              <>
+                <TkSuccessAlert>
+                  {message || successMessage || 'Playbook completed successfully'}
+                </TkSuccessAlert>
+                {actionCommand && (
+                  <div className="mt-2 rounded-md bg-muted p-3"> {/* @allowed-inline */}
+                    <p className="text-xs text-muted-foreground mb-2">Run this command in a terminal:</p>
+                    <div className="flex items-center gap-2"> {/* @allowed-inline */}
+                      <code className="flex-1 text-sm font-mono bg-background rounded px-3 py-2 select-all">
+                        {actionCommand}
+                      </code>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(actionCommand)
+                          setCommandCopied(true)
+                          setTimeout(() => setCommandCopied(false), 2000)
+                        }}
+                        className="shrink-0 p-2 rounded hover:bg-background transition-colors"
+                        title="Copy command"
+                      >
+                        {commandCopied ? (
+                          <Check className="w-4 h-4 text-green-500" />
+                        ) : (
+                          <Copy className="w-4 h-4 text-muted-foreground" />
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
 
             {/* Error Result */}
