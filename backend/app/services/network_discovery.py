@@ -107,34 +107,39 @@ class NetworkDiscovery:
         return assigned
 
     async def _get_cluster_node_ips(self) -> Set[str]:
-        """Get IPs of nodes already in the k8s cluster (for discovery filtering).
+        """Get IPs of nodes actually joined to the k8s cluster.
 
-        Collects IPs from both Kubernetes node objects and the Ansible
-        inventory.  With overlay networking the K8s InternalIP is the
-        overlay address, while the LAN scan uses physical IPs — so we
-        must also include ansible_host and lan_ip from the inventory.
+        Collects IPs from Kubernetes node objects, then cross-references
+        the inventory to include LAN IPs for overlay-networked nodes
+        (where k8s InternalIP is the overlay address, not the LAN IP).
+        Only inventory hosts that are actual k8s members are excluded.
         """
         cluster_ips = set()
+        k8s_node_names = set()
         try:
             from kubernetes import client as k8s_client
             loop = asyncio.get_event_loop()
             v1 = k8s_client.CoreV1Api()
             k8s_nodes = await loop.run_in_executor(None, v1.list_node)
             for node in k8s_nodes.items:
+                k8s_node_names.add(node.metadata.name)
                 for addr in (node.status.addresses or []):
                     if addr.type in ("InternalIP", "ExternalIP"):
                         cluster_ips.add(addr.address)
         except Exception as e:
             logger.warning(f"Could not query k8s nodes: {e}")
 
-        # Also collect IPs from the inventory (ansible_host, lan_ip)
-        # so that overlay nodes are excluded by their LAN address too.
+        # Include LAN IPs from inventory, but only for hosts that are
+        # actual k8s members. Inventory-only hosts (failed joins, pending
+        # additions) must remain discoverable.
         try:
             inventory = node_manager.read_inventory()
             baremetal = (inventory.get("all", {}).get("children", {})
                         .get("baremetal", {}).get("hosts", {}))
-            for host_vars in baremetal.values():
+            for hostname, host_vars in baremetal.items():
                 if not isinstance(host_vars, dict):
+                    continue
+                if hostname not in k8s_node_names:
                     continue
                 for key in ("ansible_host", "lan_ip", "overlay_ip"):
                     ip = host_vars.get(key)
