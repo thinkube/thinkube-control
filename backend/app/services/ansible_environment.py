@@ -167,6 +167,13 @@ class AnsibleEnvironment:
         if master_node_ip:
             env["MASTER_NODE_IP"] = master_node_ip
 
+        # Pass through THINKUBE_BRANCH so playbooks (e.g. code-server's
+        # 15_configure_environment.yaml) clone/reset repos on the correct
+        # branch instead of defaulting to main.
+        thinkube_branch = os.environ.get("THINKUBE_BRANCH")
+        if thinkube_branch:
+            env["THINKUBE_BRANCH"] = thinkube_branch
+
         return env
 
     def get_command_base(

@@ -156,6 +156,8 @@ spec:
           value: "{{ master_node_name }}"
         - name: MASTER_NODE_IP
           value: "{{ master_node_ip }}"
+        - name: THINKUBE_BRANCH
+          value: "{{ thinkube_branch | default('main') }}"
         - name: GITHUB_TOKEN
           valueFrom:
             secretKeyRef:

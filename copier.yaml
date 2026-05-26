@@ -69,6 +69,11 @@ master_node_ip:
   help: "Kubernetes master node IP address"
   # No default - must be provided during deployment
 
+thinkube_branch:
+  type: str
+  default: main
+  help: "Git branch for thinkube repos (passed to playbooks as THINKUBE_BRANCH)"
+
 # Computed values (not asked to user)
 _templates_suffix: .jinja
 
