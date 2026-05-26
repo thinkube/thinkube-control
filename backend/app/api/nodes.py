@@ -296,7 +296,12 @@ async def _run_gpu_setup(
     step: int,
 ) -> bool:
     """Deploy GPU operator and configure time-slicing profiles."""
-    gpu_deploy = GPU_OPERATOR_DIR / "10_deploy.yaml"
+    # Use the lightweight per-node playbook for add-node (GPU operator
+    # is already installed cluster-wide). Falls back to the full deploy
+    # if the node playbook doesn't exist.
+    gpu_deploy = GPU_OPERATOR_DIR / "10_deploy_node.yaml"
+    if not gpu_deploy.exists():
+        gpu_deploy = GPU_OPERATOR_DIR / "10_deploy.yaml"
     if not gpu_deploy.exists():
         await websocket.send_json(
             {"type": "error", "message": f"GPU operator playbook not found: {gpu_deploy}"}
@@ -304,13 +309,13 @@ async def _run_gpu_setup(
         return False
 
     await websocket.send_json(
-        {"type": "task", "task_name": "Deploy GPU Operator", "task_number": step}
+        {"type": "task", "task_name": "Configure GPU on new nodes", "task_number": step}
     )
     ok = await _stream_playbook(
         websocket=websocket,
         playbook_path=gpu_deploy,
         extra_vars=extra_vars,
-        step_name="Deploy GPU Operator",
+        step_name="Configure GPU on new nodes",
         step_number=step,
     )
     if not ok:
@@ -1098,7 +1103,11 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             # Update code-server hostAliases so the new node hostname
             # resolves inside the code-server pod. The playbook only
             # restarts code-server when the host list actually changed.
-            cs_playbook = CODE_SERVER_DIR / "15_configure_environment.yaml"
+            # Use the lightweight hostAliases-only playbook for add-node.
+            # Falls back to the full playbook if it doesn't exist.
+            cs_playbook = CODE_SERVER_DIR / "15a_update_host_aliases.yaml"
+            if not cs_playbook.exists():
+                cs_playbook = CODE_SERVER_DIR / "15_configure_environment.yaml"
             if cs_playbook.exists():
                 await websocket.send_json({
                     "type": "task",
