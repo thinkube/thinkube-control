@@ -40,6 +40,10 @@ SSH_SETUP_DIR = Path(
     "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
     "00_initial_setup"
 )
+NETWORKING_DIR = Path(
+    "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
+    "30_networking"
+)
 IMAGE_BUILD_TOKEN = Path("/home/thinkube/.image_build_completed_platforms")
 
 
@@ -987,6 +991,37 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
         # source; container_build_platforms in inventory can be stale from
         # incomplete runs.
         built_archs = _read_build_token()
+
+        # Step: Set up overlay network on new nodes (before k8s join)
+        overlay_provider = inventory.get("all", {}).get("vars", {}).get("overlay_provider", "")
+        if overlay_provider in ("tailscale", "zerotier"):
+            install_playbook = NETWORKING_DIR / f"{'06' if overlay_provider == 'tailscale' else '05'}_install_{overlay_provider}.yaml"
+            setup_playbook = NETWORKING_DIR / f"{'11' if overlay_provider == 'tailscale' else '10'}_setup_{overlay_provider}.yaml"
+
+            for pb, desc in [(install_playbook, f"Install {overlay_provider}"), (setup_playbook, f"Configure {overlay_provider}")]:
+                if pb.exists():
+                    await websocket.send_json({
+                        "type": "task",
+                        "task_name": f"{desc} on new nodes",
+                        "task_number": step,
+                    })
+                    overlay_ok = await _stream_playbook(
+                        websocket=websocket,
+                        playbook_path=pb,
+                        extra_vars=extra_vars,
+                        step_name=f"{desc} on new nodes",
+                        step_number=step,
+                        limit=",".join(added_hostnames),
+                    )
+                    if not overlay_ok:
+                        await websocket.send_json({
+                            "type": "complete",
+                            "status": "failed",
+                            "message": f"{desc} failed on new nodes",
+                        })
+                        await websocket.close()
+                        return
+                    step += 1
 
         # Step: Run join workers playbook
         playbook_path = Path(
