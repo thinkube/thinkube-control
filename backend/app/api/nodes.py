@@ -992,6 +992,14 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
         # incomplete runs.
         built_archs = _read_build_token()
 
+        extra_vars = {}
+        try:
+            extra_vars = ansible_env.prepare_auth_vars(extra_vars)
+        except RuntimeError as e:
+            await websocket.send_json({"type": "error", "message": str(e)})
+            await websocket.close()
+            return
+
         # Step: Set up overlay network on new nodes (before k8s join)
         overlay_provider = inventory.get("all", {}).get("vars", {}).get("overlay_provider", "")
         if overlay_provider in ("tailscale", "zerotier"):
@@ -1030,14 +1038,6 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
         )
         if not playbook_path.exists():
             playbook_path = ansible_env.get_playbook_path("add_node.yaml")
-
-        extra_vars = {}
-        try:
-            extra_vars = ansible_env.prepare_auth_vars(extra_vars)
-        except RuntimeError as e:
-            await websocket.send_json({"type": "error", "message": str(e)})
-            await websocket.close()
-            return
 
         # Include control plane + localhost so post-join plays run too
         cp_hosts = _find_inventory_group_hosts(inventory, "k8s_control_plane")
