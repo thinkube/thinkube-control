@@ -882,6 +882,49 @@ git reset --hard origin/main
             DeploymentLogger.debug(f"K8s service lookup failed for {dep_type}: {e}")
         return None
 
+    async def _compute_gpu_namespace_quota(self, has_gpu):
+        """Compute (requests.memory, limits.memory) for the namespace quota.
+
+        Architecture-aware (never a flat constant):
+          - UMA nodes (DGX Spark / GB10): GPU memory IS host RAM and IS
+            quota-charged, so the quota is a fixed ceiling (LLM_UMA_AI_BUDGET_GB,
+            default 96Gi, clamped to allocatable) leaving the rest for the system.
+          - Discrete nodes (e.g. RTX): VRAM is separate and not quota-charged,
+            so the memory quota stays modest (host overhead only).
+        Returns the max across GPU nodes (UMA dominates a mixed cluster), or the
+        default (8Gi/16Gi) for non-GPU workloads or if nodes can't be read.
+        """
+        default = ("8Gi", "16Gi")
+        if not has_gpu:
+            return default
+        uma_cap_gi = int(float(os.environ.get("LLM_UMA_AI_BUDGET_GB", "96")))
+        discrete_limit_gi = 16
+        try:
+            nodes = await self.k8s_core.list_node()
+            best_gi = 0
+            for node in nodes.items:
+                alloc = node.status.allocatable or {}
+                if int(str(alloc.get("nvidia.com/gpu", "0")) or 0) == 0:
+                    continue
+                labels = node.metadata.labels or {}
+                fam = (labels.get("nvidia.com/gpu.family") or "").lower()
+                prod = (labels.get("nvidia.com/gpu.product") or "").lower()
+                is_uma = "blackwell" in fam or "gb10" in prod or "dgx" in prod
+                if is_uma:
+                    mem = str(alloc.get("memory", "0"))
+                    ki = float(mem[:-2]) if mem.endswith("Ki") else float(mem or 0) / 1024
+                    alloc_gi = int(round(ki / (1024 * 1024)))
+                    node_gi = min(alloc_gi, uma_cap_gi)
+                else:
+                    node_gi = discrete_limit_gi
+                best_gi = max(best_gi, node_gi)
+            if best_gi <= 0:
+                return default
+            return (f"{max(best_gi // 2, 8)}Gi", f"{best_gi}Gi")
+        except Exception as e:
+            DeploymentLogger.log(f"GPU namespace quota compute failed, using default: {e}")
+            return default
+
     def generate_k8s_manifests(self):
         """Generate all Kubernetes manifests from thinkube.yaml specification.
 
@@ -978,6 +1021,7 @@ metadata:
         (k8s_dir / 'namespace.yaml').write_text(namespace_content)
 
         # 1b. Generate resource-policies.yaml (LimitRange + ResourceQuota for namespace)
+        quota_req_mem, quota_lim_mem = getattr(self, '_gpu_quota', ('8Gi', '16Gi'))
         resource_policies_content = f"""apiVersion: v1
 kind: LimitRange
 metadata:
@@ -1000,8 +1044,8 @@ metadata:
   namespace: {self.namespace}
 spec:
   hard:
-    requests.memory: "8Gi"
-    limits.memory: "16Gi"
+    requests.memory: "{quota_req_mem}"
+    limits.memory: "{quota_lim_mem}"
     requests.cpu: "4"
     limits.cpu: "8"
 """
@@ -1235,6 +1279,14 @@ spec:
         await self.generate_migrations()
         await self.setup_git_hooks()
         await self.ensure_api_token_file()
+
+        # Architecture-aware namespace quota for GPU/AI workloads: UMA nodes
+        # (DGX Spark) need a large host-RAM quota because GPU memory is host RAM;
+        # discrete GPUs need only modest host overhead. Computed from the live
+        # GPU nodes before the (sync) manifest generation reads it.
+        _containers = self.thinkube_config.get('spec', {}).get('containers', [])
+        _has_gpu = any(c.get('gpu', {}).get('count') for c in _containers)
+        self._gpu_quota = await self._compute_gpu_namespace_quota(_has_gpu)
 
         # Generate k8s manifests from thinkube.yaml (mirrors Ansible generate_k8s_manifests.yaml)
         # Run in thread pool to avoid blocking the event loop

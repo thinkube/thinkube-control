@@ -39,6 +39,54 @@ def _get_k8s_client():
     return client.CoreV1Api()
 
 
+def _gpu_namespace_quota(has_gpu):
+    """Compute (requests.memory, limits.memory) for a namespace's ResourceQuota.
+
+    GPU/AI workloads need an architecture-aware ceiling derived from the actual
+    GPU nodes, never a flat constant:
+      - UMA nodes (DGX Spark / GB10): GPU memory IS host RAM and IS quota-charged,
+        so the quota must be large — a fraction of the node's allocatable RAM.
+      - Discrete nodes (e.g. RTX): VRAM is separate and not quota-charged, so the
+        memory quota only needs modest host overhead.
+    Returns the max requirement across GPU nodes (UMA dominates a mixed cluster),
+    or the default (8Gi/16Gi) for non-GPU workloads or if the cluster can't be
+    queried.
+    """
+    default = ("8Gi", "16Gi")
+    if not has_gpu:
+        return default
+    uma_cap_gi = int(float(os.environ.get("LLM_UMA_AI_BUDGET_GB", "96")))
+    discrete_limit_gi = 16
+    try:
+        try:
+            config.load_incluster_config()
+        except Exception:
+            config.load_kube_config()
+        v1 = client.CoreV1Api()
+        best_gi = 0
+        for node in v1.list_node().items:
+            alloc = node.status.allocatable or {}
+            if int(str(alloc.get("nvidia.com/gpu", "0")) or 0) == 0:
+                continue
+            labels = node.metadata.labels or {}
+            fam = (labels.get("nvidia.com/gpu.family") or "").lower()
+            prod = (labels.get("nvidia.com/gpu.product") or "").lower()
+            is_uma = "blackwell" in fam or "gb10" in prod or "dgx" in prod
+            if is_uma:
+                mem = str(alloc.get("memory", "0"))
+                ki = float(mem[:-2]) if mem.endswith("Ki") else float(mem or 0) / 1024
+                alloc_gi = int(round(ki / (1024 * 1024)))
+                node_gi = min(alloc_gi, uma_cap_gi)
+            else:
+                node_gi = discrete_limit_gi
+            best_gi = max(best_gi, node_gi)
+        if best_gi <= 0:
+            return default
+        return (f"{max(best_gi // 2, 8)}Gi", f"{best_gi}Gi")
+    except Exception:
+        return default
+
+
 def _get_custom_objects_client():
     """Load in-cluster config and return a CustomObjectsApi client."""
     config.load_incluster_config()
@@ -278,9 +326,11 @@ class ManifestGenerator:
         containers = self.thinkube_config.get('spec', {}).get('containers', [])
         services = self.thinkube_config.get('spec', {}).get('services', [])
         has_database = 'database' in services
+        has_gpu = any(c.get('gpu', {}).get('count') for c in containers)
+        quota_req_mem, quota_lim_mem = _gpu_namespace_quota(has_gpu)
         needs_storage = (
             'storage' in services or
-            any(c.get('gpu', {}).get('count') for c in containers) or
+            has_gpu or
             any('volume' in c for c in containers)
         )
 
@@ -317,8 +367,8 @@ metadata:
   namespace: {self.namespace}
 spec:
   hard:
-    requests.memory: "8Gi"
-    limits.memory: "16Gi"
+    requests.memory: "{quota_req_mem}"
+    limits.memory: "{quota_lim_mem}"
     requests.cpu: "4"
     limits.cpu: "8"
 """

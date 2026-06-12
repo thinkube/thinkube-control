@@ -124,6 +124,12 @@ class GPUNode(BaseModel):
     used_memory_gb: float
     shared_memory: bool = False
     is_uma: bool = False
+    arch: str = "uma"  # "uma" (GPU mem = host RAM, quota-charged) | "discrete"
+    role: str = "platform-shared"  # "platform-shared" | "ai-dedicated"
+    per_gpu_vram_gb: float = 0.0  # discrete: VRAM per physical GPU
+    platform_reserved_gb: float = 0.0  # UMA shared: host RAM held by non-AI pods
+    ai_budget_gb: float = 0.0  # memory the gateway may plan against on this node
+    ai_remaining_gb: float = 0.0  # ai_budget minus memory already reserved here
     real_available_gb: Optional[float] = None
     metrics_available: bool = False
     per_gpu_metrics: List[GPUMetricEntry] = Field(default_factory=list)

@@ -20,6 +20,10 @@ from app.api.llm.schemas import (
 
 logger = logging.getLogger(__name__)
 
+# A model stuck `loading` past this deadline whose pod is Ready-but-model-absent
+# (engine crashed and the wrapper fell back to idle) is treated as a failed load.
+LOAD_TIMEOUT_SECONDS = int(os.getenv("LLM_MODEL_LOAD_TIMEOUT_SECONDS", "300"))
+
 
 class LLMModelRegistry:
     def __init__(self):
@@ -315,6 +319,7 @@ class LLMModelRegistry:
             if matched_backend_id and entry.state in (ModelState.loading, ModelState.deployable):
                 entry.state = ModelState.available
                 entry.backend_id = matched_backend_id
+                entry._loading_since = None
                 self._sync_gpu_allocation(
                     model_id, matched_backend_id,
                     llm_gpu_tracker, llm_lifecycle,
@@ -335,33 +340,64 @@ class LLMModelRegistry:
                 if last_avail is None:
                     entry._last_available_at = datetime.utcnow()
                 elif datetime.utcnow() - last_avail > timedelta(seconds=120):
+                    backend_type, node = parse_backend_id(entry.backend_id or "")
                     entry.state = ModelState.deployable
                     entry.backend_id = None
                     entry._last_available_at = None
                     llm_gpu_tracker.release_allocation(model_id)
+                    # Reclaim the (now model-less) deployment to free its slot.
+                    # Not Ollama: its one pod hosts many models.
+                    if backend_type and backend_type != "ollama" and node:
+                        llm_pod_manager.scale_to_zero(backend_type, node)
                     logger.info(f"Model {model_id} downgraded to deployable after 120s grace period")
             elif (
                 matched_backend_id is None
                 and entry.state == ModelState.loading
             ):
+                from datetime import datetime, timedelta
+
                 backend_type, node = parse_backend_id(entry.backend_id or "")
-                if backend_type and node:
-                    pod_status, pod_detail = llm_pod_manager.check_pod_status(backend_type, node)
-                    if pod_status == "failed":
-                        entry.state = ModelState.deployable
-                        entry.backend_id = None
-                        entry.last_error = pod_detail or f"Pod failed on {node}"
-                    elif pod_status == "absent":
-                        logger.warning(
-                            f"Model '{model_id}' was loading but deployment "
-                            f"{backend_type}/{node} disappeared"
-                        )
-                        entry.state = ModelState.deployable
-                        entry.backend_id = None
-                        entry.last_error = f"Deployment disappeared on {node}"
-                elif not backend_type:
+                if not backend_type:
                     entry.state = ModelState.deployable
                     entry.backend_id = None
+                    entry._loading_since = None
+                else:
+                    # Stamp when we first observed this load in flight.
+                    if getattr(entry, "_loading_since", None) is None:
+                        entry._loading_since = datetime.utcnow()
+                    pod_status, pod_detail = (
+                        llm_pod_manager.check_pod_status(backend_type, node)
+                        if node else ("absent", None)
+                    )
+                    timed_out = (
+                        datetime.utcnow() - entry._loading_since
+                        > timedelta(seconds=LOAD_TIMEOUT_SECONDS)
+                    )
+                    # A `failed`/`absent` pod is a confident failure; a pod that is
+                    # Ready-but-model-absent past the deadline means the engine
+                    # crashed and the wrapper fell back to idle. The long timeout
+                    # absorbs transient blips (a serving model would have matched).
+                    fail_reason = None
+                    if pod_status == "failed":
+                        fail_reason = pod_detail or f"Engine failed on {node}"
+                    elif pod_status == "absent":
+                        fail_reason = f"Deployment disappeared on {node}"
+                    elif timed_out:
+                        fail_reason = (
+                            f"Engine did not become ready within "
+                            f"{LOAD_TIMEOUT_SECONDS}s on {node}"
+                        )
+                    if fail_reason:
+                        entry.state = ModelState.deployable
+                        entry.backend_id = None
+                        entry.last_error = fail_reason
+                        entry._loading_since = None
+                        llm_gpu_tracker.release_allocation(model_id)
+                        # Reclaim the failed deployment to 0 so it stops holding a
+                        # slot/budget (the dead-pod bug). Not Ollama (shared pod).
+                        if backend_type != "ollama" and node:
+                            llm_pod_manager.scale_to_zero(backend_type, node)
+                        logger.warning(f"Load failed for {model_id}: {fail_reason}")
 
         # Register unmatched backend models (e.g. manually loaded Ollama models)
         for backend in llm_backend_discovery.list_backends():

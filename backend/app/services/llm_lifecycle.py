@@ -294,13 +294,34 @@ class LLMLifecycleManager:
         estimated_memory = self._estimate_memory(entry, max_context_length)
         gpu_count = self._gpus_needed(estimated_memory, node)
 
+        # Architecture-aware sizing: translate the footprint into vLLM/pod knobs
+        # consistent with the node's memory architecture, AI budget, and the
+        # slots/memory already in use by co-resident models on the chosen node.
+        sizing = await llm_gpu_tracker.plan_sizing(node, estimated_memory, gpu_count)
+
+        # Node-safety rail: if it won't fit the operator-chosen node, refuse here
+        # — never issue a load that would exceed the node's budget/quota.
+        if not sizing.get("fits", False):
+            reason = sizing.get("reason", f"Model does not fit node {node}")
+            llm_model_registry.update_model_state(
+                model_id, ModelState.deployable, error=reason
+            )
+            return ModelLoadResponse(
+                model_id=model_id, state=ModelState.deployable, message=reason
+            )
+
+        # Secondary safety: confirm the node actually has free memory right now
+        # (metrics-based — catches real usage the budget bookkeeping can't see).
         can_load, reason = await llm_gpu_tracker.check_can_load(
             estimated_memory, node_name=node
         )
         if not can_load:
+            llm_model_registry.update_model_state(
+                model_id, ModelState.deployable, error=reason
+            )
             return ModelLoadResponse(
                 model_id=model_id, state=ModelState.deployable,
-                message=f"Insufficient GPU resources: {reason}"
+                message=f"Insufficient GPU resources: {reason}",
             )
 
         payload: dict = {"model_id": model_id}
@@ -312,6 +333,12 @@ class LLMLifecycleManager:
             payload["tool_use"] = entry.tool_use
         if max_context_length:
             payload["max_context_length"] = max_context_length
+        if sizing.get("gpu_memory_utilization") is not None:
+            payload["gpu_memory_utilization"] = sizing["gpu_memory_utilization"]
+        if sizing.get("pod_mem_limit_gb"):
+            payload["pod_mem_limit_gb"] = sizing["pod_mem_limit_gb"]
+        if sizing.get("tensor_parallel_size"):
+            payload["tensor_parallel_size"] = sizing["tensor_parallel_size"]
 
         backend_id = f"{perf_type}-{node}"
         llm_model_registry.update_model_state(model_id, ModelState.loading, backend_id)
@@ -346,9 +373,16 @@ class LLMLifecycleManager:
                 model_env["TOOL_USE"] = "true"
             if payload.get("max_context_length"):
                 model_env["MAX_CONTEXT_LENGTH"] = str(payload["max_context_length"])
+            if payload.get("gpu_memory_utilization") is not None:
+                model_env["VLLM_GPU_MEMORY_UTILIZATION"] = str(
+                    payload["gpu_memory_utilization"]
+                )
+            if payload.get("tensor_parallel_size"):
+                model_env["TENSOR_PARALLEL_SIZE"] = str(payload["tensor_parallel_size"])
 
             success, _ = await llm_pod_manager.ensure_pod(
                 perf_type, node, gpu_count=gpu_count, model_env=model_env,
+                mem_limit_gb=payload.get("pod_mem_limit_gb"),
                 wait_ready=False,
             )
             if not success:
@@ -437,53 +471,6 @@ class LLMLifecycleManager:
             message="Model unloaded successfully"
         )
 
-    async def auto_load_on_resolve(self, model_id: str, timeout: Optional[int] = None) -> bool:
-        from app.services.llm_model_registry import llm_model_registry
-
-        entry = llm_model_registry.get_model(model_id)
-
-        if entry and entry.state == ModelState.loading:
-            return await self._wait_for_model_available(model_id, timeout)
-
-        if model_id in self._loading_locks:
-            event = self._loading_locks[model_id]
-            try:
-                await asyncio.wait_for(event.wait(), timeout=timeout or self._load_timeout)
-            except asyncio.TimeoutError:
-                return False
-            entry = llm_model_registry.get_model(model_id)
-            return entry is not None and entry.state == ModelState.available
-
-        node = self._pick_node_for_auto_load()
-        if not node:
-            logger.warning(f"auto_load_on_resolve: no node available for {model_id}")
-            return False
-        result = await self.load_model(model_id, node=node)
-        if result.state == ModelState.loading:
-            return await self._wait_for_model_available(model_id, timeout)
-        return result.state == ModelState.available
-
-    async def _wait_for_model_available(self, model_id: str, timeout: Optional[int] = None) -> bool:
-        from app.services.llm_model_registry import llm_model_registry
-
-        deadline = asyncio.get_event_loop().time() + (timeout or self._load_timeout)
-        while asyncio.get_event_loop().time() < deadline:
-            entry = llm_model_registry.get_model(model_id)
-            if entry is None:
-                return False
-            if entry.state == ModelState.available:
-                return True
-            if entry.state in (ModelState.deployable, ModelState.registered):
-                return False
-            await asyncio.sleep(5)
-        return False
-
-    def _pick_node_for_auto_load(self) -> Optional[str]:
-        from app.services.llm_gpu_tracker import llm_gpu_tracker
-        nodes = llm_gpu_tracker.list_nodes()
-        if not nodes:
-            return None
-        return nodes[0].name
 
     async def _resolve_gguf_path(self, model_id: str) -> Optional[str]:
         mlflow_url = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000")
