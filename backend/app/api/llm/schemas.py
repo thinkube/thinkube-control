@@ -129,6 +129,7 @@ class GPUNode(BaseModel):
     per_gpu_vram_gb: float = 0.0  # discrete: VRAM per physical GPU
     platform_reserved_gb: float = 0.0  # UMA shared: host RAM held by non-AI pods
     ai_budget_gb: float = 0.0  # memory the gateway may plan against on this node
+    ai_remaining_gb: float = 0.0  # ai_budget minus memory already reserved here
     real_available_gb: Optional[float] = None
     metrics_available: bool = False
     per_gpu_metrics: List[GPUMetricEntry] = Field(default_factory=list)
