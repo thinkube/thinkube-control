@@ -17,6 +17,37 @@ logger = logging.getLogger(__name__)
 NODE_METRICS_PORT = 9100
 NODE_METRICS_NAMESPACE = "thinkube-control"
 
+# Namespaces whose pods are AI workloads (excluded from platform_reserved).
+AI_NAMESPACES = {"vllm", "ollama", "text-embeddings", "tensorrt-llm"}
+NODE_ROLE_LABEL = "thinkube.io/node-role"  # "platform-shared" | "ai-dedicated"
+PLATFORM_RESERVED_TTL = 30.0  # seconds to cache the per-node platform reservation
+
+_MEM_BIN = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4, "Pi": 1024**5}
+_MEM_DEC = {"k": 1e3, "K": 1e3, "M": 1e6, "G": 1e9, "T": 1e12, "P": 1e15}
+
+
+def _quantity_to_bytes(q) -> float:
+    """Parse a Kubernetes memory quantity (e.g. '16Gi', '512Mi', '2G', '1024') to bytes."""
+    s = str(q).strip()
+    if not s:
+        return 0.0
+    for suf, mult in _MEM_BIN.items():
+        if s.endswith(suf):
+            try:
+                return float(s[:-2]) * mult
+            except ValueError:
+                return 0.0
+    for suf, mult in _MEM_DEC.items():
+        if s.endswith(suf):
+            try:
+                return float(s[:-1]) * mult
+            except ValueError:
+                return 0.0
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
 
 class LLMGPUTracker:
     def __init__(self):
@@ -28,6 +59,10 @@ class LLMGPUTracker:
         self._node_pod_ips: Dict[str, str] = {}
         self._pod_ips_discovered = False
         self._last_node_discovery = 0.0
+        self._platform_reserved_floor_gb = float(
+            os.getenv("LLM_PLATFORM_RESERVED_FLOOR_GB", "16")
+        )
+        self._platform_reserved_cache: Dict[str, Tuple[float, float]] = {}
         self._discover_gpu_nodes()
 
     def refresh_nodes(self) -> int:
@@ -74,6 +109,15 @@ class LLMGPUTracker:
 
                 total_memory = per_gpu_memory * gpu_count
 
+                role = labels.get(NODE_ROLE_LABEL, "platform-shared")
+                fam_l = (family or "").lower()
+                prod_l = (product or "").lower()
+                arch = (
+                    "uma"
+                    if ("blackwell" in fam_l or "gb10" in prod_l or "dgx" in prod_l)
+                    else "discrete"
+                )
+
                 discovered.add(name)
                 is_new = name not in self._gpu_nodes
                 self._gpu_nodes[name] = GPUNode(
@@ -86,6 +130,9 @@ class LLMGPUTracker:
                     available_slots=gpu_slots,
                     total_memory_gb=total_memory,
                     per_gpu_memory_gb=per_gpu_memory,
+                    per_gpu_vram_gb=per_gpu_memory,
+                    arch=arch,
+                    role=role,
                     used_memory_gb=0.0,
                     shared_memory=(sharing == "time-slicing"),
                     allocations=[],
@@ -172,6 +219,59 @@ class LLMGPUTracker:
             return node.is_uma
         return False
 
+    def _platform_reserved_gb(self, node_name: str) -> float:
+        """Host RAM held by non-AI pods on a node (UMA budgeting), floored. Cached."""
+        now = time.monotonic()
+        cached = self._platform_reserved_cache.get(node_name)
+        if cached and (now - cached[1]) < PLATFORM_RESERVED_TTL:
+            return cached[0]
+        reserved = self._platform_reserved_floor_gb
+        try:
+            from kubernetes import client, config as k8s_config
+
+            try:
+                k8s_config.load_incluster_config()
+            except k8s_config.ConfigException:
+                k8s_config.load_kube_config()
+
+            v1 = client.CoreV1Api()
+            pods = v1.list_pod_for_all_namespaces(
+                field_selector=f"spec.nodeName={node_name},status.phase=Running"
+            )
+            total_bytes = 0.0
+            for pod in pods.items:
+                if (pod.metadata.namespace or "") in AI_NAMESPACES:
+                    continue
+                for c in (pod.spec.containers or []):
+                    req = (c.resources.requests if c.resources else None) or {}
+                    mem = req.get("memory")
+                    if mem:
+                        total_bytes += _quantity_to_bytes(mem)
+            measured = total_bytes / (1024**3)
+            reserved = max(self._platform_reserved_floor_gb, round(measured, 1))
+        except Exception as e:
+            logger.warning(f"platform_reserved compute failed for {node_name}: {e}")
+        self._platform_reserved_cache[node_name] = (reserved, now)
+        return reserved
+
+    def _budget_for(
+        self, node: GPUNode, total_gb: float, is_uma: bool
+    ) -> Tuple[str, float, float]:
+        """Return (arch, platform_reserved_gb, ai_budget_gb) for a node.
+
+        UMA: ai_budget = total − platform_reserved (host RAM is quota-charged).
+        Discrete: ai_budget = Σ per-GPU VRAM (not cgroup-charged), reserved = 0.
+        """
+        arch = "uma" if (is_uma or node.arch == "uma") else "discrete"
+        if arch == "discrete":
+            vram_total = (node.per_gpu_vram_gb or 0.0) * max(node.gpu_count, 1)
+            ai_budget = vram_total if vram_total > 0 else total_gb
+            return arch, 0.0, round(ai_budget, 1)
+        reserved = (
+            0.0 if node.role == "ai-dedicated" else self._platform_reserved_gb(node.name)
+        )
+        return arch, round(reserved, 1), round(max(total_gb - reserved, 0.0), 1)
+
     async def get_status(self) -> GPUStatusResponse:
         # Self-heal: if no GPU nodes are known (e.g. the backend started
         # before any GPU node joined the cluster), retry discovery — throttled
@@ -214,11 +314,15 @@ class LLMGPUTracker:
                     for g in metrics.get("gpus", [])
                 ]
 
+                arch, reserved, ai_budget = self._budget_for(node, real_total_gb, is_uma)
                 updated = node.model_copy(
                     update={
                         "total_memory_gb": real_total_gb,
                         "used_memory_gb": real_used_gb,
                         "is_uma": is_uma,
+                        "arch": arch,
+                        "platform_reserved_gb": reserved,
+                        "ai_budget_gb": ai_budget,
                         "real_available_gb": real_available_gb,
                         "metrics_available": True,
                         "per_gpu_metrics": per_gpu,
@@ -228,9 +332,15 @@ class LLMGPUTracker:
                 )
             else:
                 est_used = sum(a.estimated_memory_gb for a in allocs)
+                arch, reserved, ai_budget = self._budget_for(
+                    node, node.total_memory_gb, node.is_uma
+                )
                 updated = node.model_copy(
                     update={
                         "used_memory_gb": est_used,
+                        "arch": arch,
+                        "platform_reserved_gb": reserved,
+                        "ai_budget_gb": ai_budget,
                         "available_slots": max(node.total_slots - slots_used, 0),
                         "allocations": list(allocs),
                         "metrics_available": False,
@@ -241,8 +351,10 @@ class LLMGPUTracker:
             total_mem += updated.total_memory_gb
             used_mem += updated.used_memory_gb
 
+        # A node can accept a new model when its AI budget has headroom beyond
+        # the memory already committed to loaded models on it.
         can_accept = any(
-            n.metrics_available and (n.real_available_gb or 0) > 4.0
+            (n.ai_budget_gb - sum(a.estimated_memory_gb for a in n.allocations)) > 4.0
             for n in nodes
         )
 
