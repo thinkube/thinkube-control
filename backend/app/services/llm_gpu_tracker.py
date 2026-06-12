@@ -23,6 +23,9 @@ NODE_ROLE_LABEL = "thinkube.io/node-role"  # "platform-shared" | "ai-dedicated"
 # ceiling that leaves the rest for the OS/kernel/platform — never the whole
 # device. Default 96 GB on a 128 GB Spark (≈32 GB reserved for the system).
 UMA_AI_BUDGET_GB = float(os.getenv("LLM_UMA_AI_BUDGET_GB", "96"))
+# A dedicated-ai UMA node has no platform stack co-resident, so AI may use almost
+# the whole device — leave only OS/kernel headroom.
+UMA_AI_BUDGET_DEDICATED_GB = float(os.getenv("LLM_UMA_AI_BUDGET_DEDICATED_GB", "112"))
 
 # Backends that lock one time-slice slot PER model (each is its own pod).
 # Ollama is excluded: one Ollama pod hosts many models in a single slot.
@@ -235,7 +238,12 @@ class LLMGPUTracker:
             vram_total = (node.per_gpu_vram_gb or 0.0) * max(node.gpu_count, 1)
             ai_budget = vram_total if vram_total > 0 else total_gb
             return arch, 0.0, round(ai_budget, 1)
-        ai_budget = min(total_gb, UMA_AI_BUDGET_GB) if total_gb else UMA_AI_BUDGET_GB
+        cap = (
+            UMA_AI_BUDGET_DEDICATED_GB
+            if node.role == "ai-dedicated"
+            else UMA_AI_BUDGET_GB
+        )
+        ai_budget = min(total_gb, cap) if total_gb else cap
         reserved = round(max(total_gb - ai_budget, 0.0), 1)
         return arch, reserved, round(ai_budget, 1)
 

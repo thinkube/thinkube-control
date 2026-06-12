@@ -252,6 +252,22 @@ class LLMPodManager:
 
             pod_template.spec.node_selector = {"kubernetes.io/hostname": node_name}
 
+            # Tolerate the dedicated-ai taint so AI pods can land on a node
+            # reserved for AI workloads (harmless on an untainted all-in-one node).
+            tols = list(pod_template.spec.tolerations or [])
+            if not any(
+                getattr(t, "key", None) == "thinkube.io/workload" for t in tols
+            ):
+                tols.append(
+                    client.V1Toleration(
+                        key="thinkube.io/workload",
+                        operator="Equal",
+                        value="ai",
+                        effect="NoSchedule",
+                    )
+                )
+            pod_template.spec.tolerations = tols
+
             if gpu_count > 0:
                 for container in pod_template.spec.containers:
                     requests = container.resources.requests or {}
