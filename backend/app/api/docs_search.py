@@ -64,13 +64,25 @@ def _snippet(text, n=260):
 
 def _search(documents, query, limit=8):
     terms = [t for t in re.split(r"\W+", (query or "").lower()) if len(t) > 1]
+    if not terms:
+        return []
+    # word-boundary patterns: "fine" matches "fine-tune" but not "define"
+    patterns = [re.compile(r"\b" + re.escape(t)) for t in terms]
     scored = []
     for d in documents.values():
         title = (d.get("title") or "").lower()
         text = (d.get("text") or "").lower()
-        score = sum(title.count(t) * 5 + text.count(t) for t in terms)
-        if score:
-            scored.append((score, d))
+        haystack = title + " " + text
+        # coverage = how many distinct query terms the page matches — the dominant
+        # signal, so a page matching all the terms beats one matching just one,
+        # regardless of raw frequency. Then title hits, then text frequency.
+        coverage = sum(1 for p in patterns if p.search(haystack))
+        if not coverage:
+            continue
+        title_hits = sum(len(p.findall(title)) for p in patterns)
+        text_hits = sum(len(p.findall(text)) for p in patterns)
+        score = coverage * 1000 + title_hits * 10 + text_hits
+        scored.append((score, d))
     scored.sort(key=lambda x: -x[0])
     return [d for _, d in scored[:limit]]
 
