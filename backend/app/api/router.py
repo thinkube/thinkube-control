@@ -27,6 +27,7 @@ from app.api import (
     jupyter_venvs,
     jupyter_notebooks,
     nodes,
+    docs_search,
 )
 from app.api.llm.router import llm_router
 
@@ -59,6 +60,7 @@ api_router.include_router(jupyter_venvs.router, tags=["jupyter-venvs"])
 api_router.include_router(jupyter_notebooks.router, tags=["jupyter-notebooks"])
 api_router.include_router(nodes.router, tags=["nodes"])
 api_router.include_router(debug.router, tags=["debug"])
+api_router.include_router(docs_search.router, prefix="/docs", tags=["docs"])
 
 # LLM Gateway API
 api_router.include_router(llm_router, prefix="/llm", tags=["llm"])

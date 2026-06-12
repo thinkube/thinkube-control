@@ -410,6 +410,10 @@ def create_app() -> FastAPI:
                 "jupyter_move_cell",           # Tool
                 "jupyter_insert_and_execute_cell",  # Tool
                 "jupyter_execute_all_cells",   # Tool
+
+                # === Docs (Context7-style; active only when the docs are deployed) ===
+                "search_thinkube_docs",        # Tool
+                "get_thinkube_doc",            # Tool
             ]
         )
 
