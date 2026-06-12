@@ -294,18 +294,35 @@ class LLMLifecycleManager:
         estimated_memory = self._estimate_memory(entry, max_context_length)
         gpu_count = self._gpus_needed(estimated_memory, node)
 
+        # Architecture-aware sizing: translate the footprint into vLLM/pod knobs
+        # consistent with the node's memory architecture, AI budget, and the
+        # slots/memory already in use by co-resident models on the chosen node.
+        sizing = await llm_gpu_tracker.plan_sizing(node, estimated_memory, gpu_count)
+
+        # Node-safety rail: if it won't fit the operator-chosen node, refuse here
+        # — never issue a load that would exceed the node's budget/quota.
+        if not sizing.get("fits", False):
+            reason = sizing.get("reason", f"Model does not fit node {node}")
+            llm_model_registry.update_model_state(
+                model_id, ModelState.deployable, error=reason
+            )
+            return ModelLoadResponse(
+                model_id=model_id, state=ModelState.deployable, message=reason
+            )
+
+        # Secondary safety: confirm the node actually has free memory right now
+        # (metrics-based — catches real usage the budget bookkeeping can't see).
         can_load, reason = await llm_gpu_tracker.check_can_load(
             estimated_memory, node_name=node
         )
         if not can_load:
+            llm_model_registry.update_model_state(
+                model_id, ModelState.deployable, error=reason
+            )
             return ModelLoadResponse(
                 model_id=model_id, state=ModelState.deployable,
-                message=f"Insufficient GPU resources: {reason}"
+                message=f"Insufficient GPU resources: {reason}",
             )
-
-        # Architecture-aware sizing: translate the footprint into vLLM/pod knobs
-        # consistent with the node's memory architecture and AI budget.
-        sizing = await llm_gpu_tracker.plan_sizing(node, estimated_memory, gpu_count)
 
         payload: dict = {"model_id": model_id}
         if entry.stop_tokens:
