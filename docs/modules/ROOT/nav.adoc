@@ -1,0 +1,2 @@
+.Control Plane
+* xref:index.adoc[thinkube-control]
