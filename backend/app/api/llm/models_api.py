@@ -99,17 +99,9 @@ async def resolve_model(
     if result is None:
         raise HTTPException(status_code=404, detail=f"Model '{model}' not found")
 
-    if result.model_state == ModelState.deployable and not result.error:
-        entry = llm_model_registry.get_model(result.model_id)
-        if entry and "ollama" in entry.server_type:
-            from app.services.llm_lifecycle import llm_lifecycle
-
-            loaded = await llm_lifecycle.auto_load_on_resolve(result.model_id, timeout=120)
-            if loaded:
-                result = llm_model_registry.resolve(model, tier)
-                if result is None:
-                    raise HTTPException(status_code=404, detail=f"Model '{model}' not found")
-
+    # Placement is a human decision (the UI forces node selection). Resolve never
+    # auto-loads a model onto a guessed node — it reports the model's state, and
+    # an unloaded model is loaded explicitly by the operator on a chosen node.
     if result.error:
         raise HTTPException(status_code=400, detail=result.error)
     return result

@@ -454,53 +454,6 @@ class LLMLifecycleManager:
             message="Model unloaded successfully"
         )
 
-    async def auto_load_on_resolve(self, model_id: str, timeout: Optional[int] = None) -> bool:
-        from app.services.llm_model_registry import llm_model_registry
-
-        entry = llm_model_registry.get_model(model_id)
-
-        if entry and entry.state == ModelState.loading:
-            return await self._wait_for_model_available(model_id, timeout)
-
-        if model_id in self._loading_locks:
-            event = self._loading_locks[model_id]
-            try:
-                await asyncio.wait_for(event.wait(), timeout=timeout or self._load_timeout)
-            except asyncio.TimeoutError:
-                return False
-            entry = llm_model_registry.get_model(model_id)
-            return entry is not None and entry.state == ModelState.available
-
-        node = self._pick_node_for_auto_load()
-        if not node:
-            logger.warning(f"auto_load_on_resolve: no node available for {model_id}")
-            return False
-        result = await self.load_model(model_id, node=node)
-        if result.state == ModelState.loading:
-            return await self._wait_for_model_available(model_id, timeout)
-        return result.state == ModelState.available
-
-    async def _wait_for_model_available(self, model_id: str, timeout: Optional[int] = None) -> bool:
-        from app.services.llm_model_registry import llm_model_registry
-
-        deadline = asyncio.get_event_loop().time() + (timeout or self._load_timeout)
-        while asyncio.get_event_loop().time() < deadline:
-            entry = llm_model_registry.get_model(model_id)
-            if entry is None:
-                return False
-            if entry.state == ModelState.available:
-                return True
-            if entry.state in (ModelState.deployable, ModelState.registered):
-                return False
-            await asyncio.sleep(5)
-        return False
-
-    def _pick_node_for_auto_load(self) -> Optional[str]:
-        from app.services.llm_gpu_tracker import llm_gpu_tracker
-        nodes = llm_gpu_tracker.list_nodes()
-        if not nodes:
-            return None
-        return nodes[0].name
 
     async def _resolve_gguf_path(self, model_id: str) -> Optional[str]:
         mlflow_url = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000")
