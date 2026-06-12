@@ -303,6 +303,10 @@ class LLMLifecycleManager:
                 message=f"Insufficient GPU resources: {reason}"
             )
 
+        # Architecture-aware sizing: translate the footprint into vLLM/pod knobs
+        # consistent with the node's memory architecture and AI budget.
+        sizing = await llm_gpu_tracker.plan_sizing(node, estimated_memory, gpu_count)
+
         payload: dict = {"model_id": model_id}
         if entry.stop_tokens:
             payload["stop_tokens"] = entry.stop_tokens
@@ -312,6 +316,12 @@ class LLMLifecycleManager:
             payload["tool_use"] = entry.tool_use
         if max_context_length:
             payload["max_context_length"] = max_context_length
+        if sizing.get("gpu_memory_utilization") is not None:
+            payload["gpu_memory_utilization"] = sizing["gpu_memory_utilization"]
+        if sizing.get("pod_mem_limit_gb"):
+            payload["pod_mem_limit_gb"] = sizing["pod_mem_limit_gb"]
+        if sizing.get("tensor_parallel_size"):
+            payload["tensor_parallel_size"] = sizing["tensor_parallel_size"]
 
         backend_id = f"{perf_type}-{node}"
         llm_model_registry.update_model_state(model_id, ModelState.loading, backend_id)
@@ -346,9 +356,16 @@ class LLMLifecycleManager:
                 model_env["TOOL_USE"] = "true"
             if payload.get("max_context_length"):
                 model_env["MAX_CONTEXT_LENGTH"] = str(payload["max_context_length"])
+            if payload.get("gpu_memory_utilization") is not None:
+                model_env["VLLM_GPU_MEMORY_UTILIZATION"] = str(
+                    payload["gpu_memory_utilization"]
+                )
+            if payload.get("tensor_parallel_size"):
+                model_env["TENSOR_PARALLEL_SIZE"] = str(payload["tensor_parallel_size"])
 
             success, _ = await llm_pod_manager.ensure_pod(
                 perf_type, node, gpu_count=gpu_count, model_env=model_env,
+                mem_limit_gb=payload.get("pod_mem_limit_gb"),
                 wait_ready=False,
             )
             if not success:

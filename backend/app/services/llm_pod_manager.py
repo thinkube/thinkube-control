@@ -104,6 +104,7 @@ class LLMPodManager:
     async def ensure_pod(
         self, backend_type: str, node_name: str, gpu_count: int = 1,
         model_env: Optional[Dict[str, str]] = None,
+        mem_limit_gb: Optional[float] = None,
         wait_ready: bool = True,
     ) -> Tuple[bool, Optional[ManagedPod]]:
         """Ensure a pod is running for this backend on the given node.
@@ -166,6 +167,7 @@ class LLMPodManager:
                 node_name,
                 gpu_count,
                 model_env,
+                mem_limit_gb,
             )
             if not success:
                 return False, None
@@ -193,6 +195,7 @@ class LLMPodManager:
     def _create_node_deployment(
         self, backend_type: str, node_name: str, gpu_count: int,
         model_env: Optional[Dict[str, str]] = None,
+        mem_limit_gb: Optional[float] = None,
     ) -> bool:
         """Create a single-replica Deployment targeting a specific node.
 
@@ -255,6 +258,20 @@ class LLMPodManager:
                     limits = container.resources.limits or {}
                     requests["nvidia.com/gpu"] = str(gpu_count)
                     limits["nvidia.com/gpu"] = str(gpu_count)
+                    container.resources.requests = requests
+                    container.resources.limits = limits
+
+            # Architecture-aware memory sizing: on UMA the model's GPU memory is
+            # host RAM charged to this cgroup, so the limit must cover it; on
+            # discrete GPUs a modest host-overhead limit is enough.
+            if mem_limit_gb:
+                mem = f"{int(round(mem_limit_gb))}Gi"
+                req_mem = f"{max(int(round(mem_limit_gb / 2)), 1)}Gi"
+                for container in pod_template.spec.containers:
+                    requests = container.resources.requests or {}
+                    limits = container.resources.limits or {}
+                    limits["memory"] = mem
+                    requests["memory"] = req_mem
                     container.resources.requests = requests
                     container.resources.limits = limits
 

@@ -272,6 +272,87 @@ class LLMGPUTracker:
         )
         return arch, round(reserved, 1), round(max(total_gb - reserved, 0.0), 1)
 
+    async def _effective_total_gb(
+        self, node: GPUNode, metrics: Optional[dict]
+    ) -> Tuple[float, bool]:
+        """Best estimate of the node's total GPU memory + whether it's UMA."""
+        is_uma = metrics.get("is_uma", node.is_uma) if metrics else node.is_uma
+        if metrics:
+            if is_uma:
+                total = metrics.get("memory_total_bytes", 0) / (1024**3)
+            else:
+                gpu_mb = metrics.get("gpu_memory_total_mb", 0)
+                total = (gpu_mb / 1024.0) if gpu_mb > 0 else (
+                    (node.per_gpu_vram_gb or 0.0) * max(node.gpu_count, 1)
+                )
+        else:
+            total = node.total_memory_gb or (
+                (node.per_gpu_vram_gb or 0.0) * max(node.gpu_count, 1)
+            )
+        return round(total or 0.0, 1), is_uma
+
+    async def plan_sizing(
+        self, node_name: str, target_gb: float, gpu_count: int = 1
+    ) -> dict:
+        """Translate a model footprint into arch-correct vLLM/pod knobs.
+
+        Returns a dict with arch, total_gb, ai_budget_gb, gpu_memory_utilization,
+        pod_mem_limit_gb, tensor_parallel_size, fits, reason. The gateway plans
+        strictly within ai_budget — fits is False when the footprint (+ margin)
+        exceeds it.
+        """
+        node = self._gpu_nodes.get(node_name)
+        if not node:
+            return {"fits": False, "reason": f"Node '{node_name}' not found"}
+
+        metrics = await self.fetch_node_metrics(node_name)
+        total_gb, is_uma = await self._effective_total_gb(node, metrics)
+        arch, reserved, ai_budget = self._budget_for(node, total_gb, is_uma)
+        margin = max(4.0, round(0.2 * target_gb, 1))
+
+        if arch == "uma":
+            # GPU memory == host RAM: util is a fraction of the whole device,
+            # and the cgroup/quota must cover target + margin.
+            util = (
+                min(max(round(target_gb / total_gb, 2), 0.05), 0.95)
+                if total_gb
+                else 0.0
+            )
+            pod_mem = int(round(target_gb + margin))
+            tp = 1
+            fits = (target_gb + margin) <= ai_budget if ai_budget else False
+        else:
+            # Discrete VRAM: util is per-GPU; cgroup only needs host overhead.
+            per_vram = node.per_gpu_vram_gb or (total_gb / max(node.gpu_count, 1))
+            tp = max(gpu_count, 1)
+            per_gpu_target = (target_gb / tp) if tp else target_gb
+            util = (
+                min(max(round(per_gpu_target / per_vram, 2), 0.05), 0.95)
+                if per_vram
+                else 0.9
+            )
+            pod_mem = int(round(max(8.0, 0.25 * target_gb + 4.0)))
+            fits = target_gb <= (per_vram * tp) if per_vram else False
+
+        return {
+            "arch": arch,
+            "total_gb": total_gb,
+            "ai_budget_gb": ai_budget,
+            "platform_reserved_gb": reserved,
+            "gpu_memory_utilization": util,
+            "pod_mem_limit_gb": pod_mem,
+            "tensor_parallel_size": tp,
+            "fits": fits,
+            "reason": (
+                "ok"
+                if fits
+                else (
+                    f"model needs ~{target_gb:.1f} GB (+~{margin:.0f} GB margin) "
+                    f"but {node_name} ai_budget is {ai_budget:.1f} GB ({arch})"
+                )
+            ),
+        }
+
     async def get_status(self) -> GPUStatusResponse:
         # Self-heal: if no GPU nodes are known (e.g. the backend started
         # before any GPU node joined the cluster), retry discovery — throttled
