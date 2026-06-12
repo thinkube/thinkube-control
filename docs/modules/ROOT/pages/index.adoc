@@ -1,5 +1,6 @@
 = thinkube-control
 :page-type: reference
+:page-docref: ds9t
 
 *thinkube-control* is the platform's control plane — the component that deploys
 your apps, manages models and GPUs, builds images, and runs the services that the
