@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from typing import Dict, List, Optional, Tuple
 
 import httpx
@@ -26,7 +27,17 @@ class LLMGPUTracker:
         self._allocations: Dict[str, List[GPUAllocation]] = {}
         self._node_pod_ips: Dict[str, str] = {}
         self._pod_ips_discovered = False
+        self._last_node_discovery = 0.0
         self._discover_gpu_nodes()
+
+    def refresh_nodes(self) -> int:
+        """Re-discover GPU nodes (e.g. after a node is added to the cluster).
+
+        Merge-safe: existing allocations are preserved, new nodes are added,
+        and nodes that no longer exist are dropped. Returns the node count.
+        """
+        self._discover_gpu_nodes()
+        return len(self._gpu_nodes)
 
     def _discover_gpu_nodes(self):
         try:
@@ -40,6 +51,7 @@ class LLMGPUTracker:
             v1 = client.CoreV1Api()
             nodes = v1.list_node()
 
+            discovered = set()
             for node in nodes.items:
                 allocatable = node.status.allocatable or {}
                 gpu_slots = int(allocatable.get("nvidia.com/gpu", "0"))
@@ -62,6 +74,8 @@ class LLMGPUTracker:
 
                 total_memory = per_gpu_memory * gpu_count
 
+                discovered.add(name)
+                is_new = name not in self._gpu_nodes
                 self._gpu_nodes[name] = GPUNode(
                     name=name,
                     gpu_product=product or None,
@@ -76,14 +90,24 @@ class LLMGPUTracker:
                     shared_memory=(sharing == "time-slicing"),
                     allocations=[],
                 )
-                self._allocations[name] = []
-                logger.info(
-                    f"GPU node discovered: {name} — {product} "
-                    f"({gpu_count}x, {gpu_slots} slots)"
-                )
+                # Preserve existing allocations across re-discovery.
+                self._allocations.setdefault(name, [])
+                if is_new:
+                    logger.info(
+                        f"GPU node discovered: {name} — {product} "
+                        f"({gpu_count}x, {gpu_slots} slots)"
+                    )
+
+            # Drop nodes that no longer exist in the cluster.
+            for gone in set(self._gpu_nodes) - discovered:
+                self._gpu_nodes.pop(gone, None)
+                self._allocations.pop(gone, None)
+                logger.info(f"GPU node removed (no longer in cluster): {gone}")
 
         except Exception as e:
             logger.error(f"GPU node discovery failed: {e}")
+        finally:
+            self._last_node_discovery = time.monotonic()
 
     async def _ensure_pod_ips(self, node_name: Optional[str] = None):
         if not self._pod_ips_discovered:
@@ -149,6 +173,14 @@ class LLMGPUTracker:
         return False
 
     async def get_status(self) -> GPUStatusResponse:
+        # Self-heal: if no GPU nodes are known (e.g. the backend started
+        # before any GPU node joined the cluster), retry discovery — throttled
+        # so a genuinely GPU-less cluster isn't polled on every request.
+        if not self._gpu_nodes and (
+            time.monotonic() - self._last_node_discovery
+        ) > 30:
+            self._discover_gpu_nodes()
+
         nodes = []
         total_mem = 0.0
         used_mem = 0.0
