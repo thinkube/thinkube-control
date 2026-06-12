@@ -340,10 +340,15 @@ class LLMModelRegistry:
                 if last_avail is None:
                     entry._last_available_at = datetime.utcnow()
                 elif datetime.utcnow() - last_avail > timedelta(seconds=120):
+                    backend_type, node = parse_backend_id(entry.backend_id or "")
                     entry.state = ModelState.deployable
                     entry.backend_id = None
                     entry._last_available_at = None
                     llm_gpu_tracker.release_allocation(model_id)
+                    # Reclaim the (now model-less) deployment to free its slot.
+                    # Not Ollama: its one pod hosts many models.
+                    if backend_type and backend_type != "ollama" and node:
+                        llm_pod_manager.scale_to_zero(backend_type, node)
                     logger.info(f"Model {model_id} downgraded to deployable after 120s grace period")
             elif (
                 matched_backend_id is None
@@ -388,6 +393,10 @@ class LLMModelRegistry:
                         entry.last_error = fail_reason
                         entry._loading_since = None
                         llm_gpu_tracker.release_allocation(model_id)
+                        # Reclaim the failed deployment to 0 so it stops holding a
+                        # slot/budget (the dead-pod bug). Not Ollama (shared pod).
+                        if backend_type != "ollama" and node:
+                            llm_pod_manager.scale_to_zero(backend_type, node)
                         logger.warning(f"Load failed for {model_id}: {fail_reason}")
 
         # Register unmatched backend models (e.g. manually loaded Ollama models)

@@ -552,6 +552,43 @@ class LLMPodManager:
             logger.debug(f"Pod status check failed for {backend_type}/{node_name}: {e}")
             return "progressing", ""
 
+    def scale_to_zero(self, backend_type: str, node_name: str) -> bool:
+        """Scale a gateway-managed node deployment to 0, freeing its slot/budget.
+
+        Idempotent and safe to call from reconciliation (sync): a missing or
+        already-zero deployment is a no-op, and any transient K8s error is
+        swallowed (simply retried on the next reconciliation cycle) — it never
+        leaves a half-state or kills a serving model.
+        """
+        try:
+            from kubernetes import client, config as k8s_config
+
+            try:
+                k8s_config.load_incluster_config()
+            except k8s_config.ConfigException:
+                k8s_config.load_kube_config()
+
+            apps_v1 = client.AppsV1Api()
+            namespace = self._get_namespace(backend_type)
+            deploy_name = self._make_deployment_name(backend_type, node_name)
+            try:
+                dep = apps_v1.read_namespaced_deployment(deploy_name, namespace)
+            except client.rest.ApiException as e:
+                if e.status == 404:
+                    return False
+                raise
+            if (dep.spec.replicas or 0) == 0:
+                return False
+            apps_v1.patch_namespaced_deployment(
+                deploy_name, namespace, {"spec": {"replicas": 0}}
+            )
+            self._managed.pop(f"{backend_type}-{node_name}", None)
+            logger.info(f"Scaled {deploy_name} to 0 (serves no model)")
+            return True
+        except Exception as e:
+            logger.warning(f"scale_to_zero failed for {backend_type}/{node_name}: {e}")
+            return False
+
     async def delete_pod(self, backend_type: str, node_name: str) -> bool:
         """Delete a gateway-managed Deployment for a backend on a node."""
         key = f"{backend_type}-{node_name}"
