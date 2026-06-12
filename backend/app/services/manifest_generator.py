@@ -55,7 +55,7 @@ def _gpu_namespace_quota(has_gpu):
     default = ("8Gi", "16Gi")
     if not has_gpu:
         return default
-    uma_factor = 0.6
+    uma_cap_gi = int(float(os.environ.get("LLM_UMA_AI_BUDGET_GB", "96")))
     discrete_limit_gi = 16
     try:
         try:
@@ -75,7 +75,8 @@ def _gpu_namespace_quota(has_gpu):
             if is_uma:
                 mem = str(alloc.get("memory", "0"))
                 ki = float(mem[:-2]) if mem.endswith("Ki") else float(mem or 0) / 1024
-                node_gi = int(round((ki / (1024 * 1024)) * uma_factor))
+                alloc_gi = int(round(ki / (1024 * 1024)))
+                node_gi = min(alloc_gi, uma_cap_gi)
             else:
                 node_gi = discrete_limit_gi
             best_gi = max(best_gi, node_gi)

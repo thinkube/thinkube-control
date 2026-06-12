@@ -17,36 +17,40 @@ logger = logging.getLogger(__name__)
 NODE_METRICS_PORT = 9100
 NODE_METRICS_NAMESPACE = "thinkube-control"
 
-# Namespaces whose pods are AI workloads (excluded from platform_reserved).
-AI_NAMESPACES = {"vllm", "ollama", "text-embeddings", "tensorrt-llm"}
 NODE_ROLE_LABEL = "thinkube.io/node-role"  # "platform-shared" | "ai-dedicated"
-PLATFORM_RESERVED_TTL = 30.0  # seconds to cache the per-node platform reservation
 
-_MEM_BIN = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4, "Pi": 1024**5}
-_MEM_DEC = {"k": 1e3, "K": 1e3, "M": 1e6, "G": 1e9, "T": 1e12, "P": 1e15}
+# UMA nodes (DGX Spark): GPU memory IS host RAM, so the AI budget is a fixed
+# ceiling that leaves the rest for the OS/kernel/platform — never the whole
+# device. Default 96 GB on a 128 GB Spark (≈32 GB reserved for the system).
+UMA_AI_BUDGET_GB = float(os.getenv("LLM_UMA_AI_BUDGET_GB", "96"))
+
+# Backends that lock one time-slice slot PER model (each is its own pod).
+# Ollama is excluded: one Ollama pod hosts many models in a single slot.
+SLOT_PER_MODEL_BACKENDS = ("vllm", "tensorrt-llm", "text-embeddings")
 
 
-def _quantity_to_bytes(q) -> float:
-    """Parse a Kubernetes memory quantity (e.g. '16Gi', '512Mi', '2G', '1024') to bytes."""
-    s = str(q).strip()
-    if not s:
-        return 0.0
-    for suf, mult in _MEM_BIN.items():
-        if s.endswith(suf):
-            try:
-                return float(s[:-2]) * mult
-            except ValueError:
-                return 0.0
-    for suf, mult in _MEM_DEC.items():
-        if s.endswith(suf):
-            try:
-                return float(s[:-1]) * mult
-            except ValueError:
-                return 0.0
-    try:
-        return float(s)
-    except ValueError:
-        return 0.0
+def _slots_used(allocs) -> int:
+    """Time-slice slots consumed on a node, backend-aware.
+
+    vLLM / TensorRT / TEI lock one slot per model; Ollama collapses to a single
+    shared slot however many models it hosts.
+    """
+    per_model = sum(
+        a.slots for a in allocs if not str(a.backend_id).startswith("ollama")
+    )
+    has_ollama = any(str(a.backend_id).startswith("ollama") for a in allocs)
+    return per_model + (1 if has_ollama else 0)
+
+
+def _reserved_gb(allocs) -> float:
+    """Memory reserved up front on a node. vLLM/TensorRT/TEI reserve per model;
+    Ollama self-manages its models' memory (keep_alive), so it isn't summed here.
+    """
+    return sum(
+        a.estimated_memory_gb
+        for a in allocs
+        if not str(a.backend_id).startswith("ollama")
+    )
 
 
 class LLMGPUTracker:
@@ -59,10 +63,6 @@ class LLMGPUTracker:
         self._node_pod_ips: Dict[str, str] = {}
         self._pod_ips_discovered = False
         self._last_node_discovery = 0.0
-        self._platform_reserved_floor_gb = float(
-            os.getenv("LLM_PLATFORM_RESERVED_FLOOR_GB", "16")
-        )
-        self._platform_reserved_cache: Dict[str, Tuple[float, float]] = {}
         self._discover_gpu_nodes()
 
     def refresh_nodes(self) -> int:
@@ -219,47 +219,15 @@ class LLMGPUTracker:
             return node.is_uma
         return False
 
-    def _platform_reserved_gb(self, node_name: str) -> float:
-        """Host RAM held by non-AI pods on a node (UMA budgeting), floored. Cached."""
-        now = time.monotonic()
-        cached = self._platform_reserved_cache.get(node_name)
-        if cached and (now - cached[1]) < PLATFORM_RESERVED_TTL:
-            return cached[0]
-        reserved = self._platform_reserved_floor_gb
-        try:
-            from kubernetes import client, config as k8s_config
-
-            try:
-                k8s_config.load_incluster_config()
-            except k8s_config.ConfigException:
-                k8s_config.load_kube_config()
-
-            v1 = client.CoreV1Api()
-            pods = v1.list_pod_for_all_namespaces(
-                field_selector=f"spec.nodeName={node_name},status.phase=Running"
-            )
-            total_bytes = 0.0
-            for pod in pods.items:
-                if (pod.metadata.namespace or "") in AI_NAMESPACES:
-                    continue
-                for c in (pod.spec.containers or []):
-                    req = (c.resources.requests if c.resources else None) or {}
-                    mem = req.get("memory")
-                    if mem:
-                        total_bytes += _quantity_to_bytes(mem)
-            measured = total_bytes / (1024**3)
-            reserved = max(self._platform_reserved_floor_gb, round(measured, 1))
-        except Exception as e:
-            logger.warning(f"platform_reserved compute failed for {node_name}: {e}")
-        self._platform_reserved_cache[node_name] = (reserved, now)
-        return reserved
-
     def _budget_for(
         self, node: GPUNode, total_gb: float, is_uma: bool
     ) -> Tuple[str, float, float]:
-        """Return (arch, platform_reserved_gb, ai_budget_gb) for a node.
+        """Return (arch, reserved_gb, ai_budget_gb) for a node.
 
-        UMA: ai_budget = total − platform_reserved (host RAM is quota-charged).
+        UMA: ai_budget is a fixed ceiling (UMA_AI_BUDGET_GB, clamped to the
+        node's total) because GPU memory is host RAM — the rest is left for the
+        OS/kernel/platform so the node can never be driven into OOM. `reserved`
+        is the derived remainder (total − budget), for display only.
         Discrete: ai_budget = Σ per-GPU VRAM (not cgroup-charged), reserved = 0.
         """
         arch = "uma" if (is_uma or node.arch == "uma") else "discrete"
@@ -267,10 +235,9 @@ class LLMGPUTracker:
             vram_total = (node.per_gpu_vram_gb or 0.0) * max(node.gpu_count, 1)
             ai_budget = vram_total if vram_total > 0 else total_gb
             return arch, 0.0, round(ai_budget, 1)
-        reserved = (
-            0.0 if node.role == "ai-dedicated" else self._platform_reserved_gb(node.name)
-        )
-        return arch, round(reserved, 1), round(max(total_gb - reserved, 0.0), 1)
+        ai_budget = min(total_gb, UMA_AI_BUDGET_GB) if total_gb else UMA_AI_BUDGET_GB
+        reserved = round(max(total_gb - ai_budget, 0.0), 1)
+        return arch, reserved, round(ai_budget, 1)
 
     async def _effective_total_gb(
         self, node: GPUNode, metrics: Optional[dict]
@@ -310,6 +277,12 @@ class LLMGPUTracker:
         arch, reserved, ai_budget = self._budget_for(node, total_gb, is_uma)
         margin = max(4.0, round(0.2 * target_gb, 1))
 
+        # Co-residency: time-slices share the pool, so fit against what's LEFT
+        # after the models already reserved on this node, and against free slots.
+        allocs = self._allocations.get(node_name, [])
+        reserved_on_node = _reserved_gb(allocs)
+        free_slots = max(node.total_slots - _slots_used(allocs), 0)
+
         if arch == "uma":
             # GPU memory == host RAM: util is a fraction of the whole device,
             # and the cgroup/quota must cover target + margin.
@@ -320,7 +293,8 @@ class LLMGPUTracker:
             )
             pod_mem = int(round(target_gb + margin))
             tp = 1
-            fits = (target_gb + margin) <= ai_budget if ai_budget else False
+            remaining = max(ai_budget - reserved_on_node, 0.0)
+            fits = (target_gb + margin) <= remaining and free_slots >= 1
         else:
             # Discrete VRAM: util is per-GPU; cgroup only needs host overhead.
             per_vram = node.per_gpu_vram_gb or (total_gb / max(node.gpu_count, 1))
@@ -332,25 +306,32 @@ class LLMGPUTracker:
                 else 0.9
             )
             pod_mem = int(round(max(8.0, 0.25 * target_gb + 4.0)))
-            fits = target_gb <= (per_vram * tp) if per_vram else False
+            remaining = max((per_vram * tp) - reserved_on_node, 0.0)
+            fits = target_gb <= remaining and free_slots >= tp
+
+        if fits:
+            reason = "ok"
+        elif free_slots < (1 if arch == "uma" else tp):
+            reason = f"{node_name} has no free time-slice slot ({node.total_slots} in use)"
+        else:
+            reason = (
+                f"model needs ~{target_gb:.1f} GB (+~{margin:.0f} GB margin) but "
+                f"{node_name} has ~{remaining:.1f} GB free of {ai_budget:.1f} GB "
+                f"AI budget ({arch})"
+            )
 
         return {
             "arch": arch,
             "total_gb": total_gb,
             "ai_budget_gb": ai_budget,
-            "platform_reserved_gb": reserved,
+            "ai_remaining_gb": round(remaining, 1),
+            "reserved_gb": reserved,
+            "free_slots": free_slots,
             "gpu_memory_utilization": util,
             "pod_mem_limit_gb": pod_mem,
             "tensor_parallel_size": tp,
             "fits": fits,
-            "reason": (
-                "ok"
-                if fits
-                else (
-                    f"model needs ~{target_gb:.1f} GB (+~{margin:.0f} GB margin) "
-                    f"but {node_name} ai_budget is {ai_budget:.1f} GB ({arch})"
-                )
-            ),
+            "reason": reason,
         }
 
     async def get_status(self) -> GPUStatusResponse:
@@ -368,7 +349,7 @@ class LLMGPUTracker:
 
         for name, node in self._gpu_nodes.items():
             allocs = self._allocations.get(name, [])
-            slots_used = sum(a.slots for a in allocs)
+            slots_used = _slots_used(allocs)
             metrics = await self.fetch_node_metrics(name)
 
             if metrics:
@@ -412,7 +393,7 @@ class LLMGPUTracker:
                     }
                 )
             else:
-                est_used = sum(a.estimated_memory_gb for a in allocs)
+                est_used = _reserved_gb(allocs)
                 arch, reserved, ai_budget = self._budget_for(
                     node, node.total_memory_gb, node.is_uma
                 )
@@ -433,9 +414,11 @@ class LLMGPUTracker:
             used_mem += updated.used_memory_gb
 
         # A node can accept a new model when its AI budget has headroom beyond
-        # the memory already committed to loaded models on it.
+        # the memory already reserved by co-resident models, and it has a free
+        # time-slice slot. Ollama's self-managed memory isn't counted as reserved.
         can_accept = any(
-            (n.ai_budget_gb - sum(a.estimated_memory_gb for a in n.allocations)) > 4.0
+            (n.ai_budget_gb - _reserved_gb(n.allocations)) > 4.0
+            and n.available_slots > 0
             for n in nodes
         )
 

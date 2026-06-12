@@ -887,8 +887,8 @@ git reset --hard origin/main
 
         Architecture-aware (never a flat constant):
           - UMA nodes (DGX Spark / GB10): GPU memory IS host RAM and IS
-            quota-charged, so the quota must be a large fraction of the node's
-            allocatable RAM.
+            quota-charged, so the quota is a fixed ceiling (LLM_UMA_AI_BUDGET_GB,
+            default 96Gi, clamped to allocatable) leaving the rest for the system.
           - Discrete nodes (e.g. RTX): VRAM is separate and not quota-charged,
             so the memory quota stays modest (host overhead only).
         Returns the max across GPU nodes (UMA dominates a mixed cluster), or the
@@ -897,7 +897,7 @@ git reset --hard origin/main
         default = ("8Gi", "16Gi")
         if not has_gpu:
             return default
-        uma_factor = 0.6
+        uma_cap_gi = int(float(os.environ.get("LLM_UMA_AI_BUDGET_GB", "96")))
         discrete_limit_gi = 16
         try:
             nodes = await self.k8s_core.list_node()
@@ -913,7 +913,8 @@ git reset --hard origin/main
                 if is_uma:
                     mem = str(alloc.get("memory", "0"))
                     ki = float(mem[:-2]) if mem.endswith("Ki") else float(mem or 0) / 1024
-                    node_gi = int(round((ki / (1024 * 1024)) * uma_factor))
+                    alloc_gi = int(round(ki / (1024 * 1024)))
+                    node_gi = min(alloc_gi, uma_cap_gi)
                 else:
                     node_gi = discrete_limit_gi
                 best_gi = max(best_gi, node_gi)
