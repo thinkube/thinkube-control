@@ -211,6 +211,7 @@ class LLMModelRegistry:
                 params_b=entry.get("params_b"),
                 active_params_b=entry.get("active_params_b"),
                 reasoning_format=entry.get("reasoning_format"),
+                speculative_config=entry.get("speculative_config"),
                 tool_use=entry.get("tool_use", False),
                 stop_tokens=entry.get("stop_tokens", []),
                 license=entry.get("license"),
