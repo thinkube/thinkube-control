@@ -101,10 +101,9 @@ interface GPUStatus {
   can_accept_new_model: boolean;
 }
 
-const LOADABLE_TYPES = new Set(['ollama', 'vllm', 'tensorrt-llm']);
+const LOADABLE_TYPES = new Set(['ollama', 'vllm', 'tensorrt-llm', 'text-embeddings']);
 const NON_LOADABLE_LABELS: Record<string, string> = {
   unsloth: 'Fine-tuning',
-  'text-embeddings': 'Embeddings',
 };
 
 function isModelLoadable(serverTypes: string[]): boolean {
