@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 MLFLOW_ARTIFACT_BASE = "/mlflow-models/artifacts"
 
-KNOWN_BACKEND_TYPES = ("tensorrt-llm", "ollama", "vllm")
+KNOWN_BACKEND_TYPES = ("tensorrt-llm", "text-embeddings", "ollama", "vllm")
 
 
 def parse_backend_id(backend_id: str) -> tuple[str, Optional[str]]:

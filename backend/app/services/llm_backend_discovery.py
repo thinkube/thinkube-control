@@ -107,6 +107,7 @@ class LLMBackendDiscovery:
                         "ollama": "LLM_OLLAMA_NAMESPACE",
                         "vllm": "LLM_VLLM_NAMESPACE",
                         "tensorrt-llm": "LLM_TENSORRT_NAMESPACE",
+                        "text-embeddings": "LLM_TEI_NAMESPACE",
                     }.get(backend_type, ""),
                     default_ns,
                 )
