@@ -27,6 +27,26 @@ UMA_AI_BUDGET_GB = float(os.getenv("LLM_UMA_AI_BUDGET_GB", "96"))
 # the whole device — leave only OS/kernel headroom.
 UMA_AI_BUDGET_DEDICATED_GB = float(os.getenv("LLM_UMA_AI_BUDGET_DEDICATED_GB", "112"))
 
+# Headroom the serving framework needs ON TOP of the weights, inside the
+# gpu_memory_utilization budget: CUDA graphs (~2–3 GB), activations, and a
+# minimum KV working set. The util floor guarantees the budget covers
+# weights + this overhead, so a small context (tiny KV term) can never drive
+# util below the weight footprint and crashloop vLLM on KV allocation.
+FRAMEWORK_OVERHEAD_GB = float(os.getenv("LLM_FRAMEWORK_OVERHEAD_GB", "6"))
+
+
+def _floored_util(util: float, weight_gb: Optional[float], capacity_gb: float) -> float:
+    """Raise `util` so its budget covers weights + framework overhead.
+
+    Never lowers util and never exceeds 0.95. A no-op when weight_gb/capacity
+    is unknown (preserves prior behaviour for callers that don't pass a weight).
+    """
+    if not weight_gb or capacity_gb <= 0:
+        return util
+    min_util = (weight_gb + FRAMEWORK_OVERHEAD_GB) / capacity_gb
+    return min(max(util, min_util), 0.95)
+
+
 # Backends that lock one time-slice slot PER model (each is its own pod).
 # Ollama is excluded: one Ollama pod hosts many models in a single slot.
 SLOT_PER_MODEL_BACKENDS = ("vllm", "tensorrt-llm", "text-embeddings")
@@ -267,7 +287,8 @@ class LLMGPUTracker:
         return round(total or 0.0, 1), is_uma
 
     async def plan_sizing(
-        self, node_name: str, target_gb: float, gpu_count: int = 1
+        self, node_name: str, target_gb: float, gpu_count: int = 1,
+        weight_gb: Optional[float] = None,
     ) -> dict:
         """Translate a model footprint into arch-correct vLLM/pod knobs.
 
@@ -299,7 +320,10 @@ class LLMGPUTracker:
                 if total_gb
                 else 0.0
             )
-            pod_mem = int(round(target_gb + margin))
+            # Floor so the budget always covers weights + framework overhead —
+            # a small context can't drive util below the weight footprint.
+            util = round(_floored_util(util, weight_gb, total_gb), 2)
+            pod_mem = int(round(max(target_gb, util * total_gb) + margin))
             tp = 1
             remaining = max(ai_budget - reserved_on_node, 0.0)
             fits = (target_gb + margin) <= remaining and free_slots >= 1
@@ -312,6 +336,10 @@ class LLMGPUTracker:
                 min(max(round(per_gpu_target / per_vram, 2), 0.05), 0.95)
                 if per_vram
                 else 0.9
+            )
+            # Per-GPU floor: the model's weights are split across `tp` GPUs.
+            util = round(
+                _floored_util(util, (weight_gb / tp) if weight_gb else None, per_vram), 2
             )
             pod_mem = int(round(max(8.0, 0.25 * target_gb + 4.0)))
             remaining = max((per_vram * tp) - reserved_on_node, 0.0)

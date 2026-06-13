@@ -316,7 +316,9 @@ class LLMLifecycleManager:
         # Architecture-aware sizing: translate the footprint into vLLM/pod knobs
         # consistent with the node's memory architecture, AI budget, and the
         # slots/memory already in use by co-resident models on the chosen node.
-        sizing = await llm_gpu_tracker.plan_sizing(node, estimated_memory, gpu_count)
+        sizing = await llm_gpu_tracker.plan_sizing(
+            node, estimated_memory, gpu_count, weight_gb=self._weight_gb(entry)
+        )
 
         # Node-safety rail: if it won't fit the operator-chosen node, refuse here
         # — never issue a load that would exceed the node's budget/quota.
@@ -676,23 +678,30 @@ class LLMLifecycleManager:
                 return name
         return None
 
+    def _weight_gb(self, entry) -> Optional[float]:
+        """Weight footprint in GiB.
+
+        Prefer the real measured checkpoint size (populated by
+        _ensure_measured_weight) over the params×dtype heuristic, which
+        under-counts multimodal / mixed-precision weights (vision encoder,
+        non-quantized embeddings/lm_head). Falls back to the parsed catalog size.
+        """
+        if entry is None:
+            return None
+        measured_bytes = getattr(entry, "weight_bytes", None)
+        if measured_bytes:
+            return measured_bytes / (1024 ** 3)
+        if getattr(entry, "params_b", None):
+            return self._estimate_weight_gb(entry.params_b, entry.quantization)
+        return self._estimate_weight_from_size(entry)
+
     def _estimate_memory(self, entry, max_context_length: Optional[int] = None) -> float:
         if entry is None:
             return 4.0
 
-        # Prefer the real measured checkpoint size (populated by
-        # _ensure_measured_weight) over the params×dtype heuristic, which
-        # under-counts multimodal / mixed-precision weights (vision encoder,
-        # non-quantized embeddings/lm_head).
-        measured_bytes = getattr(entry, "weight_bytes", None)
-        if measured_bytes:
-            weight_gb = measured_bytes / (1024 ** 3)
-        elif getattr(entry, "params_b", None):
-            weight_gb = self._estimate_weight_gb(entry.params_b, entry.quantization)
-        else:
-            weight_gb = self._estimate_weight_from_size(entry)
-            if weight_gb is None:
-                return 4.0
+        weight_gb = self._weight_gb(entry)
+        if weight_gb is None:
+            return 4.0
 
         kv_cache_gb = self._estimate_kv_cache_gb(entry, max_context_length)
 
