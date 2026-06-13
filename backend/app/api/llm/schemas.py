@@ -37,6 +37,10 @@ class ModelEntry(BaseModel):
     # measured from MLflow rather than estimated from params×dtype. Used by the
     # sizing logic so multimodal/mixed-precision weights aren't under-counted.
     weight_bytes: Optional[int] = None
+    # Run vLLM in eager mode (--enforce-eager): skip torch.compile + CUDA-graph
+    # capture. Keeps the init memory peak ≈ weights (small, predictable) at a
+    # small decode cost on bandwidth-bound models.
+    enforce_eager: bool = False
     tool_use: bool = False
     stop_tokens: List[str] = Field(default_factory=list)
     license: Optional[str] = None

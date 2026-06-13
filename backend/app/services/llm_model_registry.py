@@ -213,6 +213,7 @@ class LLMModelRegistry:
                 reasoning_format=entry.get("reasoning_format"),
                 speculative_config=entry.get("speculative_config"),
                 weight_bytes=entry.get("weight_bytes") or (existing.weight_bytes if existing else None),
+                enforce_eager=entry.get("enforce_eager", False),
                 tool_use=entry.get("tool_use", False),
                 stop_tokens=entry.get("stop_tokens", []),
                 license=entry.get("license"),

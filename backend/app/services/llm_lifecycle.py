@@ -354,6 +354,8 @@ class LLMLifecycleManager:
             payload["tool_use"] = entry.tool_use
         if getattr(entry, "speculative_config", None):
             payload["speculative_config"] = entry.speculative_config
+        if getattr(entry, "enforce_eager", False):
+            payload["enforce_eager"] = True
         if max_context_length:
             payload["max_context_length"] = max_context_length
         if sizing.get("gpu_memory_utilization") is not None:
@@ -398,6 +400,8 @@ class LLMLifecycleManager:
                 model_env["MAX_CONTEXT_LENGTH"] = str(payload["max_context_length"])
             if payload.get("speculative_config"):
                 model_env["SPECULATIVE_CONFIG"] = payload["speculative_config"]
+            if payload.get("enforce_eager"):
+                model_env["ENFORCE_EAGER"] = "true"
             if payload.get("gpu_memory_utilization") is not None:
                 model_env["VLLM_GPU_MEMORY_UTILIZATION"] = str(
                     payload["gpu_memory_utilization"]
