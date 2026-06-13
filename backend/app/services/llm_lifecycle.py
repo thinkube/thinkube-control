@@ -42,6 +42,12 @@ class LLMLifecycleManager:
 
     LOADABLE_TYPES = {"ollama", "vllm", "tensorrt-llm", "text-embeddings"}
 
+    # Default serving context when the caller doesn't specify one. Keeps every
+    # caller (UI and MCP/API) consistent and avoids deploying at the model's full
+    # window (e.g. 256K), which wastes KV-cache memory. Matches the frontend
+    # LoadModelDialog DEFAULT_CONTEXT (8192). Capped at the model's real context.
+    DEFAULT_CONTEXT_LENGTH = 8192
+
     async def load_model(
         self,
         model_id: str,
@@ -76,6 +82,15 @@ class LLMLifecycleManager:
             return ModelLoadResponse(
                 model_id=model_id, state=ModelState.loading, message="Model is already loading"
             )
+
+        # Default the serving context when unspecified (e.g. MCP/API callers that
+        # omit it) so behaviour matches the UI instead of falling back to the
+        # model's full window. Cap at the model's real context length.
+        if max_context_length is None:
+            default_ctx = self.DEFAULT_CONTEXT_LENGTH
+            if entry.context_length:
+                default_ctx = min(default_ctx, entry.context_length)
+            max_context_length = default_ctx
 
         resolved_backend = backend
 
