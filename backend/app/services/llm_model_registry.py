@@ -212,6 +212,7 @@ class LLMModelRegistry:
                 active_params_b=entry.get("active_params_b"),
                 reasoning_format=entry.get("reasoning_format"),
                 speculative_config=entry.get("speculative_config"),
+                weight_bytes=entry.get("weight_bytes") or (existing.weight_bytes if existing else None),
                 tool_use=entry.get("tool_use", False),
                 stop_tokens=entry.get("stop_tokens", []),
                 license=entry.get("license"),
@@ -259,6 +260,16 @@ class LLMModelRegistry:
             if backend_id is not None:
                 self._models[model_id].backend_id = backend_id
             self._models[model_id].last_error = error
+
+    def set_weight_bytes(self, model_id: str, weight_bytes: int):
+        """Cache the measured on-disk checkpoint size on the registry entry.
+
+        Survives until the next catalog refresh; the catalog `weight_bytes`
+        (when present) re-seeds it, so a measured value persists across refresh
+        only if also written to the catalog. Measuring is cheap and idempotent.
+        """
+        if model_id in self._models and weight_bytes:
+            self._models[model_id].weight_bytes = weight_bytes
 
     async def start_polling(self):
         if self._is_running:

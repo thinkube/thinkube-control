@@ -306,6 +306,10 @@ class LLMLifecycleManager:
                 message=f"No performance backend type found for {entry.server_type}"
             )
 
+        # Measure the real checkpoint size (cached on the entry) before sizing,
+        # so multimodal/mixed-precision weights aren't under-counted and the
+        # derived gpu_memory_utilization can't fall below the weight footprint.
+        await self._ensure_measured_weight(entry)
         estimated_memory = self._estimate_memory(entry, max_context_length)
         gpu_count = self._gpus_needed(estimated_memory, node)
 
@@ -557,6 +561,81 @@ class LLMLifecycleManager:
             logger.debug(f"MLflow artifact list failed: {e}")
         return None
 
+    # Weight files whose byte sizes sum to the real checkpoint footprint.
+    _WEIGHT_EXTS = (".safetensors", ".bin", ".gguf", ".pt", ".pth")
+
+    async def _resolve_run_id(self, model_id: str, token: str) -> Optional[str]:
+        """Resolve a model's latest MLflow run_id from the registry."""
+        mlflow_url = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000")
+        model_name = model_id.replace("/", "-")
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+                resp = await client.get(
+                    f"{mlflow_url}/api/2.0/mlflow/model-versions/search",
+                    params={"filter": f"name='{model_name}'"},
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                resp.raise_for_status()
+                versions = resp.json().get("model_versions", [])
+                if not versions:
+                    return None
+                return max(versions, key=lambda v: int(v["version"]))["run_id"]
+        except Exception as e:
+            logger.debug(f"MLflow run_id resolve failed for {model_id}: {e}")
+            return None
+
+    async def _measure_weight_bytes(self, model_id: str) -> Optional[int]:
+        """Sum the on-disk weight-file sizes from MLflow = real checkpoint size.
+
+        Avoids the params×dtype under-count for multimodal / mixed-precision
+        checkpoints. Returns None if the model/artifacts can't be resolved (the
+        caller falls back to the heuristic).
+        """
+        token = await self._get_mlflow_token()
+        if not token:
+            return None
+        run_id = await self._resolve_run_id(model_id, token)
+        if not run_id:
+            return None
+        mlflow_url = os.getenv("MLFLOW_TRACKING_URI")
+        total = 0
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+                resp = await client.get(
+                    f"{mlflow_url}/api/2.0/mlflow/artifacts/list",
+                    params={"run_id": run_id, "path": "model"},
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                if resp.status_code != 200:
+                    return None
+                for f in resp.json().get("files", []):
+                    if f.get("is_dir"):
+                        continue
+                    if str(f.get("path", "")).lower().endswith(self._WEIGHT_EXTS):
+                        total += int(f.get("file_size") or 0)
+        except Exception as e:
+            logger.debug(f"MLflow weight-size measure failed for {model_id}: {e}")
+            return None
+        return total or None
+
+    async def _ensure_measured_weight(self, entry) -> None:
+        """Populate entry.weight_bytes from the real checkpoint when missing.
+
+        Idempotent and best-effort: on any failure the sizing falls back to the
+        params×dtype heuristic (with the plan_sizing floor as the safety net).
+        """
+        if getattr(entry, "weight_bytes", None):
+            return
+        wb = await self._measure_weight_bytes(entry.id)
+        if wb:
+            from app.services.llm_model_registry import llm_model_registry
+            llm_model_registry.set_weight_bytes(entry.id, wb)
+            entry.weight_bytes = wb
+            logger.info(
+                f"Measured weight size for {entry.id}: {wb / 1024**3:.2f} GiB "
+                f"(was estimating from params/size)"
+            )
+
     async def _get_mlflow_token(self) -> Optional[str]:
         token_url = os.getenv("MLFLOW_KEYCLOAK_TOKEN_URL")
         client_id = os.getenv("MLFLOW_KEYCLOAK_CLIENT_ID")
@@ -601,7 +680,14 @@ class LLMLifecycleManager:
         if entry is None:
             return 4.0
 
-        if getattr(entry, "params_b", None):
+        # Prefer the real measured checkpoint size (populated by
+        # _ensure_measured_weight) over the params×dtype heuristic, which
+        # under-counts multimodal / mixed-precision weights (vision encoder,
+        # non-quantized embeddings/lm_head).
+        measured_bytes = getattr(entry, "weight_bytes", None)
+        if measured_bytes:
+            weight_gb = measured_bytes / (1024 ** 3)
+        elif getattr(entry, "params_b", None):
             weight_gb = self._estimate_weight_gb(entry.params_b, entry.quantization)
         else:
             weight_gb = self._estimate_weight_from_size(entry)

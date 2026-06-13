@@ -33,6 +33,10 @@ class ModelEntry(BaseModel):
     # vLLM --speculative-config JSON (e.g. '{"method": "mtp", "num_speculative_tokens": 1}')
     # for models that ship a draft / MTP head. None = no speculative decoding.
     speculative_config: Optional[str] = None
+    # Real on-disk checkpoint size in bytes (summed safetensors/weight files),
+    # measured from MLflow rather than estimated from params×dtype. Used by the
+    # sizing logic so multimodal/mixed-precision weights aren't under-counted.
+    weight_bytes: Optional[int] = None
     tool_use: bool = False
     stop_tokens: List[str] = Field(default_factory=list)
     license: Optional[str] = None
