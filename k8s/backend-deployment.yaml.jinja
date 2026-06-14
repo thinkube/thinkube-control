@@ -105,7 +105,12 @@ spec:
         - name: LLM_OLLAMA_URL
           value: "http://ollama.ollama.svc.cluster.local:11434"
         - name: LLM_MODEL_LOAD_TIMEOUT_SECONDS
-          value: "120"
+          # Backstop for a load stuck in `loading`. Must exceed the wrapper's own
+          # 600s load wait AND the slowest legit init — DFlash compiles + captures
+          # CUDA graphs for target + drafter (~336s, more for bigger models), so
+          # 120s would kill a load still legitimately in progress. A genuinely
+          # crashed engine fails fast on its own (wrapper exits -> pod NotReady).
+          value: "660"
         - name: LLM_GPU_TOTAL_MEMORY_GB
           value: "128"
         - name: LLM_GPU_SHARED_MEMORY
