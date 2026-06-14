@@ -1,0 +1,99 @@
+= LLM Serving & Models
+:page-type: reference
+
+thinkube-control runs Thinkube's *self-hosted inference platform*: it turns a
+catalog of models plus your GPU nodes into running, auto-sized model servers
+behind one authenticated, OpenAI-compatible endpoint. Like the rest of the
+control plane, every operation is available both as *MCP tools* (ask Claude) and
+in the *web dashboard*.
+
+[NOTE]
+====
+This page lives in the *thinkube-control* repository beside the code it documents
+(docs-with-code, TEP-tgh6iy) and is aggregated into the Thinkube docs at build time.
+====
+
+== Two layers: control plane and gateway
+
+The "LLM gateway" is two cooperating pieces, not one:
+
+* *Control plane* (the thinkube-control backend) — the substance. It holds the
+  model catalog and state, mirrors weights, decides placement, *sizes* each model
+  to the chosen node's memory, creates and reclaims the serving pods, and resolves
+  a model name to a concrete backend.
+* *Inference gateway* (`thinkube-control-llm-proxy`) — the data path. An
+  OpenAI-compatible reverse proxy at `llm.<domain>` that authenticates the caller
+  (Keycloak/OIDC), asks the control plane to resolve the model to a backend,
+  forwards the request, and records metrics.
+
+Clients only ever talk to the gateway; the control plane is what makes a model
+*be there* to talk to.
+
+== Model lifecycle
+
+A model moves through these states:
+
+[horizontal]
+`registered`:: known to the catalog, weights not yet mirrored.
+`deployable`:: weights mirrored to MLflow and ready to load.
+`loading`:: a serving pod is starting (pull/compile/warm-up — can be several minutes).
+`available`:: serving and resolvable through the gateway.
+`unloading`:: being torn down; its pod is reclaimed when the last model leaves it.
+
+== Loading a model
+
+Load from the dashboard's *Load* dialog or the `load_llm_model` MCP tool. A target
+*node* is required. Optional, per-load settings:
+
+[horizontal]
+Context length:: caps `max-model-len`. Smaller contexts use far less KV-cache
+memory; pick a serving-appropriate value (8K–16K is plenty for most uses) rather
+than the model's full window.
+Speculative tokens (k):: for models that use speculative decoding, overrides the
+catalog's default draft depth at load time — tune it without editing the catalog
+(see <<speculative-decoding>>). Omitted = catalog default.
+Tier / backend / node:: which serving stack and where (see <<backends>>).
+
+=== Automatic memory sizing
+
+You do not set `gpu_memory_utilization` or pod memory by hand. The control plane
+measures the *real* checkpoint size, adds the KV-cache and framework overhead
+(and a speculative drafter's weights when present), and derives a utilization and
+pod-memory request that fit the node's AI budget — refusing a load that would not
+fit rather than crash-looping it. On unified-memory nodes (e.g. DGX Spark, where
+GPU memory *is* host RAM) the budget is a fixed ceiling that leaves room for the
+OS and platform.
+
+[#speculative-decoding]
+== Speculative decoding
+
+Speculative decoding drafts several tokens ahead and verifies them in one pass,
+raising decode throughput on memory-bandwidth-bound GPUs. Two methods are supported,
+selected per model in the catalog's `speculative_config`:
+
+* *MTP* — a multi-token-prediction head built into the model itself.
+* *DFlash* — a *separate* lightweight drafter model. The catalog names the drafter
+  by id; at load time the control plane resolves it to its mirrored artifact path
+  and loads it alongside the target. The drafter is an *auxiliary* model: it is
+  mirrored and sized like any other, but never offered as an independently loadable
+  chat model.
+
+`num_speculative_tokens` (the draft depth, *k*) is the main tuning knob — higher
+can be faster when drafts are accepted, but costs memory and reduces KV-cache
+headroom. Set it per load (above) to experiment without a catalog change.
+
+[#backends]
+== Serving backends
+
+[horizontal]
+vLLM:: performance serving for text-generation models (one pod per model).
+text-embeddings (TEI):: embedding models.
+Ollama:: flexible serving where one pod hosts several models.
+
+== Mirroring models
+
+Before a catalog model can load, its weights are *mirrored* from their source
+(e.g. Hugging Face) into the platform's MLflow/JuiceFS storage — submit it from
+the catalog (dashboard or `submit_model_mirror`) and an Argo workflow fetches it.
+Gated source repositories require access to be granted to the platform's
+Hugging Face account first.

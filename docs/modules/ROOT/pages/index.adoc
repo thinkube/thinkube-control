@@ -29,6 +29,7 @@ it can do is exposed two ways:
 
 * *Templates & deployments* — deploy and redeploy app templates onto the cluster.
 * *Models & GPUs* — load, serve, and mirror LLMs; inspect GPU status.
+  See xref:llm-serving.adoc[LLM serving & models].
 * *Images & registries* — build custom images and manage Harbor.
 * *Notebooks & venvs* — JupyterHub virtual environments and notebooks.
 * *Components & services* — install and toggle the platform's services.
