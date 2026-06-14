@@ -704,23 +704,50 @@ class LLMLifecycleManager:
                 f"DFlash drafter '{drafter_id}' is not mirrored/registered — "
                 f"mirror it before loading a model that uses it"
             )
-        await self._ensure_measured_weight(drafter)
-        token = await self._get_mlflow_token()
-        path = await self._resolve_artifact_dir(drafter_id, token) if token else None
+        # Resolve the drafter's artifact path, retrying transient MLflow/token
+        # blips before refusing (rapid repeated Keycloak grants were a flake
+        # source). One token per attempt, reused for path + weight measure to
+        # minimise round-trips; the critical path (token + dir) runs first, then
+        # the best-effort weight measure. Each failed attempt is logged — never a
+        # silent None.
+        path = None
+        last_reason = "unknown"
+        for attempt in range(3):
+            token = await self._get_mlflow_token()
+            if not token:
+                last_reason = "MLflow token grant returned no token"
+            else:
+                path = await self._resolve_artifact_dir(drafter_id, token)
+                if path:
+                    if not getattr(drafter, "weight_bytes", None):
+                        try:
+                            await self._ensure_measured_weight(drafter, token=token)
+                        except Exception as e:
+                            logger.debug(f"Drafter weight measure failed (non-fatal): {e}")
+                    break
+                last_reason = "MLflow returned no run/version for the drafter"
+            logger.warning(
+                f"DFlash drafter '{drafter_id}' resolve attempt {attempt + 1}/3 "
+                f"failed: {last_reason}"
+            )
+            if attempt < 2:
+                await asyncio.sleep(1.5 * (attempt + 1))
         if not path:
             raise ValueError(
-                f"Could not resolve the MLflow artifact path for DFlash drafter '{drafter_id}'"
+                f"Could not resolve the MLflow artifact path for DFlash drafter "
+                f"'{drafter_id}' after 3 attempts ({last_reason})"
             )
         return drafter, path
 
-    async def _measure_weight_bytes(self, model_id: str) -> Optional[int]:
+    async def _measure_weight_bytes(self, model_id: str, token: Optional[str] = None) -> Optional[int]:
         """Sum the on-disk weight-file sizes from MLflow = real checkpoint size.
 
         Avoids the params×dtype under-count for multimodal / mixed-precision
         checkpoints. Returns None if the model/artifacts can't be resolved (the
-        caller falls back to the heuristic).
+        caller falls back to the heuristic). A caller may pass an existing MLflow
+        `token` to avoid an extra Keycloak grant.
         """
-        token = await self._get_mlflow_token()
+        token = token or await self._get_mlflow_token()
         if not token:
             return None
         run_id = await self._resolve_run_id(model_id, token)
@@ -747,15 +774,16 @@ class LLMLifecycleManager:
             return None
         return total or None
 
-    async def _ensure_measured_weight(self, entry) -> None:
+    async def _ensure_measured_weight(self, entry, token: Optional[str] = None) -> None:
         """Populate entry.weight_bytes from the real checkpoint when missing.
 
         Idempotent and best-effort: on any failure the sizing falls back to the
         params×dtype heuristic (with the plan_sizing floor as the safety net).
+        An optional MLflow `token` is reused to avoid an extra Keycloak grant.
         """
         if getattr(entry, "weight_bytes", None):
             return
-        wb = await self._measure_weight_bytes(entry.id)
+        wb = await self._measure_weight_bytes(entry.id, token=token)
         if wb:
             from app.services.llm_model_registry import llm_model_registry
             llm_model_registry.set_weight_bytes(entry.id, wb)
