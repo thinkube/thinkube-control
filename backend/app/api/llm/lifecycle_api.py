@@ -72,6 +72,7 @@ async def load_model(model_id: str, request: ModelLoadRequest = ModelLoadRequest
         backend=request.backend,
         node=request.node,
         max_context_length=request.max_context_length,
+        num_speculative_tokens=request.num_speculative_tokens,
     )
     return result
 

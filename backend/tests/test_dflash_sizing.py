@@ -72,3 +72,18 @@ def test_no_drafter_estimate_unchanged():
     # Regression (AC6): a model without a drafter sizes exactly as before.
     assert _mgr._estimate_memory(_target(), 8192, extra_weight_gb=0.0) == \
         _mgr._estimate_memory(_target(), 8192)
+
+
+# --- per-load num_speculative_tokens override (SL-4) ---
+
+def test_set_num_speculative_tokens_override():
+    p = json.loads(_mgr._set_num_speculative_tokens(DFLASH, 7))
+    assert p["num_speculative_tokens"] == 7
+    assert p["method"] == "dflash"  # other fields preserved
+
+
+def test_set_num_speculative_tokens_replaces_existing():
+    cfg = '{"method": "dflash", "model": "/mlflow/x", "num_speculative_tokens": 15}'
+    p = json.loads(_mgr._set_num_speculative_tokens(cfg, 4))
+    assert p["num_speculative_tokens"] == 4
+    assert p["model"] == "/mlflow/x"  # path override (from SL-2) untouched

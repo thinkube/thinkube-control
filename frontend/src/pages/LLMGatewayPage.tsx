@@ -48,6 +48,7 @@ interface ModelEntry {
   stop_tokens: string[];
   license: string | null;
   gated: boolean;
+  speculative_config: string | null;
 }
 
 interface BackendEntry {
@@ -516,6 +517,7 @@ export default function LLMGatewayPage() {
           active_params_b={loadDialog.active_params_b}
           context_length={loadDialog.context_length}
           reasoning_format={loadDialog.reasoning_format}
+          speculative_config={loadDialog.speculative_config}
           tool_use={loadDialog.tool_use ?? false}
           open={!!loadDialog}
           onOpenChange={(open) => {

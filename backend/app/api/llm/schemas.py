@@ -182,6 +182,10 @@ class ModelLoadRequest(BaseModel):
     backend: Optional[str] = None
     node: Optional[str] = None
     max_context_length: Optional[int] = None
+    # Per-load override of the speculative draft depth (k). Applies to a model
+    # whose catalog speculative_config sets a method (e.g. DFlash); lets `k` be
+    # tuned at load time without editing the catalog. None = use catalog default.
+    num_speculative_tokens: Optional[int] = None
 
 
 class ModelLoadResponse(BaseModel):

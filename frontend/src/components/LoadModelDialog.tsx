@@ -92,6 +92,7 @@ interface Props {
   active_params_b: number | null;
   context_length: number | null;
   reasoning_format: string | null;
+  speculative_config?: string | null;
   tool_use: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -133,6 +134,7 @@ export default function LoadModelDialog({
   active_params_b,
   context_length,
   reasoning_format,
+  speculative_config,
   tool_use,
   open,
   onOpenChange,
@@ -143,8 +145,12 @@ export default function LoadModelDialog({
   const [selectedBackendType, setSelectedBackendType] = useState<string>('');
   const [selectedNode, setSelectedNode] = useState<string>('');
   const [selectedContext, setSelectedContext] = useState<string>('');
+  const [specTokens, setSpecTokens] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // The model uses speculative decoding iff its catalog config sets a method.
+  const usesSpeculative = !!speculative_config;
 
   const compatibleTypes = serverType.filter((t) => t in BACKEND_TYPE_LABELS);
 
@@ -179,12 +185,14 @@ export default function LoadModelDialog({
     setError(null);
     try {
       const maxCtx = selectedContext ? parseInt(selectedContext, 10) : undefined;
+      const specK = usesSpeculative && specTokens ? parseInt(specTokens, 10) : undefined;
       const resp = await api.post(
         `/llm/models/${encodeURIComponent(modelId)}/load`,
         {
           backend: selectedBackendType || undefined,
           node: selectedNode || undefined,
           max_context_length: maxCtx || undefined,
+          num_speculative_tokens: specK || undefined,
         }
       );
       if (
@@ -339,6 +347,25 @@ export default function LoadModelDialog({
                     Reduced context uses less GPU memory (less KV cache)
                   </p>
                 )}
+              </div>
+            )}
+
+            {/* Speculative decoding draft depth (k) — only for speculative models */}
+            {usesSpeculative && (
+              <div className="space-y-2">
+                <TkLabel>Speculative tokens (k)</TkLabel>
+                <input
+                  type="number"
+                  min={1}
+                  max={32}
+                  value={specTokens}
+                  onChange={(e) => setSpecTokens(e.target.value)}
+                  placeholder="default"
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Draft depth for speculative decoding. Higher can be faster when drafts are accepted, but needs more memory. Leave empty for the model's catalog default.
+                </p>
               </div>
             )}
 

@@ -56,6 +56,7 @@ class LLMLifecycleManager:
         backend: Optional[str] = None,
         node: Optional[str] = None,
         max_context_length: Optional[int] = None,
+        num_speculative_tokens: Optional[int] = None,
     ) -> ModelLoadResponse:
         from app.services.llm_model_registry import llm_model_registry
         from app.services.llm_gpu_tracker import llm_gpu_tracker
@@ -112,7 +113,7 @@ class LLMLifecycleManager:
             elif resolved_tier == ModelTier.flexible and "ollama" in entry.server_type:
                 resolved_backend = "ollama"
             elif resolved_tier == ModelTier.performance:
-                return await self._load_performance(model_id, backend=backend, node=node, max_context_length=max_context_length)
+                return await self._load_performance(model_id, backend=backend, node=node, max_context_length=max_context_length, num_speculative_tokens=num_speculative_tokens)
             elif "ollama" in entry.server_type:
                 resolved_backend = "ollama"
 
@@ -120,7 +121,7 @@ class LLMLifecycleManager:
             return await self._load_ollama(model_id, keep_alive, node, max_context_length=max_context_length)
 
         if resolved_backend in ("vllm", "tensorrt-llm", "text-embeddings"):
-            return await self._load_performance(model_id, backend=resolved_backend, node=node, max_context_length=max_context_length)
+            return await self._load_performance(model_id, backend=resolved_backend, node=node, max_context_length=max_context_length, num_speculative_tokens=num_speculative_tokens)
 
         return ModelLoadResponse(
             model_id=model_id, state=entry.state,
@@ -281,6 +282,7 @@ class LLMLifecycleManager:
         self, model_id: str,
         backend: Optional[str] = None, node: Optional[str] = None,
         max_context_length: Optional[int] = None,
+        num_speculative_tokens: Optional[int] = None,
     ) -> ModelLoadResponse:
         from app.services.llm_backend_discovery import llm_backend_discovery
         from app.services.llm_model_registry import llm_model_registry
@@ -385,6 +387,9 @@ class LLMLifecycleManager:
             if drafter_path:
                 # Swap the drafter's catalog id for its resolved JuiceFS/MLflow path.
                 spec_cfg = self._inject_drafter_path(spec_cfg, drafter_path)
+            if num_speculative_tokens is not None:
+                # Per-load override of the catalog's default k (e.g. tune DFlash).
+                spec_cfg = self._set_num_speculative_tokens(spec_cfg, num_speculative_tokens)
             payload["speculative_config"] = spec_cfg
         if getattr(entry, "enforce_eager", False):
             payload["enforce_eager"] = True
@@ -649,6 +654,13 @@ class LLMLifecycleManager:
         cfg = json_mod.loads(spec_config)
         cfg["model"] = drafter_path
         cfg.pop("drafter", None)
+        return json_mod.dumps(cfg)
+
+    @staticmethod
+    def _set_num_speculative_tokens(spec_config: str, n: int) -> str:
+        """Override the speculative draft depth (k) in a speculative_config JSON."""
+        cfg = json_mod.loads(spec_config)
+        cfg["num_speculative_tokens"] = int(n)
         return json_mod.dumps(cfg)
 
     async def _resolve_artifact_dir(self, model_id: str, token: str) -> Optional[str]:
