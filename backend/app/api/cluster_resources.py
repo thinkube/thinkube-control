@@ -1,6 +1,8 @@
 """Cluster resources API for real-time resource availability"""
 
+import asyncio
 import logging
+import time
 from typing import List, Dict, Any
 from fastapi import APIRouter, HTTPException
 from kubernetes import client, config
@@ -8,6 +10,25 @@ from kubernetes.stream import stream
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/cluster", tags=["cluster-resources"])
+
+# Short-lived cache so the endpoint returns reliably fast.
+#
+# Computing cluster resources requires listing every pod cluster-wide, which
+# takes a few seconds on a busy cluster. JupyterHub calls this endpoint twice
+# in quick succession per spawn (spawn-form render + spawn-time profile
+# re-evaluation) with a 10s client timeout. Recomputing on every call left the
+# endpoint flirting with that timeout; a timeout on the second call used to
+# crash the hub. Caching makes the second call instant and bounds load when
+# several users spawn at once. The lock coalesces concurrent cold-cache callers
+# onto a single computation instead of stampeding the Kubernetes API server.
+_CACHE_TTL_SECONDS = 20
+_cache: Dict[str, Any] = {"data": None, "expires_at": 0.0}
+_cache_lock = asyncio.Lock()
+
+# Hard bound on the nvidia-smi exec so a busy/unresponsive GPU node can never
+# make this endpoint hang (the rest of the data is still returned without it).
+_GPU_EXEC_TIMEOUT_SECONDS = 8
+
 
 def parse_memory(memory_str: str) -> int:
     """Parse Kubernetes memory string to bytes"""
@@ -25,6 +46,7 @@ def parse_memory(memory_str: str) -> int:
         return int(memory_str[:-1]) * 1024
     return int(memory_str)
 
+
 def format_memory(bytes_val: int) -> str:
     """Format bytes to human readable string"""
     if bytes_val >= 1024 * 1024 * 1024:
@@ -35,144 +57,183 @@ def format_memory(bytes_val: int) -> str:
         return f"{bytes_val // 1024}Ki"
     return str(bytes_val)
 
+
 @router.get("/resources", response_model=List[Dict[str, Any]])
 async def get_cluster_resources():
-    """Get real-time cluster resource availability including GPU details"""
+    """Get real-time cluster resource availability including GPU details.
 
-    try:
-        # Load kubernetes config
+    Served from a short-lived cache; recomputed at most once per
+    ``_CACHE_TTL_SECONDS`` and off the event loop so blocking Kubernetes calls
+    never stall the API server.
+    """
+    now = time.monotonic()
+    if _cache["data"] is not None and now < _cache["expires_at"]:
+        return _cache["data"]
+
+    async with _cache_lock:
+        # Another request may have refreshed the cache while we waited.
+        now = time.monotonic()
+        if _cache["data"] is not None and now < _cache["expires_at"]:
+            return _cache["data"]
+
         try:
-            config.load_incluster_config()
-        except:
-            # Fallback for local development
-            config.load_kube_config()
+            data = await asyncio.to_thread(_compute_cluster_resources)
+        except Exception as e:
+            logger.error(f"Failed to get cluster resources: {e}")
+            # Prefer serving recent real data over failing a spawn outright.
+            if _cache["data"] is not None:
+                logger.warning("Serving stale cluster-resources cache after error")
+                return _cache["data"]
+            raise HTTPException(status_code=500, detail=str(e))
 
-        v1 = client.CoreV1Api()
+        _cache["data"] = data
+        _cache["expires_at"] = time.monotonic() + _CACHE_TTL_SECONDS
+        return data
 
-        # Get all nodes
-        nodes = v1.list_node()
 
-        result = []
-        for node in nodes.items:
-            node_name = node.metadata.name
+def _compute_cluster_resources() -> List[Dict[str, Any]]:
+    """Synchronous cluster-resource computation.
 
-            # Get node capacity
-            cpu_capacity = node.status.capacity.get("cpu", "0")
-            # Parse CPU - might be int or string with 'm' suffix
-            if isinstance(cpu_capacity, str):
-                if cpu_capacity.endswith('m'):
-                    cpu_val = int(cpu_capacity[:-1]) / 1000
-                else:
-                    cpu_val = int(cpu_capacity)
+    Runs in a worker thread (see :func:`get_cluster_resources`) so the blocking
+    Kubernetes client calls never block the FastAPI event loop.
+    """
+    # Load kubernetes config
+    try:
+        config.load_incluster_config()
+    except Exception:
+        # Fallback for local development
+        config.load_kube_config()
+
+    v1 = client.CoreV1Api()
+
+    # Get all nodes
+    nodes = v1.list_node()
+
+    # Fetch all pods ONCE and bucket by node. A per-node field_selector on
+    # spec.nodeName is not index-backed, so the API server re-lists every pod
+    # cluster-wide for each node (~3s each). One list + in-memory grouping keeps
+    # this endpoint fast.
+    all_pods = v1.list_pod_for_all_namespaces()
+    pods_by_node: Dict[str, List[Any]] = {}
+    for pod in all_pods.items:
+        pods_by_node.setdefault(pod.spec.node_name, []).append(pod)
+
+    result = []
+    for node in nodes.items:
+        node_name = node.metadata.name
+
+        # Get node capacity
+        cpu_capacity = node.status.capacity.get("cpu", "0")
+        # Parse CPU - might be int or string with 'm' suffix
+        if isinstance(cpu_capacity, str):
+            if cpu_capacity.endswith('m'):
+                cpu_val = int(cpu_capacity[:-1]) / 1000
             else:
                 cpu_val = int(cpu_capacity)
+        else:
+            cpu_val = int(cpu_capacity)
 
-            capacity = {
-                "cpu": cpu_val,
-                "memory": parse_memory(node.status.capacity.get("memory", "0")),
-                "gpu": int(node.status.capacity.get("nvidia.com/gpu", 0))
-            }
+        capacity = {
+            "cpu": cpu_val,
+            "memory": parse_memory(node.status.capacity.get("memory", "0")),
+            "gpu": int(node.status.capacity.get("nvidia.com/gpu", 0))
+        }
 
-            # Calculate allocated resources from pods
-            pods = v1.list_pod_for_all_namespaces(
-                field_selector=f"spec.nodeName={node_name}"
-            )
+        # Calculate allocated resources from pods (pre-grouped per node)
+        pods = pods_by_node.get(node_name, [])
 
-            allocated_cpu = 0
-            allocated_memory = 0
-            allocated_gpu = 0
+        allocated_cpu = 0
+        allocated_memory = 0
+        allocated_gpu = 0
 
-            for pod in pods.items:
-                # Skip terminated pods
-                if pod.status.phase in ["Succeeded", "Failed"]:
-                    continue
+        for pod in pods:
+            # Skip terminated pods
+            if pod.status.phase in ["Succeeded", "Failed"]:
+                continue
 
-                for container in pod.spec.containers:
-                    if container.resources:
-                        if container.resources.limits:
-                            # CPU
-                            cpu_limit = container.resources.limits.get("cpu", "0")
-                            if cpu_limit != "0":
-                                if cpu_limit.endswith('m'):
-                                    allocated_cpu += int(cpu_limit[:-1]) / 1000
-                                else:
-                                    try:
-                                        allocated_cpu += float(cpu_limit)
-                                    except ValueError:
-                                        # Skip invalid CPU values like "512M" (probably memory)
-                                        pass
+            for container in pod.spec.containers:
+                if container.resources:
+                    if container.resources.limits:
+                        # CPU
+                        cpu_limit = container.resources.limits.get("cpu", "0")
+                        if cpu_limit != "0":
+                            if cpu_limit.endswith('m'):
+                                allocated_cpu += int(cpu_limit[:-1]) / 1000
+                            else:
+                                try:
+                                    allocated_cpu += float(cpu_limit)
+                                except ValueError:
+                                    # Skip invalid CPU values like "512M" (probably memory)
+                                    pass
 
-                            # Memory
-                            mem_limit = container.resources.limits.get("memory", "0")
-                            if mem_limit != "0":
-                                allocated_memory += parse_memory(mem_limit)
+                        # Memory
+                        mem_limit = container.resources.limits.get("memory", "0")
+                        if mem_limit != "0":
+                            allocated_memory += parse_memory(mem_limit)
 
-                            # GPU
-                            gpu_limit = container.resources.limits.get("nvidia.com/gpu", "0")
-                            if gpu_limit != "0":
-                                allocated_gpu += int(gpu_limit)
+                        # GPU
+                        gpu_limit = container.resources.limits.get("nvidia.com/gpu", "0")
+                        if gpu_limit != "0":
+                            allocated_gpu += int(gpu_limit)
 
-            # Get GPU details if node has GPUs
-            gpu_details = []
-            if capacity["gpu"] > 0:
-                try:
-                    gpu_details = await get_gpu_details(node_name, v1)
-                except Exception as e:
-                    logger.warning(f"Could not get GPU details for {node_name}: {e}")
-                    # Create basic GPU info without nvidia-smi details
-                    for i in range(capacity["gpu"]):
-                        gpu_details.append({
-                            "index": i,
-                            "model": "Unknown GPU",
-                            "memory_total": "Unknown",
-                            "memory_used": "Unknown",
-                            "memory_free": "Unknown",
-                            "available": i >= allocated_gpu
-                        })
+        # Get GPU details if node has GPUs
+        gpu_details = []
+        if capacity["gpu"] > 0:
+            try:
+                gpu_details = _get_gpu_details(node_name, v1)
+            except Exception as e:
+                logger.warning(f"Could not get GPU details for {node_name}: {e}")
+                # Create basic GPU info without nvidia-smi details
+                for i in range(capacity["gpu"]):
+                    gpu_details.append({
+                        "index": i,
+                        "model": "Unknown GPU",
+                        "memory_total": "Unknown",
+                        "memory_used": "Unknown",
+                        "memory_free": "Unknown",
+                        "available": i >= allocated_gpu
+                    })
 
-            # Calculate available resources
-            available = {
-                "cpu": max(0, capacity["cpu"] - allocated_cpu),
-                "memory": max(0, capacity["memory"] - allocated_memory),
-                "gpu": max(0, capacity["gpu"] - allocated_gpu)
-            }
+        # Calculate available resources
+        available = {
+            "cpu": max(0, capacity["cpu"] - allocated_cpu),
+            "memory": max(0, capacity["memory"] - allocated_memory),
+            "gpu": max(0, capacity["gpu"] - allocated_gpu)
+        }
 
-            # Effective GPU: for time-sliced nodes (virtual > physical),
-            # cap to 1 since multiple partitions share the same memory
-            # pool with no benefit (especially on unified-memory like DGX Spark)
-            physical_gpus = len(gpu_details)
-            effective_gpu = capacity["gpu"]
-            if physical_gpus > 0 and capacity["gpu"] > physical_gpus:
-                effective_gpu = 1
+        # Effective GPU: for time-sliced nodes (virtual > physical),
+        # cap to 1 since multiple partitions share the same memory
+        # pool with no benefit (especially on unified-memory like DGX Spark)
+        physical_gpus = len(gpu_details)
+        effective_gpu = capacity["gpu"]
+        if physical_gpus > 0 and capacity["gpu"] > physical_gpus:
+            effective_gpu = 1
 
-            result.append({
-                "name": node_name,
-                "capacity": {
-                    "cpu": capacity["cpu"],
-                    "memory": format_memory(capacity["memory"]),
-                    "gpu": capacity["gpu"],
-                    "effective_gpu": effective_gpu
-                },
-                "allocated": {
-                    "cpu": round(allocated_cpu, 2),
-                    "memory": format_memory(allocated_memory),
-                    "gpu": allocated_gpu
-                },
-                "available": {
-                    "cpu": round(available["cpu"], 2),
-                    "memory": format_memory(available["memory"]),
-                    "gpu": available["gpu"]
-                },
-                "gpu_details": gpu_details
-            })
+        result.append({
+            "name": node_name,
+            "capacity": {
+                "cpu": capacity["cpu"],
+                "memory": format_memory(capacity["memory"]),
+                "gpu": capacity["gpu"],
+                "effective_gpu": effective_gpu
+            },
+            "allocated": {
+                "cpu": round(allocated_cpu, 2),
+                "memory": format_memory(allocated_memory),
+                "gpu": allocated_gpu
+            },
+            "available": {
+                "cpu": round(available["cpu"], 2),
+                "memory": format_memory(available["memory"]),
+                "gpu": available["gpu"]
+            },
+            "gpu_details": gpu_details
+        })
 
-        return result
+    return result
 
-    except Exception as e:
-        logger.error(f"Failed to get cluster resources: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
-async def get_gpu_details(node_name: str, v1: client.CoreV1Api) -> List[Dict[str, Any]]:
+def _get_gpu_details(node_name: str, v1: client.CoreV1Api) -> List[Dict[str, Any]]:
     """Get detailed GPU information from nvidia-smi via gpu-operator pod"""
 
     # Find nvidia driver pod on this node
@@ -206,7 +267,8 @@ async def get_gpu_details(node_name: str, v1: client.CoreV1Api) -> List[Dict[str
             stderr=False,
             stdin=False,
             stdout=True,
-            tty=False
+            tty=False,
+            _request_timeout=_GPU_EXEC_TIMEOUT_SECONDS
         )
 
         gpus = []
