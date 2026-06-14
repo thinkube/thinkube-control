@@ -22,7 +22,13 @@ logger = logging.getLogger(__name__)
 
 # A model stuck `loading` past this deadline whose pod is Ready-but-model-absent
 # (engine crashed and the wrapper fell back to idle) is treated as a failed load.
-LOAD_TIMEOUT_SECONDS = int(os.getenv("LLM_MODEL_LOAD_TIMEOUT_SECONDS", "300"))
+# This is a *backstop* — a genuinely crashed engine fails fast on its own (the
+# wrapper's wait_for_backend exits → pod NotReady → detected as `failed`). So
+# this must sit ABOVE the wrapper's own load wait (600s) AND above the slowest
+# legitimate init; DFlash compiles + captures CUDA graphs for target *and*
+# drafter (~336s observed, and more for bigger models), so 300s would kill a
+# load that's still legitimately in progress. Default 660s, env-overridable.
+LOAD_TIMEOUT_SECONDS = int(os.getenv("LLM_MODEL_LOAD_TIMEOUT_SECONDS", "660"))
 
 
 class LLMModelRegistry:
