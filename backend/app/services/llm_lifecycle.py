@@ -66,6 +66,14 @@ class LLMLifecycleManager:
                 model_id=model_id, state=ModelState.registered, message=f"Model '{model_id}' not found"
             )
 
+        # Auxiliary models (e.g. DFlash drafters) only run inside a target model's
+        # vLLM via --speculative-config; they are never loaded standalone.
+        if entry.role != "primary":
+            return ModelLoadResponse(
+                model_id=model_id, state=entry.state,
+                message=f"Model '{model_id}' is an auxiliary {entry.role} model and cannot be loaded standalone"
+            )
+
         if not any(st in self.LOADABLE_TYPES for st in entry.server_type):
             return ModelLoadResponse(
                 model_id=model_id, state=entry.state,

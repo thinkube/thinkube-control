@@ -46,6 +46,11 @@ class ModelEntry(BaseModel):
     license: Optional[str] = None
     gated: bool = False
     capabilities: List[str] = Field(default_factory=list)
+    # Gateway role. "primary" = a normally loadable/servable model; "drafter" =
+    # an auxiliary speculative-decoding drafter (e.g. DFlash) that only runs
+    # inside a target model's vLLM via --speculative-config, never served or
+    # loaded on its own. Non-"primary" roles are filtered out of the loadable list.
+    role: str = "primary"
     artifact_path: Optional[str] = None
     state: ModelState = ModelState.registered
     backend_id: Optional[str] = None

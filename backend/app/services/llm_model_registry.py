@@ -219,6 +219,7 @@ class LLMModelRegistry:
                 license=entry.get("license"),
                 gated=entry.get("gated", False),
                 capabilities=entry.get("capabilities", []),
+                role=entry.get("role", "primary"),
                 is_finetuned=entry.get("is_finetuned", False),
                 state=initial_state,
                 backend_id=existing.backend_id if existing else None,

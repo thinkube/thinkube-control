@@ -67,6 +67,11 @@ async def list_models(
 ):
     models = llm_model_registry.list_models()
 
+    # Auxiliary models (e.g. DFlash speculative-decoding drafters) are catalogued and
+    # mirrored so they can be located, but are never offered as standalone loadable
+    # models — they only run inside a target model's vLLM via --speculative-config.
+    models = [m for m in models if m.role == "primary"]
+
     if state:
         models = [m for m in models if m.state == state]
     if server_type:
