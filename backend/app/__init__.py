@@ -197,6 +197,13 @@ async def app_lifespan(app: FastAPI):
     mirror_poll_task = asyncio.create_task(poll_mirror_jobs())
     logger.info("Started mirror job status poller (60s interval)")
 
+    # Keep the cluster-resources cache warm so /cluster/resources returns
+    # instantly (a full pod list is multi-second; JupyterHub calls this on the
+    # spawn path with a tight timeout).
+    from app.api.cluster_resources import refresh_cluster_resources_loop
+    cluster_resources_task = asyncio.create_task(refresh_cluster_resources_loop())
+    logger.info("Started cluster resources refresh task (15s interval)")
+
     yield
 
     # Shutdown: Clean up resources
@@ -209,6 +216,7 @@ async def app_lifespan(app: FastAPI):
     llm_registry_task.cancel()
     llm_discovery_task.cancel()
     mirror_poll_task.cancel()
+    cluster_resources_task.cancel()
     for task in [health_check_task, discovery_task, llm_registry_task, llm_discovery_task]:
         try:
             await task

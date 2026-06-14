@@ -21,13 +21,55 @@ router = APIRouter(prefix="/cluster", tags=["cluster-resources"])
 # crash the hub. Caching makes the second call instant and bounds load when
 # several users spawn at once. The lock coalesces concurrent cold-cache callers
 # onto a single computation instead of stampeding the Kubernetes API server.
-_CACHE_TTL_SECONDS = 20
-_cache: Dict[str, Any] = {"data": None, "expires_at": 0.0}
+# A single cluster-wide pod list takes several seconds on a busy cluster, so we
+# never compute in the request path. A background task (started from the app
+# lifespan) keeps the cache warm; the endpoint returns the cached snapshot
+# instantly. _CACHE_TTL_SECONDS is the staleness threshold at which a *read*
+# triggers a background refresh, so the cache self-heals even if the loop isn't
+# running (e.g. in tests). _REFRESH_INTERVAL_SECONDS is the proactive cadence.
+_CACHE_TTL_SECONDS = 30
+_REFRESH_INTERVAL_SECONDS = 15
+_cache: Dict[str, Any] = {"data": None, "updated_at": 0.0}
 _cache_lock = asyncio.Lock()
+_refreshing = False
 
 # Hard bound on the nvidia-smi exec so a busy/unresponsive GPU node can never
 # make this endpoint hang (the rest of the data is still returned without it).
 _GPU_EXEC_TIMEOUT_SECONDS = 8
+
+
+async def _refresh_once() -> List[Dict[str, Any]]:
+    """Recompute cluster resources off the event loop and update the cache."""
+    data = await asyncio.to_thread(_compute_cluster_resources)
+    _cache["data"] = data
+    _cache["updated_at"] = time.monotonic()
+    return data
+
+
+async def _safe_refresh() -> None:
+    """Background-safe refresh: swallows errors and de-dupes concurrent runs."""
+    global _refreshing
+    if _refreshing:
+        return
+    _refreshing = True
+    try:
+        await _refresh_once()
+    except Exception as e:
+        logger.warning(f"Background cluster-resources refresh failed: {e}")
+    finally:
+        _refreshing = False
+
+
+async def refresh_cluster_resources_loop() -> None:
+    """Proactively keep the cluster-resources cache warm.
+
+    Started from the FastAPI lifespan so the endpoint never pays the multi-second
+    pod-list cost in the request path (which used to exceed JupyterHub's spawn
+    timeout and crash the hub).
+    """
+    while True:
+        await _safe_refresh()
+        await asyncio.sleep(_REFRESH_INTERVAL_SECONDS)
 
 
 def parse_memory(memory_str: str) -> int:
@@ -62,33 +104,27 @@ def format_memory(bytes_val: int) -> str:
 async def get_cluster_resources():
     """Get real-time cluster resource availability including GPU details.
 
-    Served from a short-lived cache; recomputed at most once per
-    ``_CACHE_TTL_SECONDS`` and off the event loop so blocking Kubernetes calls
-    never stall the API server.
+    Served instantly from a cache kept warm by ``refresh_cluster_resources_loop``.
+    Computing is never done synchronously in the request path; a stale read just
+    kicks off a background refresh and returns the current snapshot.
     """
-    now = time.monotonic()
-    if _cache["data"] is not None and now < _cache["expires_at"]:
-        return _cache["data"]
+    data = _cache["data"]
+    if data is not None:
+        if time.monotonic() - _cache["updated_at"] > _CACHE_TTL_SECONDS:
+            # Stale and (likely) no loop running — refresh in the background but
+            # serve the current data immediately. Never block the response.
+            asyncio.create_task(_safe_refresh())
+        return data
 
+    # Cold start: cache not warmed yet. Compute once, coalescing concurrent callers.
     async with _cache_lock:
-        # Another request may have refreshed the cache while we waited.
-        now = time.monotonic()
-        if _cache["data"] is not None and now < _cache["expires_at"]:
+        if _cache["data"] is not None:
             return _cache["data"]
-
         try:
-            data = await asyncio.to_thread(_compute_cluster_resources)
+            return await _refresh_once()
         except Exception as e:
             logger.error(f"Failed to get cluster resources: {e}")
-            # Prefer serving recent real data over failing a spawn outright.
-            if _cache["data"] is not None:
-                logger.warning("Serving stale cluster-resources cache after error")
-                return _cache["data"]
             raise HTTPException(status_code=500, detail=str(e))
-
-        _cache["data"] = data
-        _cache["expires_at"] = time.monotonic() + _CACHE_TTL_SECONDS
-        return data
 
 
 def _compute_cluster_resources() -> List[Dict[str, Any]]:
