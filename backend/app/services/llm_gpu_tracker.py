@@ -27,12 +27,15 @@ UMA_AI_BUDGET_GB = float(os.getenv("LLM_UMA_AI_BUDGET_GB", "96"))
 # the whole device — leave only OS/kernel headroom.
 UMA_AI_BUDGET_DEDICATED_GB = float(os.getenv("LLM_UMA_AI_BUDGET_DEDICATED_GB", "112"))
 
-# Headroom the serving framework needs ON TOP of the weights, inside the
-# gpu_memory_utilization budget: CUDA graphs (~2–3 GB), activations, and a
-# minimum KV working set. The util floor guarantees the budget covers
-# weights + this overhead, so a small context (tiny KV term) can never drive
-# util below the weight footprint and crashloop vLLM on KV allocation.
-FRAMEWORK_OVERHEAD_GB = float(os.getenv("LLM_FRAMEWORK_OVERHEAD_GB", "6"))
+# Non-weight working set the budget must reserve ON TOP of the weights, inside
+# the gpu_memory_utilization budget: framework/activation overhead (~6 GB
+# measured on GB10 with --enforce-eager) PLUS a usable KV cache. The util floor
+# guarantees the budget covers weights + this headroom, so a small context
+# (tiny single-sequence KV estimate) can never drive util so low that vLLM has
+# no memory left for KV blocks and crashloops on "No available memory for the
+# cache blocks". 24 GiB ≈ ~6 GiB overhead + ~18 GiB KV working set, which on a
+# 122 GiB UMA node with ~24.5 GiB weights floors util at ~0.40.
+FRAMEWORK_OVERHEAD_GB = float(os.getenv("LLM_FRAMEWORK_OVERHEAD_GB", "24"))
 
 
 def _floored_util(util: float, weight_gb: Optional[float], capacity_gb: float) -> float:
