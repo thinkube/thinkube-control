@@ -318,14 +318,34 @@ class LLMLifecycleManager:
         # so multimodal/mixed-precision weights aren't under-counted and the
         # derived gpu_memory_utilization can't fall below the weight footprint.
         await self._ensure_measured_weight(entry)
-        estimated_memory = self._estimate_memory(entry, max_context_length)
+
+        # DFlash speculative decoding loads a separate drafter model into the same
+        # vLLM process. Resolve it once: its weight feeds sizing, and its MLflow
+        # path is injected into --speculative-config below. Refuse the load if it
+        # can't be resolved — the pod loads from the JuiceFS mount, not an HF id.
+        try:
+            drafter_entry, drafter_path = await self._resolve_dflash_drafter(entry)
+        except ValueError as e:
+            llm_model_registry.update_model_state(
+                model_id, ModelState.deployable, error=str(e)
+            )
+            return ModelLoadResponse(
+                model_id=model_id, state=ModelState.deployable, message=str(e)
+            )
+        drafter_gb = (self._weight_gb(drafter_entry) or 0.0) if drafter_entry else 0.0
+
+        estimated_memory = self._estimate_memory(
+            entry, max_context_length, extra_weight_gb=drafter_gb
+        )
         gpu_count = self._gpus_needed(estimated_memory, node)
 
         # Architecture-aware sizing: translate the footprint into vLLM/pod knobs
         # consistent with the node's memory architecture, AI budget, and the
         # slots/memory already in use by co-resident models on the chosen node.
+        # weight_gb covers target + drafter so the util floor fits both.
         sizing = await llm_gpu_tracker.plan_sizing(
-            node, estimated_memory, gpu_count, weight_gb=self._weight_gb(entry)
+            node, estimated_memory, gpu_count,
+            weight_gb=(self._weight_gb(entry) or 0.0) + drafter_gb,
         )
 
         # Node-safety rail: if it won't fit the operator-chosen node, refuse here
@@ -361,7 +381,11 @@ class LLMLifecycleManager:
         if entry.tool_use:
             payload["tool_use"] = entry.tool_use
         if getattr(entry, "speculative_config", None):
-            payload["speculative_config"] = entry.speculative_config
+            spec_cfg = entry.speculative_config
+            if drafter_path:
+                # Swap the drafter's catalog id for its resolved JuiceFS/MLflow path.
+                spec_cfg = self._inject_drafter_path(spec_cfg, drafter_path)
+            payload["speculative_config"] = spec_cfg
         if getattr(entry, "enforce_eager", False):
             payload["enforce_eager"] = True
         if max_context_length:
@@ -598,6 +622,85 @@ class LLMLifecycleManager:
             logger.debug(f"MLflow run_id resolve failed for {model_id}: {e}")
             return None
 
+    @staticmethod
+    def _dflash_drafter_id(spec_config) -> Optional[str]:
+        """The drafter model id referenced by a DFlash speculative_config.
+
+        Returns the catalog id of the drafter when the config selects DFlash and
+        names the drafter by id (not an already-resolved /path); else None. MTP /
+        non-speculative configs return None (their drafter is the model's own head).
+        """
+        if not spec_config:
+            return None
+        try:
+            cfg = json_mod.loads(spec_config)
+        except (ValueError, TypeError):
+            return None
+        if cfg.get("method") != "dflash":
+            return None
+        ref = cfg.get("model") or cfg.get("drafter")
+        if ref and not str(ref).startswith("/"):
+            return str(ref)
+        return None
+
+    @staticmethod
+    def _inject_drafter_path(spec_config: str, drafter_path: str) -> str:
+        """Rewrite a DFlash speculative_config's drafter reference to a concrete path."""
+        cfg = json_mod.loads(spec_config)
+        cfg["model"] = drafter_path
+        cfg.pop("drafter", None)
+        return json_mod.dumps(cfg)
+
+    async def _resolve_artifact_dir(self, model_id: str, token: str) -> Optional[str]:
+        """A model's MLflow artifact 'model' dir, as the vLLM pod sees it on JuiceFS."""
+        run_id = await self._resolve_run_id(model_id, token)
+        if not run_id:
+            return None
+        mlflow_url = os.getenv(
+            "MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000"
+        )
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+                resp = await client.get(
+                    f"{mlflow_url}/api/2.0/mlflow/runs/get",
+                    params={"run_id": run_id},
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                resp.raise_for_status()
+                experiment_id = resp.json()["run"]["info"]["experiment_id"]
+        except Exception as e:
+            logger.error(f"Failed to resolve artifact dir for {model_id}: {e}")
+            return None
+        return f"{MLFLOW_ARTIFACT_BASE}/{experiment_id}/{run_id}/artifacts/model"
+
+    async def _resolve_dflash_drafter(self, entry):
+        """Resolve a target's DFlash drafter: its registry entry (for sizing) and
+        its concrete MLflow path (for --speculative-config).
+
+        Returns (drafter_entry, drafter_path), or (None, None) when the target
+        doesn't use DFlash. Raises ValueError when a drafter is referenced but
+        isn't registered/mirrored or its path can't be resolved — the gateway
+        refuses the load rather than ship an unusable HF id to the pod.
+        """
+        drafter_id = self._dflash_drafter_id(getattr(entry, "speculative_config", None))
+        if not drafter_id:
+            return None, None
+        from app.services.llm_model_registry import llm_model_registry
+        drafter = llm_model_registry.get_model(drafter_id)
+        if drafter is None:
+            raise ValueError(
+                f"DFlash drafter '{drafter_id}' is not mirrored/registered — "
+                f"mirror it before loading a model that uses it"
+            )
+        await self._ensure_measured_weight(drafter)
+        token = await self._get_mlflow_token()
+        path = await self._resolve_artifact_dir(drafter_id, token) if token else None
+        if not path:
+            raise ValueError(
+                f"Could not resolve the MLflow artifact path for DFlash drafter '{drafter_id}'"
+            )
+        return drafter, path
+
     async def _measure_weight_bytes(self, model_id: str) -> Optional[int]:
         """Sum the on-disk weight-file sizes from MLflow = real checkpoint size.
 
@@ -707,7 +810,10 @@ class LLMLifecycleManager:
             return self._estimate_weight_gb(entry.params_b, entry.quantization)
         return self._estimate_weight_from_size(entry)
 
-    def _estimate_memory(self, entry, max_context_length: Optional[int] = None) -> float:
+    def _estimate_memory(
+        self, entry, max_context_length: Optional[int] = None,
+        extra_weight_gb: float = 0.0,
+    ) -> float:
         if entry is None:
             return 4.0
 
@@ -719,7 +825,9 @@ class LLMLifecycleManager:
 
         overhead_gb = 1.0
 
-        return round(weight_gb + kv_cache_gb + overhead_gb, 1)
+        # extra_weight_gb covers a co-resident DFlash drafter model loaded into the
+        # same vLLM process for speculative decoding (its weights occupy memory too).
+        return round(weight_gb + extra_weight_gb + kv_cache_gb + overhead_gb, 1)
 
     def _estimate_weight_gb(self, params_b: float, quantization: Optional[str]) -> float:
         quant = (quantization or "BF16").upper()
