@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # legitimate init; DFlash compiles + captures CUDA graphs for target *and*
 # drafter (~336s observed, and more for bigger models), so 300s would kill a
 # load that's still legitimately in progress. Default 660s, env-overridable.
-LOAD_TIMEOUT_SECONDS = int(os.getenv("LLM_MODEL_LOAD_TIMEOUT_SECONDS", "660"))
+LOAD_TIMEOUT_SECONDS = int(os.getenv("LLM_MODEL_LOAD_TIMEOUT_SECONDS", "1920"))
 
 
 class LLMModelRegistry:
