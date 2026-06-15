@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -127,5 +128,84 @@ func TestResolveRetryThenSucceed(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&calls); got != 2 {
 		t.Fatalf("backend calls = %d, want 2 (one retry)", got)
+	}
+}
+
+// resolveAllBody returns a one-model resolve-all payload.
+func resolveAllBody(modelID, servingName string) string {
+	return `[{"backend_url":"http://b","api_path":"/v1","model_id":"` + modelID +
+		`","serving_name":"` + servingName + `","model_state":"available","tier":"performance"}]`
+}
+
+// With a populated snapshot, concurrent requests for a snapshotted model resolve
+// in-memory and make ZERO per-request control-plane (/resolve) calls.
+func TestSnapshotHitAvoidsLiveCall(t *testing.T) {
+	var liveCalls int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/llm/models/resolve-all", func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(resolveAllBody("m", "m-serve")))
+	})
+	mux.HandleFunc("/api/v1/llm/models/resolve", func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&liveCalls, 1)
+		w.Write([]byte(okBody("m")))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	r := newTestResolver(srv.URL)
+	if err := r.loadSnapshot(context.Background()); err != nil {
+		t.Fatalf("snapshot load: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			key := "m"
+			if i%2 == 0 {
+				key = "m-serve" // resolvable by serving name too
+			}
+			res, err := r.Resolve(context.Background(), key, "")
+			if err != nil || res == nil || res.ModelID != "m" {
+				t.Errorf("resolve(%q): res=%v err=%v", key, res, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&liveCalls); got != 0 {
+		t.Fatalf("live /resolve calls = %d, want 0 (served from snapshot)", got)
+	}
+}
+
+// A model absent from the snapshot falls back to exactly one live /resolve call.
+func TestSnapshotMissFallsBackToLive(t *testing.T) {
+	var liveCalls int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/llm/models/resolve-all", func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(resolveAllBody("known", "known")))
+	})
+	mux.HandleFunc("/api/v1/llm/models/resolve", func(w http.ResponseWriter, req *http.Request) {
+		atomic.AddInt32(&liveCalls, 1)
+		w.Write([]byte(okBody(req.URL.Query().Get("model"))))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	r := newTestResolver(srv.URL)
+	if err := r.loadSnapshot(context.Background()); err != nil {
+		t.Fatalf("snapshot load: %v", err)
+	}
+
+	res, err := r.Resolve(context.Background(), "fresh-model", "")
+	if err != nil {
+		t.Fatalf("expected live fallback success, got: %v", err)
+	}
+	if res.ModelID != "fresh-model" {
+		t.Fatalf("model_id = %q, want fresh-model", res.ModelID)
+	}
+	if got := atomic.LoadInt32(&liveCalls); got != 1 {
+		t.Fatalf("live /resolve calls = %d, want 1 (snapshot miss -> one live resolve)", got)
 	}
 }

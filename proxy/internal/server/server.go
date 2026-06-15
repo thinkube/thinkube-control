@@ -60,8 +60,11 @@ func (s *Server) registerRoutes() {
 		}()
 	}
 
-	// Resolver and forwarder
+	// Resolver and forwarder. The resolver keeps a locally-synced snapshot of the
+	// control plane's resolution table so the request path resolves in-memory
+	// instead of calling the control plane per request.
 	res := resolver.New(s.cfg.BackendURL, s.cfg.ModelAliases)
+	res.StartSnapshotSync(context.Background())
 	fwd := forwarder.New(s.cfg.RequestTimeout)
 
 	// OpenAI handler

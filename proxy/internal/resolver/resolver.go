@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/thinkube/thinkube-control/proxy/internal/metrics"
@@ -44,6 +45,13 @@ type Resolver struct {
 	cacheTTL    time.Duration
 	lastGoodTTL time.Duration
 	retryDelay  time.Duration
+
+	// snapshot is a locally-synced copy of the control plane's whole resolution
+	// table (keyed by model id AND serving name), refreshed in the background by
+	// StartSnapshotSync. Resolve serves tier-agnostic requests from it without
+	// any per-request control-plane call; a miss falls back to the live path.
+	snapshot     atomic.Pointer[map[string]*ResolveResult]
+	syncInterval time.Duration
 }
 
 func New(backendURL string, aliases map[string]string) *Resolver {
@@ -60,6 +68,11 @@ func New(backendURL string, aliases map[string]string) *Resolver {
 		// long-gone backend.
 		lastGoodTTL: 5 * time.Minute,
 		retryDelay:  150 * time.Millisecond,
+		// How often the background snapshot is refreshed from the control plane.
+		// The resolution table changes on the order of minutes (model loads), so
+		// a few seconds keeps it fresh while reducing control-plane traffic from
+		// per-request to ~one poll per interval.
+		syncInterval: 5 * time.Second,
 	}
 }
 
@@ -77,6 +90,19 @@ func (r *Resolver) Resolve(ctx context.Context, model string, tier string) (*Res
 		model = alias
 	}
 
+	// Snapshot-first: serve tier-agnostic requests from the locally-synced
+	// table with no control-plane call. Tier-specific requests skip the snapshot
+	// (it holds each model's default-tier resolution) and take the live path,
+	// which honours tier.
+	if tier == "" {
+		if snap := r.snapshot.Load(); snap != nil {
+			if res, ok := (*snap)[model]; ok {
+				metrics.ResolveSource.WithLabelValues("snapshot").Inc()
+				return res, nil
+			}
+		}
+	}
+
 	cacheKey := model + ":" + tier
 
 	// Fresh cache hit.
@@ -88,7 +114,9 @@ func (r *Resolver) Resolve(ctx context.Context, model string, tier string) (*Res
 		r.cache.Delete(cacheKey)
 	}
 
-	// Live fetch, with one retry on a transient failure.
+	// Live fetch (snapshot miss or tier-specific), with one retry on a transient
+	// failure.
+	metrics.ResolveSource.WithLabelValues("live").Inc()
 	result, err := r.fetch(ctx, model, tier)
 	if err != nil && !errors.Is(err, ErrModelNotFound) {
 		metrics.ResolveResilience.WithLabelValues("retry").Inc()
@@ -173,4 +201,67 @@ func (r *Resolver) fetch(ctx context.Context, model, tier string) (*ResolveResul
 	}
 
 	return &result, nil
+}
+
+// StartSnapshotSync launches a background goroutine that refreshes the local
+// resolution snapshot from the control plane's bulk endpoint every syncInterval,
+// so Resolve serves requests without a per-request control-plane call. It does
+// an immediate load, then ticks until ctx is cancelled.
+func (r *Resolver) StartSnapshotSync(ctx context.Context) {
+	go func() {
+		if err := r.loadSnapshot(ctx); err != nil {
+			slog.Warn("initial resolve-all snapshot load failed", "error", err)
+		}
+		t := time.NewTicker(r.syncInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if err := r.loadSnapshot(ctx); err != nil {
+					slog.Warn("resolve-all snapshot refresh failed", "error", err)
+				}
+			}
+		}
+	}()
+}
+
+// loadSnapshot fetches the control plane's full resolution table once and
+// atomically swaps it in, keyed by both model id and serving name.
+func (r *Resolver) loadSnapshot(ctx context.Context) error {
+	reqURL := r.backendURL + "/api/v1/llm/models/resolve-all"
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		return fmt.Errorf("create resolve-all request: %w", err)
+	}
+
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("resolve-all request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("resolve-all returned %d", resp.StatusCode)
+	}
+
+	var items []ResolveResult
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		return fmt.Errorf("decode resolve-all response: %w", err)
+	}
+
+	m := make(map[string]*ResolveResult, len(items)*2)
+	for i := range items {
+		res := &items[i]
+		if res.ModelID != "" {
+			m[res.ModelID] = res
+		}
+		if res.ServingName != "" {
+			m[res.ServingName] = res
+		}
+	}
+	r.snapshot.Store(&m)
+	slog.Debug("resolve-all snapshot refreshed", "models", len(items))
+	return nil
 }
