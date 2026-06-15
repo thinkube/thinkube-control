@@ -41,4 +41,13 @@ var (
 		Name: "llm_gateway_active_streams",
 		Help: "Currently active streaming connections",
 	}, []string{"protocol", "model"})
+
+	// ResolveResilience counts how often model resolution had to fall back on
+	// its resilience paths: "retry" (a transient backend failure was retried)
+	// and "stale_serve" (a transient failure was absorbed by serving the
+	// last-known-good resolution). A rising rate means the backend is flapping.
+	ResolveResilience = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "llm_gateway_resolve_resilience_total",
+		Help: "Model-resolution resilience fallbacks (retry / stale_serve)",
+	}, []string{"event"})
 )
