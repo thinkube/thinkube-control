@@ -92,6 +92,21 @@ async def list_models(
 
 
 @router.get(
+    "/resolve-all",
+    response_model=list[ModelResolveResponse],
+    operation_id="resolve_all_llm_models",
+)
+async def resolve_all_models():
+    """Bulk, in-memory dump of every resolvable model -> backend.
+
+    The Go proxy polls this on a timer and serves requests from a local
+    snapshot, so the inference hot path does not call the control plane per
+    request. In-memory only — no Kubernetes/network work on this path.
+    """
+    return llm_model_registry.resolve_all()
+
+
+@router.get(
     "/resolve",
     response_model=ModelResolveResponse,
     operation_id="resolve_llm_model",

@@ -2,7 +2,13 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
+
+	"github.com/thinkube/thinkube-control/proxy/internal/metrics"
+	"github.com/thinkube/thinkube-control/proxy/internal/resolver"
 )
 
 type anthropicError struct {
@@ -19,6 +25,24 @@ type openaiError struct {
 		Type    string `json:"type"`
 		Code    string `json:"code"`
 	} `json:"error"`
+}
+
+// writeResolveError maps a resolver failure to the right client response.
+// Only a definitive ErrModelNotFound is a 404; every other (transient) failure
+// is a retryable 503 — so a momentary backend stall/flap is never surfaced as
+// "model not found".
+func writeResolveError(w http.ResponseWriter, protocol, model string, err error) {
+	if errors.Is(err, resolver.ErrModelNotFound) {
+		slog.Warn("model not found", "model", model, "error", err)
+		WriteError(w, protocol, http.StatusNotFound, "not_found",
+			fmt.Sprintf("Model '%s' not found", model))
+		metrics.ErrorsTotal.WithLabelValues(protocol, "not_found").Inc()
+		return
+	}
+	slog.Warn("model resolve unavailable", "model", model, "error", err)
+	WriteError(w, protocol, http.StatusServiceUnavailable, "service_unavailable",
+		fmt.Sprintf("Model '%s' is temporarily unavailable, please retry", model))
+	metrics.ErrorsTotal.WithLabelValues(protocol, "resolve_unavailable").Inc()
 }
 
 func WriteError(w http.ResponseWriter, protocol string, statusCode int, errorType string, message string) {

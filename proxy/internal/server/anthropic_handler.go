@@ -62,9 +62,7 @@ func (h *AnthropicHandler) Messages(w http.ResponseWriter, r *http.Request) {
 	tier := r.Header.Get("X-LLM-Tier")
 	resolved, err := h.resolver.Resolve(r.Context(), req.Model, tier)
 	if err != nil {
-		slog.Warn("model resolve failed", "model", req.Model, "error", err)
-		WriteError(w, "anthropic", http.StatusNotFound, "not_found", fmt.Sprintf("Model '%s' not found or not available", req.Model))
-		metrics.ErrorsTotal.WithLabelValues("anthropic", "routing").Inc()
+		writeResolveError(w, "anthropic", req.Model, err)
 		return
 	}
 

@@ -148,6 +148,22 @@ class LLMModelRegistry:
             tier=resolved_tier,
         )
 
+    def resolve_all(self) -> List[ModelResolveResponse]:
+        """In-memory dump of every currently-resolvable model -> backend.
+
+        Reuses :meth:`resolve` per model and keeps only the ones that resolved to
+        a healthy backend (have a ``backend_url`` and no error). Purely in-memory
+        (registry + backend-discovery state) — performs NO Kubernetes/network
+        call — so the Go proxy can poll it on a timer and resolve requests from a
+        local snapshot instead of calling the control plane per request.
+        """
+        out: List[ModelResolveResponse] = []
+        for model_id in list(self._models.keys()):
+            res = self.resolve(model_id)
+            if res and not res.error and res.backend_url:
+                out.append(res)
+        return out
+
     def _resolve_alias(self, alias: str) -> Optional[ModelEntry]:
         if alias in self._models:
             return self._models[alias]

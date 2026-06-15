@@ -58,9 +58,7 @@ func (h *OpenAIHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) 
 	tier := r.Header.Get("X-LLM-Tier")
 	resolved, err := h.resolver.Resolve(r.Context(), req.Model, tier)
 	if err != nil {
-		slog.Warn("model resolve failed", "model", req.Model, "error", err)
-		WriteError(w, "openai", http.StatusNotFound, "not_found", fmt.Sprintf("Model '%s' not found or not available", req.Model))
-		metrics.ErrorsTotal.WithLabelValues("openai", "routing").Inc()
+		writeResolveError(w, "openai", req.Model, err)
 		return
 	}
 
@@ -210,9 +208,7 @@ func (h *OpenAIHandler) Embeddings(w http.ResponseWriter, r *http.Request) {
 	tier := r.Header.Get("X-LLM-Tier")
 	resolved, err := h.resolver.Resolve(r.Context(), req.Model, tier)
 	if err != nil {
-		slog.Warn("embedding model resolve failed", "model", req.Model, "error", err)
-		WriteError(w, "openai", http.StatusNotFound, "not_found", fmt.Sprintf("Model '%s' not found or not available", req.Model))
-		metrics.ErrorsTotal.WithLabelValues("openai", "routing").Inc()
+		writeResolveError(w, "openai", req.Model, err)
 		return
 	}
 

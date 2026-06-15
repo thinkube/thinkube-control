@@ -29,6 +29,40 @@ The "LLM gateway" is two cooperating pieces, not one:
 Clients only ever talk to the gateway; the control plane is what makes a model
 *be there* to talk to.
 
+== Request routing and resilience
+
+The gateway resolves the requested model to a serving backend from a
+*locally-synced snapshot* of the control plane's resolution table, refreshed in
+the background every few seconds. The inference hot path therefore resolves
+in-memory and does **not** call the control plane per request — a burst of
+requests to a loaded model is unaffected by control-plane load, stalls, or even
+a restart. The `llm_gateway_resolve_source_total` metric (labels `snapshot`,
+`live`) shows the split; a healthy system is overwhelmingly `snapshot`.
+
+Resolution is further hardened so a momentary control-plane hiccup never looks
+like a missing model:
+
+* A model not yet in the snapshot (e.g. just loaded) falls back to a single live
+  resolve call, and a successful live resolution is cached briefly with the most
+  recent good result kept per model.
+* If a live resolution transiently fails — a timeout, a `5xx`, or a brief
+  "model is loading" / "no healthy backend" flap while the control plane
+  reconciles — the gateway retries once and, failing that, serves the
+  last-known-good resolution (a model-to-backend mapping is stable, so a
+  few-seconds-stale answer is correct).
+
+As a result the status codes are precise:
+
+[horizontal]
+`404 not found`:: the model is genuinely unknown to the catalog.
+`503 (retryable)`:: the model exists but is *temporarily* unresolvable (a
+  transient backend stall with no recent good resolution) — retry the request.
+
+A burst of concurrent requests to a loaded model therefore succeeds even if the
+control plane briefly stalls or flaps, instead of failing with a spurious
+`404 not found or not available`. The `llm_gateway_resolve_resilience_total`
+metric (labels `retry`, `stale_serve`) exposes how often these fallbacks fire.
+
 == Model lifecycle
 
 A model moves through these states:

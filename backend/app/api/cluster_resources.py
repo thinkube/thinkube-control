@@ -1,6 +1,7 @@
 """Cluster resources API for real-time resource availability"""
 
 import asyncio
+import json
 import logging
 import time
 from typing import List, Dict, Any
@@ -27,8 +28,12 @@ router = APIRouter(prefix="/cluster", tags=["cluster-resources"])
 # instantly. _CACHE_TTL_SECONDS is the staleness threshold at which a *read*
 # triggers a background refresh, so the cache self-heals even if the loop isn't
 # running (e.g. in tests). _REFRESH_INTERVAL_SECONDS is the proactive cadence.
-_CACHE_TTL_SECONDS = 30
-_REFRESH_INTERVAL_SECONDS = 15
+# Cluster resource availability changes slowly, and each refresh deserialises
+# the whole pod list (CPU/GIL-bound). Refresh infrequently so the periodic
+# refresh doesn't repeatedly stall the event loop and starve latency-critical
+# in-memory endpoints like /llm/models/resolve under load.
+_CACHE_TTL_SECONDS = 120
+_REFRESH_INTERVAL_SECONDS = 60
 _cache: Dict[str, Any] = {"data": None, "updated_at": 0.0}
 _cache_lock = asyncio.Lock()
 _refreshing = False
@@ -145,14 +150,25 @@ def _compute_cluster_resources() -> List[Dict[str, Any]]:
     # Get all nodes
     nodes = v1.list_node()
 
-    # Fetch all pods ONCE and bucket by node. A per-node field_selector on
-    # spec.nodeName is not index-backed, so the API server re-lists every pod
-    # cluster-wide for each node (~3s each). One list + in-memory grouping keeps
-    # this endpoint fast.
-    all_pods = v1.list_pod_for_all_namespaces()
-    pods_by_node: Dict[str, List[Any]] = {}
-    for pod in all_pods.items:
-        pods_by_node.setdefault(pod.spec.node_name, []).append(pod)
+    # Fetch all pods ONCE and bucket by node.
+    #
+    # Two cost controls keep this from stalling the event loop (it runs every
+    # refresh and the deserialisation is CPU/GIL-bound even in a worker thread):
+    #   1. A single cluster-wide list (a per-node spec.nodeName field_selector is
+    #      not index-backed — the API server re-lists every pod per node).
+    #   2. `_preload_content=False` + manual JSON parse, so we DON'T construct a
+    #      typed V1Pod object graph for every pod (the dominant GIL cost); we read
+    #      only the few fields we need from plain dicts. A server-side phase
+    #      filter also drops terminated pods from the payload.
+    raw_pods = v1.list_pod_for_all_namespaces(
+        _preload_content=False,
+        field_selector="status.phase!=Succeeded,status.phase!=Failed",
+    )
+    pods_payload = json.loads(raw_pods.data)
+    pods_by_node: Dict[str, List[dict]] = {}
+    for pod in pods_payload.get("items", []):
+        node_of_pod = (pod.get("spec") or {}).get("nodeName")
+        pods_by_node.setdefault(node_of_pod, []).append(pod)
 
     result = []
     for node in nodes.items:
@@ -182,35 +198,36 @@ def _compute_cluster_resources() -> List[Dict[str, Any]]:
         allocated_memory = 0
         allocated_gpu = 0
 
+        # Terminated pods (Succeeded/Failed) are already excluded server-side via
+        # the field_selector above. Each pod is a plain dict (raw JSON).
         for pod in pods:
-            # Skip terminated pods
-            if pod.status.phase in ["Succeeded", "Failed"]:
-                continue
+            spec = pod.get("spec") or {}
+            for container in spec.get("containers", []):
+                limits = (container.get("resources") or {}).get("limits") or {}
+                if not limits:
+                    continue
 
-            for container in pod.spec.containers:
-                if container.resources:
-                    if container.resources.limits:
-                        # CPU
-                        cpu_limit = container.resources.limits.get("cpu", "0")
-                        if cpu_limit != "0":
-                            if cpu_limit.endswith('m'):
-                                allocated_cpu += int(cpu_limit[:-1]) / 1000
-                            else:
-                                try:
-                                    allocated_cpu += float(cpu_limit)
-                                except ValueError:
-                                    # Skip invalid CPU values like "512M" (probably memory)
-                                    pass
+                # CPU
+                cpu_limit = limits.get("cpu", "0")
+                if cpu_limit != "0":
+                    if cpu_limit.endswith('m'):
+                        allocated_cpu += int(cpu_limit[:-1]) / 1000
+                    else:
+                        try:
+                            allocated_cpu += float(cpu_limit)
+                        except ValueError:
+                            # Skip invalid CPU values like "512M" (probably memory)
+                            pass
 
-                        # Memory
-                        mem_limit = container.resources.limits.get("memory", "0")
-                        if mem_limit != "0":
-                            allocated_memory += parse_memory(mem_limit)
+                # Memory
+                mem_limit = limits.get("memory", "0")
+                if mem_limit != "0":
+                    allocated_memory += parse_memory(mem_limit)
 
-                        # GPU
-                        gpu_limit = container.resources.limits.get("nvidia.com/gpu", "0")
-                        if gpu_limit != "0":
-                            allocated_gpu += int(gpu_limit)
+                # GPU
+                gpu_limit = limits.get("nvidia.com/gpu", "0")
+                if gpu_limit != "0":
+                    allocated_gpu += int(gpu_limit)
 
         # Get GPU details if node has GPUs
         gpu_details = []
