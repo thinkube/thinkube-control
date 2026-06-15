@@ -18,7 +18,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 
@@ -420,4 +420,54 @@ async def jupyter_execute_all_cells(
     result = await _proxy_tool_call("execute_all_cells", {
         "notebook_path": request.notebook_path,
     })
+    return ToolResultResponse(result=result)
+
+
+# Submit + poll for long-running cells. The blocking execute tools hold the
+# request open until the cell finishes, which times out the MCP bridge on
+# multi-minute cells. These expose the tk-ai-extension's async submit/poll tools
+# (already registered there): submit returns an execution_id immediately, then
+# poll status. Both return fast, so they use a short timeout, never the 300s
+# blocking default. Like the blocking tools these are frontend-delegated, so the
+# proxy passes notebook_path/cell_index only — the frontend supplies the kernel.
+_ASYNC_PROXY_TIMEOUT = 30.0
+
+
+@router.post("/execute-cell-async", response_model=ToolResultResponse, operation_id="jupyter_execute_cell_async")
+async def jupyter_execute_cell_async(
+    request: CellExecuteRequest,
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """Start executing a code cell without blocking; returns an execution_id.
+
+    Use for long-running cells. Poll completion with jupyter_check_execution_status.
+    """
+    result = await _proxy_tool_call("execute_cell_async", {
+        "notebook_path": request.notebook_path,
+        "cell_index": int(request.cell_index),
+    }, timeout=_ASYNC_PROXY_TIMEOUT)
+    return ToolResultResponse(result=result)
+
+
+@router.get("/execution-status", response_model=ToolResultResponse, operation_id="jupyter_check_execution_status")
+async def jupyter_check_execution_status(
+    execution_id: str = Query(..., description="Execution ID returned by jupyter_execute_cell_async"),
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """Poll an async cell execution: returns running / completed / error and outputs."""
+    result = await _proxy_tool_call("check_execution_status", {
+        "execution_id": execution_id,
+    }, timeout=_ASYNC_PROXY_TIMEOUT)
+    return ToolResultResponse(result=result)
+
+
+@router.get("/all-cells-status", response_model=ToolResultResponse, operation_id="jupyter_check_all_cells_status")
+async def jupyter_check_all_cells_status(
+    execution_id: str = Query(..., description="Execution ID returned by jupyter_execute_all_cells"),
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """Poll an async run-all execution (jupyter_execute_all_cells returns an execution_id)."""
+    result = await _proxy_tool_call("check_all_cells_status", {
+        "execution_id": execution_id,
+    }, timeout=_ASYNC_PROXY_TIMEOUT)
     return ToolResultResponse(result=result)

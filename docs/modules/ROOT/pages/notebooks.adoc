@@ -1,0 +1,40 @@
+= Notebook execution over MCP
+
+thinkube-control exposes JupyterHub notebooks as MCP tools (backed by the
+tk-ai-extension running in the notebook server), so an agent can list, read,
+edit, and execute cells.
+
+== Executing cells
+
+[horizontal]
+`jupyter_execute_cell`:: Execute one cell and wait for its result. Best for
+  short cells — the call blocks until the cell finishes.
+`jupyter_execute_all_cells`:: Run the whole notebook. Returns an `execution_id`
+  immediately (it runs asynchronously).
+
+== Long-running cells: submit and poll
+
+Blocking execution holds the request open until the cell completes. For a cell
+that runs for minutes (a multi-agent run, model training, a long query) that
+exceeds the MCP bridge / proxy timeout and the call fails *even though the cell
+keeps running in the kernel*. Use the asynchronous **submit-then-poll** tools
+instead — the request never stays open:
+
+[horizontal]
+`jupyter_execute_cell_async`:: Start a cell without blocking. Returns an
+  `execution_id` immediately.
+`jupyter_check_execution_status`:: Poll an `execution_id`; returns
+  `running` / `completed` / `error` and the outputs once finished.
+`jupyter_check_all_cells_status`:: Poll a run-all `execution_id` returned by
+  `jupyter_execute_all_cells`.
+
+Pattern:
+
+. `jupyter_execute_cell_async(notebook_path, cell_index)` → `execution_id`
+. poll `jupyter_check_execution_status(execution_id)` until `status` is
+  `completed` (or `error`)
+. read the returned outputs
+
+Rule of thumb: if a cell might run longer than a few seconds, launch it with
+`jupyter_execute_cell_async` and poll, rather than the blocking
+`jupyter_execute_cell`.
