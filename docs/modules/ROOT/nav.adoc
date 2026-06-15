@@ -1,3 +1,4 @@
 .Control Plane
 * xref:index.adoc[thinkube-control]
 * xref:llm-serving.adoc[LLM serving & models]
+* xref:notebooks.adoc[Notebook execution over MCP]
