@@ -32,6 +32,15 @@ spec:
   accessModes:
     - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
+  # Size the JuiceFS NVMe block cache to hold a model working set so warm
+  # reloads read from local NVMe instead of re-streaming weights from SeaweedFS
+  # (~180 MB/s). The 100 GiB default is exceeded by multi-model working sets
+  # (measured ~32% miss), forcing re-fetches. 512000 MiB = 500 GiB; cap is a
+  # lazy eviction ceiling, not a preallocation. free-space-ratio keeps 15% of
+  # the node disk free so the cache can never fill it. (TEP-tgmtd3 / SP-tgqg1j_SL-3)
+  mountOptions:
+    - cache-size=512000
+    - free-space-ratio=0.15
   csi:
     driver: csi.juicefs.com
     fsType: juicefs
