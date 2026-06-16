@@ -333,6 +333,10 @@ spec:
           volumeMounts:
             - name: mlflow-models
               mountPath: /mlflow-models
+            # Persist torch.compile + flashinfer autotune across pod restarts so
+            # reloads skip ~226s of recompile/re-autotune (TEP-tgmtd3 / SP-tgqg1j_SL-4).
+            - name: vllm-compile-cache
+              mountPath: /root/.cache/vllm
 {%- endif %}
       {% if container.volume is defined %}
       volumes:
@@ -345,5 +349,12 @@ spec:
         - name: mlflow-models
           persistentVolumeClaim:
             claimName: {{ project_name }}-{{ container.name }}-mlflow-models
+        # Node-local cache for vLLM's compile/autotune artifacts. hostPath (not
+        # emptyDir) so it survives pod restarts; the cache is inherently node- and
+        # vLLM-version-specific, so per-node is correct. (TEP-tgmtd3 / SP-tgqg1j_SL-4)
+        - name: vllm-compile-cache
+          hostPath:
+            path: /var/lib/thinkube/vllm-compile-cache/{{ project_name }}-{{ container.name }}
+            type: DirectoryOrCreate
       {% endif %}
 {% endfor %}
