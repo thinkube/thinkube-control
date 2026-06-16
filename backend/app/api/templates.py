@@ -382,7 +382,10 @@ async def deploy_template_async(
             # Add system variables
             "domain_name": domain_name,
             "admin_username": "tkadmin",  # Default admin username
-            "github_token": os.environ.get("GITHUB_TOKEN", ""),
+            # NOTE: github_token is intentionally NOT stored here. It is injected
+            # at execution time by ansible_env.prepare_auth_vars() so the secret
+            # never persists in the deployment record (and never leaks back out
+            # through list_deployments / get_deployment_status responses).
             "overwrite_existing": overwrite_confirmed,  # Pass to deployment
         }
 

@@ -11,6 +11,25 @@ import uuid
 
 from app.db.session import Base
 
+# Substrings that mark a deployment variable as sensitive. Matching values are
+# redacted before being returned in any API/MCP response. Defends rows that
+# already have secrets persisted from before secrets were kept out of the record.
+_SENSITIVE_VAR_MARKERS = ("token", "password", "secret", "api_key", "passwd")
+_REDACTED = "***REDACTED***"
+
+
+def _redact_variables(variables):
+    """Return a copy of deployment variables with sensitive values redacted."""
+    if not isinstance(variables, dict):
+        return variables
+    redacted = {}
+    for key, value in variables.items():
+        if any(marker in key.lower() for marker in _SENSITIVE_VAR_MARKERS) and value:
+            redacted[key] = _REDACTED
+        else:
+            redacted[key] = value
+    return redacted
+
 
 class TemplateDeployment(Base):
     """Track template deployments"""
@@ -48,7 +67,7 @@ class TemplateDeployment(Base):
             "name": self.name,
             "template_url": self.template_url,
             "status": self.status,
-            "variables": self.variables,
+            "variables": _redact_variables(self.variables),
             "output": self.output,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "started_at": self.started_at.isoformat() if self.started_at else None,

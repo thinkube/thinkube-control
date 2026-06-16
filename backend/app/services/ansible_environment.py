@@ -101,6 +101,13 @@ class AnsibleEnvironment:
         if ansible_become_password:
             extra_vars["ansible_become_pass"] = ansible_become_password
 
+        # GitHub token for template/repo operations. Injected at execution time
+        # (not persisted in the deployment record) so it never leaks back out
+        # through deployment-listing API/MCP responses.
+        github_token = os.environ.get("GITHUB_TOKEN")
+        if github_token:
+            extra_vars["github_token"] = github_token
+
         # Add master node information if available
         master_node_name = os.environ.get("MASTER_NODE_NAME")
         if master_node_name:
