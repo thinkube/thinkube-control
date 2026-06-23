@@ -125,3 +125,7 @@ This repo is a Copier template (`copier.yaml`). Variables like `domain_name`, `n
 - **Background tasks**: Lifespan-managed background tasks for health checks (every service, periodic) and service discovery (every 5 minutes).
 - **MLflow injection**: All deployed applications automatically receive MLflow auth credentials as environment variables.
 - **Base images**: Backend uses `python-base:3.12-slim` and frontend uses `node-base:22-alpine` from Harbor registry. Dependencies are pre-installed in base images, not in the app Dockerfiles.
+
+@../thinkube-metadata/plugins/tandem-methodology/methodology.md
+
+
