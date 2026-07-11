@@ -43,6 +43,7 @@ class Service(Base):
         String(255), unique=True, nullable=False, index=True
     )  # Kubernetes name
     display_name = Column(String(255), nullable=False)  # UI display name
+    powered_by = Column(String(255), nullable=True)  # Attribution: upstream project/technology
     description = Column(Text, nullable=True)
 
     # Service type and categorization

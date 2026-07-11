@@ -5,6 +5,7 @@ export interface Service {
   id: string;
   name: string;
   display_name?: string;
+  powered_by?: string;
   description?: string;
   type: 'core' | 'optional' | 'user_app';
   category?: string;

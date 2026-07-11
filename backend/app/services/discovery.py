@@ -163,6 +163,7 @@ class ServiceDiscovery:
             service = ServiceModel(
                 name=svc["name"],
                 display_name=svc.get("display_name", svc["name"]),
+                powered_by=svc.get("powered_by"),
                 description=svc.get("description", ""),
                 type=svc.get("type", "optional"),
                 namespace=scaling.get("namespace", configmap.metadata.namespace),
@@ -331,6 +332,7 @@ class ServiceDiscovery:
                 service_data = {
                     "name": service.name,
                     "display_name": service.display_name,
+                    "powered_by": service.powered_by,
                     "description": service.description,
                     "type": service.type,
                     "namespace": service.namespace,
@@ -355,6 +357,7 @@ class ServiceDiscovery:
                     index_elements=["name"],
                     set_={
                         "display_name": stmt.excluded.display_name,
+                        "powered_by": stmt.excluded.powered_by,
                         "description": stmt.excluded.description,
                         "type": stmt.excluded.type,  # THIS WAS MISSING - must update type field!
                         "namespace": stmt.excluded.namespace,

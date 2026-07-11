@@ -244,6 +244,9 @@ export function ServiceCard({
             {!compact && service.description && (
               <p className="text-sm text-muted-foreground">{service.description}</p>
             )}
+            {!compact && service.powered_by && (
+              <p className="text-xs text-muted-foreground/70 mt-0.5">Powered by {service.powered_by}</p>
+            )}
           </div>
           <div className="flex items-start gap-2">
             <TkBadge status={statusBadgeStatus}>{statusLabel}</TkBadge>
