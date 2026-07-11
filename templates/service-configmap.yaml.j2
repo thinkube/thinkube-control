@@ -13,6 +13,7 @@ data:
     service:
       name: "{{ app_name }}"
       display_name: "{{ app_name | replace('-', ' ') | title }}"
+      powered_by: "{{ powered_by | default('') }}"
       description: "{{ project_description | default('User application deployed from ' + template_url) }}"
       type: user_app
       category: applications

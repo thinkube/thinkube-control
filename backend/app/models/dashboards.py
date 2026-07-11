@@ -14,6 +14,7 @@ class DashboardItem(BaseModel):
     color: str
     category: str
     requires_role: Optional[str] = None
+    powered_by: Optional[str] = None  # Attribution: upstream project/technology
     gpu_count: Optional[int] = None  # Number of GPUs used
     gpu_nodes: Optional[List[str]] = None  # Nodes where GPUs are allocated
 

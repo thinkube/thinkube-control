@@ -845,7 +845,7 @@ export default function ServiceDetailsPage() {
                                 </div>
                               </TkCardContent>
                             </TkCard>
-                            {resizeTarget?.podName === pod.name && resizeTarget?.containerName === container.name && (
+                            {serviceDetails && resizeTarget?.podName === pod.name && resizeTarget?.containerName === container.name && (
                               <PodResourceEditor
                                 serviceId={serviceDetails.id}
                                 podName={pod.name}

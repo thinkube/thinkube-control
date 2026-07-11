@@ -20,6 +20,7 @@ class ServiceBase(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=255, pattern=r"^[a-z][a-z0-9-]*$")
     display_name: str = Field(..., min_length=1, max_length=255)
+    powered_by: Optional[str] = None  # Attribution: upstream project/technology
     description: Optional[str] = None
     type: ServiceType
     namespace: str = Field(..., min_length=1, max_length=255)

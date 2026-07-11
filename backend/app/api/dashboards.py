@@ -85,6 +85,7 @@ async def get_dashboards(
             color=_get_category_color(service.category),
             category=service.category or "other",
             requires_role=None,  # Role-based access can be added later
+            powered_by=service.powered_by,
             gpu_count=gpu_count if gpu_count and gpu_count > 0 else None,
             gpu_nodes=gpu_nodes if gpu_nodes else None,
         )
@@ -134,6 +135,7 @@ async def get_dashboard(
         color=_get_category_color(service.category),
         category=service.category or "other",
         requires_role=None,
+        powered_by=service.powered_by,
     )
 
     return dashboard_item
