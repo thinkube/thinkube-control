@@ -386,7 +386,7 @@ async def check_mlflow_status(
 
     # Get MLflow configuration
     mlflow_uri = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000")
-    mlflow_public_url = f"https://mlflow.{os.getenv('DOMAIN_NAME', 'thinkube.com')}"
+    mlflow_public_url = f"https://experiments.{os.getenv('DOMAIN_NAME', 'thinkube.com')}"
 
     try:
         # Get credentials from secret

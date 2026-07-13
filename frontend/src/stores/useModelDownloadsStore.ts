@@ -201,7 +201,7 @@ export const useModelDownloadsStore = create<ModelDownloadsState>((set, get) => 
 
       await api.delete(`/models/${encodeURIComponent(modelId)}`);
 
-      toast.success(`${modelName} deleted from MLflow`);
+      toast.success(`${modelName} deleted from Experiments`);
 
       // Refresh both models catalog and downloads to update UI
       await Promise.all([

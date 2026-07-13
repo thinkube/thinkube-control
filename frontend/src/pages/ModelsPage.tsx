@@ -69,10 +69,10 @@ export default function ModelsPage() {
   }, []);
 
   const checkMlflowStatus = async () => {
-    // Construct MLflow URL from current domain
+    // Construct Experiments URL from current domain (service is powered by MLflow)
     const domainParts = window.location.hostname.split('.');
     const baseDomain = domainParts.slice(-2).join('.');
-    const mlflowUrl = `https://mlflow.${baseDomain}`;
+    const mlflowUrl = `https://experiments.${baseDomain}`;
 
     try {
       const response = await api.get('/models/mlflow/status');
@@ -192,7 +192,7 @@ export default function ModelsPage() {
   const activeDownloads = downloads.filter(d => d.is_running);
 
   return (
-    <TkPageWrapper description="Mirror pre-optimized models from HuggingFace to MLflow model registry">
+    <TkPageWrapper description="Mirror pre-optimized models from HuggingFace to the Experiments registry">
 
       {/* Error Alert */}
       {error && <TkErrorAlert title="Error" className="mb-6">{error}</TkErrorAlert>}
@@ -200,10 +200,10 @@ export default function ModelsPage() {
       {/* MLflow Initialization Banner */}
       {checkingMlflow ? (
         <TkInfoAlert
-          title="Checking MLflow status..."
+          title="Checking Experiments status..."
           className="mb-6"
         >
-          Please wait while we verify MLflow initialization
+          Please wait while we verify Experiments initialization
         </TkInfoAlert>
       ) : mlflowStatus?.needs_browser_login && (
         <TkCard className="mb-6 border-blue-500 bg-blue-50 dark:bg-blue-950">
@@ -211,10 +211,10 @@ export default function ModelsPage() {
             <div className="flex items-start gap-4">
               <ExternalLink className="w-6 h-6 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-1" />
               <div className="flex-1">
-                <h3 className="font-semibold text-lg mb-2">MLflow Initialization Required</h3>
+                <h3 className="font-semibold text-lg mb-2">Experiments Initialization Required</h3>
                 <p className="text-sm text-muted-foreground mb-4">
-                  Before you can mirror AI models, you need to initialize MLflow by logging in through your browser.
-                  This creates your user account in MLflow and enables seamless authentication.
+                  Before you can mirror AI models, you need to initialize Experiments by logging in through your browser.
+                  This creates your user account in Experiments and enables seamless authentication.
                 </p>
                 {mlflowStatus.error && (
                   <p className="text-sm text-destructive mb-4">
@@ -226,7 +226,7 @@ export default function ModelsPage() {
                   onClick={handleOpenMlflow}
                 >
                   <ExternalLink className="w-4 h-4 mr-2" />
-                  Initialize MLflow
+                  Initialize Experiments
                 </TkButton>
               </div>
             </div>
