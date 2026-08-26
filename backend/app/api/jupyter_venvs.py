@@ -97,6 +97,8 @@ FINETUNING_PACKAGES = [
     "openpyxl",
     # Puzzle generator for the zebra-grpo example notebook
     "python-constraint",
+    # Unsloth rejects the base image's older torchao
+    "torchao>=0.16",
 ]
 
 AGENT_PACKAGES = [
