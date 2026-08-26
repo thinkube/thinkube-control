@@ -36,6 +36,9 @@ BASE_PACKAGES = [
     "ipykernel",
     "transformers==4.56.2",
     "datasets==4.1.1",
+    # Resolved in the venv so it matches the venv's torch; the base image's
+    # torchvision only matches the base image's torch
+    "torchvision",
     "accelerate==1.10.1",
     "nvidia-modelopt",
     "pandas==2.3.2",
@@ -92,6 +95,8 @@ FINETUNING_PACKAGES = [
     "sentencepiece",
     "protobuf",
     "openpyxl",
+    # Puzzle generator for the zebra-grpo example notebook
+    "python-constraint",
 ]
 
 AGENT_PACKAGES = [
