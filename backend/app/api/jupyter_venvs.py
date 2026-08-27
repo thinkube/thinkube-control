@@ -99,6 +99,10 @@ FINETUNING_PACKAGES = [
     "python-constraint",
     # Unsloth rejects the base image's older torchao
     "torchao>=0.16",
+    # Kernels for hybrid-attention models (Qwen3.5 GatedDeltaNet layers).
+    # Without them transformers falls back to a slow torch implementation.
+    "flash-linear-attention",
+    "causal-conv1d",
 ]
 
 AGENT_PACKAGES = [
