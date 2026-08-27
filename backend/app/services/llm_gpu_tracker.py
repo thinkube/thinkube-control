@@ -218,20 +218,47 @@ class LLMGPUTracker:
             logger.warning(f"Failed to discover node-metrics pods: {e}")
 
     async def fetch_node_metrics(self, node_name: str) -> Optional[dict]:
+        """Read a node's metrics, re-resolving the pod IP if the cached one fails.
+
+        A node-metrics pod gets a new IP whenever it is recreated — a node
+        reboot, an eviction, a rescheduling. The cached IP then points at
+        nothing, and since an unreachable node is treated as unmeasurable, the
+        node stays unschedulable for models. One retry against a freshly
+        discovered IP keeps that outage as short as the pod's own restart.
+        """
         await self._ensure_pod_ips(node_name)
-        pod_ip = self._node_pod_ips.get(node_name)
-        if not pod_ip:
-            return None
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(
-                    f"http://{pod_ip}:{NODE_METRICS_PORT}/metrics"
+
+        for attempt in (1, 2):
+            pod_ip = self._node_pod_ips.get(node_name)
+            if not pod_ip:
+                return None
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    resp = await client.get(
+                        f"http://{pod_ip}:{NODE_METRICS_PORT}/metrics"
+                    )
+                    resp.raise_for_status()
+                    return resp.json()
+            except Exception as e:
+                if attempt == 1:
+                    logger.info(
+                        f"Metrics fetch failed for {node_name} ({pod_ip}); "
+                        f"re-discovering node-metrics pods: {e}"
+                    )
+                    self._discover_node_metrics_pods()
+                    if self._node_pod_ips.get(node_name) == pod_ip:
+                        # Same IP came back — the pod is genuinely unhealthy,
+                        # so a second identical request would tell us nothing.
+                        logger.warning(
+                            f"Failed to fetch metrics from {node_name} ({pod_ip}): {e}"
+                        )
+                        return None
+                    continue
+                logger.warning(
+                    f"Failed to fetch metrics from {node_name} ({pod_ip}): {e}"
                 )
-                resp.raise_for_status()
-                return resp.json()
-        except Exception as e:
-            logger.warning(f"Failed to fetch metrics from {node_name} ({pod_ip}): {e}")
-            return None
+                return None
+        return None
 
     def list_nodes(self) -> List[GPUNode]:
         return list(self._gpu_nodes.values())
