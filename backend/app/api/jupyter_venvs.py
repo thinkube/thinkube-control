@@ -35,6 +35,9 @@ router = APIRouter(prefix="/jupyter-venvs", tags=["jupyter-venvs"])
 BASE_PACKAGES = [
     "ipykernel",
     "transformers",
+    # transformers loads Hub kernels through this and bitsandbytes looks for
+    # it; without it both warn on import. Pure Python, no torch ABI.
+    "kernels",
     # Pinned for Unsloth compatibility (4.4.x causes recursion errors)
     "datasets==4.3.0",
     # torchvision is deliberately absent: it declares an exact torch== pin, so
@@ -98,10 +101,10 @@ FINETUNING_PACKAGES = [
     "openpyxl",
     # Puzzle generator for the zebra-grpo example notebook
     "python-constraint",
-    # peft rejects the base image's torchao and raises during LoRA creation;
-    # from 0.17 torchao needs torch >= 2.11, which the base image predates.
-    # 0.16.0 is the one version that satisfies peft and imports cleanly.
-    "torchao==0.16.0",
+    # peft rejects the base image's own torchao and raises during LoRA
+    # creation, so a floor is needed. The old ceiling (0.17+ needs torch 2.11)
+    # no longer applies: the base image ships torch 2.11.
+    "torchao>=0.16",
     # Kernels for hybrid-attention models (Qwen3.5 GatedDeltaNet layers).
     # Without them transformers falls back to a slow torch implementation.
     "flash-linear-attention",

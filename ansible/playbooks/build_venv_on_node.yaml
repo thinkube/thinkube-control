@@ -67,8 +67,28 @@
                     echo "Upgrading pip..."
                     "$VENV_PATH/bin/pip" install --upgrade pip
 
+                    # Packages are installed in one resolution so pip can solve
+                    # them together. Entries that carry their own pip flags are
+                    # the exception: joined into one command their flags would
+                    # apply to every package, so --no-deps on a single entry
+                    # would silently leave the whole venv without dependencies.
+                    # Those are installed individually instead.
                     echo "Installing packages..."
-                    "$VENV_PATH/bin/pip" install {{ package_list | join(' ') }}
+                    PKGS=({{ package_list | map('quote') | join(' ') }})
+                    PLAIN=()
+                    for p in "${PKGS[@]}"; do
+                      case "$p" in
+                        *" --"*)
+                          echo "  (own flags) $p"
+                          # deliberately unquoted: the flags must split into words
+                          "$VENV_PATH/bin/pip" install $p
+                          ;;
+                        *) PLAIN+=("$p") ;;
+                      esac
+                    done
+                    if [ ${#PLAIN[@]} -gt 0 ]; then
+                      "$VENV_PATH/bin/pip" install "${PLAIN[@]}"
+                    fi
 
                     echo "Installing ipykernel..."
                     "$VENV_PATH/bin/pip" install ipykernel
