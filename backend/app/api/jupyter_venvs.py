@@ -34,11 +34,12 @@ router = APIRouter(prefix="/jupyter-venvs", tags=["jupyter-venvs"])
 # Package lists for templates (from build-venvs.sh)
 BASE_PACKAGES = [
     "ipykernel",
-    "transformers==4.56.2",
-    "datasets==4.1.1",
-    # Resolved in the venv so it matches the venv's torch; the base image's
-    # torchvision only matches the base image's torch
-    "torchvision",
+    "transformers",
+    # Pinned for Unsloth compatibility (4.4.x causes recursion errors)
+    "datasets==4.3.0",
+    # torchvision is deliberately absent: it declares an exact torch== pin, so
+    # naming it installs a PyPI torch into the venv, shadowing the base image
+    # build that every compiled extension here was built against.
     "accelerate==1.10.1",
     "nvidia-modelopt",
     "pandas==2.3.2",
@@ -89,7 +90,7 @@ BASE_PACKAGES = [
 FINETUNING_PACKAGES = [
     "bitsandbytes>=0.48.2",
     "peft>=0.17.1",
-    "trl==0.23.0",
+    "trl",
     "tyro",
     "hf_transfer",
     "sentencepiece",
@@ -97,12 +98,18 @@ FINETUNING_PACKAGES = [
     "openpyxl",
     # Puzzle generator for the zebra-grpo example notebook
     "python-constraint",
-    # Unsloth rejects the base image's older torchao
-    "torchao>=0.16",
+    # peft rejects the base image's torchao and raises during LoRA creation;
+    # from 0.17 torchao needs torch >= 2.11, which the base image predates.
+    # 0.16.0 is the one version that satisfies peft and imports cleanly.
+    "torchao==0.16.0",
     # Kernels for hybrid-attention models (Qwen3.5 GatedDeltaNet layers).
     # Without them transformers falls back to a slow torch implementation.
     "flash-linear-attention",
-    "causal-conv1d",
+    # causal-conv1d is deliberately absent: it ships a compiled CUDA extension
+    # that must be BUILT against the base image's torch, which this flat
+    # package list cannot express (it needs CAUSAL_CONV1D_FORCE_BUILD plus
+    # --no-binary/--no-build-isolation). build-venvs.sh installs it in its own
+    # step; see that script for why each flag is required.
 ]
 
 AGENT_PACKAGES = [
