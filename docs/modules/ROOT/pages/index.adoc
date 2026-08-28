@@ -10,7 +10,7 @@ rest of Thinkube depends on.
 ====
 This page's source lives in the *thinkube-control* repository, beside the code it
 documents. Antora aggregates it into the Thinkube documentation at build time —
-docs-with-code (TEP-tgh6iy): the docs change in the same commit as the code.
+docs-with-code: the docs change in the same commit as the code.
 ====
 
 == Two faces, one control plane

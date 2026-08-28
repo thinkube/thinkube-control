@@ -10,7 +10,7 @@ in the *web dashboard*.
 [NOTE]
 ====
 This page lives in the *thinkube-control* repository beside the code it documents
-(docs-with-code, TEP-tgh6iy) and is aggregated into the Thinkube docs at build time.
+(docs-with-code) and is aggregated into the Thinkube docs at build time.
 ====
 
 == Two layers: control plane and gateway
