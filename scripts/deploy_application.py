@@ -2095,7 +2095,8 @@ git push -u origin main --force
                 'project_description': self.params.get('project_description', ''),
                 'deployment_date': datetime.now().isoformat(),
                 'containers': self.thinkube_config.get('spec', {}).get('containers', []),
-                'routes': self.thinkube_config.get('spec', {}).get('routes', [])
+                'routes': self.thinkube_config.get('spec', {}).get('routes', []),
+                'deployment': self.thinkube_config.get('spec', {}).get('deployment', {})
             }
 
             yaml_content = None

@@ -8,7 +8,7 @@ from uuid import uuid4
 import httpx
 import asyncpg
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, or_, select
 
 from app.models.services import Service as ServiceModel, ServiceHealth, ServiceEndpoint
 from app.db.session import SessionLocal
@@ -68,13 +68,24 @@ class HealthCheckService:
         session_factory = SessionLocal()
         db: Session = session_factory()
         try:
-            # Get all enabled services with health endpoints
+            # Get all enabled services that something can actually be checked on.
+            # TCP services carry no health_endpoint - their endpoint URL is the
+            # check target - so they qualify on having a tcp endpoint instead.
+            checkable_by_tcp = (
+                db.query(ServiceEndpoint.service_id)
+                .filter(ServiceEndpoint.type == "tcp")
+                .subquery()
+            )
+
             services = (
                 db.query(ServiceModel)
                 .filter(
                     and_(
                         ServiceModel.is_enabled == True,
-                        ServiceModel.health_endpoint.isnot(None),
+                        or_(
+                            ServiceModel.health_endpoint.isnot(None),
+                            ServiceModel.id.in_(select(checkable_by_tcp)),
+                        ),
                     )
                 )
                 .all()
@@ -227,6 +238,68 @@ class HealthCheckService:
                                 (datetime.utcnow() - start_time).total_seconds() * 1000
                             )
                         }
+
+            elif endpoint.type == "tcp":
+                # TCP health check for services that speak no HTTP (Valkey, etc).
+                # A proxy in front of a dead backend accepts the connection and
+                # then resets it, so an immediate EOF counts as unhealthy while
+                # a connection that stays open (or answers) counts as healthy.
+                target = endpoint.health_url or endpoint.url
+                host, _, port = target.rpartition(":")
+                host = host.rstrip("/").rpartition("/")[2] or host
+
+                if not host or not port.isdigit():
+                    return {
+                        "status": "unknown",
+                        "reason": f"Cannot parse host:port from {target}",
+                    }
+
+                writer = None
+                try:
+                    reader, writer = await asyncio.wait_for(
+                        asyncio.open_connection(host, int(port)),
+                        timeout=self.timeout,
+                    )
+
+                    # Time the connect itself; the settle wait below is a fixed
+                    # cost and would otherwise swamp the reported latency.
+                    response_time = int(
+                        (datetime.utcnow() - start_time).total_seconds() * 1000
+                    )
+
+                    # A live service either stays silent or greets us; a proxy
+                    # with no upstream closes immediately.
+                    try:
+                        greeting = await asyncio.wait_for(reader.read(64), timeout=1.0)
+                        connection_held = bool(greeting)
+                    except asyncio.TimeoutError:
+                        connection_held = True
+
+                    if not connection_held:
+                        return {
+                            "status": "unhealthy",
+                            "error": "Connection closed immediately by peer",
+                            "response_time": response_time,
+                        }
+
+                    return {
+                        "status": "healthy",
+                        "response_time": response_time,
+                        "details": {"check_type": "tcp_connect", "target": target},
+                    }
+
+                except (ConnectionRefusedError, OSError, asyncio.TimeoutError) as e:
+                    return {
+                        "status": "unhealthy",
+                        "error": f"Cannot connect: {type(e).__name__}: {e}",
+                        "response_time": int(
+                            (datetime.utcnow() - start_time).total_seconds() * 1000
+                        ),
+                    }
+
+                finally:
+                    if writer is not None:
+                        writer.close()
 
             elif endpoint.type == "grpc":
                 # TODO: Implement gRPC health check

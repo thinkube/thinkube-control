@@ -6,6 +6,7 @@
 {% set _root_name = _root_route.to if _root_route else (_containers[0].name if _containers | length == 1 else none) %}
 {% set _root_container = _containers | selectattr('name', 'equalto', _root_name) | first | default(none) %}
 {% set health_path = (_root_container.health | default('/health', true)) if _root_container else '/health' %}
+{% set gateway_managed = (thinkube_config.spec.deployment | default({})).get('gateway_managed', false) %}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -44,8 +45,9 @@ data:
             resource_name: "{{ app_name }}-{{ container.name }}"
           {% endfor -%}
         namespace: "{{ k8s_namespace }}"
-        min_replicas: 1
+        min_replicas: {{ 0 if gateway_managed else 1 }}
         can_disable: true
+        gateway_managed: {{ 'true' if gateway_managed else 'false' }}
         
       metadata:
         template_url: "{{ template_url }}"

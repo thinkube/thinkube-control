@@ -29,6 +29,10 @@ class Route(BaseModel):
     to: str
 
 
+class Deployment(BaseModel):
+    gateway_managed: bool = False
+
+
 class ServiceDiscoveryConfigRequest(BaseModel):
     app_name: str
     app_host: str
@@ -38,6 +42,7 @@ class ServiceDiscoveryConfigRequest(BaseModel):
     deployment_date: str
     containers: List[Container]
     routes: List[Route] = []
+    deployment: Deployment = Deployment()
 
 
 def resolve_health_path(
@@ -90,6 +95,7 @@ async def generate_service_discovery_yaml(
         )
 
     health_path = resolve_health_path(request.containers, request.routes)
+    gateway_managed = request.deployment.gateway_managed
 
     # Build service data
     service_data = {
@@ -115,8 +121,11 @@ async def generate_service_discovery_yaml(
             "scaling": {
                 "resources": resources,
                 "namespace": request.k8s_namespace,
-                "min_replicas": 1,
+                # Gateway-managed backends sit at zero replicas until a model is
+                # loaded, so a floor of 1 would misreport them as scaled down.
+                "min_replicas": 0 if gateway_managed else 1,
                 "can_disable": True,
+                "gateway_managed": gateway_managed,
             },
             "metadata": {
                 "template_url": request.template_url,
