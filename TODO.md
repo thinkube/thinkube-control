@@ -42,13 +42,13 @@ inference backends and make all four use it.
 the published cvat images are not built for arm64 and the cluster now includes
 arm nodes.
 
-Two things to settle:
+Checked at v2.74.0, the current release: `cvat/server` and `cvat/ui` both
+publish a single-arch `linux/amd64` manifest, with no manifest list and no
+arm64 variant. Upstream still does not ship arm64.
 
-- Check whether cvat publishes arm64 images now. If it does, the entry can just
-  be added.
-- If it does not, deployment has to be pinned to the amd64 nodes. That
-  restriction is not implemented anywhere today and is the real work in this
-  item.
+So deployment has to be pinned to the amd64 nodes, or cvat has to be built for
+arm64 in-house. Nothing in the platform expresses a node-architecture
+restriction today, and that restriction is the work in this item.
 
 ## 5. Components leave a Gitea repo and an apps checkout
 
