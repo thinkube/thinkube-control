@@ -98,6 +98,31 @@ def test_ordinary_service_still_scales_its_own_deployment(manager):
     manager.apps_v1.list_namespaced_deployment.assert_not_called()
 
 
+def test_enable_leaves_a_gateway_backend_at_rest(manager):
+    """Its base Deployment must stay at zero; the gateway places pods on load."""
+    service = gateway_service()
+    service.is_enabled = False
+    service.original_replicas = 1
+
+    ok, error = K8sServiceManager.enable_service(manager, service)
+
+    assert (ok, error) == (True, None)
+    manager.scale_deployment.assert_not_called()
+
+
+def test_enable_restores_an_ordinary_service(manager):
+    todo = Service(
+        name="todo", type="user_app", namespace="todo",
+        resource_name="todo-backend", service_metadata={},
+    )
+    todo.is_enabled = False
+    todo.original_replicas = 2
+
+    K8sServiceManager.enable_service(manager, todo)
+
+    manager.scale_deployment.assert_called_once_with("todo", "todo-backend", 2)
+
+
 @pytest.mark.asyncio
 async def test_placement_is_refused_while_the_backend_is_disabled(monkeypatch):
     pods = LLMPodManager()

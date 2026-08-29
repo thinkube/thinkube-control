@@ -553,6 +553,13 @@ class K8sServiceManager:
         # Clean up any stale pods before enabling
         self.cleanup_stale_pods(service.namespace)
 
+        # A gateway-managed backend has no replicas of its own to restore: its
+        # base Deployment must stay at zero and the gateway places per-node
+        # pods when a model is loaded. Scaling it here would start a pod that
+        # should not exist.
+        if (service.service_metadata or {}).get("gateway_managed"):
+            return True, None
+
         # Scale to original replica count
         return self.scale_deployment(
             service.namespace, self._target_deployment(service), service.original_replicas
