@@ -287,15 +287,34 @@ async def uninstall_optional_component(
             )
         
         # Get uninstall playbook path
+        # A template deployment leaves an ArgoCD application, a namespace, a
+        # Gitea repository, a checkout and a services row rather than anything
+        # a rollback playbook could undo.
         if service.template_descriptor(component):
-            raise HTTPException(
-                status_code=501,
-                detail=(
-                    f"'{component}' was installed from a template and there is no "
-                    f"teardown for template deployments yet. Remove its namespace, "
-                    f"ArgoCD application and Gitea repository by hand."
-                ),
+            from app.core.config import settings
+            from app.services.component_teardown import ComponentTeardown
+
+            result = ComponentTeardown(db, settings.DOMAIN_NAME).remove(
+                component, component_info["namespace"]
             )
+            if result["failed"]:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        f"Removed {', '.join(result['removed']) or 'nothing'}; "
+                        f"failed on {'; '.join(result['failed'])}"
+                    ),
+                )
+            return {
+                "deployment_id": None,
+                "component": component,
+                "status": "completed",
+                "message": (
+                    f"{component_info['display_name']} removed: "
+                    f"{', '.join(result['removed']) or 'nothing to remove'}"
+                ),
+                "websocket_url": None,
+            }
 
         playbook_path = service.get_playbook_path(component, "uninstall")
         if not playbook_path:

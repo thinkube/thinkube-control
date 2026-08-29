@@ -306,6 +306,7 @@ class LLMModelRegistry:
         self._poll_catalog()
 
         await asyncio.sleep(2)
+        await self._refresh_backends()
         self._reconcile_states()
 
         while self._is_running:
@@ -313,11 +314,27 @@ class LLMModelRegistry:
                 await asyncio.sleep(self._refresh_interval)
                 if self._is_running:
                     self._poll_catalog()
+                    await self._refresh_backends()
                     self._reconcile_states()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Model registry poll failed: {e}")
+
+    async def _refresh_backends(self):
+        """Re-probe the backends before reconciling against them.
+
+        _reconcile_states reads the discovered backend list to decide which
+        models are serving. Nothing else refreshes that list on a schedule, so
+        without this a loaded model stays 'loading' until someone refreshes the
+        registry by hand.
+        """
+        from app.services.llm_backend_discovery import llm_backend_discovery
+
+        try:
+            await llm_backend_discovery.refresh()
+        except Exception as e:
+            logger.warning(f"Backend discovery refresh failed: {e}")
 
     def stop(self):
         self._is_running = False
