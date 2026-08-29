@@ -525,6 +525,16 @@ class K8sServiceManager:
             logger.error(f"Failed to cleanup stale pods in namespace {namespace}: {e}")
             return 0
 
+    @staticmethod
+    def _target_deployment(service: ServiceModel) -> str:
+        """Name of the deployment that carries the service's replicas.
+
+        A service is rarely named after its deployment - todo runs
+        todo-backend, vllm runs vllm-inference - so scaling by service name
+        addresses a workload that does not exist and reports success.
+        """
+        return service.resource_name or service.name
+
     def enable_service(self, service: ServiceModel) -> Tuple[bool, Optional[str]]:
         """Enable a service by scaling to original replicas
 
@@ -545,7 +555,7 @@ class K8sServiceManager:
 
         # Scale to original replica count
         return self.scale_deployment(
-            service.namespace, service.name, service.original_replicas
+            service.namespace, self._target_deployment(service), service.original_replicas
         )
 
     def disable_service(self, service: ServiceModel) -> Tuple[bool, Optional[str]]:
@@ -564,12 +574,13 @@ class K8sServiceManager:
             return True, None  # Already disabled
 
         # Get current replica count before disabling
-        status = self.get_deployment_status(service.namespace, service.name)
+        target = self._target_deployment(service)
+        status = self.get_deployment_status(service.namespace, target)
         if status and status["replicas"] > 0:
             service.original_replicas = status["replicas"]
 
         # Scale to 0
-        result = self.scale_deployment(service.namespace, service.name, 0)
+        result = self.scale_deployment(service.namespace, target, 0)
         
         # Clean up any stale pods after disabling
         if result[0]:  # If scaling was successful
