@@ -357,6 +357,11 @@ async def _execute_component_installation(
         try:
             # Prepare vars with authentication (like templates do)
             extra_vars = ansible_env.prepare_auth_vars(parameters or {})
+            # Components that only ship for some architectures must land on a
+            # node that can run them.
+            extra_vars["component_node_selector"] = OptionalComponentService(
+                db
+            ).node_selector(component)
             with os.fdopen(temp_vars_fd, 'w') as f:
                 yaml.dump(extra_vars, f)
         except:

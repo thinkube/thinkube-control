@@ -92,6 +92,48 @@ class OptionalComponentService:
                 
         self.core_v1 = client.CoreV1Api()
         
+    ARCH_LABEL = "kubernetes.io/arch"
+
+    def _cluster_architectures(self) -> set:
+        """Architectures the cluster's nodes actually offer."""
+        try:
+            from kubernetes import client
+
+            nodes = client.CoreV1Api().list_node()
+            return {
+                n.metadata.labels.get(self.ARCH_LABEL)
+                for n in nodes.items
+                if n.metadata.labels and n.metadata.labels.get(self.ARCH_LABEL)
+            }
+        except Exception as e:
+            logger.warning(f"Could not read node architectures: {e}")
+            return set()
+
+    def _architecture_status(self, info: Dict[str, Any]) -> tuple:
+        """Whether a component's architectures exist here, and which are missing.
+
+        A component with no declared architectures runs anywhere.
+        """
+        required = info.get("architectures") or []
+        if not required:
+            return True, []
+
+        available = self._cluster_architectures()
+        if not available:
+            return True, []  # Unknown cluster: do not block on a failed read.
+
+        if set(required) & available:
+            return True, []
+        return False, [f"a {'/'.join(required)} node"]
+
+    def node_selector(self, component_name: str) -> Dict[str, str]:
+        """Node selector pinning a component to an architecture it supports."""
+        info = get_components_catalog().get(component_name) or {}
+        required = info.get("architectures") or []
+        if len(required) != 1:
+            return {}
+        return {self.ARCH_LABEL: required[0]}
+
     def list_components(self) -> List[Dict[str, Any]]:
         """
         List all available optional components with their installation status
@@ -109,8 +151,11 @@ class OptionalComponentService:
                 "name": name,
                 "installed": installed,
                 "component_version": self._get_component_version(name) if installed else None,
-                "requirements_met": self._check_requirements(info["requirements"]),
+                "requirements_met": self._check_requirements(info["requirements"])
+                and self._architecture_status(info)[0],
                 "missing_requirements": self._get_missing_requirements(info["requirements"])
+                + self._architecture_status(info)[1],
+                "architectures": info.get("architectures") or [],
             }
             components.append(component)
             
@@ -137,7 +182,9 @@ class OptionalComponentService:
             "name": component_name,
             "installed": installed,
             "component_version": self._get_component_version(component_name) if installed else None,
-            "requirements_met": self._check_requirements(info["requirements"]),
+            "requirements_met": self._check_requirements(info["requirements"])
+            and self._architecture_status(info)[0],
+            "architectures": info.get("architectures") or [],
             "missing_requirements": self._get_missing_requirements(info["requirements"]),
             "status": self._get_component_status(component_name)
         }
