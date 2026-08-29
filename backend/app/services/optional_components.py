@@ -61,11 +61,11 @@ def get_components_catalog() -> Dict[str, Any]:
         logger.info("Using stale cached components catalog")
         return _COMPONENTS_CATALOG_CACHE
 
+    # Do not cache the empty result: storing it with a fresh timestamp would
+    # hold the menu empty for a whole TTL after one transient network failure,
+    # and every expiry would re-poison it.
     logger.error("No components catalog available (fetch failed, no cache)")
-    _COMPONENTS_CATALOG_CACHE = {}
-    _COMPONENTS_CATALOG_CACHE_TIME = now
-
-    return _COMPONENTS_CATALOG_CACHE
+    return {}
 
 
 class OptionalComponentService:
