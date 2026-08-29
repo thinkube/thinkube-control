@@ -55,7 +55,12 @@ class ServiceDiscovery:
         Returns:
             Dictionary with service types as keys and lists of services as values
         """
-        services = {"core": [], "optional": [], "user_app": []}
+        services: Dict[str, List[ServiceModel]] = {
+            "core": [],
+            "optional": [],
+            "user_app": [],
+            "component": [],
+        }
 
         try:
             # Get all ConfigMaps with our label
@@ -69,7 +74,9 @@ class ServiceDiscovery:
                 )
                 service = self._extract_service_from_configmap(cm)
                 if service:
-                    services[service.type].append(service)
+                    # A type absent from the buckets above must not abort the
+                    # whole sync; downstream consumers iterate the values.
+                    services.setdefault(service.type, []).append(service)
                     logger.info(
                         f"Discovered service {service.name} of type {service.type} from ConfigMap"
                     )
