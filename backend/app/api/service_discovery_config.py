@@ -16,8 +16,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["service-discovery-config"])
 
 
+DEFAULT_HEALTH_PATH = "/health"
+
+
 class Container(BaseModel):
     name: str
+    health: Optional[str] = None
+
+
+class Route(BaseModel):
+    path: str
+    to: str
 
 
 class ServiceDiscoveryConfigRequest(BaseModel):
@@ -28,6 +37,28 @@ class ServiceDiscoveryConfigRequest(BaseModel):
     project_description: Optional[str] = ""
     deployment_date: str
     containers: List[Container]
+    routes: List[Route] = []
+
+
+def resolve_health_path(
+    containers: List[Container], routes: List[Route]
+) -> str:
+    """Return the health path of the container serving the app host root.
+
+    The web endpoint points at the app host root, so its health check must use
+    the health path of whichever container is routed at "/". Falls back to the
+    single container's path when there is only one, then to DEFAULT_HEALTH_PATH.
+    """
+    root_container = next((r.to for r in routes if r.path == "/"), None)
+
+    if root_container is None and len(containers) == 1:
+        root_container = containers[0].name
+
+    for container in containers:
+        if container.name == root_container:
+            return container.health or DEFAULT_HEALTH_PATH
+
+    return DEFAULT_HEALTH_PATH
 
 
 @router.post(
@@ -58,6 +89,8 @@ async def generate_service_discovery_yaml(
             }
         )
 
+    health_path = resolve_health_path(request.containers, request.routes)
+
     # Build service data
     service_data = {
         "service": {
@@ -73,7 +106,7 @@ async def generate_service_discovery_yaml(
                     "name": "web",
                     "type": "http",
                     "url": f"https://{request.app_host}",
-                    "health_url": f"https://{request.app_host}/health",
+                    "health_url": f"https://{request.app_host}{health_path}",
                     "description": "Main application endpoint",
                     "primary": True,
                 }
