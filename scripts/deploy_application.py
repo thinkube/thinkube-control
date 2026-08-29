@@ -8,6 +8,7 @@ import asyncio
 import base64
 import json
 import os
+import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -22,6 +23,10 @@ import yaml
 from kubernetes_asyncio import client, config
 from kubernetes_asyncio.client.rest import ApiException
 from kubernetes_asyncio.stream import WsApiClient
+
+
+APPS_DIR = "/home/thinkube/apps"
+COMPONENTS_DIR = "/home/thinkube/components"
 
 
 class DeploymentLogger:
@@ -66,8 +71,10 @@ class ApplicationDeployer:
         self.admin_username = params['admin_username']
         self.template_url = params['template_url']
         # Inside container: /home/thinkube is mounted from host's /home/{ansible_user}/shared-code
-        # Apps are stored under apps/ subdirectory for clean organization
-        self.local_repo_path = f"/home/thinkube/apps/{self.app_name}"
+        # Apps the user works on live under apps/; platform components live
+        # under components/. Which one applies is only known once thinkube.yaml
+        # is parsed, so the checkout starts here and relocates if needed.
+        self.local_repo_path = f"{APPS_DIR}/{self.app_name}"
 
         # Unique Gitea repository name: {app_name}-{deployment_id}
         # This prevents conflicts and database corruption
@@ -104,6 +111,89 @@ class ApplicationDeployer:
     def _is_component(self) -> bool:
         """Check if current deployment is a platform component."""
         return self.thinkube_config.get('spec', {}).get('deployment', {}).get('type') == 'component'
+
+    def _relocate_component_checkout(self):
+        """Move a component's checkout out of apps/ and into components/.
+
+        apps/ holds what the user works on. A component landing there looks
+        like the source of truth while every deploy rewrites it.
+        """
+        target = Path(COMPONENTS_DIR) / self.app_name
+        current = Path(self.local_repo_path)
+
+        if current == target:
+            return
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        if current.exists():
+            if target.exists():
+                shutil.rmtree(current)
+                DeploymentLogger.log(
+                    f"Removed duplicate component checkout at {current}"
+                )
+            else:
+                shutil.move(str(current), str(target))
+                DeploymentLogger.log(
+                    f"Moved component checkout to {target}"
+                )
+
+        self.local_repo_path = str(target)
+
+    def _local_modifications(self) -> Optional[str]:
+        """Describe uncommitted or unpushed work in the checkout, if any."""
+        repo = Path(self.local_repo_path)
+        if not (repo.exists() and (repo / ".git").exists()):
+            return None
+
+        def git(*args):
+            return subprocess.run(
+                ["git", *args], cwd=str(repo),
+                capture_output=True, text=True, timeout=30,
+            )
+
+        try:
+            dirty = git("status", "--porcelain").stdout.strip()
+            ahead = git("log", "--oneline", "origin/main..HEAD").stdout.strip()
+        except Exception:
+            return None
+
+        parts = []
+        if dirty:
+            parts.append(f"{len(dirty.splitlines())} uncommitted change(s)")
+        if ahead:
+            parts.append(f"{len(ahead.splitlines())} unpushed commit(s)")
+        return ", ".join(parts) or None
+
+    def _preserve_local_modifications(self, description: str) -> None:
+        """Park local work on a branch so the deploy cannot silently drop it."""
+        repo = Path(self.local_repo_path)
+        branch = f"local-changes-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+        DeploymentLogger.log(
+            f"WARNING: {self.local_repo_path} has {description}. "
+            f"This deploy overwrites the checkout from the template."
+        )
+        try:
+            subprocess.run(
+                ["git", "add", "-A"], cwd=str(repo),
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            subprocess.run(
+                ["git", "stash", "push", "--include-untracked",
+                 "-m", f"thinkube deploy {branch}"],
+                cwd=str(repo), capture_output=True, text=True, timeout=60, check=False,
+            )
+            subprocess.run(
+                ["git", "branch", branch], cwd=str(repo),
+                capture_output=True, text=True, timeout=30, check=False,
+            )
+            DeploymentLogger.log(
+                f"Local work kept on branch {branch} and in the stash; "
+                f"recover it with: git -C {self.local_repo_path} stash list"
+            )
+        except Exception as e:
+            DeploymentLogger.error(f"Could not preserve local changes: {e}")
 
     async def phase1_setup(self):
         """Phase 1: Validate parameters, create namespace, and run Copier."""
@@ -142,6 +232,10 @@ class ApplicationDeployer:
         if not (Path(self.local_repo_path).exists() and Path(self.local_repo_path, '.git').exists()):
             DeploymentLogger.log("No existing git repository, will be created fresh")
             return
+
+        modifications = self._local_modifications()
+        if modifications:
+            self._preserve_local_modifications(modifications)
 
         DeploymentLogger.log("Pulling latest changes from Gitea repository")
         gitea_token = self._decode_secret_data(self.secrets['gitea'], 'token')
@@ -389,6 +483,8 @@ git reset --hard origin/main
                         f"Component name mismatch: manifest declares '{manifest_name}' "
                         f"but deployment was requested as '{self.app_name}'"
                     )
+
+                self._relocate_component_checkout()
 
             deployment = self.thinkube_config.get('spec', {}).get('deployment', {})
             if 'replicas' not in deployment:
