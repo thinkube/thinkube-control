@@ -2,7 +2,14 @@
 API endpoints for managing optional Thinkube components
 """
 
-from fastapi import APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from typing import List, Dict, Any, Optional
 from uuid import uuid4
 from datetime import datetime
@@ -125,10 +132,49 @@ async def get_component_info(
         )
 
 
+async def _install_from_template(
+    component: str,
+    component_info: dict,
+    template: dict,
+    db: Session,
+    background_tasks: BackgroundTasks,
+    current_user: dict,
+) -> InstallResponse:
+    """Queue a template-backed component through the template deployment path."""
+    from app.services.background_executor import background_executor
+
+    deployment = TemplateDeployment(
+        id=uuid4(),
+        name=template.get("fixed_name") or component,
+        template_url=template["url"],
+        status="pending",
+        variables={
+            "app_name": template.get("fixed_name") or component,
+            "project_name": template.get("fixed_name") or component,
+            "project_description": component_info.get("description", ""),
+            "author_name": current_user.get("preferred_username", "thinkube-user"),
+        },
+        created_by=current_user.get("preferred_username", "unknown"),
+    )
+    db.add(deployment)
+    db.commit()
+
+    background_tasks.add_task(background_executor.start_deployment, str(deployment.id))
+
+    return InstallResponse(
+        deployment_id=str(deployment.id),
+        component=component,
+        status="queued",
+        message=f"Installation of {component_info['display_name']} has been queued",
+        websocket_url=f"/ws/template/deploy/{deployment.id}",
+    )
+
+
 @router.post("/{component}/install", response_model=InstallResponse, operation_id="install_optional_component")
 async def install_optional_component(
     component: str,
     request: ComponentInstallRequest,
+    background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user_dual_auth),
     db: Session = Depends(get_db)
 ):
@@ -160,6 +206,14 @@ async def install_optional_component(
                     detail=validation.get("error", "Component cannot be installed")
                 )
         
+        # Inference backends install through the template deployment process
+        # rather than a playbook; the menu entry is the same either way.
+        template = service.template_descriptor(component)
+        if template:
+            return await _install_from_template(
+                component, component_info, template, db, background_tasks, current_user
+            )
+
         # Get playbook path
         playbook_path = service.get_playbook_path(component, "install")
         if not playbook_path:
@@ -233,6 +287,16 @@ async def uninstall_optional_component(
             )
         
         # Get uninstall playbook path
+        if service.template_descriptor(component):
+            raise HTTPException(
+                status_code=501,
+                detail=(
+                    f"'{component}' was installed from a template and there is no "
+                    f"teardown for template deployments yet. Remove its namespace, "
+                    f"ArgoCD application and Gitea repository by hand."
+                ),
+            )
+
         playbook_path = service.get_playbook_path(component, "uninstall")
         if not playbook_path:
             raise HTTPException(

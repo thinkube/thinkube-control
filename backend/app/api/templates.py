@@ -132,6 +132,11 @@ async def list_available_templates(
         templates = []
         for repo in repositories:
             if repo.get("type") == "application_template":
+                # Components are installed from the Optional Components menu,
+                # so they do not belong in the templates listing.
+                if repo.get("deployment_type") == "component":
+                    continue
+
                 entry = {
                     "name": repo["name"],
                     "description": repo.get("description", ""),

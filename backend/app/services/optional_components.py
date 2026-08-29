@@ -423,6 +423,19 @@ class OptionalComponentService:
             else:
                 return {"status": "error", "message": str(e)}
     
+    def template_descriptor(self, component_name: str) -> Optional[Dict[str, Any]]:
+        """The template a component deploys from, when it is not playbook-backed.
+
+        Components install two ways: the platform ones run an ansible playbook,
+        the inference backends go through the template deployment process. The
+        listing does not care which; only install does.
+        """
+        component = get_components_catalog().get(component_name) or {}
+        descriptor = component.get("template")
+        if not descriptor or not descriptor.get("url"):
+            return None
+        return descriptor
+
     def get_playbook_path(self, component_name: str, playbook_type: str) -> Optional[str]:
         """
         Get the full path to a component's playbook
@@ -439,7 +452,9 @@ class OptionalComponentService:
             return None
 
         component = catalog[component_name]
-        playbook_name = component["playbooks"].get(playbook_type)
+        # Template-backed components carry no playbooks; the caller branches on
+        # template_descriptor instead.
+        playbook_name = (component.get("playbooks") or {}).get(playbook_type)
         
         if not playbook_name:
             return None
