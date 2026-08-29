@@ -112,3 +112,19 @@ def test_min_replicas_floor_follows_gateway_managed(
     deployment = Deployment(gateway_managed=gateway_managed)
 
     assert (0 if deployment.gateway_managed else 1) == expected_min_replicas
+
+
+@pytest.mark.parametrize(
+    "declared_type,is_component",
+    [("component", True), ("app", False), ("knative", False)],
+)
+def test_component_is_recognised_from_the_declared_type(declared_type, is_component):
+    assert Deployment(type=declared_type).is_component is is_component
+
+
+def test_deployment_type_defaults_to_app():
+    """thinkube.yaml may omit the type; an app is the default."""
+    request = ServiceDiscoveryConfigRequest(**MINIMAL_REQUEST)
+
+    assert request.deployment.type == "app"
+    assert request.deployment.is_component is False

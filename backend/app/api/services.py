@@ -101,7 +101,7 @@ async def list_services(
         # Create ServiceSchema instance with computed fields
         service_schema = ServiceSchema.model_validate(service)
         service_schema.latest_health = latest_health
-        service_schema.can_be_disabled = service.type in ["optional", "user_app"]
+        service_schema.can_be_disabled = service.type in ["optional", "user_app", "component"]
         service_schema.is_favorite = str(service.id) in user_favorites
 
         # Apply cached GPU info
@@ -197,7 +197,7 @@ async def get_service_details(
     service_detail = ServiceDetail(
         **service.__dict__,
         latest_health=latest_health,
-        can_be_disabled=service.type in ["optional", "user_app"],
+        can_be_disabled=service.type in ["optional", "user_app", "component"],
         health_history=[],  # Empty - use /health endpoint for full history
         recent_actions=recent_actions,
         resource_usage=k8s_status.get("resource_usage") if k8s_status else None,

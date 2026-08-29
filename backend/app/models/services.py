@@ -104,7 +104,7 @@ class Service(Base):
     @property
     def can_be_disabled(self) -> bool:
         """Check if this service can be disabled"""
-        return self.type in ["optional", "user_app"]
+        return self.type in ["optional", "user_app", "component"]
 
 
 class ServiceHealth(Base):

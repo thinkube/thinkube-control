@@ -29,8 +29,19 @@ class Route(BaseModel):
     to: str
 
 
+COMPONENT_SERVICE_TYPE = "component"
+COMPONENT_CATEGORY = "components"
+APP_SERVICE_TYPE = "user_app"
+APP_CATEGORY = "applications"
+
+
 class Deployment(BaseModel):
+    type: str = "app"
     gateway_managed: bool = False
+
+    @property
+    def is_component(self) -> bool:
+        return self.type == "component"
 
 
 class ServiceDiscoveryConfigRequest(BaseModel):
@@ -96,6 +107,10 @@ async def generate_service_discovery_yaml(
 
     health_path = resolve_health_path(request.containers, request.routes)
     gateway_managed = request.deployment.gateway_managed
+    is_component = request.deployment.is_component
+
+    service_type = COMPONENT_SERVICE_TYPE if is_component else APP_SERVICE_TYPE
+    category = COMPONENT_CATEGORY if is_component else APP_CATEGORY
 
     # Build service data
     service_data = {
@@ -104,8 +119,8 @@ async def generate_service_discovery_yaml(
             "display_name": request.app_name.replace("-", " ").title(),
             "description": request.project_description
             or f"User application deployed from {request.template_url}",
-            "type": "user_app",
-            "category": "applications",
+            "type": service_type,
+            "category": category,
             "icon": "/icons/tk_dashboard.svg",
             "endpoints": [
                 {
