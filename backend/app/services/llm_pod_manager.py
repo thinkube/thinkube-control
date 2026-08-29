@@ -70,6 +70,30 @@ class LLMPodManager:
             return os.getenv(env_key, BACKEND_NAMESPACES.get(backend_type, backend_type))
         return BACKEND_NAMESPACES.get(backend_type, backend_type)
 
+    def _is_disabled(self, backend_type: str) -> bool:
+        """Whether the operator has turned this backend off in the services view.
+
+        Placement has to honour that: without the check, disabling a backend
+        removes its pods and the next model load puts them straight back.
+        """
+        from app.db.session import SessionLocal
+        from app.models.services import Service
+
+        namespace = self._get_namespace(backend_type)
+        try:
+            db = SessionLocal()()
+            try:
+                service = (
+                    db.query(Service).filter(Service.namespace == namespace).first()
+                )
+                return service is not None and not service.is_enabled
+            finally:
+                db.close()
+        except Exception as e:
+            # Never let a lookup failure block placement.
+            logger.warning(f"Could not read enabled state for {backend_type}: {e}")
+            return False
+
     def _get_base_deployment_name(self, backend_type: str) -> str:
         names = {
             "ollama": "ollama",
@@ -112,6 +136,13 @@ class LLMPodManager:
         Returns (success, managed_pod). If wait_ready is False, creates the
         Deployment and returns immediately without waiting for pod readiness.
         """
+        if self._is_disabled(backend_type):
+            logger.info(
+                f"Refusing to place {backend_type} on {node_name}: "
+                f"the service is disabled"
+            )
+            return False, None
+
         key = f"{backend_type}-{node_name}"
 
         existing = self._managed.get(key)

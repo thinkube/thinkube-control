@@ -579,14 +579,47 @@ class K8sServiceManager:
         if status and status["replicas"] > 0:
             service.original_replicas = status["replicas"]
 
+        # A gateway-managed backend rests at zero replicas and does its serving
+        # from per-node Deployments the gateway creates, so scaling the base
+        # Deployment alone would report success and stop nothing.
+        if (service.service_metadata or {}).get("gateway_managed"):
+            ok, error = self._scale_down_gateway_deployments(service.namespace)
+            if not ok:
+                return False, error
+            self.cleanup_stale_pods(service.namespace)
+            return True, None
+
         # Scale to 0
         result = self.scale_deployment(service.namespace, target, 0)
-        
+
         # Clean up any stale pods after disabling
         if result[0]:  # If scaling was successful
             self.cleanup_stale_pods(service.namespace)
-        
+
         return result
+
+    def _scale_down_gateway_deployments(
+        self, namespace: str
+    ) -> Tuple[bool, Optional[str]]:
+        """Scale every gateway-created Deployment in a namespace to zero."""
+        from app.services.llm_pod_manager import GATEWAY_LABEL, GATEWAY_LABEL_VALUE
+
+        try:
+            deployments = self.apps_v1.list_namespaced_deployment(
+                namespace,
+                label_selector=f"{GATEWAY_LABEL}={GATEWAY_LABEL_VALUE}",
+            )
+        except ApiException as e:
+            return False, f"Could not list gateway deployments: {e}"
+
+        for deployment in deployments.items:
+            ok, error = self.scale_deployment(
+                namespace, deployment.metadata.name, 0
+            )
+            if not ok:
+                return False, error
+
+        return True, None
 
     def _parse_cpu(self, cpu_str: str) -> int:
         """Parse CPU string to millicores
