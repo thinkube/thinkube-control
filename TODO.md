@@ -2,8 +2,8 @@
 
 Open work on thinkube-control and the pieces around it.
 
-Each item says what to do. Where a choice has to be made first, the choice is
-stated with its options, so the item can be picked up without rediscovering it.
+Each item says what to do. Decisions already taken are recorded under the item
+that depends on them, so nothing has to be rediscovered.
 
 ---
 
@@ -17,42 +17,60 @@ it is not deployed.
 now carry the flag. Without it, the first deployment reports Disabled while
 serving.
 
-Ready to do. No decision needed.
-
 ---
 
 ## 2. Make the generator emit the real deployment type
 
+**Decided:** components get their own category. They no longer land in
+`applications`.
+
 **Do:** pass the deployment type into
 `backend/app/api/service_discovery_config.py` and emit it, instead of the
 hardcoded `"type": "user_app"`. Mirror it in
-`templates/service-configmap.yaml.j2`. Then redeploy vllm and text-embeddings so
-their rows change type.
+`templates/service-configmap.yaml.j2`. Set the component category alongside it.
+Then redeploy vllm and text-embeddings so their rows change type and category.
 
-**Decide first:** components currently land in category `applications`. Give
-them their own category, or leave it.
-
-**Why:** the ConfigMap label already says `thinkube.io/service-type: component`,
-set from `_is_component()` in `scripts/deploy_application.py`, while the body it
-labels says `user_app`. The two disagree on every component deployment.
+**Why:** the ConfigMap label already says
+`thinkube.io/service-type: component`, set from `_is_component()` in
+`scripts/deploy_application.py`, while the body it labels says `user_app`. The
+two disagree on every component deployment.
 
 ---
 
-## 3. Give the four LLM backends one install path
+## 3. List all components in one menu, keep two install mechanisms
 
-**Decide first, this is the whole item:** ollama installs from Optional
-Components and registers as `optional`; vllm, tensorrt and text-embeddings
-install from Templates and register as `user_app`. Pick one:
+**Decided:** everything is listed under Optional Components. How a component
+installs stays split: the existing ones run their ansible playbook, the
+inference ones go through the thinkube-control template deployment process.
+One menu, two mechanisms.
 
-- **a** — move ollama to a fixed-name template, so all four are templates.
-- **b** — move the three inference templates to optional components.
-- **c** — keep both paths, but make all four register with the same type and
-  category so they read as one group in the UI.
+**Do:**
 
-**Do, once chosen:** implement the move, then redeploy the affected backends.
+- Add vllm, tensorrt and text-embeddings to `optional_components.json` in
+  thinkube-metadata, carrying a `template` descriptor (template url and fixed
+  name) in place of the `playbooks` block.
+- Branch on which descriptor is present at the install, test and uninstall call
+  sites in `backend/app/api/optional_components.py`. Playbook entries keep
+  `get_playbook_path()`; template entries call the deployment process.
+- Stop the Templates menu listing entries whose `deployment_type` is
+  `component`. `repositories.json` still holds their template metadata — only
+  the menu placement changes.
 
-**Why:** four peers of the same gateway arrive by two routes and end up as two
-different kinds of thing. Option **c** is the cheapest and depends on item 2.
+**This works because the listing does not care how a thing installs.**
+`list_components()` reads only the presentation fields and installed state. The
+`playbooks` block is consulted solely at install, test and uninstall time,
+through `get_playbook_path()`. That is the seam.
+
+**Two things come free:** the `requirements` gate that makes perses require
+prometheus would let vllm declare a GPU requirement, and template components
+gain a consistent uninstall path, which they do not have today.
+
+**One assumption to revisit:** `backend/app/services/optional_components.py`
+line 20 states that components require local playbooks, so only the platform
+catalog is used and no user catalog is merged. Template components can come from
+a user org, so that assumption blocks user-supplied components.
+
+**Depends on item 2** for components to register as their own type and category.
 
 ---
 
@@ -74,56 +92,54 @@ today; that is the work. cvat is the first case, not the only one.
 
 ---
 
-## 5. Stop components landing in the user's apps directory
+## 5. Move components to their own directory, and track local edits
 
-**Decide first:** `/home/thinkube/apps/` holds both apps you edit (docs, todo)
-and inference components you do not (vllm, text-embeddings). Pick one:
+**Decided:** components get a `components/` directory of their own, added to the
+workspace. `apps/` keeps only the apps the user works on.
 
-- **a** — give components their own directory and leave `apps/` for user apps.
-- **b** — keep the location and make the checkout visibly not-for-editing.
+**Decided:** editing a component stays allowed. Locking it down would mean
+supporting every feature every model needs, which is not sustainable — vllm was
+recently tweaked to support dflash, and that kind of change is legitimate. A
+documented, modifiable standard component is the right shape.
 
-**Do, once chosen:** for **a**, derive the checkout path from `_is_component()`
-instead of the app name alone. For **b**, have the deploy write a marker into
-component checkouts saying edits there are discarded.
+**Do:**
 
-**Why:** `local_repo_path` and `gitea_repo_name` are both built from the app name
-alone (`scripts/deploy_application.py` lines 70 and 74) and `_is_component()`
-reaches neither.
+- Derive the checkout path from `_is_component()` rather than the app name
+  alone, so components land in `components/<name>` and apps stay in
+  `apps/<name>`. Both paths are currently built from the app name at
+  `scripts/deploy_application.py` lines 70 and 74.
+- Add `components/` to the workspace.
+- Record a flag when the user has modified a component checkout. The checkout is
+  a git repo, so a dirty tree or commits ahead of the deployed revision is the
+  natural signal.
+- When a deploy would overwrite a modified component, warn first and make the
+  user confirm. Today the overwrite is silent.
 
-Note the checkout is **not** a spare copy — the deploy reads `thinkube.yaml`
-from it, generates the k8s manifests in it, resolves build contexts against it,
-installs git hooks into it, and pushes to Gitea from it. It cannot be dropped,
-only moved or marked. The Gitea repo is load-bearing too: ArgoCD deploys from
+**Why the warning matters:** the deploy rewrites the checkout every time, so an
+edit made there looks like the source of truth and disappears without a word.
+
+**Note the checkout is not a spare copy.** The deploy reads `thinkube.yaml` from
+it, generates the k8s manifests in it, resolves build contexts against it,
+installs git hooks into it, and pushes to Gitea from it. It moves; it cannot be
+dropped. The Gitea repo is load-bearing too — ArgoCD deploys from
 `thinkube-deployments/<name>`.
-
-The trap is that an edit in `apps/<name>` for a component looks like the source
-of truth and is overwritten on the next deploy.
-
----
-
-## 6. Check services on their internal endpoint
-
-**Do:** in `backend/app/services/health_checker.py`, prefer a registered
-internal endpoint over the public one when choosing what decides a service's
-health.
-
-**Decide first:** whether the public route should still be checked and reported
-separately, so a broken ingress is visible rather than silent.
-
-**Why:** endpoint selection takes the primary or first non-internal endpoint, so
-every check traverses the ingress and its auth, and a service is reported down
-when only its route is broken. Internal endpoints are already registered and
-unused — clickhouse has
-`http://clickhouse-clickhouse.clickhouse.svc.cluster.local:8123/ping` sitting
-there while its check goes out through the gateway.
 
 ---
 
 ## Decided, not to fix
+
+**Health checks stay on the public endpoint.** Thinkube is a development
+platform and external access is a design prerequisite. A check that traverses
+the ingress and its auth is checking the thing that is actually required, so
+"unhealthy" correctly means "not reachable the way users reach it". Switching
+the deciding check to internal cluster addresses would contradict the
+requirement.
+
+Registered internal endpoints stay unused for health decisions.
 
 **LiteLLM stays as an optional component.** It is superseded by the LLM gateway
 for local inference, but it routes to external providers such as OpenAI and
 Claude, which the gateway does not do. As an optional component it costs
 nothing. The open-core risk is understood and accepted for an optional install.
 
-Do not raise this again as a defect.
+Do not raise either of these again as a defect.
