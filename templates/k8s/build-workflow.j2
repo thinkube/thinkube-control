@@ -162,7 +162,15 @@ spec:
         args:
           - |
             set -e
-            cd /workspace/{{ "{{" }}inputs.parameters.build_path{{ "}}" }}
+            # The shared checkout is the person's own tree, read here and never
+            # written: a test install made in this image writes native modules
+            # for this image's C library into it, and nothing else can use them.
+            # The container's source is copied into a scratch tree first, without
+            # any dependency store, and the tests run and install there.
+            SRC=/workspace/{{ "{{" }}inputs.parameters.build_path{{ "}}" }}
+            WORK=$(mktemp -d /tmp/test-tree.XXXXXX)
+            (cd "$SRC" && tar cf - --exclude=node_modules --exclude=.venv --exclude=__pycache__ --exclude=dist --exclude=htmlcov .) | (cd "$WORK" && tar xf -)
+            cd "$WORK"
 
             # Get test command - MUST be provided, no auto-detection
             TEST_CMD="{{ "{{" }}inputs.parameters.test_command{{ "}}" }}"
