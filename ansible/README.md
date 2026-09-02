@@ -29,8 +29,8 @@ ansible/
 
 When thinkube-control executes template deployments:
 1. Templates download their `ansible/deploy.yaml` playbook
-2. The playbook uses roles from `/home/thinkube-control/ansible/roles/`
-3. The inventory at `/home/thinkube-control/ansible/inventory/inventory.yaml` provides host information
+2. The playbook uses roles from `/home/thinkube/thinkube-control/ansible/roles/`
+3. The inventory at `/home/thinkube/thinkube-control/ansible/inventory/inventory.yaml` provides host information
 
 ## Security
 

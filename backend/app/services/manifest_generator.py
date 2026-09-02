@@ -19,7 +19,7 @@ import yaml
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
-sys.path.insert(0, '/home/thinkube-control/scripts')
+sys.path.insert(0, '/home/thinkube/thinkube-control/scripts')
 from thinkube_yaml_validator import (
     validate_knative_constraints as _validate_knative_constraints,
     validate_component_constraints as _validate_component_constraints,
@@ -29,7 +29,8 @@ from thinkube_yaml_validator import (
 logger = logging.getLogger(__name__)
 
 # Path to the J2 templates used by the deployment system
-# In the backend pod, thinkube-control is mounted at /home/thinkube-control/
+# The backend pod mounts the shared home at /home/thinkube, where the
+# thinkube-control checkout lives — the same path code-server sees.
 TEMPLATES_DIR = Path("/home/thinkube/thinkube-control/templates/k8s")
 
 
