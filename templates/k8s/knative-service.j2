@@ -109,6 +109,13 @@ spec:
               value: "{{ param_value }}"
             {% endfor %}
             {% endif %}
+            # Names the container may show the browser (thinkube.yaml publicEnv).
+            # An allow-list of names only; every container holds the full
+            # environment, secrets included, so an absent list publishes nothing.
+            {% if container.publicEnv is defined %}
+            - name: PUBLIC_ENV_VARS
+              value: "{{ container.publicEnv | join(',') }}"
+            {% endif %}
             # Platform-wide environment variables
             - name: APP_NAME
               value: "{{ project_name }}"
