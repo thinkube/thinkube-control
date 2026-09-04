@@ -171,12 +171,20 @@ spec:
             WORK=$(mktemp -d /tmp/test-tree.XXXXXX)
             (cd "$SRC" && tar cf - --exclude=node_modules --exclude=.venv --exclude=__pycache__ --exclude=dist --exclude=htmlcov .) | (cd "$WORK" && tar xf -)
             cd "$WORK"
-            # Package caches belong to this run, not to the shared checkout:
-            # a cache there is written by every node that tests this app, and
-            # on a mixed-architecture cluster npm reads it back as a corrupt
-            # tree. They go with the scratch tree and die with it.
-            export npm_config_cache="$WORK/.npm-cache"
-            export PIP_CACHE_DIR="$WORK/.pip-cache"
+            # Package caches are kept, and kept apart by architecture.
+            #
+            # They cannot go in the scratch tree: a cold cache every run is
+            # slow, and npm 10.9 fails outright resolving this kind of tree
+            # from nothing ("Cannot read properties of null (reading
+            # edgesOut)"). They cannot be shared across architectures either:
+            # this cluster is amd64 and arm64, and one cache written by both
+            # is read back as a corrupt tree. So: beside the checkout, named
+            # for the architecture that filled it, and never inside the
+            # source the tests run on.
+            CACHES="/workspace/.cache/$(uname -m)"
+            mkdir -p "$CACHES/npm" "$CACHES/pip" 2>/dev/null || true
+            export npm_config_cache="$CACHES/npm"
+            export PIP_CACHE_DIR="$CACHES/pip"
 
             # Get test command - MUST be provided, no auto-detection
             TEST_CMD="{{ "{{" }}inputs.parameters.test_command{{ "}}" }}"
