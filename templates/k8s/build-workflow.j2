@@ -159,6 +159,10 @@ spec:
             value: "{{ admin_username }}"
           - name: ADMIN_PASSWORD
             value: "{{ admin_password }}"
+          # The store this app's tests own, named after the app so two
+          # apps never write into each other's rows.
+          - name: TEST_DATABASE_NAME
+            value: "test_{{ project_name | replace('-', '_') }}"
         args:
           - |
             set -e

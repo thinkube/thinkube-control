@@ -778,36 +778,46 @@ git reset --hard origin/main
 
         # Create database with hyphens replaced by underscores (matches postgresql.j2 template)
         db_name = self.app_name.replace('-', '_')
+        databases = [db_name]
 
-        # DROP then CREATE using k8s exec (exactly like Ansible)
-        drop_sql = f'DROP DATABASE IF EXISTS {db_name};'
-        create_sql = f'CREATE DATABASE {db_name} OWNER {admin_username};'
+        # An app whose tests need a database gets one of its own, named
+        # after the app. A store shared by every app built from the same
+        # template mixes their rows together, and the tests of one app then
+        # fail on data another app left behind.
+        containers = self.thinkube_config.get('spec', {}).get('containers', [])
+        if any(c.get('test', {}).get('enabled') for c in containers):
+            databases.append(f'test_{db_name}')
 
-        # Run DROP
-        try:
-            drop_result = await self._exec_in_pod(
-                namespace='postgres',
-                pod='postgresql-official-0',
-                container='postgres',
-                command=['psql', '-U', admin_username, '-d', 'postgres', '-c', drop_sql]
-            )
-            DeploymentLogger.log(f"Dropped database {db_name}")
-        except Exception as e:
-            DeploymentLogger.error(f"DROP DATABASE {db_name} failed: {e}")
-            raise RuntimeError(f"DROP DATABASE {db_name} failed: {e}")
+        for name in databases:
+            # DROP then CREATE using k8s exec (exactly like Ansible)
+            drop_sql = f'DROP DATABASE IF EXISTS {name};'
+            create_sql = f'CREATE DATABASE {name} OWNER {admin_username};'
 
-        # Run CREATE
-        try:
-            create_result = await self._exec_in_pod(
-                namespace='postgres',
-                pod='postgresql-official-0',
-                container='postgres',
-                command=['psql', '-U', admin_username, '-d', 'postgres', '-c', create_sql]
-            )
-            DeploymentLogger.log(f"Created database {db_name}")
-        except Exception as e:
-            DeploymentLogger.error(f"CREATE DATABASE {db_name} failed: {e}")
-            raise RuntimeError(f"CREATE DATABASE {db_name} failed: {e}")
+            # Run DROP
+            try:
+                drop_result = await self._exec_in_pod(
+                    namespace='postgres',
+                    pod='postgresql-official-0',
+                    container='postgres',
+                    command=['psql', '-U', admin_username, '-d', 'postgres', '-c', drop_sql]
+                )
+                DeploymentLogger.log(f"Dropped database {name}")
+            except Exception as e:
+                DeploymentLogger.error(f"DROP DATABASE {name} failed: {e}")
+                raise RuntimeError(f"DROP DATABASE {name} failed: {e}")
+
+            # Run CREATE
+            try:
+                create_result = await self._exec_in_pod(
+                    namespace='postgres',
+                    pod='postgresql-official-0',
+                    container='postgres',
+                    command=['psql', '-U', admin_username, '-d', 'postgres', '-c', create_sql]
+                )
+                DeploymentLogger.log(f"Created database {name}")
+            except Exception as e:
+                DeploymentLogger.error(f"CREATE DATABASE {name} failed: {e}")
+                raise RuntimeError(f"CREATE DATABASE {name} failed: {e}")
 
     async def _generate_workflow_template(self) -> dict:
         """Generate a WorkflowTemplate using the Jinja2 template from templates/k8s/build-workflow.j2."""
