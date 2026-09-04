@@ -171,6 +171,12 @@ spec:
             WORK=$(mktemp -d /tmp/test-tree.XXXXXX)
             (cd "$SRC" && tar cf - --exclude=node_modules --exclude=.venv --exclude=__pycache__ --exclude=dist --exclude=htmlcov .) | (cd "$WORK" && tar xf -)
             cd "$WORK"
+            # Package caches belong to this run, not to the shared checkout:
+            # a cache there is written by every node that tests this app, and
+            # on a mixed-architecture cluster npm reads it back as a corrupt
+            # tree. They go with the scratch tree and die with it.
+            export npm_config_cache="$WORK/.npm-cache"
+            export PIP_CACHE_DIR="$WORK/.pip-cache"
 
             # Get test command - MUST be provided, no auto-detection
             TEST_CMD="{{ "{{" }}inputs.parameters.test_command{{ "}}" }}"
