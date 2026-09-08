@@ -308,7 +308,13 @@ class NetworkDiscovery:
         return nodes
 
     async def _verify_ssh_auth(self, ip: str) -> bool:
-        """Check if we can SSH into a node using cluster key or env password."""
+        """Check if we can SSH into a node using cluster key or env password.
+
+        Every rejection is logged with its reason. A node dropped here vanishes
+        from the discovery result with no other trace, and "no eligible nodes
+        found" is the same message whether the machine was off, ran a different
+        OS, had another password, or the cluster key itself was unusable.
+        """
         from app.services.node_manager import node_manager
 
         if await node_manager.test_ssh_key_auth(ip):
@@ -316,10 +322,20 @@ class NetworkDiscovery:
 
         password = os.environ.get("ANSIBLE_BECOME_PASSWORD") or os.environ.get("SYSTEM_PASSWORD")
         if not password:
+            logger.warning(
+                f"{ip}: cluster key was rejected and no password is set "
+                f"(ANSIBLE_BECOME_PASSWORD / SYSTEM_PASSWORD), skipping node"
+            )
             return False
 
         result = await node_manager.distribute_ssh_key(ip, password)
-        return result.get("success", False)
+        if not result.get("success"):
+            logger.warning(
+                f"{ip}: could not install the cluster key: "
+                f"{result.get('error', 'no reason reported')}"
+            )
+            return False
+        return True
 
     async def discover(
         self, scan_cidrs: Optional[List[str]] = None
@@ -364,18 +380,23 @@ class NetworkDiscovery:
 
     async def _get_hostname_via_ssh(self, ip: str) -> Optional[str]:
         """Get hostname from a node via SSH."""
-        ssh_key_path = ansible_env.get_ssh_key_path()
         username = os.environ["SYSTEM_USERNAME"]
-        cmd = f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -i {ssh_key_path} {username}@{ip} hostname"
         try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd.split(),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
-            if process.returncode == 0:
-                return stdout.decode().strip()
+            async with node_manager.cluster_key_material() as key:
+                if key is None:
+                    return None
+                cmd = (
+                    f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "
+                    f"-o IdentitiesOnly=yes -i {key} {username}@{ip} hostname"
+                )
+                process = await asyncio.create_subprocess_exec(
+                    *cmd.split(),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+                if process.returncode == 0:
+                    return stdout.decode().strip()
         except Exception:
             pass
         return None

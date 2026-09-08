@@ -9,6 +9,7 @@ import re
 import shutil
 import tempfile
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -118,12 +119,10 @@ class NodeManager:
 
         Uses Ansible to connect and gather facts from the target node.
         """
-        ssh_key_path = ansible_env.get_ssh_key_path()
         if not username:
             username = os.environ.get("SYSTEM_USERNAME", "tkadmin")
 
         ssh_opts = "-o StrictHostKeyChecking=no -o ConnectTimeout=10"
-        ssh_key_arg = f"-i {ssh_key_path}" if ssh_key_path.exists() else ""
 
         detection_script = r"""
 echo '{'
@@ -187,18 +186,20 @@ echo -n '"lvm_expandable": false, "lvm_free_gb": 0, "lvm_lv_path": ""'
 echo '}'
 """
 
-        cmd = f"ssh {ssh_opts} {ssh_key_arg} {username}@{ip} bash -s"
-
         try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd.split(),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(input=detection_script.encode()), timeout=30
-            )
+            async with self.cluster_key_material() as key:
+                ssh_key_arg = f"-i {key}" if key else ""
+                cmd = f"ssh {ssh_opts} {ssh_key_arg} {username}@{ip} bash -s"
+
+                process = await asyncio.create_subprocess_exec(
+                    *cmd.split(),
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(input=detection_script.encode()), timeout=30
+                )
 
             if process.returncode != 0:
                 error_msg = stderr.decode("utf-8", errors="replace").strip()
@@ -672,91 +673,117 @@ fi
             logger.error(f"Failed to get MetalLB IP range: {e}")
         return ips
 
-    async def test_ssh_key_auth(self, ip: str) -> bool:
-        """Test if the cluster SSH key can authenticate to a node."""
+    @asynccontextmanager
+    async def cluster_key_material(self):
+        """Yield a directory holding the cluster key and a derived public key.
+
+        OpenSSH reads the public key stored beside a private key to make its
+        offer, and refuses to sign when the two disagree. The stored file is
+        therefore never used: the public half is derived from the private key
+        on every call and exists only for the duration of that call, so it
+        cannot fall out of step with the key it describes.
+
+        Yields None when the private key is missing or cannot be read.
+        """
         ssh_key_path = ansible_env.get_ssh_key_path()
-        username = os.environ["SYSTEM_USERNAME"]
-
         if not ssh_key_path.exists():
-            return False
+            logger.error(f"Cluster SSH key not found at {ssh_key_path}")
+            yield None
+            return
 
-        cmd = (
-            f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "
-            f"-o BatchMode=yes -i {ssh_key_path} "
-            f"{username}@{ip} echo ok"
-        )
         try:
             process = await asyncio.create_subprocess_exec(
-                *cmd.split(),
+                "ssh-keygen", "-y", "-f", str(ssh_key_path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
-            return process.returncode == 0
-        except Exception:
-            return False
+            public_key, stderr = await process.communicate()
+            if process.returncode != 0:
+                logger.error(
+                    f"Cannot derive public key from {ssh_key_path}: "
+                    f"{stderr.decode('utf-8', errors='replace').strip()}"
+                )
+                yield None
+                return
+        except Exception as e:
+            logger.error(f"Cannot derive public key from {ssh_key_path}: {e}")
+            yield None
+            return
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            key = Path(tmpdir) / "cluster_key"
+            key.symlink_to(ssh_key_path)
+            key.with_suffix(".pub").write_bytes(public_key)
+            yield key
+
+    async def test_ssh_key_auth(self, ip: str) -> bool:
+        """Test if the cluster SSH key can authenticate to a node."""
+        username = os.environ["SYSTEM_USERNAME"]
+
+        async with self.cluster_key_material() as key:
+            if key is None:
+                return False
+
+            cmd = (
+                f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "
+                f"-o BatchMode=yes -o IdentitiesOnly=yes -i {key} "
+                f"{username}@{ip} echo ok"
+            )
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *cmd.split(),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                stdout, _ = await asyncio.wait_for(process.communicate(), timeout=10)
+                return process.returncode == 0
+            except Exception:
+                return False
 
     async def distribute_ssh_key(self, ip: str, password: str) -> Dict[str, Any]:
         """Copy the cluster SSH key to a new node using password authentication.
 
         Uses sshpass + ssh-copy-id to install the public key, then verifies
-        key-based auth works. If the .pub file is missing, derives it from
-        the private key.
+        key-based auth works. The public key installed on the node is derived
+        from the private key for this call alone, never read from disk.
         """
-        ssh_key_path = ansible_env.get_ssh_key_path()
         username = os.environ["SYSTEM_USERNAME"]
 
-        if not ssh_key_path.exists():
-            return {"success": False, "error": f"SSH key not found at {ssh_key_path}"}
+        async with self.cluster_key_material() as key:
+            if key is None:
+                return {"success": False, "error": "Cluster SSH key unusable, see log"}
 
-        pub_key_path = Path(f"{ssh_key_path}.pub")
-        if not pub_key_path.exists():
+            cmd = [
+                "sshpass", "-p", password,
+                "ssh-copy-id",
+                "-i", str(key.with_suffix(".pub")),
+                "-o", "StrictHostKeyChecking=no",
+                f"{username}@{ip}",
+            ]
             try:
                 process = await asyncio.create_subprocess_exec(
-                    "ssh-keygen", "-y", "-f", str(ssh_key_path),
+                    *cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                stdout, stderr = await process.communicate()
-                if process.returncode == 0:
-                    pub_key_path.write_bytes(stdout)
-                    logger.info(f"Generated {pub_key_path} from private key")
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+
+                if process.returncode != 0:
+                    error = stderr.decode("utf-8", errors="replace").strip()
+                    return {"success": False, "error": f"ssh-copy-id failed: {error}"}
+
+                # Verify key auth works
+                if await self.test_ssh_key_auth(ip):
+                    return {"success": True}
                 else:
-                    return {"success": False, "error": f"Cannot derive public key: {stderr.decode().strip()}"}
+                    return {"success": False, "error": "Key was copied but auth test failed"}
+
+            except asyncio.TimeoutError:
+                return {"success": False, "error": "SSH key distribution timed out"}
+            except FileNotFoundError:
+                return {"success": False, "error": "sshpass not found — install it in the backend container"}
             except Exception as e:
-                return {"success": False, "error": f"Cannot derive public key: {e}"}
-
-        cmd = [
-            "sshpass", "-p", password,
-            "ssh-copy-id",
-            "-i", str(pub_key_path),
-            "-o", "StrictHostKeyChecking=no",
-            f"{username}@{ip}",
-        ]
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
-
-            if process.returncode != 0:
-                error = stderr.decode("utf-8", errors="replace").strip()
-                return {"success": False, "error": f"ssh-copy-id failed: {error}"}
-
-            # Verify key auth works
-            if await self.test_ssh_key_auth(ip):
-                return {"success": True}
-            else:
-                return {"success": False, "error": "Key was copied but auth test failed"}
-
-        except asyncio.TimeoutError:
-            return {"success": False, "error": "SSH key distribution timed out"}
-        except FileNotFoundError:
-            return {"success": False, "error": "sshpass not found — install it in the backend container"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+                return {"success": False, "error": str(e)}
 
     async def _ensure_zerotier_vip_routes(
         self,
