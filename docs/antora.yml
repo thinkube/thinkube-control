@@ -1,6 +1,3 @@
-name: control
-title: Control Plane
+name: thinkube-docs
+title: Thinkube
 version: ~
-start_page: index.adoc
-nav:
-  - modules/ROOT/nav.adoc
