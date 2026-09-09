@@ -5,6 +5,8 @@ _How thinkube-control turns the model catalogue and your GPU nodes into served m
 
 Every operation here is a click on the *LLM Gateway* and *AI Models* pages and an MCP operation of the same name; see xref:index.adoc[thinkube-control] for the list.
 
+image::control-llm-gateway.png[The LLM Gateway page with two backends discovered and two models loaded: Qwen3.5-4B on the DGX Spark through vLLM, Qwen3-Embedding-0.6B on the RTX 3090 node through text-embeddings]
+
 This page lives in the `thinkube-control` repository, beside the code it describes.
 
 == Two parts
