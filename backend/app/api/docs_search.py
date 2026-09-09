@@ -21,7 +21,7 @@ router = APIRouter()
 # Where the deployed docs serve their Lunr index. Candidates cover the single-pod
 # (service == app name) and separate-pods (service == container "docs") service
 # naming; an env override wins. First that responds is used; none -> not deployed.
-_APP = os.getenv("THINKUBE_DOCS_APP", "thinkube-docs")
+_APP = os.getenv("THINKUBE_DOCS_APP", "docs")
 _PORT = os.getenv("THINKUBE_DOCS_PORT", "8080")
 _INDEX_CANDIDATES = [
     os.getenv("THINKUBE_DOCS_INDEX_URL", ""),
@@ -32,7 +32,7 @@ _INDEX_CANDIDATES = [
 _NOT_DEPLOYED = {
     "status": "docs_not_deployed",
     "message": (
-        "The Thinkube documentation is not deployed. Deploy the thinkube-docs "
+        "The Thinkube documentation is not deployed. Deploy the docs "
         "template to make the docs searchable from here."
     ),
 }
