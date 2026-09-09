@@ -1,40 +1,56 @@
 = Notebook execution over MCP
+:page-type: reference
 
-thinkube-control exposes JupyterHub notebooks as MCP tools (backed by the
-tk-ai-extension running in the notebook server), so an agent can list, read,
-edit, and execute cells.
+_The operations that let Claude Code read, edit and run cells in a notebook that is open in Thinkube Notebooks._
 
-== Executing cells
+thinkube-control forwards these operations to the `tk-ai-extension` running inside your notebook server. They work only while a server is running. Without one, every operation answers:
 
-[horizontal]
-`jupyter_execute_cell`:: Execute one cell and wait for its result. Best for
-  short cells — the call blocks until the cell finishes.
-`jupyter_execute_all_cells`:: Run the whole notebook. Returns an `execution_id`
-  immediately (it runs asynchronously).
+----
+No Jupyter notebook server running. Start it from the JupyterHub launcher.
+----
 
-== Long-running cells: submit and poll
+Start a server from Thinkube Notebooks first, then ask.
 
-Blocking execution holds the request open until the cell completes. For a cell
-that runs for minutes (a multi-agent run, model training, a long query) that
-exceeds the MCP bridge / proxy timeout and the call fails *even though the cell
-keeps running in the kernel*. Use the asynchronous **submit-then-poll** tools
-instead — the request never stays open:
+== Resources
 
-[horizontal]
-`jupyter_execute_cell_async`:: Start a cell without blocking. Returns an
-  `execution_id` immediately.
-`jupyter_check_execution_status`:: Poll an `execution_id`; returns
-  `running` / `completed` / `error` and the outputs once finished.
-`jupyter_check_all_cells_status`:: Poll a run-all `execution_id` returned by
-  `jupyter_execute_all_cells`.
+Reads. Claude Code may consult them as context.
 
-Pattern:
+[cols="1,2",options="header"]
+|===
+| Operation | What it returns
 
-. `jupyter_execute_cell_async(notebook_path, cell_index)` → `execution_id`
-. poll `jupyter_check_execution_status(execution_id)` until `status` is
-  `completed` (or `error`)
-. read the returned outputs
+| `jupyter_notebook_status` | Whether a notebook server is running and reachable.
+| `jupyter_list_notebooks` | Every `.ipynb` file in the notebooks directory.
+| `jupyter_list_cells` | The cells of one notebook, by index, with their type.
+| `jupyter_read_cell` | One cell's source and its outputs.
+|===
 
-Rule of thumb: if a cell might run longer than a few seconds, launch it with
-`jupyter_execute_cell_async` and poll, rather than the blocking
-`jupyter_execute_cell`.
+== Tools
+
+Changes. Claude Code uses them when you ask.
+
+[cols="1,2",options="header"]
+|===
+| Operation | What it does
+
+| `jupyter_create_notebook` | Creates a notebook file.
+| `jupyter_insert_cell` | Inserts a cell at an index.
+| `jupyter_overwrite_cell` | Replaces a cell's source.
+| `jupyter_delete_cell` | Removes a cell.
+| `jupyter_move_cell` | Moves a cell to another index.
+| `jupyter_execute_cell` | Runs one cell and waits for its result. The call stays open until the cell finishes.
+| `jupyter_insert_and_execute_cell` | Inserts a cell and runs it in one step.
+| `jupyter_execute_all_cells` | Runs the whole notebook. Returns an `execution_id` at once and keeps running in the kernel.
+|===
+
+== Long-running cells
+
+`jupyter_execute_cell` holds the request open. A cell that runs for minutes — a training step, an agent loop, a long query — outlives the timeout between Claude Code and thinkube-control, and the call fails even though the cell keeps running in the kernel.
+
+The REST API has three endpoints for this case, under `/api/v1/jupyter/notebooks`:
+
+* `POST execute-cell-async` starts a cell and returns an `execution_id` immediately;
+* `GET execution-status?execution_id=…` reports `running`, `completed` or `error`, with the outputs once finished;
+* `GET all-cells-status?execution_id=…` does the same for a run started by `jupyter_execute_all_cells`.
+
+They are not in the MCP include list, so Claude Code cannot call them as tools today. Over MCP, the way to run a long cell is to ask for `jupyter_execute_all_cells` on a notebook whose cells are arranged so the long one runs last, or to run the cell from the notebook interface and read its outputs afterwards with `jupyter_read_cell`.

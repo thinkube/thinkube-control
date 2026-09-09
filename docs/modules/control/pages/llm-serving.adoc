@@ -1,133 +1,101 @@
-= LLM Serving & Models
+= LLM serving and models
 :page-type: reference
 
-thinkube-control runs Thinkube's *self-hosted inference platform*: it turns a
-catalog of models plus your GPU nodes into running, auto-sized model servers
-behind one authenticated, OpenAI-compatible endpoint. Like the rest of the
-control plane, every operation is available both as *MCP tools* (ask Claude) and
-in the *web dashboard*.
+_How thinkube-control turns the model catalogue and your GPU nodes into served models behind one endpoint: states, loading, sizing, routing and authentication._
 
-[NOTE]
-====
-This page lives in the *thinkube-control* repository beside the code it documents
-(docs-with-code) and is aggregated into the Thinkube docs at build time.
-====
+Every operation here is a click on the *LLM Gateway* and *AI Models* pages and an MCP operation of the same name; see xref:index.adoc[thinkube-control] for the list.
 
-== Two layers: control plane and gateway
+This page lives in the `thinkube-control` repository, beside the code it describes.
 
-The "LLM gateway" is two cooperating pieces, not one:
+== Two parts
 
-* *Control plane* (the thinkube-control backend) — the substance. It holds the
-  model catalog and state, mirrors weights, decides placement, *sizes* each model
-  to the chosen node's memory, creates and reclaims the serving pods, and resolves
-  a model name to a concrete backend.
-* *Inference gateway* (`thinkube-control-llm-proxy`) — the data path. An
-  OpenAI-compatible reverse proxy at `llm.<domain>` that authenticates the caller
-  (Keycloak/OIDC), asks the control plane to resolve the model to a backend,
-  forwards the request, and records metrics.
+*The control plane* is the thinkube-control backend. It holds the catalogue and each model's state, mirrors weights, chooses a node, sizes the model to that node's memory, creates and removes the serving pods, and resolves a model name to a backend.
 
-Clients only ever talk to the gateway; the control plane is what makes a model
-*be there* to talk to.
+*The gateway* is `thinkube-control-llm-proxy`, a reverse proxy at `https://llm.<your domain>`. It authenticates the caller, resolves the model to a backend, forwards the request and records metrics. Clients only ever talk to the gateway.
 
-== Request routing and resilience
+== The endpoint
 
-The gateway resolves the requested model to a serving backend from a
-*locally-synced snapshot* of the control plane's resolution table, refreshed in
-the background every few seconds. The inference hot path therefore resolves
-in-memory and does **not** call the control plane per request — a burst of
-requests to a loaded model is unaffected by control-plane load, stalls, or even
-a restart. The `llm_gateway_resolve_source_total` metric (labels `snapshot`,
-`live`) shows the split; a healthy system is overwhelmingly `snapshot`.
+The gateway serves:
 
-Resolution is further hardened so a momentary control-plane hiccup never looks
-like a missing model:
+[cols="1,2",options="header"]
+|===
+| Route | API
 
-* A model not yet in the snapshot (e.g. just loaded) falls back to a single live
-  resolve call, and a successful live resolution is cached briefly with the most
-  recent good result kept per model.
-* If a live resolution transiently fails — a timeout, a `5xx`, or a brief
-  "model is loading" / "no healthy backend" flap while the control plane
-  reconciles — the gateway retries once and, failing that, serves the
-  last-known-good resolution (a model-to-backend mapping is stable, so a
-  few-seconds-stale answer is correct).
+| `POST /v1/chat/completions` | OpenAI chat completions
+| `POST /v1/embeddings` | OpenAI embeddings
+| `GET /v1/models` | OpenAI model list
+| `POST /v1/messages` | Anthropic Messages
+|===
 
-As a result the status codes are precise:
+A client written for either API works unchanged with the base URL changed to the gateway.
+
+=== Authentication
+
+Every route takes a token, either as `Authorization: Bearer <token>` or as an `x-api-key` header. Two kinds are accepted:
+
+* a Thinkube Identity access token, verified against the realm's signing keys;
+* a thinkube-control API token, which starts with `tk_`, created under *API Tokens* and verified against thinkube-control.
+
+From a notebook or Thinkube IDE, `get_openai_client()` from the `tk_llm` package returns an OpenAI client already pointed at the gateway with a token.
+
+== Model states
 
 [horizontal]
-`404 not found`:: the model is genuinely unknown to the catalog.
-`503 (retryable)`:: the model exists but is *temporarily* unresolvable (a
-  transient backend stall with no recent good resolution) — retry the request.
+`registered`:: In the catalogue; weights not mirrored yet.
+`deployable`:: Weights mirrored into Thinkube Storage and registered in Thinkube Experiments; can be loaded.
+`loading`:: A serving pod is starting: image pull, weight load, warm-up.
+`available`:: Serving; the gateway routes to it.
+`unloading`:: Being removed. The pod is deleted when its last model leaves it.
 
-A burst of concurrent requests to a loaded model therefore succeeds even if the
-control plane briefly stalls or flaps, instead of failing with a spurious
-`404 not found or not available`. The `llm_gateway_resolve_resilience_total`
-metric (labels `retry`, `stale_serve`) exposes how often these fallbacks fire.
+== Backends
 
-== Model lifecycle
-
-A model moves through these states:
+The inference engines are optional components you install; the control plane discovers the ones present and offers only those. Each is a `type: component` template whose pods the control plane creates at load time.
 
 [horizontal]
-`registered`:: known to the catalog, weights not yet mirrored.
-`deployable`:: weights mirrored to MLflow and ready to load.
-`loading`:: a serving pod is starting (pull/compile/warm-up — can be several minutes).
-`available`:: serving and resolvable through the gateway.
-`unloading`:: being torn down; its pod is reclaimed when the last model leaves it.
+vLLM:: Full-precision text generation, one pod per model.
+TensorRT-LLM:: NVIDIA's inference engine, one pod per model; the catalogue entries built for it carry NVFP4 quantisation for Blackwell.
+Ollama:: Quantised GGUF models; one pod hosts several models.
+text-embeddings:: Text Embeddings Inference, for embedding models.
 
-== Loading a model
+== Mirroring
 
-Load from the dashboard's *Load* dialog or the `load_llm_model` MCP tool. A target
-*node* is required. Optional, per-load settings:
+A model must be in the catalogue (`models.json` in `thinkube-metadata`) before it can be mirrored. Mirroring downloads the weights from Hugging Face once, as an Argo workflow, into Thinkube Storage, and registers the model in Thinkube Experiments. Submit it from *AI Models* or with `submit_model_mirror`; follow it with `get_mirror_status`. A gated model needs its licence accepted on Hugging Face by the account whose token the installer stored.
 
-[horizontal]
-Context length:: caps `max-model-len`. Smaller contexts use far less KV-cache
-memory; pick a serving-appropriate value (8K–16K is plenty for most uses) rather
-than the model's full window.
-Speculative tokens (k):: for models that use speculative decoding, overrides the
-catalog's default draft depth at load time — tune it without editing the catalog
-(see <<speculative-decoding>>). Omitted = catalog default.
-Tier / backend / node:: which serving stack and where (see <<backends>>).
+== Loading
 
-=== Automatic memory sizing
-
-You do not set `gpu_memory_utilization` or pod memory by hand. The control plane
-measures the *real* checkpoint size, adds the KV-cache and framework overhead
-(and a speculative drafter's weights when present), and derives a utilization and
-pod-memory request that fit the node's AI budget — refusing a load that would not
-fit rather than crash-looping it. On unified-memory nodes (e.g. DGX Spark, where
-GPU memory *is* host RAM) the budget is a fixed ceiling that leaves room for the
-OS and platform.
-
-[#speculative-decoding]
-== Speculative decoding
-
-Speculative decoding drafts several tokens ahead and verifies them in one pass,
-raising decode throughput on memory-bandwidth-bound GPUs. Two methods are supported,
-selected per model in the catalog's `speculative_config`:
-
-* *MTP* — a multi-token-prediction head built into the model itself.
-* *DFlash* — a *separate* lightweight drafter model. The catalog names the drafter
-  by id; at load time the control plane resolves it to its mirrored artifact path
-  and loads it alongside the target. The drafter is an *auxiliary* model: it is
-  mirrored and sized like any other, but never offered as an independently loadable
-  chat model.
-
-`num_speculative_tokens` (the draft depth, *k*) is the main tuning knob — higher
-can be faster when drafts are accepted, but costs memory and reduces KV-cache
-headroom. Set it per load (above) to experiment without a catalog change.
-
-[#backends]
-== Serving backends
+Load from the *Load* dialog on the LLM Gateway page or with `load_llm_model`. The options:
 
 [horizontal]
-vLLM:: performance serving for text-generation models (one pod per model).
-text-embeddings (TEI):: embedding models.
-Ollama:: flexible serving where one pod hosts several models.
+node:: The GPU node. The control plane chooses one when you do not; it never chooses a node whose GPU metrics it cannot read.
+tier:: `flexible` loads through Ollama when the model has a GGUF entry: quick, quantised, smaller. `performance` loads through vLLM or TensorRT-LLM.
+backend:: Name one instead of a tier.
+max_context_length:: Caps the context window. The KV cache grows with it, so a serving-sized value such as 8k to 32k uses far less memory than the model's full window.
+keep_alive:: Ollama only: how long the model stays loaded after its last request.
+num_speculative_tokens:: For models with a speculative-decoding configuration, the draft depth for this load.
 
-== Mirroring models
+`get_llm_load_options` answers before anything is loaded: the compatible backends, the GPU nodes with their free slots and remaining budget, and the estimated memory.
 
-Before a catalog model can load, its weights are *mirrored* from their source
-(e.g. Hugging Face) into the platform's MLflow/JuiceFS storage — submit it from
-the catalog (dashboard or `submit_model_mirror`) and an Argo workflow fetches it.
-Gated source repositories require access to be granted to the platform's
-Hugging Face account first.
+=== Sizing
+
+You do not set `gpu_memory_utilization` or the pod's memory. The control plane measures the checkpoint's real size, adds the KV cache and a framework overhead, adds the drafter's weights when speculative decoding is configured, and derives a utilisation fraction and a memory request that fit the node's AI budget. A model that would not fit is refused with the reason, rather than crash-looping. On a unified-memory node such as a DGX Spark the budget is a fixed ceiling below the physical memory, so the operating system and the platform keep room.
+
+=== Speculative decoding
+
+Two methods, chosen per model in the catalogue's `speculative_config`:
+
+* *MTP*, a multi-token-prediction head inside the model;
+* *DFlash*, a separate small drafter model. The catalogue names the drafter; at load time the control plane resolves it to its mirrored weights and loads it beside the target. A drafter is mirrored and sized like any model but is never offered for loading on its own.
+
+`num_speculative_tokens` is the draft depth. A larger value can be faster when drafts are accepted and costs memory that would otherwise be KV cache.
+
+== Routing
+
+The gateway keeps a copy of the control plane's model-to-backend table and refreshes it every 5 seconds in the background, so a request is resolved in memory and does not call the control plane. A model missing from the copy, for example one just loaded, is resolved with one live call, and a successful answer is cached for 10 seconds with the last good answer kept per model. A live call that fails or reports the model as still loading is retried once, and then the last good answer is used, because a model's backend does not change from one second to the next.
+
+So the status codes mean one thing each:
+
+[horizontal]
+`404`:: The model is not in the catalogue.
+`503`:: The model exists and cannot be resolved right now; retry.
+
+Two Prometheus metrics on the gateway's `/metrics` show this: `llm_gateway_resolve_source_total` counts resolutions by `snapshot` and `live`, and `llm_gateway_resolve_resilience_total` counts the `retry` and `stale_serve` cases.

@@ -1,37 +1,141 @@
 = thinkube-control
 :page-type: reference
 
-*thinkube-control* is the platform's control plane — the component that deploys
-your apps, manages models and GPUs, builds images, and runs the services that the
-rest of Thinkube depends on.
+_The control panel: what each of its pages does, and the operations it exposes to Claude Code as MCP resources and tools._
 
-[NOTE]
-====
-This page's source lives in the *thinkube-control* repository, beside the code it
-documents. Antora aggregates it into the Thinkube documentation at build time —
-docs-with-code: the docs change in the same commit as the code.
-====
+thinkube-control is one application with two faces. A FastAPI backend serves a React web interface, and the same backend is wrapped with `ExtendedFastApiMCP` and mounted at `/mcp`. Every operation listed on this page is reachable from the web interface and, by its `operation_id`, from Claude Code in Thinkube IDE. There is no second implementation.
 
-== Two faces, one control plane
+It is a core component: the installer deploys it, and it redeploys itself through the same build loop as your applications.
 
-thinkube-control is a FastAPI backend with a Vue web dashboard. Almost everything
-it can do is exposed two ways:
+This page lives in the `thinkube-control` repository, beside the code it describes, and is built into the documentation site with the rest.
 
-* *As MCP tools* — the way you actually drive the platform. From code-server you
-  ask Claude, and the request runs against the control plane (deploy a template,
-  load a model, check GPU status, build a venv, mirror a model…). This is the
-  signature Thinkube workflow.
-* *As the web control panel* — the same capabilities with a visual dashboard, for
-  when you want to see and click rather than ask.
+== The pages
 
-== What it manages
+The sidebar has three groups.
 
-* *Templates & deployments* — deploy and redeploy app templates onto the cluster.
-* *Models & GPUs* — load, serve, and mirror LLMs; inspect GPU status.
-  See xref:llm-serving.adoc[LLM serving & models].
-* *Images & registries* — build custom images and manage Harbor.
-* *Notebooks & venvs* — JupyterHub virtual environments and notebooks.
-* *Components & services* — install and toggle the platform's services.
+image::control-dashboard-all.png[thinkube-control with the All Services dashboard open]
 
-thinkube-control is a *core component*: it ships with the platform rather than as a
-user-deployed app.
+=== Dashboard
+
+[cols="1,3",options="header"]
+|===
+| Page | What it shows
+
+| Favorites | The services you starred. Empty until you star one.
+| All Services | Every core component, optional component and deployed application, with its health, its category, a link to open it, its details, a restart button and a favourite star. The list comes from the services' own registrations; nothing is added by hand.
+| Knative Services | Applications deployed with `type: knative`, which scale to zero.
+| ai, applications, development, devops, security, storage | The same cards, one category at a time.
+|===
+
+Every card's *details* page shows the service's health status and the health history thinkube-control has recorded for it, and carries the *Service Enabled* switch. Switching a non-core service off scales it to zero; on brings it back. This is the switch that keeps an installed optional component from costing memory while you are not using it.
+
+=== Deployment and infrastructure
+
+[cols="1,3",options="header"]
+|===
+| Page | What it does
+
+| LLM Gateway | The gateway endpoint, the GPU nodes with their slots and memory, the inference backends it has discovered, and every model in the registry with a *Load* and *Unload* control. xref:llm-serving.adoc[LLM serving and models] describes the mechanics.
+| AI Models | The model catalogue. Mirror a model from Hugging Face into Thinkube Storage; watch the mirror job; delete a mirrored model.
+| Templates | The template catalogue. Deploy a template by name or from a GitHub URL, follow a deployment's progress, and publish one of your applications as a template.
+| Harbor Images | Two tabs. *Mirrored Images*: the public images the platform mirrored into Thinkube Registry, with their mirror date and per-architecture tags, and a control to mirror one again. *Custom Images*: images you define from a Dockerfile and build here.
+| Optional Components | The catalogue of optional components with their requirements and whether each is installed. Install one; remove one. An installed component is switched off and on from its card's details page.
+| Cluster Nodes | Every node with its role, architecture, memory, GPUs and version. Add nodes and remove nodes; see xref:install:adding-nodes.adoc[Add more nodes].
+|===
+
+=== Configuration and security
+
+[cols="1,3",options="header"]
+|===
+| Page | What it does
+
+| Jupyter Kernels | Notebook environments built from definitions. Start from the `fine-tuning` or `agent-dev` template, add packages, and build it for every GPU architecture in the cluster. A built environment appears as a kernel in Thinkube Notebooks.
+| JupyterHub Config | The defaults a new notebook server starts with: node, CPU cores, memory and GPU count. The form shows what each node has, and the defaults cannot exceed it.
+| Secrets | Secrets your applications read, and which applications use each one.
+| API Tokens | Tokens for calling thinkube-control and the LLM Gateway from outside the browser. They start with `tk_`.
+|===
+
+== The operations
+
+The backend exposes 109 operations over MCP. A `GET` becomes a *resource*, which an assistant may read as context. Everything else is a *tool*, which runs only when asked. The list below is the include list in the backend's `app/__init__.py`, in its order.
+
+[cols="1,3,3",options="header"]
+|===
+| Area | Resources | Tools
+
+| Auth and tokens
+| `get_user_info`, `list_tokens`, `verify_current_token`
+| `create_token`, `delete_token`
+
+| Services
+| `list_services_minimal`, `get_service_details`, `get_service_health_history`, `get_service_dependencies`, `describe_pod`, `get_container_logs`
+| `toggle_service`, `restart_service`, `trigger_health_check`, `sync_services`
+
+| Dashboards
+| `list_dashboards`, `get_dashboard_categories`, `get_dashboard`
+|
+
+| Templates and deployments
+| `list_templates`, `get_template_metadata`, `list_deployments`, `get_deployment_status`, `get_deployment_logs`, `get_deployment_debug_logs`, `download_debug_log`
+| `deploy_template`, `redeploy_template`, `cancel_deployment`
+
+| Registry images
+| `list_harbor_images`, `get_harbor_image`, `get_image_statistics`, `list_harbor_jobs`, `get_harbor_job_status`, `list_harbor_projects`, `check_harbor_health`
+| `register_harbor_image`, `remirror_harbor_image`, `bulk_mirror_images`, `delete_image`
+
+| Secrets
+| `list_secrets`, `get_secret`, `get_secret_apps`
+| `create_secret`, `update_secret`, `delete_secret`
+
+| Custom images
+| `list_custom_images`, `get_custom_image`, `get_base_registry`, `get_image_dockerfile`, `get_build_logs`, `download_build_log`
+| `create_custom_image`, `build_custom_image`, `delete_custom_image`
+
+| Models
+| `get_model_catalog`, `list_mirror_jobs`, `get_mirror_status`, `check_mlflow_status`
+| `submit_model_mirror`, `cancel_model_mirror`, `reset_mirror_job`, `delete_model`, `register_finetuned_model`
+
+| Notebook environments
+| `list_jupyter_venvs`, `get_jupyter_venv`, `get_venv_templates`, `get_venv_template_details`, `get_venv_build_logs`, `download_venv_build_log`
+| `create_jupyter_venv`, `build_jupyter_venv`, `delete_jupyter_venv`
+
+| JupyterHub configuration
+| `get_jupyterhub_config`
+|
+
+| Optional components
+| `list_optional_components`, `get_component_info`, `get_component_status`
+| `install_optional_component`, `uninstall_optional_component`
+
+| Knative
+| `list_knative_services`, `get_knative_service`
+|
+
+| Cluster and GPU
+| `get_cluster_resources`, `get_gpu_metrics`
+|
+
+| LLM Gateway
+| `get_llm_models`, `get_llm_model_status`, `resolve_llm_model`, `get_llm_backends`, `get_llm_gpu_status`, `get_llm_load_options`
+| `refresh_llm_registry`, `load_llm_model`, `unload_llm_model`
+
+| Debug
+| `resolve_hostname`, `test_connectivity`, `get_environment`, `test_ssh`
+|
+
+| Notebooks
+| `jupyter_notebook_status`, `jupyter_list_notebooks`, `jupyter_list_cells`, `jupyter_read_cell`
+| `jupyter_create_notebook`, `jupyter_execute_cell`, `jupyter_insert_cell`, `jupyter_overwrite_cell`, `jupyter_delete_cell`, `jupyter_move_cell`, `jupyter_insert_and_execute_cell`, `jupyter_execute_all_cells` — see xref:notebooks.adoc[Notebook execution over MCP]
+
+| Documentation
+|
+| `search_thinkube_docs`, `get_thinkube_doc` — read the documentation site deployed in the cluster; until it is deployed they answer `docs_not_deployed`
+|===
+
+Two operations of the include list, `get_deployment_debug_logs` and `download_debug_log`, are not offered by the MCP server on the reference cluster. They remain available on the REST API.
+
+== Calling it from outside the browser
+
+The REST API is at `https://control.<your domain>/api/v1`, with its OpenAPI description at `/api/v1/docs`. Create a token under *API Tokens* and send it as `Authorization: Bearer tk_…`. The same token is accepted by the LLM Gateway.
+
+Thinkube IDE arrives with this connection made: Claude Code's MCP configuration points at `https://control.<your domain>/mcp` with a token the installer created.
