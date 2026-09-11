@@ -3,11 +3,12 @@
 
 _How thinkube-control turns the model catalogue and your GPU nodes into served models behind one endpoint: states, loading, sizing, routing and authentication._
 
-Every operation here is a click on the *LLM Gateway* and *AI Models* pages and an MCP operation of the same name; see xref:index.adoc[thinkube-control] for the list.
+.TL;DR
+"load Qwen/Qwen3-8B on the spark" is the whole of it for most days. This page is what happens underneath: the states a model passes through, how the platform sizes it to a node, how a request is routed to the right backend, and how a client authenticates at `llm.<your domain>`.
+
+Every operation here is a click on the *LLM Gateway* and *AI Models* pages and a sentence to Claude Code.
 
 image::control-llm-gateway.png[The LLM Gateway page with two backends discovered and two models loaded: Qwen3.5-4B on the DGX Spark through vLLM, Qwen3-Embedding-0.6B on the RTX 3090 node through text-embeddings]
-
-This page lives in the `thinkube-control` repository, beside the code it describes.
 
 == Two parts
 

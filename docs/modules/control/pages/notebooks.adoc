@@ -3,6 +3,9 @@
 
 _The operations that let Claude Code read, edit and run cells in a notebook that is open in Thinkube Notebooks._
 
+.TL;DR
+"run the zebra notebook" executes every cell of a notebook that is open in Thinkube Notebooks with a kernel. This page lists the finer operations, reading, inserting and running one cell at a time, and their limits.
+
 thinkube-control forwards these operations to the `tk-ai-extension` running inside your notebook server. They work only while a server is running. Without one, every operation answers:
 
 ----

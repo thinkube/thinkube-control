@@ -3,11 +3,12 @@
 
 _The control panel: what each of its pages does, and the operations it exposes to Claude Code as MCP resources and tools._
 
+.TL;DR
+Everything on these pages is also a sentence to Claude Code: it reads the same state and calls the same operations. Open thinkube-control when you want to see the state of things or click instead of asking.
+
 thinkube-control is one application with two faces. A FastAPI backend serves a React web interface, and the same backend is wrapped with `ExtendedFastApiMCP` and mounted at `/mcp`. Every operation listed on this page is reachable from the web interface and, by its `operation_id`, from Claude Code in Thinkube IDE. There is no second implementation.
 
 It is a core component: the installer deploys it, and it redeploys itself through the same build loop as your applications.
-
-This page lives in the `thinkube-control` repository, beside the code it describes, and is built into the documentation site with the rest.
 
 == The pages
 
@@ -57,82 +58,7 @@ Every card's *details* page shows the service's health status and the health his
 
 == The operations
 
-The backend exposes 109 operations over MCP. A `GET` becomes a *resource*, which an assistant may read as context. Everything else is a *tool*, which runs only when asked. The list below is the include list in the backend's `app/__init__.py`, in its order.
-
-[cols="1,3,3",options="header"]
-|===
-| Area | Resources | Tools
-
-| Auth and tokens
-| `get_user_info`, `list_tokens`, `verify_current_token`
-| `create_token`, `delete_token`
-
-| Services
-| `list_services_minimal`, `get_service_details`, `get_service_health_history`, `get_service_dependencies`, `describe_pod`, `get_container_logs`
-| `toggle_service`, `restart_service`, `trigger_health_check`, `sync_services`
-
-| Dashboards
-| `list_dashboards`, `get_dashboard_categories`, `get_dashboard`
-|
-
-| Templates and deployments
-| `list_templates`, `get_template_metadata`, `list_deployments`, `get_deployment_status`, `get_deployment_logs`, `get_deployment_debug_logs`, `download_debug_log`
-| `deploy_template`, `redeploy_template`, `cancel_deployment`
-
-| Registry images
-| `list_harbor_images`, `get_harbor_image`, `get_image_statistics`, `list_harbor_jobs`, `get_harbor_job_status`, `list_harbor_projects`, `check_harbor_health`
-| `register_harbor_image`, `remirror_harbor_image`, `bulk_mirror_images`, `delete_image`
-
-| Secrets
-| `list_secrets`, `get_secret`, `get_secret_apps`
-| `create_secret`, `update_secret`, `delete_secret`
-
-| Custom images
-| `list_custom_images`, `get_custom_image`, `get_base_registry`, `get_image_dockerfile`, `get_build_logs`, `download_build_log`
-| `create_custom_image`, `build_custom_image`, `delete_custom_image`
-
-| Models
-| `get_model_catalog`, `list_mirror_jobs`, `get_mirror_status`, `check_mlflow_status`
-| `submit_model_mirror`, `cancel_model_mirror`, `reset_mirror_job`, `delete_model`, `register_finetuned_model`
-
-| Notebook environments
-| `list_jupyter_venvs`, `get_jupyter_venv`, `get_venv_templates`, `get_venv_template_details`, `get_venv_build_logs`, `download_venv_build_log`
-| `create_jupyter_venv`, `build_jupyter_venv`, `delete_jupyter_venv`
-
-| JupyterHub configuration
-| `get_jupyterhub_config`
-|
-
-| Optional components
-| `list_optional_components`, `get_component_info`, `get_component_status`
-| `install_optional_component`, `uninstall_optional_component`
-
-| Knative
-| `list_knative_services`, `get_knative_service`
-|
-
-| Cluster and GPU
-| `get_cluster_resources`, `get_gpu_metrics`
-|
-
-| LLM Gateway
-| `get_llm_models`, `get_llm_model_status`, `resolve_llm_model`, `get_llm_backends`, `get_llm_gpu_status`, `get_llm_load_options`
-| `refresh_llm_registry`, `load_llm_model`, `unload_llm_model`
-
-| Debug
-| `resolve_hostname`, `test_connectivity`, `get_environment`, `test_ssh`
-|
-
-| Notebooks
-| `jupyter_notebook_status`, `jupyter_list_notebooks`, `jupyter_list_cells`, `jupyter_read_cell`
-| `jupyter_create_notebook`, `jupyter_execute_cell`, `jupyter_insert_cell`, `jupyter_overwrite_cell`, `jupyter_delete_cell`, `jupyter_move_cell`, `jupyter_insert_and_execute_cell`, `jupyter_execute_all_cells` — see xref:notebooks.adoc[Notebook execution over MCP]
-
-| Documentation
-|
-| `search_thinkube_docs`, `get_thinkube_doc` — read the documentation site deployed in the cluster; until it is deployed they answer `docs_not_deployed`
-|===
-
-Two operations of the include list, `get_deployment_debug_logs` and `download_debug_log`, are not offered by the MCP server on the reference cluster. They remain available on the REST API.
+Every page above is also a set of operations, each reachable from Claude Code by name. The ones a developer says in a normal week are on xref:thinkube-docs::apps/claude-code.adoc[What Claude can do for you], with the sentence that triggers each. The full list is what Claude reads from `/mcp` when it starts, so it never needs to be looked up here: ask Claude what it can do, and it will tell you from the live list.
 
 == Calling it from outside the browser
 
