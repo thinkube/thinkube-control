@@ -123,3 +123,5 @@ Images and any text output longer than ten thousand characters are written under
 * A notebook server is one node. A run that needs a GPU on another node is an unattended run there, or a stop and a start.
 * Up to three unattended runs at a time, each on its own server.
 * The operations answer only on a notebook server built with `tk-notebook-mcp`; an older image answers `501` and names the rebuild.
+* JupyterHub stops a server whose kernels have been idle for an hour. A running cell counts as activity; an open tab or an opened notebook with an idle kernel does not. `jupyter_notebook_status` says whether a server is there before a tab is opened on it.
+* A progress bar moves in the tab during a run Claude starts when it is the text form, `from tqdm import tqdm`. The widget form, `tqdm.auto`, keeps its progress outside the cell's outputs and only fills in when the cell ends.
