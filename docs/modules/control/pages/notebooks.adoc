@@ -109,7 +109,7 @@ thinkube-control polls a run every fifteen seconds and records it in its databas
 
 == See it in the IDE
 
-Thinkube IDE carries the Thinkube Notebook View extension. In a terminal, `tk-notebook-open <path>` shows the notebook in an editor tab: JupyterLab's own page, signed in, on the kernel Claude is using, with copy and paste working. Ask Claude to show the notebook and it runs that command after opening it. The tab's title bar has *Reload* and *Open in the browser*.
+Thinkube IDE carries the Thinkube Notebook View extension. In a terminal, `tk-notebook-open <path>` shows the notebook in an editor tab: the notebook server's own single-document page, signed in, on the kernel Claude is using, with copy and paste working. The tab shows one notebook with its toolbar and kernel; the extension's `page` setting switches it to the whole of JupyterLab. Ask Claude to show the notebook and it runs that command after opening it. The tab's title bar has *Reload* and *Open in the browser*.
 
 A tab takes a moment to attach after it opens. Until it has, a running cell's progress is written to the file but the tab shows nothing move; it fills in only when the cell ends. `jupyter_kernel_status` reports `connections`, the number of live frontends on the kernel: `0` means no tab is attached yet, `1` or more means one is. So to watch a run, Claude opens the tab and waits until `connections` is at least one before it runs the cell; then the progress bar and the prints appear as they happen. A silent run with no tab does not wait, because there is nothing to watch.
 

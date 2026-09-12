@@ -264,8 +264,12 @@ async def jupyter_use_notebook(request: UseNotebookRequest, current_user: dict =
         args["kernel_name"] = request.kernel_name
     result = await call_tool("use_notebook", args, timeout=OPEN_TIMEOUT)
     if isinstance(result, dict) and result.get("success") and result.get("url_path"):
-        # The full address, and the one command that shows it inside Thinkube IDE.
-        result["url"] = f"https://notebooks.{settings.DOMAIN_NAME}{result['url_path']}"
+        # The full address of the notebook's single-document page (the Notebook
+        # page, not the whole of JupyterLab), and the one command that shows it
+        # inside Thinkube IDE. The extension's url_path is JupyterLab's route.
+        single = result["url_path"].replace("/lab/tree/", "/notebooks/", 1)
+        result["url"] = f"https://notebooks.{settings.DOMAIN_NAME}{single}"
+        result["lab_url"] = f"https://notebooks.{settings.DOMAIN_NAME}{result['url_path']}"
         result["open_in_ide"] = f"tk-notebook-open {result.get('notebook_path', request.notebook_path)}"
     return ToolResultResponse(result=result)
 
