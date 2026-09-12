@@ -1,30 +1,24 @@
-"""API endpoints that proxy Jupyter notebook tools from tk-ai-extension.
+"""Notebook operations, forwarded to tk-notebook-mcp inside the notebook server.
 
-These endpoints forward requests to the tk-ai-extension running inside the
-JupyterHub notebook server, making Jupyter notebook manipulation tools
-available via thinkube-control's MCP server to Claude Code.
+Every endpoint here is a thin forward: the arguments go to the extension's
+tool of the same purpose and the tool's own result comes back unchanged. The
+extension needs no JupyterLab tab; ``jupyter_use_notebook`` starts the kernel
+and the shared document, and the other tools work from there.
 
-The notebook server URL is constructed from:
-- DOMAIN_NAME env var (e.g., thinkube.com)
-- ADMIN_USERNAME env var (e.g., tkadmin) — the single Thinkube user
-- JUPYTERHUB_API_TOKEN env var — for authenticating to the notebook server
-
-When the Jupyter server is not running, endpoints return clear errors rather
-than failing silently.
+The notebook server's address and token are read from its pod, because a
+JupyterHub service token does not authenticate to a single-user server.
+Without a running server every forward answers 503 with the sentence that
+says how to start one.
 """
 
+from __future__ import annotations
+
 import logging
-import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-
-
-
-# No custom types needed — integer fields declared as str below
-# and converted to int in the proxy function
 
 from app.core.api_tokens import get_current_user_dual_auth
 
@@ -32,442 +26,405 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/jupyter/notebooks", tags=["jupyter-notebooks"])
 
+EXTENSION_PREFIX = "/api/tk-notebook/mcp"
+NO_SERVER = "No notebook server is running. Ask for start_notebook_server, or start one from Thinkube Notebooks."
+
+# The extension's blocking tools wait for the kernel; the forward waits a little longer.
+QUICK_TIMEOUT = 60.0
+OPEN_TIMEOUT = 180.0
+RUN_MARGIN = 30.0
+
 
 # ---------------------------------------------------------------------------
-# Configuration
+# Reaching the server
 # ---------------------------------------------------------------------------
 
-def _get_notebook_server_access() -> tuple[str, str]:
-    """Get the notebook server URL and token by reading from the running pod.
+def _load_kube():
+    from kubernetes import client, config
 
-    JupyterHub service tokens don't authenticate to the single-user server.
-    Instead, we read the notebook server's own API token and pod IP from
-    Kubernetes directly.
-
-    Returns:
-        (base_url, token) tuple
-    """
     try:
-        from kubernetes import client, config
-        try:
-            config.load_incluster_config()
-        except config.ConfigException:
-            config.load_kube_config()
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
+    return client.CoreV1Api()
 
-        v1 = client.CoreV1Api()
 
-        # Find the notebook server pod
-        pods = v1.list_namespaced_pod(
-            "jupyterhub",
-            label_selector="component=singleuser-server"
-        )
+def find_server_pod(server_name: str = "") -> Optional[Any]:
+    """The running single-user pod of one server: the default one, or a named one."""
+    v1 = _load_kube()
+    pods = v1.list_namespaced_pod("jupyterhub", label_selector="component=singleuser-server")
+    for pod in pods.items:
+        labels = pod.metadata.labels or {}
+        if labels.get("hub.jupyter.org/servername", "") != server_name:
+            continue
+        if pod.metadata.deletion_timestamp is not None or pod.status.phase != "Running":
+            continue
+        return pod
+    return None
 
-        if not pods.items:
-            # Try by pod name pattern
-            pods = v1.list_namespaced_pod("jupyterhub")
-            pods.items = [p for p in pods.items if p.metadata.name.startswith("jupyter-")]
 
-        if not pods.items:
-            raise HTTPException(
-                status_code=503,
-                detail="No Jupyter notebook server running. Start it from the JupyterHub launcher."
-            )
-
-        pod = pods.items[0]
-        pod_ip = pod.status.pod_ip
-        if not pod_ip:
-            raise HTTPException(status_code=503, detail="Notebook server pod has no IP yet (still starting).")
-
-        # Extract the JUPYTERHUB_API_TOKEN from the pod's environment
-        token = None
-        for container in pod.spec.containers:
-            for env in (container.env or []):
-                if env.name == "JUPYTERHUB_API_TOKEN":
-                    token = env.value
-                    break
-            if token:
-                break
-
-        if not token:
-            raise HTTPException(status_code=500, detail="Could not read notebook server API token")
-
-        # The notebook server listens on port 8888 with a base URL
-        # Read JUPYTERHUB_SERVICE_PREFIX for the base path
-        base_path = ""
-        for container in pod.spec.containers:
-            for env in (container.env or []):
-                if env.name == "JUPYTERHUB_SERVICE_PREFIX":
-                    base_path = env.value.rstrip("/")
-                    break
-
-        base_url = f"http://{pod_ip}:8888{base_path}"
-        return base_url, token
-
+def server_access(server_name: str = "") -> tuple[str, str]:
+    """``(base_url, token)`` of a running server, from its pod."""
+    try:
+        pod = find_server_pod(server_name)
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get notebook server access: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to access notebook server: {str(e)}")
+        logger.error("could not list notebook server pods: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"could not reach the Kubernetes API: {e}")
+    if pod is None:
+        raise HTTPException(status_code=503, detail=NO_SERVER)
+    if not pod.status.pod_ip:
+        raise HTTPException(status_code=503, detail="The notebook server pod has no address yet; it is still starting.")
+
+    token = None
+    prefix = ""
+    for container in pod.spec.containers:
+        for env in container.env or []:
+            if env.name == "JUPYTERHUB_API_TOKEN":
+                token = env.value
+            elif env.name == "JUPYTERHUB_SERVICE_PREFIX":
+                prefix = (env.value or "").rstrip("/")
+    if not token:
+        raise HTTPException(status_code=500, detail="The notebook server pod carries no API token.")
+    return f"http://{pod.status.pod_ip}:8888{prefix}", token
 
 
-async def _proxy_tool_call(tool_name: str, arguments: dict, timeout: float = 300.0) -> dict:
-    """Forward a tool call to the tk-ai-extension in the notebook server."""
-    base_url, token = _get_notebook_server_access()
-
-    url = f"{base_url}/api/tk-ai/mcp/tools/call"
-    headers = {
-        "Authorization": f"token {token}",
-        "Content-Type": "application/json",
-    }
-
+async def extension_health(server_name: str = "") -> Dict[str, Any]:
+    base_url, token = server_access(server_name)
     try:
-        async with httpx.AsyncClient(timeout=timeout, verify=False) as client:
-            response = await client.post(
-                url,
-                json={"tool": tool_name, "arguments": arguments},
-                headers=headers,
-            )
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(f"{base_url}{EXTENSION_PREFIX}/health", headers={"Authorization": f"token {token}"})
+    except httpx.HTTPError as e:
+        return {"status": "unreachable", "error": str(e)}
+    if response.status_code != 200:
+        return {"status": "error", "error": f"health check answered HTTP {response.status_code}"}
+    return {"status": "ok", **response.json()}
 
-            if response.status_code == 200:
-                return response.json()
-            else:
-                logger.error(f"Jupyter tool call failed: HTTP {response.status_code} - {response.text}")
-                raise HTTPException(
-                    status_code=response.status_code,
-                    detail=f"Jupyter server returned: {response.text}"
-                )
 
+async def call_tool(tool: str, arguments: Dict[str, Any], timeout: float = QUICK_TIMEOUT, server_name: str = "") -> Any:
+    """Forward one tool call and return the tool's own result."""
+    base_url, token = server_access(server_name)
+    url = f"{base_url}{EXTENSION_PREFIX}/tools/call"
+    headers = {"Authorization": f"token {token}", "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(url, json={"tool": tool, "arguments": arguments}, headers=headers)
     except httpx.ConnectError:
-        raise HTTPException(
-            status_code=503,
-            detail="Jupyter notebook server is not running. Start it from the JupyterHub launcher."
-        )
+        raise HTTPException(status_code=503, detail=NO_SERVER)
     except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail=f"The notebook server did not answer '{tool}' within {int(timeout)} seconds.")
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"The notebook server could not be reached for '{tool}': {e}")
+
+    try:
+        body = response.json()
+    except ValueError:
+        body = {"success": False, "error": response.text[:500]}
+    if response.status_code == 404 and isinstance(body, dict) and "not found" in str(body.get("error", "")):
         raise HTTPException(
-            status_code=504,
-            detail=f"Jupyter notebook server timed out while executing '{tool_name}'."
+            status_code=501,
+            detail=f"The notebook server does not have the tool '{tool}'; its image predates tk-notebook-mcp. Rebuild tk-jupyter-base.",
         )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error proxying tool call to Jupyter: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail=body.get("error") if isinstance(body, dict) else str(body))
+    return body
+
+
+def _int(value: Union[int, str, None], name: str) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail=f"{name} must be an integer")
+
+
+def _bool(value: Union[bool, str, None], default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _opt_int(value: Union[int, str, None], name: str) -> Optional[int]:
+    return None if value is None or value == "" else _int(value, name)
 
 
 # ---------------------------------------------------------------------------
-# Request/Response models
+# Request and response models
 # ---------------------------------------------------------------------------
 
-class JupyterStatusResponse(BaseModel):
-    status: str = Field(..., description="Status: ok, unreachable, not_configured")
-    jupyter_url: Optional[str] = None
-    service: Optional[str] = None
-    version: Optional[str] = None
-    error: Optional[str] = None
-
-
-class NotebookListResponse(BaseModel):
-    result: str = Field(..., description="Formatted list of notebooks")
-
-
-class CellListResponse(BaseModel):
-    result: Any = Field(..., description="Cell listing result from Jupyter")
-
-
-class CellReadResponse(BaseModel):
-    result: Any = Field(..., description="Cell content from Jupyter")
-
-
-class CellExecuteRequest(BaseModel):
-    cell_index: str = Field(..., description="Index of the cell to execute (0-based)")
-    notebook_path: str = Field(..., description="Path to the notebook")
-
-
-class CellExecuteResponse(BaseModel):
-    result: Any = Field(..., description="Execution result from Jupyter")
-
-
-class CellInsertRequest(BaseModel):
-    content: str = Field(..., description="Content/source code for the new cell")
-    notebook_path: str = Field(..., description="Path to the notebook")
-    cell_type: str = Field("code", description="Type of cell: code or markdown")
-    position: str = Field("end", description="Where to insert: above, below, end")
-
-
-class CellOverwriteRequest(BaseModel):
-    cell_index: str = Field(..., description="Index of the cell to overwrite (0-based)")
-    content: str = Field(..., description="New content for the cell")
-    notebook_path: str = Field(..., description="Path to the notebook")
-
-
-class CellDeleteRequest(BaseModel):
-    cell_index: str = Field(..., description="Index of the cell to delete (0-based)")
-    notebook_path: str = Field(..., description="Path to the notebook")
-
-
-class CellMoveRequest(BaseModel):
-    from_index: str = Field(..., description="Current index of the cell (0-based)")
-    to_index: str = Field(..., description="Target index for the cell (0-based)")
-    notebook_path: str = Field(..., description="Path to the notebook")
-
-
-class CreateNotebookRequest(BaseModel):
-    path: str = Field(..., description="Path for the new notebook")
-    cells: Optional[List[Dict[str, str]]] = Field(None, description="Initial cells [{cell_type, source}]")
-
-
-class InsertAndExecuteRequest(BaseModel):
-    content: str = Field(..., description="Code to insert and execute")
-    notebook_path: str = Field(..., description="Path to the notebook")
-    position: str = Field("below", description="Where to insert: above, below, end")
-
-
-class ExecuteAllRequest(BaseModel):
-    notebook_path: str = Field(..., description="Path to the notebook")
+NotebookPath = Field(..., description="Path of the notebook, relative to the notebooks folder (for example 'examples/research-assistant/00-platform-validation.ipynb').")
+CellIndex = Field(..., description="0-based position of the cell (not its execution count).")
+Position = Field("end", description="Where the new cell goes: 'end', or 'above' or 'below' cell_index.")
+Timeout = Field(None, description="Seconds to wait for the cell; past it the kernel is interrupted. Default 600.")
 
 
 class ToolResultResponse(BaseModel):
-    result: Any = Field(..., description="Tool execution result")
+    result: Any = Field(..., description="The tool's own result: an object with 'success' and, on failure, 'error'.")
+
+
+class UseNotebookRequest(BaseModel):
+    notebook_path: str = NotebookPath
+    kernel_name: Optional[str] = Field(None, description="Kernel to run it with, for example 'agent-dev' or 'fine-tuning'. Defaults to the one the notebook names.")
+    create: Union[bool, str, None] = Field(False, description="Create the notebook if it does not exist.")
+    needs_gpu: Union[bool, str, None] = Field(False, description="Refuse when the notebook server was started without a GPU.")
+
+
+class CloseNotebookRequest(BaseModel):
+    notebook_path: str = NotebookPath
+    shutdown_kernel: Union[bool, str, None] = Field(True, description="Shut the kernel down (default true).")
+
+
+class CreateNotebookRequest(BaseModel):
+    notebook_path: str = Field(..., description="Path for the new notebook; without a folder it goes under the notebooks folder.")
+    cells: Optional[List[Dict[str, str]]] = Field(None, description="Initial cells: [{cell_type: code|markdown, source: ...}].")
+
+
+class CellInsertRequest(BaseModel):
+    notebook_path: str = NotebookPath
+    content: str = Field(..., description="The cell's source.")
+    cell_type: str = Field("code", description="'code' or 'markdown'.")
+    position: str = Position
+    cell_index: Union[int, str, None] = Field(None, description="The cell that 'above' or 'below' refers to.")
+
+
+class CellOverwriteRequest(BaseModel):
+    notebook_path: str = NotebookPath
+    cell_index: Union[int, str] = CellIndex
+    content: str = Field(..., description="The new source.")
+
+
+class CellDeleteRequest(BaseModel):
+    notebook_path: str = NotebookPath
+    cell_index: Union[int, str] = CellIndex
+
+
+class CellMoveRequest(BaseModel):
+    notebook_path: str = NotebookPath
+    from_index: Union[int, str] = Field(..., description="Where the cell is now (0-based).")
+    to_index: Union[int, str] = Field(..., description="Where it should end up (0-based).")
+
+
+class CellExecuteRequest(BaseModel):
+    notebook_path: str = NotebookPath
+    cell_index: Union[int, str] = CellIndex
+    timeout_seconds: Union[int, str, None] = Timeout
+
+
+class InsertAndExecuteRequest(BaseModel):
+    notebook_path: str = NotebookPath
+    content: str = Field(..., description="The code to insert and run.")
+    position: str = Position
+    cell_index: Union[int, str, None] = Field(None, description="The cell that 'above' or 'below' refers to.")
+    timeout_seconds: Union[int, str, None] = Timeout
+
+
+class ExecuteAllRequest(BaseModel):
+    notebook_path: str = NotebookPath
+    restart_kernel: Union[bool, str, None] = Field(False, description="Restart the kernel before the run.")
+    stop_on_error: Union[bool, str, None] = Field(True, description="Stop at the first cell that raises (default true).")
+    cell_timeout_seconds: Union[int, str, None] = Field(None, description="Seconds allowed per cell; default 3600.")
+
+
+class ExecuteCodeRequest(BaseModel):
+    notebook_path: str = Field(..., description="The notebook whose kernel runs the code.")
+    code: str = Field(..., description="Python or IPython code. The notebook itself is not changed.")
+    timeout_seconds: Union[int, str, None] = Field(None, description="Seconds to wait; default 300.")
+
+
+class KernelRequest(BaseModel):
+    notebook_path: str = Field(..., description="The notebook whose kernel is meant.")
 
 
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("/status", response_model=JupyterStatusResponse, operation_id="jupyter_notebook_status")
-async def jupyter_notebook_status(
-    current_user: dict = Depends(get_current_user_dual_auth),
-):
-    """Check if the Jupyter notebook server is running and the tk-ai-extension is accessible."""
-    try:
-        base_url, token = _get_notebook_server_access()
-    except HTTPException as e:
-        return JupyterStatusResponse(
-            status="not_configured" if e.status_code == 500 else "unreachable",
-            error=e.detail,
-        )
-
-    url = f"{base_url}/api/tk-ai/mcp/health"
-    headers = {"Authorization": f"token {token}"}
-
-    try:
-        async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
-            response = await client.get(url, headers=headers)
-
-            if response.status_code == 200:
-                data = response.json()
-                return JupyterStatusResponse(
-                    status="ok",
-                    jupyter_url=base_url,
-                    service=data.get("service"),
-                    version=data.get("version"),
-                )
-            else:
-                return JupyterStatusResponse(
-                    status="error",
-                    jupyter_url=base_url,
-                    error=f"Health check returned HTTP {response.status_code}",
-                )
-    except httpx.ConnectError:
-        return JupyterStatusResponse(
-            status="unreachable",
-            jupyter_url=base_url,
-            error="Jupyter server is not running. Start it from the JupyterHub launcher.",
-        )
-    except Exception as e:
-        return JupyterStatusResponse(
-            status="error",
-            jupyter_url=base_url,
-            error=str(e),
-        )
-
-
 @router.get("/list", response_model=ToolResultResponse, operation_id="jupyter_list_notebooks")
-async def jupyter_list_notebooks(
-    current_user: dict = Depends(get_current_user_dual_auth),
-):
-    """List all .ipynb notebook files in the Jupyter notebooks directory."""
-    result = await _proxy_tool_call("list_notebooks", {})
-    return ToolResultResponse(result=result)
+async def jupyter_list_notebooks(current_user: dict = Depends(get_current_user_dual_auth)):
+    """List every notebook under the notebooks folder, with the kernel each open one uses."""
+    return ToolResultResponse(result=await call_tool("list_notebooks", {}))
 
 
-@router.get("/{notebook_path:path}/cells", response_model=ToolResultResponse, operation_id="jupyter_list_cells")
-async def jupyter_list_cells(
-    notebook_path: str,
-    current_user: dict = Depends(get_current_user_dual_auth),
-):
-    """List all cells in a notebook with their indices, types, and source preview."""
-    result = await _proxy_tool_call("list_cells", {"notebook_path": notebook_path})
-    return ToolResultResponse(result=result)
+@router.post("/use", response_model=ToolResultResponse, operation_id="jupyter_use_notebook")
+async def jupyter_use_notebook(request: UseNotebookRequest, current_user: dict = Depends(get_current_user_dual_auth)):
+    """Open a notebook for work: start its kernel and shared document. Call this before running or editing cells. No JupyterLab tab is needed."""
+    args: Dict[str, Any] = {
+        "notebook_path": request.notebook_path,
+        "create": _bool(request.create, False),
+        "needs_gpu": _bool(request.needs_gpu, False),
+    }
+    if request.kernel_name:
+        args["kernel_name"] = request.kernel_name
+    return ToolResultResponse(result=await call_tool("use_notebook", args, timeout=OPEN_TIMEOUT))
+
+
+@router.post("/close", response_model=ToolResultResponse, operation_id="jupyter_close_notebook")
+async def jupyter_close_notebook(request: CloseNotebookRequest, current_user: dict = Depends(get_current_user_dual_auth)):
+    """Finish with a notebook: save it and shut its kernel down."""
+    args = {"notebook_path": request.notebook_path, "shutdown_kernel": _bool(request.shutdown_kernel, True)}
+    return ToolResultResponse(result=await call_tool("close_notebook", args))
+
+
+@router.post("/create", response_model=ToolResultResponse, operation_id="jupyter_create_notebook")
+async def jupyter_create_notebook(request: CreateNotebookRequest, current_user: dict = Depends(get_current_user_dual_auth)):
+    """Create a notebook file, with optional initial cells."""
+    args: Dict[str, Any] = {"notebook_path": request.notebook_path}
+    if request.cells:
+        args["cells"] = request.cells
+    return ToolResultResponse(result=await call_tool("create_notebook", args))
 
 
 @router.get("/{notebook_path:path}/cells/{cell_index}", response_model=ToolResultResponse, operation_id="jupyter_read_cell")
-async def jupyter_read_cell(
-    notebook_path: str,
-    cell_index: int,
-    current_user: dict = Depends(get_current_user_dual_auth),
-):
-    """Read the content and outputs of a specific cell by index."""
-    result = await _proxy_tool_call("read_cell", {
-        "notebook_path": notebook_path,
-        "cell_index": cell_index,
-    })
-    return ToolResultResponse(result=result)
+async def jupyter_read_cell(notebook_path: str, cell_index: int, current_user: dict = Depends(get_current_user_dual_auth)):
+    """Read one cell: its source and, for code, its execution count and outputs."""
+    return ToolResultResponse(result=await call_tool("read_cell", {"notebook_path": notebook_path, "cell_index": cell_index}))
 
 
-@router.post("/execute-cell", response_model=ToolResultResponse, operation_id="jupyter_execute_cell")
-async def jupyter_execute_cell(
-    request: CellExecuteRequest,
-    current_user: dict = Depends(get_current_user_dual_auth),
-):
-    """Execute a code cell and return its output."""
-    result = await _proxy_tool_call("execute_cell", {
-        "notebook_path": request.notebook_path,
-        "cell_index": int(request.cell_index),
-    })
-    return ToolResultResponse(result=result)
+@router.get("/{notebook_path:path}/cells", response_model=ToolResultResponse, operation_id="jupyter_list_cells")
+async def jupyter_list_cells(notebook_path: str, current_user: dict = Depends(get_current_user_dual_auth)):
+    """List the cells of a notebook: index, type, execution count and first line."""
+    return ToolResultResponse(result=await call_tool("list_cells", {"notebook_path": notebook_path}))
 
 
 @router.post("/insert-cell", response_model=ToolResultResponse, operation_id="jupyter_insert_cell")
-async def jupyter_insert_cell(
-    request: CellInsertRequest,
-    current_user: dict = Depends(get_current_user_dual_auth),
-):
-    """Insert a new cell into the notebook."""
-    result = await _proxy_tool_call("insert_cell", {
+async def jupyter_insert_cell(request: CellInsertRequest, current_user: dict = Depends(get_current_user_dual_auth)):
+    """Insert a code or markdown cell at the end, or above or below a given cell."""
+    args: Dict[str, Any] = {
         "notebook_path": request.notebook_path,
         "content": request.content,
         "cell_type": request.cell_type,
         "position": request.position,
-    })
-    return ToolResultResponse(result=result)
+    }
+    index = _opt_int(request.cell_index, "cell_index")
+    if index is not None:
+        args["cell_index"] = index
+    return ToolResultResponse(result=await call_tool("insert_cell", args))
 
 
 @router.post("/overwrite-cell", response_model=ToolResultResponse, operation_id="jupyter_overwrite_cell")
-async def jupyter_overwrite_cell(
-    request: CellOverwriteRequest,
-    current_user: dict = Depends(get_current_user_dual_auth),
-):
-    """Overwrite the source content of a cell."""
-    result = await _proxy_tool_call("overwrite_cell", {
-        "notebook_path": request.notebook_path,
-        "cell_index": int(request.cell_index),
-        "content": request.content,
-    })
-    return ToolResultResponse(result=result)
+async def jupyter_overwrite_cell(request: CellOverwriteRequest, current_user: dict = Depends(get_current_user_dual_auth)):
+    """Replace a cell's source."""
+    args = {"notebook_path": request.notebook_path, "cell_index": _int(request.cell_index, "cell_index"), "content": request.content}
+    return ToolResultResponse(result=await call_tool("overwrite_cell", args))
 
 
 @router.post("/delete-cell", response_model=ToolResultResponse, operation_id="jupyter_delete_cell")
-async def jupyter_delete_cell(
-    request: CellDeleteRequest,
-    current_user: dict = Depends(get_current_user_dual_auth),
-):
-    """Delete a cell from the notebook."""
-    result = await _proxy_tool_call("delete_cell", {
-        "notebook_path": request.notebook_path,
-        "cell_index": int(request.cell_index),
-    })
-    return ToolResultResponse(result=result)
+async def jupyter_delete_cell(request: CellDeleteRequest, current_user: dict = Depends(get_current_user_dual_auth)):
+    """Delete a cell."""
+    args = {"notebook_path": request.notebook_path, "cell_index": _int(request.cell_index, "cell_index")}
+    return ToolResultResponse(result=await call_tool("delete_cell", args))
 
 
 @router.post("/move-cell", response_model=ToolResultResponse, operation_id="jupyter_move_cell")
-async def jupyter_move_cell(
-    request: CellMoveRequest,
-    current_user: dict = Depends(get_current_user_dual_auth),
-):
-    """Move a cell from one position to another."""
-    result = await _proxy_tool_call("move_cell", {
+async def jupyter_move_cell(request: CellMoveRequest, current_user: dict = Depends(get_current_user_dual_auth)):
+    """Move a cell to another index."""
+    args = {
         "notebook_path": request.notebook_path,
-        "from_index": int(request.from_index),
-        "to_index": int(request.to_index),
-    })
-    return ToolResultResponse(result=result)
+        "from_index": _int(request.from_index, "from_index"),
+        "to_index": _int(request.to_index, "to_index"),
+    }
+    return ToolResultResponse(result=await call_tool("move_cell", args))
 
 
-@router.post("/create", response_model=ToolResultResponse, operation_id="jupyter_create_notebook")
-async def jupyter_create_notebook(
-    request: CreateNotebookRequest,
-    current_user: dict = Depends(get_current_user_dual_auth),
-):
-    """Create a new Jupyter notebook."""
-    args = {"path": request.path}
-    if request.cells:
-        args["cells"] = request.cells
-    result = await _proxy_tool_call("create_notebook", args)
-    return ToolResultResponse(result=result)
+@router.post("/execute-cell", response_model=ToolResultResponse, operation_id="jupyter_execute_cell")
+async def jupyter_execute_cell(request: CellExecuteRequest, current_user: dict = Depends(get_current_user_dual_auth)):
+    """Run one code cell and return its outputs once it finishes. For a cell that runs for many minutes use jupyter_execute_cell_async."""
+    timeout = _opt_int(request.timeout_seconds, "timeout_seconds")
+    args: Dict[str, Any] = {"notebook_path": request.notebook_path, "cell_index": _int(request.cell_index, "cell_index")}
+    if timeout is not None:
+        args["timeout_seconds"] = timeout
+    return ToolResultResponse(result=await call_tool("execute_cell", args, timeout=(timeout or 600) + RUN_MARGIN))
 
 
 @router.post("/insert-and-execute", response_model=ToolResultResponse, operation_id="jupyter_insert_and_execute_cell")
-async def jupyter_insert_and_execute_cell(
-    request: InsertAndExecuteRequest,
-    current_user: dict = Depends(get_current_user_dual_auth),
-):
-    """Insert a new code cell and execute it immediately."""
-    result = await _proxy_tool_call("insert_and_execute_cell", {
-        "notebook_path": request.notebook_path,
-        "content": request.content,
-        "position": request.position,
-    })
-    return ToolResultResponse(result=result)
+async def jupyter_insert_and_execute_cell(request: InsertAndExecuteRequest, current_user: dict = Depends(get_current_user_dual_auth)):
+    """Insert a code cell and run it in one step."""
+    timeout = _opt_int(request.timeout_seconds, "timeout_seconds")
+    args: Dict[str, Any] = {"notebook_path": request.notebook_path, "content": request.content, "position": request.position}
+    index = _opt_int(request.cell_index, "cell_index")
+    if index is not None:
+        args["cell_index"] = index
+    if timeout is not None:
+        args["timeout_seconds"] = timeout
+    return ToolResultResponse(result=await call_tool("insert_and_execute_cell", args, timeout=(timeout or 600) + RUN_MARGIN))
 
 
 @router.post("/execute-all", response_model=ToolResultResponse, operation_id="jupyter_execute_all_cells")
-async def jupyter_execute_all_cells(
-    request: ExecuteAllRequest,
-    current_user: dict = Depends(get_current_user_dual_auth),
-):
-    """Execute all code cells in the notebook sequentially."""
-    result = await _proxy_tool_call("execute_all_cells", {
+async def jupyter_execute_all_cells(request: ExecuteAllRequest, current_user: dict = Depends(get_current_user_dual_auth)):
+    """Run every code cell in order, in the background. Returns an execution_id at once; poll jupyter_check_all_cells_status."""
+    args: Dict[str, Any] = {
         "notebook_path": request.notebook_path,
-    })
-    return ToolResultResponse(result=result)
-
-
-# Submit + poll for long-running cells. The blocking execute tools hold the
-# request open until the cell finishes, which times out the MCP bridge on
-# multi-minute cells. These expose the tk-ai-extension's async submit/poll tools
-# (already registered there): submit returns an execution_id immediately, then
-# poll status. Both return fast, so they use a short timeout, never the 300s
-# blocking default. Like the blocking tools these are frontend-delegated, so the
-# proxy passes notebook_path/cell_index only — the frontend supplies the kernel.
-_ASYNC_PROXY_TIMEOUT = 30.0
+        "restart_kernel": _bool(request.restart_kernel, False),
+        "stop_on_error": _bool(request.stop_on_error, True),
+    }
+    timeout = _opt_int(request.cell_timeout_seconds, "cell_timeout_seconds")
+    if timeout is not None:
+        args["cell_timeout_seconds"] = timeout
+    return ToolResultResponse(result=await call_tool("execute_all_cells", args))
 
 
 @router.post("/execute-cell-async", response_model=ToolResultResponse, operation_id="jupyter_execute_cell_async")
-async def jupyter_execute_cell_async(
-    request: CellExecuteRequest,
-    current_user: dict = Depends(get_current_user_dual_auth),
-):
-    """Start executing a code cell without blocking; returns an execution_id.
-
-    Use for long-running cells. Poll completion with jupyter_check_execution_status.
-    """
-    result = await _proxy_tool_call("execute_cell_async", {
-        "notebook_path": request.notebook_path,
-        "cell_index": int(request.cell_index),
-    }, timeout=_ASYNC_PROXY_TIMEOUT)
-    return ToolResultResponse(result=result)
+async def jupyter_execute_cell_async(request: CellExecuteRequest, current_user: dict = Depends(get_current_user_dual_auth)):
+    """Start one code cell in the background. Returns an execution_id at once; poll jupyter_check_execution_status."""
+    args: Dict[str, Any] = {"notebook_path": request.notebook_path, "cell_index": _int(request.cell_index, "cell_index")}
+    timeout = _opt_int(request.timeout_seconds, "timeout_seconds")
+    if timeout is not None:
+        args["timeout_seconds"] = timeout
+    return ToolResultResponse(result=await call_tool("execute_cell_async", args))
 
 
 @router.get("/execution-status", response_model=ToolResultResponse, operation_id="jupyter_check_execution_status")
 async def jupyter_check_execution_status(
-    execution_id: str = Query(..., description="Execution ID returned by jupyter_execute_cell_async"),
+    execution_id: str = Query(..., description="The id jupyter_execute_cell_async returned."),
     current_user: dict = Depends(get_current_user_dual_auth),
 ):
-    """Poll an async cell execution: returns running / completed / error and outputs."""
-    result = await _proxy_tool_call("check_execution_status", {
-        "execution_id": execution_id,
-    }, timeout=_ASYNC_PROXY_TIMEOUT)
-    return ToolResultResponse(result=result)
+    """The state of a background cell run: running, completed or error, with the outputs once it ends."""
+    return ToolResultResponse(result=await call_tool("check_execution_status", {"execution_id": execution_id}))
 
 
 @router.get("/all-cells-status", response_model=ToolResultResponse, operation_id="jupyter_check_all_cells_status")
 async def jupyter_check_all_cells_status(
-    execution_id: str = Query(..., description="Execution ID returned by jupyter_execute_all_cells"),
+    execution_id: str = Query(..., description="The id jupyter_execute_all_cells returned."),
     current_user: dict = Depends(get_current_user_dual_auth),
 ):
-    """Poll an async run-all execution (jupyter_execute_all_cells returns an execution_id)."""
-    result = await _proxy_tool_call("check_all_cells_status", {
-        "execution_id": execution_id,
-    }, timeout=_ASYNC_PROXY_TIMEOUT)
-    return ToolResultResponse(result=result)
+    """Progress of a run started by jupyter_execute_all_cells: cells done, the one running, each cell's result."""
+    return ToolResultResponse(result=await call_tool("check_all_cells_status", {"execution_id": execution_id}))
+
+
+@router.post("/execute-code", response_model=ToolResultResponse, operation_id="jupyter_execute_code")
+async def jupyter_execute_code(request: ExecuteCodeRequest, current_user: dict = Depends(get_current_user_dual_auth)):
+    """Run code in a notebook's kernel without changing the notebook: inspect a variable, check a package, try a line."""
+    timeout = _opt_int(request.timeout_seconds, "timeout_seconds")
+    args: Dict[str, Any] = {"notebook_path": request.notebook_path, "code": request.code}
+    if timeout is not None:
+        args["timeout_seconds"] = timeout
+    return ToolResultResponse(result=await call_tool("execute_ipython", args, timeout=(timeout or 300) + RUN_MARGIN))
+
+
+@router.post("/restart-kernel", response_model=ToolResultResponse, operation_id="jupyter_restart_kernel")
+async def jupyter_restart_kernel(request: KernelRequest, current_user: dict = Depends(get_current_user_dual_auth)):
+    """Restart a notebook's kernel: variables are lost, cells and outputs stay."""
+    return ToolResultResponse(result=await call_tool("restart_kernel", {"notebook_path": request.notebook_path}, timeout=OPEN_TIMEOUT))
+
+
+@router.post("/interrupt-kernel", response_model=ToolResultResponse, operation_id="jupyter_interrupt_kernel")
+async def jupyter_interrupt_kernel(request: KernelRequest, current_user: dict = Depends(get_current_user_dual_auth)):
+    """Interrupt what a notebook's kernel is running, as Ctrl-C would."""
+    return ToolResultResponse(result=await call_tool("interrupt_kernel", {"notebook_path": request.notebook_path}))
+
+
+@router.get("/kernel-status", response_model=ToolResultResponse, operation_id="jupyter_kernel_status")
+async def jupyter_kernel_status(
+    notebook_path: str = Query(..., description="The notebook whose kernel is meant."),
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """Whether a notebook's kernel is idle or busy."""
+    return ToolResultResponse(result=await call_tool("get_kernel_status", {"notebook_path": notebook_path}))
+
+
+@router.get("/kernels", response_model=ToolResultResponse, operation_id="jupyter_list_kernels")
+async def jupyter_list_kernels(current_user: dict = Depends(get_current_user_dual_auth)):
+    """The kernels running now, with their notebooks, and the kernel types installed."""
+    return ToolResultResponse(result=await call_tool("list_kernels", {}))

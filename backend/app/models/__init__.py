@@ -8,6 +8,7 @@ from app.models.custom_images import CustomImageBuild
 from app.models.jupyterhub_config import JupyterHubConfig
 from app.models.model_mirrors import ModelMirrorJob
 from app.models.jupyter_venvs import JupyterVenv
+from app.models.notebook_jobs import NotebookJob
 
 __all__ = [
     "Service",
@@ -23,4 +24,5 @@ __all__ = [
     "JupyterHubConfig",
     "ModelMirrorJob",
     "JupyterVenv",
+    "NotebookJob",
 ]

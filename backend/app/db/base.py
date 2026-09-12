@@ -14,6 +14,7 @@ from app.models import (
     TemplateDeployment,
     DeploymentLog,
     JupyterHubConfig,
+    NotebookJob,
 )
 from app.models.secrets import Secret, AppSecret
 

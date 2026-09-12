@@ -26,6 +26,7 @@ from app.api import (
     gpu_metrics,
     jupyter_venvs,
     jupyter_notebooks,
+    jupyter_servers,
     nodes,
     docs_search,
 )
@@ -57,6 +58,7 @@ api_router.include_router(jupyterhub_config.router, tags=["jupyterhub-config"])
 api_router.include_router(model_mirrors.router, prefix="/models", tags=["models"])
 api_router.include_router(gpu_metrics.router, tags=["gpu-metrics"])
 api_router.include_router(jupyter_venvs.router, tags=["jupyter-venvs"])
+api_router.include_router(jupyter_servers.router, tags=["jupyter-server"])
 api_router.include_router(jupyter_notebooks.router, tags=["jupyter-notebooks"])
 api_router.include_router(nodes.router, tags=["nodes"])
 api_router.include_router(debug.router, tags=["debug"])

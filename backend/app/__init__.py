@@ -204,6 +204,13 @@ async def app_lifespan(app: FastAPI):
     cluster_resources_task = asyncio.create_task(refresh_cluster_resources_loop())
     logger.info("Started cluster resources refresh task (15s interval)")
 
+    # Unattended notebook runs that were in flight when thinkube-control last stopped
+    from app.api.jupyter_servers import resume_notebook_jobs
+    try:
+        await resume_notebook_jobs()
+    except Exception as e:
+        logger.warning(f"Could not resume notebook jobs: {e}")
+
     yield
 
     # Shutdown: Clean up resources
@@ -405,19 +412,37 @@ def create_app() -> FastAPI:
                 "get_environment",             # Resource
                 "test_ssh",                    # Resource
 
-                # === Jupyter Notebooks (proxied to tk-ai-extension) ===
+                # === Notebook server (JupyterHub) and unattended runs ===
                 "jupyter_notebook_status",     # Resource
+                "start_notebook_server",       # Tool
+                "stop_notebook_server",        # Tool
+                "run_notebook_job",            # Tool
+                "notebook_job_status",         # Resource
+                "list_notebook_jobs",          # Resource
+                "cancel_notebook_job",         # Tool
+
+                # === Notebooks (forwarded to tk-notebook-mcp in the server) ===
                 "jupyter_list_notebooks",      # Resource
                 "jupyter_list_cells",          # Resource
                 "jupyter_read_cell",           # Resource
+                "jupyter_list_kernels",        # Resource
+                "jupyter_kernel_status",       # Resource
+                "jupyter_check_execution_status",   # Resource
+                "jupyter_check_all_cells_status",   # Resource
+                "jupyter_use_notebook",        # Tool
+                "jupyter_close_notebook",      # Tool
                 "jupyter_create_notebook",     # Tool
                 "jupyter_execute_cell",        # Tool
+                "jupyter_execute_cell_async",  # Tool
+                "jupyter_execute_all_cells",   # Tool
+                "jupyter_execute_code",        # Tool
                 "jupyter_insert_cell",         # Tool
                 "jupyter_overwrite_cell",      # Tool
                 "jupyter_delete_cell",         # Tool
                 "jupyter_move_cell",           # Tool
                 "jupyter_insert_and_execute_cell",  # Tool
-                "jupyter_execute_all_cells",   # Tool
+                "jupyter_restart_kernel",      # Tool
+                "jupyter_interrupt_kernel",    # Tool
 
                 # === Docs (Context7-style; active only when the docs are deployed) ===
                 "search_thinkube_docs",        # Tool

@@ -122,8 +122,17 @@ spec:
           value: '{"NVIDIA-GB10-SHARED": 128}'
         - name: LLM_MODEL_IDLE_TIMEOUT_MINUTES
           value: "30"
-        # Notebook server access is read dynamically from the running pod via K8s API
-        # (no static tokens or URLs needed)
+        # Notebook server access is read from the running pod via the K8s API.
+        # The Hub itself (start, stop, named servers) takes the service token
+        # JupyterHub's deploy playbook copies into this namespace.
+        - name: JUPYTERHUB_API_URL
+          value: "http://hub.jupyterhub.svc.cluster.local:8081/hub/api"
+        - name: JUPYTERHUB_SERVICE_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: jupyterhub-service-token
+              key: token
+              optional: true
         # Services not yet deployed - uncomment when ready
         # - name: OPENSEARCH_URL
         #   value: "https://osd.{{ domain_name }}"
