@@ -120,12 +120,16 @@ async def call_tool(tool: str, arguments: Dict[str, Any], timeout: float = QUICK
     try:
         body = response.json()
     except ValueError:
-        body = {"success": False, "error": response.text[:500]}
-    if response.status_code == 404 and isinstance(body, dict) and "not found" in str(body.get("error", "")):
+        body = None
+    if response.status_code == 404:
+        # A JSON 404 is the extension saying the tool is unknown; an HTML 404 is a
+        # server without the extension at all. Either way the image is behind.
         raise HTTPException(
             status_code=501,
-            detail=f"The notebook server does not have the tool '{tool}'; its image predates tk-notebook-mcp. Rebuild tk-jupyter-base.",
+            detail=f"The notebook server does not have the tool '{tool}'; its image predates tk-notebook-mcp. Rebuild tk-jupyter-base and restart the server.",
         )
+    if body is None:
+        body = {"success": False, "error": response.text[:300]}
     if response.status_code >= 400:
         raise HTTPException(status_code=response.status_code, detail=body.get("error") if isinstance(body, dict) else str(body))
     return body

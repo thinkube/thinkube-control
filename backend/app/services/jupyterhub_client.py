@@ -64,7 +64,13 @@ _username: Optional[str] = None
 
 
 async def username() -> str:
-    """The notebook user's name: from the environment when set, else the Hub's one real user."""
+    """The notebook user's name.
+
+    From the environment when set. Otherwise the Hub's users are asked: the
+    one with a server wins, then the one that signed in most recently. The
+    Hub also lists the admin user from its configuration, who may never have
+    signed in, so "the first user" is not enough.
+    """
     global _username
     if _username:
         return _username
@@ -73,11 +79,18 @@ async def username() -> str:
         _username = configured
         return configured
     _, users = await request("GET", "/users")
-    real = [u["name"] for u in users if u.get("kind", "user") == "user"]
+    real = [u for u in users if u.get("kind", "user") == "user"]
     if not real:
         raise HubError("JupyterHub has no user yet; sign in to Thinkube Notebooks once")
-    _username = real[0]
-    return _username
+    with_server = [u for u in real if u.get("servers")]
+    if with_server:
+        _username = with_server[0]["name"]
+        return _username
+    signed_in = [u for u in real if u.get("last_activity")]
+    if not signed_in:
+        raise HubError("nobody has signed in to Thinkube Notebooks yet; sign in once so the Hub knows the user")
+    # A guess from activity is not cached; a live server settles it later.
+    return max(signed_in, key=lambda u: u["last_activity"])["name"]
 
 
 async def user() -> Dict[str, Any]:
