@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 def init_venvs(db: Session = None):
     """Initialize Jupyter venv templates in the database
 
-    This function creates template entries for fine-tuning and agent-dev
-    that users can use as base for creating custom venvs.
+    Creates the fine-tuning and agent-dev templates, and keeps an existing
+    template's package list equal to the one in the code.
     """
     close_db = False
     if db is None:
@@ -24,37 +24,40 @@ def init_venvs(db: Session = None):
         close_db = True
 
     try:
-        # Check if templates already exist
-        existing_count = db.query(JupyterVenv).filter_by(is_template=True).count()
-
-        if existing_count > 0:
-            logger.info(
-                f"Jupyter venv templates already initialized ({existing_count} templates found)"
-            )
-            return
-
-        logger.info("Initializing Jupyter venv templates for the first time")
-
-        # Create template entries
+        # The built-in templates are owned by the code: an existing record is
+        # brought to the current package list, a missing one is created.
+        created = 0
+        updated = 0
         for template_id, template_data in VENV_TEMPLATES.items():
-            # Combine packages with special installs for storage
             all_packages = template_data["packages"].copy()
             for special in template_data.get("special_installs", []):
                 all_packages.append(special)
 
-            venv_template = JupyterVenv(
-                id=uuid4(),
-                name=template_id,
-                packages=all_packages,
-                status="template",  # Special status for templates
-                is_template=True,
-                created_by="system",
+            existing = (
+                db.query(JupyterVenv)
+                .filter_by(name=template_id, is_template=True)
+                .first()
             )
-            db.add(venv_template)
-            logger.info(f"Created venv template: {template_id} ({len(all_packages)} packages)")
+            if existing is None:
+                db.add(
+                    JupyterVenv(
+                        id=uuid4(),
+                        name=template_id,
+                        packages=all_packages,
+                        status="template",  # Special status for templates
+                        is_template=True,
+                        created_by="system",
+                    )
+                )
+                created += 1
+                logger.info(f"Created venv template: {template_id} ({len(all_packages)} packages)")
+            elif list(existing.packages or []) != all_packages:
+                existing.packages = all_packages
+                updated += 1
+                logger.info(f"Updated venv template: {template_id} ({len(all_packages)} packages)")
 
         db.commit()
-        logger.info(f"Successfully initialized {len(VENV_TEMPLATES)} venv templates")
+        logger.info(f"Venv templates: {created} created, {updated} updated")
 
     except Exception as e:
         logger.error(f"Failed to initialize venv templates: {e}")
