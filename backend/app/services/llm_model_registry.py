@@ -233,6 +233,7 @@ class LLMModelRegistry:
                 params_b=entry.get("params_b"),
                 active_params_b=entry.get("active_params_b"),
                 reasoning_format=entry.get("reasoning_format"),
+                tool_call_parser=entry.get("tool_call_parser"),
                 speculative_config=entry.get("speculative_config"),
                 weight_bytes=entry.get("weight_bytes") or (existing.weight_bytes if existing else None),
                 enforce_eager=entry.get("enforce_eager", False),

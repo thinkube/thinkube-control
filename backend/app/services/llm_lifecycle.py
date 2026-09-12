@@ -382,6 +382,8 @@ class LLMLifecycleManager:
             payload["reasoning_format"] = entry.reasoning_format
         if entry.tool_use:
             payload["tool_use"] = entry.tool_use
+        if getattr(entry, "tool_call_parser", None):
+            payload["tool_call_parser"] = entry.tool_call_parser
         if getattr(entry, "speculative_config", None):
             spec_cfg = entry.speculative_config
             if drafter_path:
@@ -433,6 +435,8 @@ class LLMLifecycleManager:
                 model_env["REASONING_FORMAT"] = payload["reasoning_format"]
             if payload.get("tool_use"):
                 model_env["TOOL_USE"] = "true"
+            if payload.get("tool_call_parser"):
+                model_env["TOOL_CALL_PARSER"] = payload["tool_call_parser"]
             if payload.get("max_context_length"):
                 model_env["MAX_CONTEXT_LENGTH"] = str(payload["max_context_length"])
             if payload.get("speculative_config"):

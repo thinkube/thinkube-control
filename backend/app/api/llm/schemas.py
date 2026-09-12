@@ -30,6 +30,9 @@ class ModelEntry(BaseModel):
     params_b: Optional[float] = None
     active_params_b: Optional[float] = None
     reasoning_format: Optional[str] = None
+    # vLLM --tool-call-parser for this model, when the family's default does not
+    # match the format the model emits (e.g. hermes for a Qwen3 that emits JSON).
+    tool_call_parser: Optional[str] = None
     # vLLM --speculative-config JSON (e.g. '{"method": "mtp", "num_speculative_tokens": 1}')
     # for models that ship a draft / MTP head. None = no speculative decoding.
     speculative_config: Optional[str] = None
