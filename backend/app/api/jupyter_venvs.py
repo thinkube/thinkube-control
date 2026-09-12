@@ -60,7 +60,7 @@ BASE_PACKAGES = [
     "chromadb",
     "nats-py",
     "weaviate-client==4.17.0",
-    "litellm==1.74.9",
+    "litellm==1.97.0",
     "kubernetes",
     "PyGithub",
     "hera-workflows",
@@ -70,9 +70,9 @@ BASE_PACKAGES = [
     "openai",
     "arxiv",
     "python-dotenv==1.1.1",
-    "requests==2.32.5",
-    "httpx==0.28.1",
-    "pydantic==2.11.9",
+    "requests==2.34.2",
+    "httpx",
+    "pydantic",
     "sqlalchemy",
     "alembic",
     "ipywidgets",
@@ -115,16 +115,19 @@ FINETUNING_PACKAGES = [
     # step; see that script for why each flag is required.
 ]
 
+# One set pip resolves together in the base image, with ag2 held at 0.10 because
+# the example notebooks import it as `autogen`; pydantic and httpx come from the
+# image. Re-resolve the set as a whole when moving any one of them.
 AGENT_PACKAGES = [
-    "langchain==1.1.3",
-    "langchain-core==1.1.3",
-    "langchain-community==0.4.1",
-    "langchain-openai==1.1.1",
+    "langchain==1.4.0",
+    "langchain-core==1.6.3",
+    "langchain-community==0.4.2",
+    "langchain-openai==1.6.2",
     "ag2[openai]==0.10.2",
-    "langgraph==0.4.1",
-    "openai-agents==0.6.2",
-    "crewai==1.7.0",
-    "crewai-tools==1.7.0",
+    "langgraph==1.2.11",
+    "openai-agents==0.20.0",
+    "crewai==1.6.1",
+    "crewai-tools==1.6.1",
     "faiss-cpu==1.12.0",
     "opentelemetry-sdk==1.39.0",
     "opentelemetry-exporter-otlp==1.39.0",
