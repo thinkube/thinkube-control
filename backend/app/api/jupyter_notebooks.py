@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.core.api_tokens import get_current_user_dual_auth
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -261,7 +262,12 @@ async def jupyter_use_notebook(request: UseNotebookRequest, current_user: dict =
     }
     if request.kernel_name:
         args["kernel_name"] = request.kernel_name
-    return ToolResultResponse(result=await call_tool("use_notebook", args, timeout=OPEN_TIMEOUT))
+    result = await call_tool("use_notebook", args, timeout=OPEN_TIMEOUT)
+    if isinstance(result, dict) and result.get("success") and result.get("url_path"):
+        # The full address, and the one command that shows it inside Thinkube IDE.
+        result["url"] = f"https://notebooks.{settings.DOMAIN_NAME}{result['url_path']}"
+        result["open_in_ide"] = f"tk-notebook-open {result.get('notebook_path', request.notebook_path)}"
+    return ToolResultResponse(result=result)
 
 
 @router.post("/close", response_model=ToolResultResponse, operation_id="jupyter_close_notebook")

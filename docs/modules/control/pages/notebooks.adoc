@@ -41,7 +41,7 @@ Paths are relative to the notebooks folder, for example `examples/research-assis
 | Operation | What it does
 
 | `jupyter_use_notebook`
-| Opens a notebook for work: starts its kernel and its shared document. Call it before running or editing cells. `kernel_name` picks the environment (`agent-dev`, `fine-tuning`); without it the kernel the notebook names is used. `create` makes the file when it does not exist; `needs_gpu` refuses when the server was started without one.
+| Opens a notebook for work: starts its kernel and its shared document. Call it before running or editing cells. `kernel_name` picks the environment (`agent-dev`, `fine-tuning`); without it the kernel the notebook names is used. `create` makes the file when it does not exist; `needs_gpu` refuses when the server was started without one. The answer carries the notebook's address and `open_in_ide`, the command that shows it in a Thinkube IDE tab.
 
 | `jupyter_close_notebook`
 | Saves the document and shuts the kernel down, freeing the memory it held.
@@ -106,6 +106,10 @@ Over MCP a call that waits for a cell is held open by Claude Code for a limited 
 |===
 
 thinkube-control polls a run every fifteen seconds and records it in its database. If thinkube-control restarts during a run, it picks the polling up again; a run whose server was still starting is marked `lost` and its server stopped.
+
+== See it in the IDE
+
+Thinkube IDE carries the Thinkube Notebook View extension. In a terminal, `tk-notebook-open <path>` shows the notebook in an editor tab: JupyterLab's own page, signed in, on the kernel Claude is using, with copy and paste working. Ask Claude to show the notebook and it runs that command after opening it. The tab's title bar has *Reload* and *Open in the browser*.
 
 == Large outputs
 
