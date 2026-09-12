@@ -86,7 +86,7 @@
                         *) PLAIN+=("$p") ;;
                       esac
                     done
-                    if [ ${#PLAIN[@]} -gt 0 ]; then
+                    if [ -n "${PLAIN[*]}" ]; then
                       "$VENV_PATH/bin/pip" install "${PLAIN[@]}"
                     fi
 
