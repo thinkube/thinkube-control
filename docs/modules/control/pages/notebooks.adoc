@@ -1,59 +1,119 @@
 = Notebook execution over MCP
 :page-type: reference
 
-_The operations that let Claude Code read, edit and run cells in a notebook that is open in Thinkube Notebooks._
+_The operations that let Claude Code start a notebook server where the work needs to be, run a notebook in it with no JupyterLab tab open, and stop it when the GPU should go back to serving models._
 
 .TL;DR
-"run the zebra notebook" executes every cell of a notebook that is open in Thinkube Notebooks with a kernel. This page lists the finer operations, reading, inserting and running one cell at a time, and their limits.
+"start a notebook server on the spark with one GPU, then run the zebra notebook with the fine-tuning kernel" starts the server with `start_notebook_server`, opens the notebook with `jupyter_use_notebook` and runs every cell with `jupyter_execute_all_cells`, polling until the run ends. No tab needs to be open; open one at any time and the outputs are there as they arrive. "run the zebra notebook unattended on the spark with one GPU" does the same on a server of its own that stops when the run ends, with `run_notebook_job`. This page lists every operation, what it answers, and the limits.
 
-thinkube-control forwards these operations to the `tk-ai-extension` running inside your notebook server. They work only while a server is running. Without one, every operation answers:
+== How it works
 
-----
-No Jupyter notebook server running. Start it from the JupyterHub launcher.
-----
+thinkube-control forwards the notebook operations to `tk-notebook-mcp`, a server extension inside the notebook server. The extension works on the notebook's shared document, the same one a JupyterLab tab edits, and creates it itself when no tab has: an edit or an output written by Claude appears in a tab that has the notebook open, and the document's own autosave writes it to the file. A kernel is held by one call at a time. A second call for the same kernel waits five seconds and then answers with what holds it.
 
-Start a server from Thinkube Notebooks first, then ask.
+The server operations go to JupyterHub itself, with the service token thinkube-control is registered with.
 
-== Resources
+== The server
 
-Reads. Claude Code may consult them as context.
-
-[cols="1,2",options="header"]
-|===
-| Operation | What it returns
-
-| `jupyter_notebook_status` | Whether a notebook server is running and reachable.
-| `jupyter_list_notebooks` | Every `.ipynb` file in the notebooks directory.
-| `jupyter_list_cells` | The cells of one notebook, by index, with their type.
-| `jupyter_read_cell` | One cell's source and its outputs.
-|===
-
-== Tools
-
-Changes. Claude Code uses them when you ask.
+A notebook does not run on "the cluster"; it runs in one server pod that JupyterHub starts on one node with the CPU, memory and GPUs chosen at start. These operations make that choice.
 
 [cols="1,2",options="header"]
 |===
 | Operation | What it does
 
-| `jupyter_create_notebook` | Creates a notebook file.
-| `jupyter_insert_cell` | Inserts a cell at an index.
-| `jupyter_overwrite_cell` | Replaces a cell's source.
-| `jupyter_delete_cell` | Removes a cell.
-| `jupyter_move_cell` | Moves a cell to another index.
-| `jupyter_execute_cell` | Runs one cell and waits for its result. The call stays open until the cell finishes.
-| `jupyter_insert_and_execute_cell` | Inserts a cell and runs it in one step.
-| `jupyter_execute_all_cells` | Runs the whole notebook. Returns an `execution_id` at once and keeps running in the kernel.
+| `jupyter_notebook_status`
+| Whether a server is running, on which node and with how many cores, GB and GPUs, whether its tools answer, and which servers unattended runs hold.
+
+| `start_notebook_server`
+| Starts the server on `node` with `cpu_cores`, `memory_gb` and `gpus`, and waits until its tools answer. What is not said comes from the defaults under *JupyterHub Config*. The ask is checked against the node: its cores and memory, its GPUs, and the GPU slots not held by a served model. On a time-sliced GPU such as the GB10 the most is one. A server already running must be stopped first.
+
+| `stop_notebook_server`
+| Stops the server and frees its node, memory and GPUs. Kernels are shut down; notebook files keep their outputs.
 |===
 
-== Long-running cells
+A refusal says why in one sentence, for example `tkspark has 0 GPU slots free of 4; a served model may be holding the rest (unload_llm_model frees one)`.
 
-`jupyter_execute_cell` holds the request open. A cell that runs for minutes — a training step, an agent loop, a long query — outlives the timeout between Claude Code and thinkube-control, and the call fails even though the cell keeps running in the kernel.
+== Notebooks
 
-The REST API has three endpoints for this case, under `/api/v1/jupyter/notebooks`:
+Paths are relative to the notebooks folder, for example `examples/research-assistant/00-platform-validation.ipynb`. Every operation answers with the tool's own result: an object with `success` and, on failure, `error` in plain words.
 
-* `POST execute-cell-async` starts a cell and returns an `execution_id` immediately;
-* `GET execution-status?execution_id=…` reports `running`, `completed` or `error`, with the outputs once finished;
-* `GET all-cells-status?execution_id=…` does the same for a run started by `jupyter_execute_all_cells`.
+[cols="1,2",options="header"]
+|===
+| Operation | What it does
 
-They are not in the MCP include list, so Claude Code cannot call them as tools today. Over MCP, the way to run a long cell is to ask for `jupyter_execute_all_cells` on a notebook whose cells are arranged so the long one runs last, or to run the cell from the notebook interface and read its outputs afterwards with `jupyter_read_cell`.
+| `jupyter_use_notebook`
+| Opens a notebook for work: starts its kernel and its shared document. Call it before running or editing cells. `kernel_name` picks the environment (`agent-dev`, `fine-tuning`); without it the kernel the notebook names is used. `create` makes the file when it does not exist; `needs_gpu` refuses when the server was started without one.
+
+| `jupyter_close_notebook`
+| Saves the document and shuts the kernel down, freeing the memory it held.
+
+| `jupyter_list_notebooks`
+| Every notebook under the notebooks folder, with the kernel each open one uses.
+
+| `jupyter_create_notebook`
+| Creates a notebook file, with optional initial cells.
+
+| `jupyter_list_cells`, `jupyter_read_cell`
+| The cells by index with type, execution count and first line; one cell's full source and outputs.
+
+| `jupyter_insert_cell`, `jupyter_overwrite_cell`, `jupyter_delete_cell`, `jupyter_move_cell`
+| Edits. `insert_cell` takes `position`: `end`, or `above` or `below` a `cell_index`. Overwrite and delete return the previous source.
+|===
+
+== Running cells
+
+[cols="1,2",options="header"]
+|===
+| Operation | What it does
+
+| `jupyter_execute_cell`
+| Runs one cell and answers with its outputs when it finishes. `timeout_seconds` (default 600) bounds the wait; past it the kernel is interrupted and the answer says so. A cell that raises answers `success: false` with the exception and the outputs so far.
+
+| `jupyter_insert_and_execute_cell`
+| Inserts a code cell and runs it in one step.
+
+| `jupyter_execute_code`
+| Runs code in the notebook's kernel without changing the notebook: read a variable, check a package, try a line.
+
+| `jupyter_execute_cell_async`, `jupyter_check_execution_status`
+| A cell that runs for many minutes: the first answers an `execution_id` at once, the second reports `running`, `completed` or `error` with the outputs once it ends. The default limit is one hour per cell.
+
+| `jupyter_execute_all_cells`, `jupyter_check_all_cells_status`
+| The whole notebook in order, in the background, with an `execution_id` to poll: cells done of total, the one running, and each cell's result. `restart_kernel` starts clean; `stop_on_error` (default true) stops at the first cell that raises.
+
+| `jupyter_restart_kernel`, `jupyter_interrupt_kernel`
+| Restart loses every variable and keeps the cells and outputs; interrupt is Ctrl-C. Either ends a run in flight, which reports it.
+
+| `jupyter_kernel_status`, `jupyter_list_kernels`
+| Whether a kernel is idle or busy; the kernels running with their notebooks, and the kernel types installed.
+|===
+
+Over MCP a call that waits for a cell is held open by Claude Code for a limited time. For anything longer than a few minutes use the background pair and poll.
+
+== Unattended runs
+
+[cols="1,2",options="header"]
+|===
+| Operation | What it does
+
+| `run_notebook_job`
+| Runs a notebook on a server of its own: a named server started on `node` with `cpu_cores`, `memory_gb` and `gpus`, the notebook opened with `kernel_name` and run top to bottom, the server stopped when the run ends. Answers a `job_id` at once. The default server, and the tab you may have open in it, are untouched.
+
+| `notebook_job_status`
+| `starting`, `running` with cells done of total, then `completed`, `error` or `cancelled`, with each cell's result. The notebook file keeps the outputs.
+
+| `list_notebook_jobs`, `cancel_notebook_job`
+| The runs, newest first; stop one and its server.
+|===
+
+thinkube-control polls a run every fifteen seconds and records it in its database. If thinkube-control restarts during a run, it picks the polling up again; a run whose server was still starting is marked `lost` and its server stopped.
+
+== Large outputs
+
+Images and any text output longer than ten thousand characters are written under `.outputs/` beside the notebooks, dated, and the answer carries the path in their place. The notebook file keeps the full output.
+
+== Limits
+
+* One kernel per notebook. A cell started from a tab and a cell started by Claude wait for each other.
+* A notebook server is one node. A run that needs a GPU on another node is an unattended run there, or a stop and a start.
+* Up to three unattended runs at a time, each on its own server.
+* The operations answer only on a notebook server built with `tk-notebook-mcp`; an older image answers `501` and names the rebuild.
