@@ -470,6 +470,7 @@ async def _execute_component_installation(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,  # Merge stderr into stdout like templates
+            limit=1024 * 1024,
             env=env,
             cwd="/home/thinkube/thinkube-platform/core/thinkube"  # Use the thinkube repo root as working directory
         )

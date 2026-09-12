@@ -281,6 +281,7 @@ class BackgroundExecutor:
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                limit=1024 * 1024,
                 env=os.environ.copy(),
             )
 
@@ -405,6 +406,7 @@ class BackgroundExecutor:
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                limit=1024 * 1024,
                 env=env,
                 cwd=str(cwd),
             )

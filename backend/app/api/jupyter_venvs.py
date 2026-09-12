@@ -639,6 +639,7 @@ async def _run_ansible_build(venv) -> Dict[str, Any]:
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                limit=1024 * 1024,
                 env=env,
             )
 
