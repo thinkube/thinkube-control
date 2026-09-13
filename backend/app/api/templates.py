@@ -638,7 +638,7 @@ async def cancel_deployment(
     return {"message": "Deployment cancellation requested"}
 
 
-@router.get("/deployments/{deployment_id}/debug-logs")
+@router.get("/deployments/{deployment_id}/debug-logs", operation_id="get_deployment_debug_logs")
 async def get_deployment_debug_logs(
     deployment_id: UUID,
     db: Session = Depends(get_db),
@@ -710,7 +710,7 @@ async def get_deployment_debug_logs(
     }
 
 
-@router.get("/deployments/{deployment_id}/debug-logs/{filename}")
+@router.get("/deployments/{deployment_id}/debug-logs/{filename}", operation_id="download_debug_log")
 async def download_debug_log(
     deployment_id: UUID,
     filename: str,
