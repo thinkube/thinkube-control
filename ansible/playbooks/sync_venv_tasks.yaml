@@ -65,6 +65,18 @@
   loop: "{{ target_nodes }}"
   when: target_nodes | length > 0 and (remove_dir | default('')) != ''
 
+# rsync creates the last folder of its destination only; a custom venv's
+# parent, custom/<name>/, does not exist yet on a node the venv is new to.
+- name: Create the venv's parent folder on each target node
+  ansible.builtin.file:
+    path: "{{ sync_dir_effective | dirname }}"
+    state: directory
+    mode: "0755"
+  delegate_to: "{{ item }}"
+  become: true
+  loop: "{{ target_nodes }}"
+  when: target_nodes | length > 0
+
 - name: Sync venv to each target node
   delegate_to: "{{ item }}"
   ansible.posix.synchronize:
