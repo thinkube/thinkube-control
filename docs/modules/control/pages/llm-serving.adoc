@@ -69,14 +69,16 @@ A model must be in the catalogue (`models.json` in `thinkube-metadata`) before i
 Load from the *Load* dialog on the LLM Gateway page or with `load_llm_model`. The options:
 
 [horizontal]
-node:: The GPU node. The control plane chooses one when you do not; it never chooses a node whose GPU metrics it cannot read.
+node:: The GPU node. Without it, the node with the most AI memory left and a free slot takes the model.
 tier:: `flexible` loads through Ollama when the model has a GGUF entry: quick, quantised, smaller. `performance` loads through vLLM or TensorRT-LLM.
-backend:: Name one instead of a tier.
-max_context_length:: Caps the context window. The KV cache grows with it, so a serving-sized value such as 8k to 32k uses far less memory than the model's full window.
+backend:: A backend type instead of a tier, or a backend by id as `get_llm_load_options` lists them, such as `vllm-tkspark`; an id names its node too. Anything else is refused with the forms accepted.
+max_context_length:: Caps the context window. The KV cache grows with it, so a serving-sized value such as 8k to 32k uses far less memory than the model's full window. Without it the load takes the largest of 32k, 16k and 8k the model allows and the node's budget fits, decided with the same sizing as the load; the answer names the node and the context chosen.
 keep_alive:: Ollama only: how long the model stays loaded after its last request.
 num_speculative_tokens:: For models with a speculative-decoding configuration, the draft depth for this load.
 
 `get_llm_load_options` answers before anything is loaded: the compatible backends, the GPU nodes with their free slots and remaining budget, and the estimated memory.
+
+A vLLM, TensorRT-LLM or embeddings deployment serves one model per node. A load of a second model onto a node whose deployment already serves one is refused, naming the model: unload it, or choose another node. Ollama's one pod holds several models.
 
 === Sizing
 
