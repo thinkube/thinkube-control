@@ -92,16 +92,27 @@ class LLMLifecycleManager:
                 model_id=model_id, state=ModelState.loading, message="Model is already loading"
             )
 
-        # Default the serving context when unspecified (e.g. MCP/API callers that
-        # omit it) so behaviour matches the UI instead of falling back to the
-        # model's full window. Cap at the model's real context length.
-        if max_context_length is None:
-            default_ctx = self.DEFAULT_CONTEXT_LENGTH
-            if entry.context_length:
-                default_ctx = min(default_ctx, entry.context_length)
-            max_context_length = default_ctx
+        # `backend` may be a backend type (vllm, ollama, ...) or the id of a
+        # discovered backend (vllm-tkspark, ollama-tkamd2), which also names
+        # its node. Anything else is refused with the forms that are accepted.
+        resolved_backend, backend_node, refusal = self._resolve_backend_arg(backend)
+        if refusal:
+            return ModelLoadResponse(model_id=model_id, state=entry.state, message=refusal)
+        node = node or backend_node
 
-        resolved_backend = backend
+        # Without a node, the GPU node with the most AI memory left takes it.
+        if not node:
+            node = await self._pick_node()
+            if not node:
+                return ModelLoadResponse(
+                    model_id=model_id, state=entry.state,
+                    message="No GPU node is known; a target node is required to load a model",
+                )
+
+        # The serving context when the caller does not say: the largest of
+        # 32k, 16k, 8k that the model allows and the node has memory for.
+        if max_context_length is None:
+            max_context_length = await self._default_context(entry, node)
 
         if not resolved_backend:
             resolved_tier = tier or (
@@ -127,6 +138,54 @@ class LLMLifecycleManager:
             model_id=model_id, state=entry.state,
             message=f"No supported backend for model '{model_id}' with server_type={entry.server_type}"
         )
+
+    BACKEND_TYPES = ("vllm", "tensorrt-llm", "text-embeddings", "ollama")
+    CONTEXT_CHOICES = (32768, 16384, 8192)
+
+    def _resolve_backend_arg(self, backend: Optional[str]):
+        """``(backend_type, node, refusal)`` for the caller's ``backend`` argument."""
+        from app.services.llm_backend_discovery import llm_backend_discovery
+
+        if not backend:
+            return None, None, None
+        if backend in self.BACKEND_TYPES:
+            return backend, None, None
+        found = llm_backend_discovery.get_backend(backend)
+        if found is not None:
+            return found.type, found.node, None
+        known = sorted(b.id for b in llm_backend_discovery.list_backends())
+        return None, None, (
+            f"backend '{backend}' is neither a backend type ({', '.join(self.BACKEND_TYPES)}) "
+            f"nor a known backend id ({', '.join(known) or 'none discovered yet'})"
+        )
+
+    async def _pick_node(self) -> Optional[str]:
+        """The GPU node with the most AI memory left and a free slot, else the most memory."""
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+
+        status = await llm_gpu_tracker.get_status()
+        nodes = list(status.nodes)
+        if not nodes:
+            return None
+        free = [n for n in nodes if n.available_slots > 0]
+        best = max(free or nodes, key=lambda n: n.ai_remaining_gb)
+        return best.name
+
+    async def _default_context(self, entry, node: str) -> int:
+        """The largest of CONTEXT_CHOICES the model allows and the node has memory for."""
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+
+        cap = entry.context_length or self.CONTEXT_CHOICES[0]
+        choices = [c for c in self.CONTEXT_CHOICES if c <= cap] or [min(cap, self.CONTEXT_CHOICES[-1])]
+        weight = self._weight_gb(entry) or 0.0
+        for context in choices:
+            estimated = self._estimate_memory(entry, context)
+            sizing = await llm_gpu_tracker.plan_sizing(
+                node, estimated, self._gpus_needed(estimated, node), weight_gb=weight
+            )
+            if sizing.get("fits"):
+                return context
+        return choices[-1]
 
     def _gpus_needed(self, estimated_memory_gb: float, node_name: str) -> int:
         import math
@@ -415,7 +474,7 @@ class LLMLifecycleManager:
 
         return ModelLoadResponse(
             model_id=model_id, state=ModelState.loading,
-            message="Loading model — this may take several minutes",
+            message=f"Loading on {node} with a {max_context_length} token context; this takes some minutes",
             backend_id=backend_id,
         )
 
