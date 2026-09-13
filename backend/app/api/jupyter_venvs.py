@@ -585,6 +585,30 @@ async def _execute_venv_build(venv_id: str) -> None:
         db.close()
 
 
+async def read_process_output(stream, log_file) -> List[str]:
+    """Copy a process's output to the log as it comes and return its lines.
+
+    Read in chunks, not lines: a playbook step can answer with one line of
+    any length (a sync that lists every file of a venv is megabytes), and a
+    line reader with a limit raises on it and loses the build.
+    """
+    lines: List[str] = []
+    pending = ""
+    while True:
+        chunk = await stream.read(65536)
+        if not chunk:
+            break
+        text = chunk.decode("utf-8", errors="replace")
+        log_file.write(text)
+        log_file.flush()
+        pending += text
+        *complete, pending = pending.split("\n")
+        lines.extend(line.rstrip() for line in complete)
+    if pending:
+        lines.append(pending.rstrip())
+    return lines
+
+
 _ARCH_MARKER = re.compile(r"Architecture marker written: (amd64|arm64|[a-z0-9_]+)\b")
 
 
@@ -680,16 +704,7 @@ async def _run_ansible_build(venv) -> Dict[str, Any]:
                 env=env,
             )
 
-            # Read output
-            output_lines = []
-            while True:
-                line = await process.stdout.readline()
-                if not line:
-                    break
-                line_text = line.decode("utf-8", errors="replace").rstrip()
-                output_lines.append(line_text)
-                f.write(f"{line_text}\n")
-                f.flush()
+            output_lines = await read_process_output(process.stdout, f)
 
             return_code = await process.wait()
 

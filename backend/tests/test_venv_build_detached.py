@@ -175,7 +175,7 @@ def test_a_template_build_tells_the_playbook_so(monkeypatch):
         vars_path = [a for a in cmd if a.startswith("@")][0][1:]
         seen.update(yaml.safe_load(open(vars_path)))
         class Out:
-            async def readline(self):
+            async def read(self, n):
                 return b""
         proc = FakeProc(); proc.stdout = Out()
         async def wait():
@@ -208,3 +208,25 @@ def test_built_architectures_are_read_from_verbose_output():
     ]
     assert built_architectures(lines) == ["amd64", "arm64"]
     assert built_architectures([]) == []
+
+
+def test_a_line_of_any_length_is_read_without_losing_the_build():
+    import io
+    from app.api.jupyter_venvs import read_process_output
+
+    huge = "x" * (2 * 1024 * 1024)
+    payload = ("first line\n" + "Architecture marker written: amd64\n" + huge + "\nlast").encode()
+
+    class Stream:
+        def __init__(self, data):
+            self.data = data
+
+        async def read(self, n):
+            chunk, self.data = self.data[:n], self.data[n:]
+            return chunk
+
+    log = io.StringIO()
+    lines = asyncio.run(read_process_output(Stream(payload), log))
+    assert lines[0] == "first line" and lines[1] == "Architecture marker written: amd64"
+    assert len(lines[2]) == 2 * 1024 * 1024 and lines[3] == "last"
+    assert log.getvalue() == payload.decode()
