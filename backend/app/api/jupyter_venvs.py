@@ -178,6 +178,7 @@ class VenvResponse(BaseModel):
     parent_template_id: Optional[str]
     venv_path: Optional[str]
     architecture: Optional[str]
+    architectures_built: List[str] = []
     created_at: str
     started_at: Optional[str]
     completed_at: Optional[str]

@@ -230,3 +230,16 @@ def test_a_line_of_any_length_is_read_without_losing_the_build():
     assert lines[0] == "first line" and lines[1] == "Architecture marker written: amd64"
     assert len(lines[2]) == 2 * 1024 * 1024 and lines[3] == "last"
     assert log.getvalue() == payload.decode()
+
+
+def test_the_venv_answer_carries_the_architectures_built():
+    from app.api.jupyter_venvs import VenvResponse
+
+    answer = VenvResponse(
+        id="x", name="agent-dev", packages=["a"], status="success", output=None, is_template=True,
+        parent_template_id=None, venv_path="/var/lib/jupyterhub-venvs/<arch>/agent-dev", architecture="amd64",
+        architectures_built=["amd64", "arm64"], created_at="t", started_at=None, completed_at=None,
+        created_by="system", duration=None,
+    )
+    assert answer.architectures_built == ["amd64", "arm64"]
+    assert VenvResponse(**{**answer.model_dump(), "architectures_built": []}).architectures_built == []
