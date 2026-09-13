@@ -133,6 +133,7 @@ class BackgroundExecutor:
             db.commit()
 
             logger.info(f"Starting optional component deployment {deployment_id} for {component_name}")
+            verb = "uninstall" if deployment.template_url.endswith("/uninstall") else "install"
 
             # Execute the playbook directly
             try:
@@ -144,10 +145,10 @@ class BackgroundExecutor:
                 # Update deployment status based on result
                 if result["success"]:
                     deployment.status = "success"
-                    deployment.output = f"Component {component_name} installed successfully"
+                    deployment.output = f"Component {component_name} {verb}ed successfully"
                 else:
                     deployment.status = "failed"
-                    deployment.output = result.get("error", f"Component {component_name} installation failed")
+                    deployment.output = result.get("error", f"Component {component_name} {verb} failed")
 
             except Exception as e:
                 logger.error(f"Component deployment {deployment_id} failed: {e}")

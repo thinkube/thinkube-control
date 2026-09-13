@@ -43,11 +43,13 @@ class ComponentResponse(BaseModel):
     category: str
     icon: str
     installed: bool
+    # ``installing`` or ``uninstalling`` while a run for the component is in flight.
+    activity: Optional[str] = None
     component_version: Optional[str] = None
     requirements_met: bool
     missing_requirements: List[str]
     estimated_time: int
-    
+
 
 class ComponentListResponse(BaseModel):
     """Response model for component list"""
