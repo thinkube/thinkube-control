@@ -166,3 +166,15 @@ def test_a_template_build_tells_the_playbook_so(monkeypatch):
     custom = SimpleNamespace(name="mine", packages=["a"], is_template=False)
     asyncio.run(jv_mod._run_ansible_build(custom))
     assert seen["is_template"] is False
+
+
+def test_built_architectures_are_read_from_verbose_output():
+    from app.api.jupyter_venvs import built_architectures
+
+    lines = [
+        'ok: [tkamd1 -> localhost] => {"changed": false, "log": "=== Building venv: agent-dev (amd64) ===\\nArchitecture marker written: amd64\\n=== Build completed successfully ===", "started": "2026-09-13T07:06:21Z"}',
+        "                    echo \"Architecture marker written: $ARCH_NAME\"",
+        'ok: [tkamd1 -> localhost] => {"log": "Architecture marker written: arm64\\n", "started": "2026-09-13T07:10:21Z"}',
+    ]
+    assert built_architectures(lines) == ["amd64", "arm64"]
+    assert built_architectures([]) == []

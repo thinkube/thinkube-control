@@ -17,25 +17,33 @@
   ansible.builtin.set_fact:
     all_target_nodes: "{{ groups['baremetal_gpus'] | difference([source_node]) }}"
 
+# A node's architecture comes from its Kubernetes label, which every node
+# carries; inventory host variables do not say it and would leave the
+# target list empty.
 - name: Resolve effective filter architecture
   ansible.builtin.set_fact:
     effective_filter_arch: >-
       {%- if filter_architecture is defined and filter_architecture != '' -%}
         {{ filter_architecture }}
       {%- else -%}
-        {%- set src_arch = hostvars[source_node].get('node_architecture', hostvars[source_node].get('ansible_architecture', '')) -%}
-        {{ 'arm64' if src_arch in ['aarch64', 'arm64'] else ('amd64' if src_arch in ['x86_64', 'amd64'] else src_arch) }}
+        {%- set ns = namespace(arch='') -%}
+        {%- for node in all_nodes.resources -%}
+          {%- if node.metadata.name == source_node -%}
+            {%- set ns.arch = node.metadata.labels.get('kubernetes.io/arch', '') -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {{ ns.arch }}
       {%- endif -%}
 
 - name: Filter target nodes by architecture
   ansible.builtin.set_fact:
     target_nodes: >-
       {%- set ns = namespace(nodes=[]) -%}
-      {%- for node in all_target_nodes -%}
-        {%- set node_arch = hostvars[node].get('node_architecture', hostvars[node].get('ansible_architecture', '')) -%}
-        {%- set normalized = 'arm64' if node_arch in ['aarch64', 'arm64'] else ('amd64' if node_arch in ['x86_64', 'amd64'] else node_arch) -%}
-        {%- if normalized == effective_filter_arch -%}
-          {%- set ns.nodes = ns.nodes + [node] -%}
+      {%- for node in all_nodes.resources -%}
+        {%- set name = node.metadata.name -%}
+        {%- set arch = node.metadata.labels.get('kubernetes.io/arch', '') -%}
+        {%- if name in all_target_nodes and arch == effective_filter_arch -%}
+          {%- set ns.nodes = ns.nodes + [name] -%}
         {%- endif -%}
       {%- endfor -%}
       {{ ns.nodes }}

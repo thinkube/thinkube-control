@@ -6,6 +6,7 @@ After build, venvs are synced to other GPU nodes via rsync.
 """
 
 import os
+import re
 import json
 import logging
 import asyncio
@@ -584,6 +585,23 @@ async def _execute_venv_build(venv_id: str) -> None:
         db.close()
 
 
+_ARCH_MARKER = re.compile(r"Architecture marker written: (amd64|arm64|[a-z0-9_]+)\b")
+
+
+def built_architectures(output_lines: List[str]) -> List[str]:
+    """The architectures a build wrote its marker for, from the playbook's output.
+
+    Ansible's verbose output can carry a Job's whole log inside one line, so
+    the marker is matched wherever it appears, not at a line's end.
+    """
+    found: List[str] = []
+    for line in output_lines:
+        for arch in _ARCH_MARKER.findall(line):
+            if arch not in found:
+                found.append(arch)
+    return sorted(found)
+
+
 async def _run_ansible_build(venv) -> Dict[str, Any]:
     """Run Ansible playbook to build venv via K8s Job.
 
@@ -680,12 +698,7 @@ async def _run_ansible_build(venv) -> Dict[str, Any]:
             f.write(f"Finished: {datetime.now()}\n")
 
         if return_code == 0:
-            architectures = []
-            for line in output_lines:
-                if "Architecture marker written:" in line:
-                    arch = line.split(":")[-1].strip()
-                    if arch and arch not in architectures:
-                        architectures.append(arch)
+            architectures = built_architectures(output_lines)
 
             return {
                 "success": True,
