@@ -17,23 +17,18 @@
   ansible.builtin.set_fact:
     all_target_nodes: "{{ groups['baremetal_gpus'] | difference([source_node]) }}"
 
-# A node's architecture comes from its Kubernetes label, which every node
-# carries; inventory host variables do not say it and would leave the
-# target list empty.
-- name: Resolve effective filter architecture
+# The architecture is the one the build just made the venv for. A node's
+# architecture comes from its Kubernetes label, which every node carries.
+- name: Require the architecture to sync for
+  ansible.builtin.assert:
+    that:
+      - filter_architecture is defined
+      - filter_architecture != ''
+    fail_msg: "sync_venv_tasks needs filter_architecture, the architecture the venv was built for"
+
+- name: Use the given architecture
   ansible.builtin.set_fact:
-    effective_filter_arch: >-
-      {%- if filter_architecture is defined and filter_architecture != '' -%}
-        {{ filter_architecture }}
-      {%- else -%}
-        {%- set ns = namespace(arch='') -%}
-        {%- for node in all_nodes.resources -%}
-          {%- if node.metadata.name == source_node -%}
-            {%- set ns.arch = node.metadata.labels.get('kubernetes.io/arch', '') -%}
-          {%- endif -%}
-        {%- endfor -%}
-        {{ ns.arch }}
-      {%- endif -%}
+    effective_filter_arch: "{{ filter_architecture }}"
 
 - name: Filter target nodes by architecture
   ansible.builtin.set_fact:
