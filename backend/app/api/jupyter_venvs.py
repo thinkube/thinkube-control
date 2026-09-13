@@ -16,7 +16,7 @@ from pathlib import Path
 import tempfile
 import yaml
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Body, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from app.core.api_tokens import get_current_user_dual_auth
 from app.db.session import get_db, SessionLocal
 from app.models.jupyter_venvs import JupyterVenv
+from app.services import detached
 from app.services.ansible_environment import ansible_env
 
 logger = logging.getLogger(__name__)
@@ -351,19 +352,15 @@ def get_jupyter_venv(
 async def build_jupyter_venv(
     venv_id: UUID,
     request: BuildVenvRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user_dual_auth)
 ):
-    """Start building a Jupyter venv using Kubernetes Job on GPU node.
+    """Start building a Jupyter venv and return at once with the id to poll.
 
-    The build runs as a K8s Job on a GPU node with hostPath volume mount.
-    This provides fast I/O (local NVMe/SSD) instead of network storage.
-
-    After successful build, the venv is synced to other GPU nodes via rsync.
-
-    WARNING: Build may take 5-15 minutes. Poll the status endpoint for updates.
-    There is no streaming output during pip install.
+    The build runs as a Kubernetes Job on a GPU node with a hostPath volume,
+    then the venv is synced to the other GPU nodes. It takes minutes; this
+    call does not wait for it. Poll get_jupyter_venv until status is
+    success or failed; get_venv_build_logs has the build's log.
     """
     venv = db.query(JupyterVenv).filter_by(id=venv_id).first()
 
@@ -385,15 +382,16 @@ async def build_jupyter_venv(
     venv.completed_at = None
     db.commit()
 
-    # Start build in background using Ansible playbook
-    background_tasks.add_task(_execute_venv_build, str(venv.id))
+    # Detached from this request: an in-process caller (the MCP bridge) would
+    # otherwise wait for the whole build before it got the answer.
+    detached.start(f"venv-build:{venv.id}", _execute_venv_build(str(venv.id)))
 
     return BuildResponse(
         build_id=str(venv.id),
         status="building",
-        message="Build started on GPU node",
+        message="Build started on a GPU node; poll get_jupyter_venv for its status",
         poll_url=f"/jupyter-venvs/{venv.id}",
-        warning="Build may take 5-15 minutes. The process may appear idle during package installation. Poll the status endpoint for updates."
+        warning="The build takes minutes and shows no output while packages install. Poll the status until it is success or failed."
     )
 
 
