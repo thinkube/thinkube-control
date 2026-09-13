@@ -65,6 +65,24 @@ def test_build_returns_while_the_build_is_still_running(monkeypatch):
     assert db.commits == 1
 
 
+def test_build_without_a_body_is_the_plain_build(monkeypatch):
+    venv = SimpleNamespace(id=uuid.uuid4(), name="c17", status="pending", output=None, started_at=None, completed_at=None)
+    started = []
+
+    async def fake_build(venv_id):
+        started.append(venv_id)
+
+    monkeypatch.setattr(jv, "_execute_venv_build", fake_build)
+
+    async def scenario():
+        response = await jv.build_jupyter_venv(venv.id, None, db=FakeDB(venv), current_user={})
+        assert response.status == "building"
+        await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+    assert started == [str(venv.id)]
+
+
 def test_a_failing_detached_task_is_logged_not_lost(caplog):
     async def boom():
         raise RuntimeError("the build blew up")

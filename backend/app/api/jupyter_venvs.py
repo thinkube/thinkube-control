@@ -351,7 +351,7 @@ def get_jupyter_venv(
 @router.post("/{venv_id}/build", response_model=BuildResponse, operation_id="build_jupyter_venv")
 async def build_jupyter_venv(
     venv_id: UUID,
-    request: BuildVenvRequest,
+    request: Optional[BuildVenvRequest] = None,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user_dual_auth)
 ):
@@ -371,8 +371,11 @@ async def build_jupyter_venv(
     if venv.status == "building":
         raise HTTPException(status_code=400, detail="Venv is already being built")
 
+    # No body means no force: a caller that only names the venv gets the plain build.
+    force = bool(request and request.force)
+
     # Check if already built and not forcing
-    if venv.status == "success" and not request.force:
+    if venv.status == "success" and not force:
         raise HTTPException(status_code=400, detail="Venv already built. Use force=true to rebuild.")
 
     # Reset status for new build
