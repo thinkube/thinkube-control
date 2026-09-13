@@ -129,14 +129,25 @@ func (h *OpenAIHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) 
 	)
 }
 
+// ListModels answers the OpenAI model list from the backend's registry: the
+// models that are served or could be. The backend route carries a trailing
+// slash; without it the backend redirects, and the forwarder does not follow
+// redirects, so the exact path matters. A backend answer that is not 200 or
+// not the expected shape is reported, never shown as an empty list.
 func (h *OpenAIHandler) ListModels(w http.ResponseWriter, r *http.Request) {
-	modelsURL := fmt.Sprintf("%s/api/v1/llm/models", h.resolver.BackendURL())
+	modelsURL := fmt.Sprintf("%s/api/v1/llm/models/", h.resolver.BackendURL())
 	resp, err := h.forwarder.ForwardGet(r.Context(), modelsURL)
 	if err != nil {
 		WriteError(w, "openai", http.StatusBadGateway, "backend_error", "Failed to fetch models")
 		return
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		WriteError(w, "openai", http.StatusBadGateway, "backend_error",
+			fmt.Sprintf("The model registry answered HTTP %d", resp.StatusCode))
+		return
+	}
 
 	var backendResp struct {
 		Models []struct {
@@ -148,7 +159,10 @@ func (h *OpenAIHandler) ListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, _ := io.ReadAll(resp.Body)
-	json.Unmarshal(body, &backendResp)
+	if err := json.Unmarshal(body, &backendResp); err != nil {
+		WriteError(w, "openai", http.StatusBadGateway, "backend_error", "The model registry answered something that is not a model list")
+		return
+	}
 
 	type openAIModel struct {
 		ID      string `json:"id"`
@@ -157,7 +171,7 @@ func (h *OpenAIHandler) ListModels(w http.ResponseWriter, r *http.Request) {
 		OwnedBy string `json:"owned_by"`
 	}
 
-	var models []openAIModel
+	models := []openAIModel{}
 	for _, m := range backendResp.Models {
 		if m.State == "available" || m.State == "deployable" {
 			models = append(models, openAIModel{
