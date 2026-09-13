@@ -340,6 +340,16 @@ class LLMModelRegistry:
     def stop(self):
         self._is_running = False
 
+    def _others_on_backend(self, backend_id: Optional[str], model_id: str) -> bool:
+        """Whether a model other than ``model_id`` is available on ``backend_id``."""
+        if not backend_id:
+            return False
+        return any(
+            other.backend_id == backend_id and other.state == ModelState.available
+            for mid, other in self._models.items()
+            if mid != model_id
+        )
+
     def _reconcile_states(self):
         from app.services.llm_backend_discovery import llm_backend_discovery
         from app.services.llm_gpu_tracker import llm_gpu_tracker
@@ -400,8 +410,9 @@ class LLMModelRegistry:
                     entry._last_available_at = None
                     llm_gpu_tracker.release_allocation(model_id)
                     # Reclaim the (now model-less) deployment to free its slot.
-                    # Not Ollama: its one pod hosts many models.
-                    if backend_type and backend_type != "ollama" and node:
+                    # Not Ollama: its one pod hosts many models. And never while
+                    # another model is served by the same deployment.
+                    if backend_type and backend_type != "ollama" and node and not self._others_on_backend(entry.backend_id, model_id):
                         llm_pod_manager.scale_to_zero(backend_type, node)
                     logger.info(f"Model {model_id} downgraded to deployable after 120s grace period")
             elif (
@@ -448,8 +459,9 @@ class LLMModelRegistry:
                         entry._loading_since = None
                         llm_gpu_tracker.release_allocation(model_id)
                         # Reclaim the failed deployment to 0 so it stops holding a
-                        # slot/budget (the dead-pod bug). Not Ollama (shared pod).
-                        if backend_type != "ollama" and node:
+                        # slot/budget (the dead-pod bug). Not Ollama (shared pod),
+                        # and never while another model is served by it.
+                        if backend_type != "ollama" and node and not self._others_on_backend(f"{backend_type}-{node}", model_id):
                             llm_pod_manager.scale_to_zero(backend_type, node)
                         logger.warning(f"Load failed for {model_id}: {fail_reason}")
 

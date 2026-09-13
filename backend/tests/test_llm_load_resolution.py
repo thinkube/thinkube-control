@@ -110,3 +110,34 @@ def test_the_model_window_caps_the_default(world):
 def test_an_explicit_context_is_kept(world):
     asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3-8B", node="tkspark", max_context_length=65536))
     assert world.captured["context"] == 65536
+
+
+def test_a_second_model_on_an_occupied_backend_is_refused(world, monkeypatch):
+    """vLLM serves one model per pod: a load onto a backend that serves another model is refused, not ignored."""
+    import app.services.llm_model_registry as reg
+    other = entry(id="Qwen/Qwen3-8B", state=ModelState.available, backend_id="vllm-tkspark")
+    mine = entry(id="Qwen/Qwen3.5-4B")
+    models = {"Qwen/Qwen3-8B": other, "Qwen/Qwen3.5-4B": mine}
+    monkeypatch.setattr(reg, "llm_model_registry", SimpleNamespace(
+        get_model=lambda mid: models.get(mid), list_models=lambda: list(models.values()),
+        update_model_state=lambda *a, **k: None))
+    # Use the real _load_performance up to the refusal; it returns before any sizing.
+    monkeypatch.setattr(llm_lifecycle, "_load_performance", type(llm_lifecycle)._load_performance.__get__(llm_lifecycle))
+    result = asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3.5-4B", backend="vllm-tkspark"))
+    assert result.state == ModelState.deployable
+    assert "vllm-tkspark already serves Qwen/Qwen3-8B" in result.message
+    assert world.captured == {}
+
+
+def test_reconcile_never_scales_a_shared_deployment_to_zero():
+    from app.services.llm_model_registry import LLMModelRegistry
+
+    registry = LLMModelRegistry()
+    registry._models = {
+        "a": entry(id="a", state=ModelState.available, backend_id="vllm-tkspark"),
+        "b": entry(id="b", state=ModelState.loading, backend_id="vllm-tkspark"),
+        "c": entry(id="c", state=ModelState.loading, backend_id="vllm-tkamd2"),
+    }
+    assert registry._others_on_backend("vllm-tkspark", "b") is True
+    assert registry._others_on_backend("vllm-tkamd2", "c") is False
+    assert registry._others_on_backend(None, "c") is False

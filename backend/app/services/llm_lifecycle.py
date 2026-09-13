@@ -142,6 +142,17 @@ class LLMLifecycleManager:
     BACKEND_TYPES = ("vllm", "tensorrt-llm", "text-embeddings", "ollama")
     CONTEXT_CHOICES = (32768, 16384, 8192)
 
+    def _model_on_backend(self, backend_id: str, except_model: Optional[str] = None):
+        """The model loaded or loading on a one-model backend, if any other than ``except_model``."""
+        from app.services.llm_model_registry import llm_model_registry
+
+        for other in llm_model_registry.list_models():
+            if other.id == except_model:
+                continue
+            if other.backend_id == backend_id and other.state in (ModelState.available, ModelState.loading, ModelState.unloading):
+                return other
+        return None
+
     def _resolve_backend_arg(self, backend: Optional[str]):
         """``(backend_type, node, refusal)`` for the caller's ``backend`` argument."""
         from app.services.llm_backend_discovery import llm_backend_discovery
@@ -374,6 +385,17 @@ class LLMLifecycleManager:
                 model_id=model_id, state=ModelState.deployable,
                 message=f"No performance backend type found for {entry.server_type}"
             )
+
+        # A vLLM, TensorRT-LLM or embeddings pod serves one model. A second
+        # model asked for on the same type and node would neither load nor be
+        # refused: the existing pod is returned as it is. Refuse it here.
+        occupant = self._model_on_backend(f"{perf_type}-{node}", except_model=model_id)
+        if occupant is not None:
+            message = (
+                f"{perf_type}-{node} already serves {occupant.id} ({occupant.state.value}); "
+                f"unload it, or choose another node"
+            )
+            return ModelLoadResponse(model_id=model_id, state=entry.state, message=message)
 
         # Measure the real checkpoint size (cached on the entry) before sizing,
         # so multimodal/mixed-precision weights aren't under-counted and the
