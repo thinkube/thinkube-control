@@ -129,6 +129,36 @@ def test_builds_orphaned_by_a_restart_are_marked_failed():
     assert db.commits == 1
 
 
+def test_a_build_this_process_still_runs_is_left_alone():
+    from app.db.init_venvs import mark_orphaned_builds
+
+    mine = SimpleNamespace(id="11111111-1111-1111-1111-111111111111", name="mine", status="building", output=None, completed_at=None)
+    lost = SimpleNamespace(id="22222222-2222-2222-2222-222222222222", name="lost", status="building", output=None, completed_at=None)
+
+    class Query:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def filter(self, *args):
+            return self
+
+        def all(self):
+            return self.rows
+
+    class DB:
+        commits = 0
+
+        def query(self, model):
+            return Query([mine, lost])
+
+        def commit(self):
+            self.commits += 1
+
+    assert mark_orphaned_builds(DB(), still_running=lambda vid: vid == mine.id) == 1
+    assert mine.status == "building"
+    assert lost.status == "failed"
+
+
 def test_a_template_build_tells_the_playbook_so(monkeypatch):
     """The playbook rebuilds a template in place; it must know which kind it builds."""
     import app.api.jupyter_venvs as jv_mod

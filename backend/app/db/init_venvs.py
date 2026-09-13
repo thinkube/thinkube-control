@@ -76,13 +76,15 @@ if __name__ == "__main__":
     init_venvs()
 
 
-def mark_orphaned_builds(db: Session = None):
-    """A venv still marked building when thinkube-control starts has no build behind it.
+def mark_orphaned_builds(db: Session = None, still_running=None):
+    """A venv marked building with no build task behind it is marked failed.
 
     The build runs as a task inside the backend process and dies with it,
-    while the record keeps saying building. Such records are marked failed
-    with the reason, so the person sees a build to start again rather than
-    one that never ends.
+    while the record keeps saying building. At startup no task exists, so
+    every such record is orphaned. Later, ``still_running(venv_id)`` says
+    whether this process holds the build; a record whose build began on a
+    pod that was replaced mid-way is caught that way, since the pod that
+    took over never started it.
     """
     close_db = False
     if db is None:
@@ -91,6 +93,8 @@ def mark_orphaned_builds(db: Session = None):
         close_db = True
     try:
         stuck = db.query(JupyterVenv).filter(JupyterVenv.status == "building").all()
+        if still_running is not None:
+            stuck = [v for v in stuck if not still_running(str(v.id))]
         for venv in stuck:
             venv.status = "failed"
             venv.output = "thinkube-control restarted while this venv was building; start the build again"

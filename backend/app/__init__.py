@@ -212,6 +212,22 @@ async def app_lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Could not resume notebook jobs: {e}")
 
+    # A venv build lives as a task in one backend process. When a rollout
+    # replaces the pod under a build, the new pod never had the task, so the
+    # record would say building for ever; this loop marks such records failed.
+    async def reconcile_venv_builds():
+        from app.db.init_venvs import mark_orphaned_builds
+        from app.services import detached
+
+        while True:
+            await asyncio.sleep(60)
+            try:
+                mark_orphaned_builds(still_running=lambda venv_id: detached.running(f"venv-build:{venv_id}"))
+            except Exception as e:
+                logger.debug(f"venv build reconciliation: {e}")
+
+    venv_reconcile_task = asyncio.create_task(reconcile_venv_builds())
+
     yield
 
     # Shutdown: Clean up resources
@@ -220,6 +236,7 @@ async def app_lifespan(app: FastAPI):
     llm_backend_discovery.stop()
 
     health_check_task.cancel()
+    venv_reconcile_task.cancel()
     discovery_task.cancel()
     llm_registry_task.cancel()
     llm_discovery_task.cancel()
