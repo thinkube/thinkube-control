@@ -109,9 +109,10 @@ async def app_lifespan(app: FastAPI):
 
     # Initialize Jupyter venv templates
     try:
-        from app.db.init_venvs import init_venvs
+        from app.db.init_venvs import init_venvs, mark_orphaned_builds
 
         init_venvs()
+        mark_orphaned_builds()
     except Exception as e:
         logger.warning(f"Failed to initialize Jupyter venv templates: {e}")
 

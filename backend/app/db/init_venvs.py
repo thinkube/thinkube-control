@@ -1,6 +1,7 @@
 """Initialize Jupyter venv templates in the database"""
 
 import logging
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from uuid import uuid4
 
@@ -73,3 +74,32 @@ if __name__ == "__main__":
 
     # Run initialization
     init_venvs()
+
+
+def mark_orphaned_builds(db: Session = None):
+    """A venv still marked building when thinkube-control starts has no build behind it.
+
+    The build runs as a task inside the backend process and dies with it,
+    while the record keeps saying building. Such records are marked failed
+    with the reason, so the person sees a build to start again rather than
+    one that never ends.
+    """
+    close_db = False
+    if db is None:
+        from app.db.session import SessionLocal
+        db = SessionLocal()()
+        close_db = True
+    try:
+        stuck = db.query(JupyterVenv).filter(JupyterVenv.status == "building").all()
+        for venv in stuck:
+            venv.status = "failed"
+            venv.output = "thinkube-control restarted while this venv was building; start the build again"
+            venv.completed_at = datetime.now(timezone.utc)
+            logger.warning(f"venv {venv.name} was building when thinkube-control stopped; marked failed")
+        if stuck:
+            db.commit()
+        return len(stuck)
+    finally:
+        if close_db:
+            db.close()
+

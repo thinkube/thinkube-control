@@ -95,3 +95,35 @@ def test_a_failing_detached_task_is_logged_not_lost(caplog):
 
     asyncio.run(scenario())
     assert any("the build blew up" in r.getMessage() for r in caplog.records)
+
+
+def test_builds_orphaned_by_a_restart_are_marked_failed():
+    from app.db.init_venvs import mark_orphaned_builds
+
+    building = SimpleNamespace(name="a", status="building", output=None, completed_at=None)
+    done = SimpleNamespace(name="b", status="success", output="ok", completed_at=None)
+
+    class Query:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def filter(self, *args):
+            return Query([r for r in self.rows if r.status == "building"])
+
+        def all(self):
+            return self.rows
+
+    class DB:
+        commits = 0
+
+        def query(self, model):
+            return Query([building, done])
+
+        def commit(self):
+            self.commits += 1
+
+    db = DB()
+    assert mark_orphaned_builds(db) == 1
+    assert building.status == "failed" and "restarted" in building.output
+    assert done.status == "success"
+    assert db.commits == 1
