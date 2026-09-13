@@ -1,0 +1,143 @@
+---
+# ansible/playbooks/delete_venv.yaml
+#
+# Removes a custom venv from every node and the Jobs its builds left.
+#
+# A custom venv lives under <base>/custom/<venv_name>/<arch>/ on each node's
+# own disk, and its kernel spec under <base>/kernels/<venv_name>/. The
+# backend does not mount those disks, so the removal runs as one short Job
+# per node, on that node. Every node of the cluster is visited: a node that
+# never held the venv has nothing to remove.
+#
+# Required variables:
+#   - venv_name: name of the venv to remove
+#   - kubeconfig: path to the kubeconfig
+#   - harbor_registry: registry that holds library/busybox
+
+- name: Remove a custom venv from every node
+  hosts: k8s_control_plane
+  gather_facts: false
+  vars:
+    venvs_host_path: /var/lib/jupyterhub-venvs
+    custom_venvs_subpath: custom
+    job_namespace: jupyterhub
+    job_prefix: "venv-delete-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}"
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - venv_name is defined
+          - venv_name != ''
+        fail_msg: "venv_name must be provided"
+
+    - name: Get all cluster nodes
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: v1
+        kind: Node
+      delegate_to: localhost
+      register: all_nodes
+
+    - name: List the nodes to clean
+      ansible.builtin.set_fact:
+        target_nodes: "{{ all_nodes.resources | map(attribute='metadata.name') | list }}"
+
+    - name: Remove build Jobs left by this venv
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        api_version: batch/v1
+        kind: Job
+        namespace: "{{ job_namespace }}"
+        label_selectors:
+          - "app=jupyter-venv-builder"
+          - "venv-name={{ venv_name }}"
+        delete_options:
+          propagationPolicy: Background
+      delegate_to: localhost
+
+    - name: Create a removal Job on each node
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: "{{ job_prefix }}-{{ item }}"
+            namespace: "{{ job_namespace }}"
+            labels:
+              app: jupyter-venv-remover
+              venv-name: "{{ venv_name }}"
+          spec:
+            ttlSecondsAfterFinished: 600
+            backoffLimit: 0
+            template:
+              spec:
+                nodeSelector:
+                  kubernetes.io/hostname: "{{ item }}"
+                restartPolicy: Never
+                containers:
+                  - name: remover
+                    image: "{{ harbor_registry }}/library/busybox:latest"
+                    command:
+                      - sh
+                      - -c
+                      - |
+                        set -e
+                        rm -rf "/venvs/{{ custom_venvs_subpath }}/{{ venv_name }}"
+                        rm -rf "/venvs/kernels/{{ venv_name }}"
+                        echo "removed {{ venv_name }} from $(hostname)"
+                    securityContext:
+                      runAsUser: 0
+                    volumeMounts:
+                      - name: venvs
+                        mountPath: /venvs
+                volumes:
+                  - name: venvs
+                    hostPath:
+                      path: "{{ venvs_host_path }}"
+                      type: DirectoryOrCreate
+      delegate_to: localhost
+      loop: "{{ target_nodes }}"
+
+    - name: Wait for the removal Jobs to complete
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: batch/v1
+        kind: Job
+        namespace: "{{ job_namespace }}"
+        name: "{{ job_prefix }}-{{ item }}"
+      delegate_to: localhost
+      register: removal_job
+      until: >-
+        (removal_job.resources[0].status.succeeded | default(0)) > 0
+        or (removal_job.resources[0].status.failed | default(0)) > 0
+      retries: 30
+      delay: 5
+      loop: "{{ target_nodes }}"
+
+    - name: Report a node whose removal failed
+      ansible.builtin.fail:
+        msg: "removal of {{ venv_name }} failed on {{ item.item }}"
+      when: (item.resources[0].status.failed | default(0)) > 0
+      loop: "{{ removal_job.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Remove the removal Jobs and their pods
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        api_version: batch/v1
+        kind: Job
+        namespace: "{{ job_namespace }}"
+        name: "{{ job_prefix }}-{{ item }}"
+        delete_options:
+          propagationPolicy: Background
+      delegate_to: localhost
+      loop: "{{ target_nodes }}"
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "Venv '{{ venv_name }}' removed from: {{ target_nodes | join(', ') }}"

@@ -222,7 +222,11 @@ async def app_lifespan(app: FastAPI):
         while True:
             await asyncio.sleep(60)
             try:
-                mark_orphaned_builds(still_running=lambda venv_id: detached.running(f"venv-build:{venv_id}"))
+                mark_orphaned_builds(
+                    still_running=lambda venv_id, status: detached.running(
+                        f"venv-delete:{venv_id}" if status == "deleting" else f"venv-build:{venv_id}"
+                    )
+                )
             except Exception as e:
                 logger.debug(f"venv build reconciliation: {e}")
 

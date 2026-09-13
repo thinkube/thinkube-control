@@ -469,38 +469,39 @@ async def delete_jupyter_venv(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user_dual_auth)
 ):
-    """Delete a Jupyter virtualenv"""
+    """Remove a custom venv from every node and forget it; answers at once.
+
+    The venv lives on each node's own disk, so the removal runs as one short
+    Job per node. The record says deleting until it is gone; a removal that
+    fails leaves the record as delete_failed with the reason, and can be
+    asked for again. Templates cannot be deleted; a venv that is building
+    must finish first.
+    """
     venv = db.query(JupyterVenv).filter_by(id=venv_id).first()
 
     if not venv:
         raise HTTPException(status_code=404, detail="Venv not found")
 
-    # Don't allow deleting templates
     if venv.is_template:
         raise HTTPException(status_code=400, detail="Cannot delete template venvs")
 
-    # Check if currently building
     if venv.status == "building":
         raise HTTPException(status_code=400, detail="Cannot delete venv while building")
 
-    # Delete venv directory from JuiceFS if exists
-    if venv.venv_path:
-        venv_path = Path(venv.venv_path)
-        if venv_path.exists():
-            import shutil
-            shutil.rmtree(venv_path, ignore_errors=True)
+    if venv.status == "deleting":
+        raise HTTPException(status_code=400, detail="Venv is already being removed")
 
-    # Delete log directory
-    log_dir = Path(f"/tmp/thinkube-venvs/{venv.name}")
-    if log_dir.exists():
-        import shutil
-        shutil.rmtree(log_dir, ignore_errors=True)
-
-    # Delete database record
-    db.delete(venv)
+    venv.status = "deleting"
+    venv.output = None
     db.commit()
 
-    return {"message": f"Venv '{venv.name}' deleted successfully"}
+    detached.start(f"venv-delete:{venv.id}", _execute_venv_delete(str(venv.id)))
+
+    return {
+        "message": f"Venv '{venv.name}' is being removed from every node; poll get_jupyter_venv until it is gone",
+        "status": "deleting",
+        "poll_url": f"/jupyter-venvs/{venv.id}",
+    }
 
 
 @router.put("/{venv_id}/packages", operation_id="update_venv_packages")
@@ -627,40 +628,18 @@ def built_architectures(output_lines: List[str]) -> List[str]:
     return sorted(found)
 
 
-async def _run_ansible_build(venv) -> Dict[str, Any]:
-    """Run Ansible playbook to build venv via K8s Job.
-
-    Returns:
-        Dict with success, output/error, and architecture
-    """
-    # Playbook path
-    playbook_path = Path("/home/thinkube/thinkube-control/ansible/playbooks/build_venv.yaml")
-
+async def _run_venv_playbook(venv, playbook: str, extra_vars: Dict[str, Any]) -> tuple[int, List[str], Path]:
+    """Run one of the venv playbooks for ``venv`` and return (return code, output lines, log file)."""
+    playbook_path = Path(f"/home/thinkube/thinkube-control/ansible/playbooks/{playbook}")
     if not playbook_path.exists():
-        return {"success": False, "error": f"Playbook not found: {playbook_path}"}
+        raise FileNotFoundError(f"Playbook not found: {playbook_path}")
 
-    # Prepare variables. A template is the built-in venv: its build replaces
-    # the release's copy in place on every node instead of adding a custom one.
-    extra_vars = {
-        "venv_name": venv.name,
-        "packages": json.dumps(venv.packages),  # JSON string for Ansible
-        "is_template": bool(venv.is_template),
-    }
-
-    # Add auth variables
-    extra_vars = ansible_env.prepare_auth_vars(extra_vars)
-
-    # Add kubeconfig path
-    kubeconfig = os.environ.get("KUBECONFIG", "/home/thinkube/.kube/config")
-    extra_vars["kubeconfig"] = kubeconfig
-
-    # Add harbor registry
+    extra_vars = ansible_env.prepare_auth_vars(dict(extra_vars))
+    extra_vars["kubeconfig"] = os.environ.get("KUBECONFIG", "/home/thinkube/.kube/config")
     domain_name = os.environ.get("DOMAIN_NAME", "cmxela.com")
     extra_vars["harbor_registry"] = f"registry.{domain_name}"
 
-    # Create temporary vars file
     temp_vars_fd, temp_vars_path = tempfile.mkstemp(suffix=".yml", prefix="venv-vars-")
-
     try:
         with os.fdopen(temp_vars_fd, "w") as f:
             yaml.dump(extra_vars, f)
@@ -668,35 +647,27 @@ async def _run_ansible_build(venv) -> Dict[str, Any]:
         os.close(temp_vars_fd)
         raise
 
-    # Build ansible command
-    inventory_path = ansible_env.get_inventory_path()
     cmd = [
         "ansible-playbook",
-        "-i", str(inventory_path),
+        "-i", str(ansible_env.get_inventory_path()),
         str(playbook_path),
         "-e", f"@{temp_vars_path}",
         "-v",
     ]
-
-    # Get environment
     env = ansible_env.get_environment(context="template")
 
-    # Create log file
     log_dir = Path("/tmp/thinkube-venvs") / venv.name
     log_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    log_file = log_dir / f"build-{timestamp}.log"
+    stem = playbook.split("_")[0]
+    log_file = log_dir / f"{stem}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 
     try:
         logger.info(f"Running: {' '.join(cmd)}")
-
         with open(log_file, "w") as f:
-            f.write(f"=== VENV BUILD LOG ===\n")
+            f.write(f"=== VENV {stem.upper()} LOG ===\n")
             f.write(f"Venv: {venv.name}\n")
             f.write(f"Started: {datetime.now()}\n")
-            f.write(f"Packages: {len(venv.packages)}\n")
             f.write(f"\n=== ANSIBLE OUTPUT ===\n")
-
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -704,36 +675,80 @@ async def _run_ansible_build(venv) -> Dict[str, Any]:
                 limit=1024 * 1024,
                 env=env,
             )
-
             output_lines = await read_process_output(process.stdout, f)
-
             return_code = await process.wait()
-
             f.write(f"\n=== COMPLETED ===\n")
             f.write(f"Return code: {return_code}\n")
             f.write(f"Finished: {datetime.now()}\n")
-
-        if return_code == 0:
-            architectures = built_architectures(output_lines)
-
-            return {
-                "success": True,
-                "output": f"Build completed. Log: {log_file}",
-                "architectures": sorted(architectures),
-                "architecture": architectures[0] if architectures else "unknown",
-            }
-        else:
-            return {
-                "success": False,
-                "error": f"Build failed with return code {return_code}. Log: {log_file}",
-            }
-
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
+        return return_code, output_lines, log_file
     finally:
-        # Clean up temp file
         try:
             os.unlink(temp_vars_path)
         except:
             pass
+
+
+async def _run_ansible_build(venv) -> Dict[str, Any]:
+    """Build a venv on every architecture through build_venv.yaml.
+
+    Returns:
+        Dict with success, output/error, and architectures
+    """
+    # A template is the built-in venv: its build replaces the release's copy
+    # in place on every node instead of adding a custom one.
+    extra_vars = {
+        "venv_name": venv.name,
+        "packages": json.dumps(venv.packages),  # JSON string for Ansible
+        "is_template": bool(venv.is_template),
+    }
+    try:
+        return_code, output_lines, log_file = await _run_venv_playbook(venv, "build_venv.yaml", extra_vars)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+    if return_code == 0:
+        architectures = built_architectures(output_lines)
+        return {
+            "success": True,
+            "output": f"Build completed. Log: {log_file}",
+            "architectures": architectures,
+            "architecture": architectures[0] if architectures else "unknown",
+        }
+    return {
+        "success": False,
+        "error": f"Build failed with return code {return_code}. Log: {log_file}",
+    }
+
+
+async def _execute_venv_delete(venv_id: str) -> None:
+    """Remove a venv from every node through delete_venv.yaml, then forget the record."""
+    db = SessionLocal()()
+    try:
+        venv = db.query(JupyterVenv).filter_by(id=venv_id).first()
+        if not venv:
+            logger.error(f"Venv {venv_id} not found")
+            return
+        try:
+            return_code, _, log_file = await _run_venv_playbook(venv, "delete_venv.yaml", {"venv_name": venv.name})
+        except Exception as e:
+            return_code, log_file = 1, None
+            reason = str(e)
+        else:
+            reason = f"Removal failed with return code {return_code}. Log: {log_file}"
+
+        if return_code == 0:
+            log_dir = Path(f"/tmp/thinkube-venvs/{venv.name}")
+            if log_dir.exists():
+                import shutil
+                shutil.rmtree(log_dir, ignore_errors=True)
+            db.delete(venv)
+            db.commit()
+            logger.info(f"Venv {venv.name} removed from every node and forgotten")
+        else:
+            venv.status = "delete_failed"
+            venv.output = reason
+            venv.completed_at = datetime.now(timezone.utc)
+            db.commit()
+            logger.error(f"Venv {venv.name} removal failed: {reason}")
+    finally:
+        db.close()

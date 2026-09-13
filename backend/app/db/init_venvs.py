@@ -81,8 +81,8 @@ def mark_orphaned_builds(db: Session = None, still_running=None):
 
     The build runs as a task inside the backend process and dies with it,
     while the record keeps saying building. At startup no task exists, so
-    every such record is orphaned. Later, ``still_running(venv_id)`` says
-    whether this process holds the build; a record whose build began on a
+    every such record is orphaned. Later, ``still_running(venv_id, status)``
+    says whether this process holds the build or the removal; a record whose build began on a
     pod that was replaced mid-way is caught that way, since the pod that
     took over never started it.
     """
@@ -92,14 +92,19 @@ def mark_orphaned_builds(db: Session = None, still_running=None):
         db = SessionLocal()()
         close_db = True
     try:
-        stuck = db.query(JupyterVenv).filter(JupyterVenv.status == "building").all()
+        stuck = db.query(JupyterVenv).filter(JupyterVenv.status.in_(["building", "deleting"])).all()
         if still_running is not None:
-            stuck = [v for v in stuck if not still_running(str(v.id))]
+            stuck = [v for v in stuck if not still_running(str(v.id), v.status)]
         for venv in stuck:
-            venv.status = "failed"
-            venv.output = "thinkube-control restarted while this venv was building; start the build again"
+            was = venv.status
+            venv.status = "failed" if was == "building" else "delete_failed"
+            venv.output = (
+                "thinkube-control restarted while this venv was building; start the build again"
+                if was == "building"
+                else "thinkube-control restarted while this venv was being removed; delete it again"
+            )
             venv.completed_at = datetime.now(timezone.utc)
-            logger.warning(f"venv {venv.name} was building when thinkube-control stopped; marked failed")
+            logger.warning(f"venv {venv.name} was {was} when thinkube-control stopped; marked {venv.status}")
         if stuck:
             db.commit()
         return len(stuck)

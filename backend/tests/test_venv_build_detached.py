@@ -154,7 +154,7 @@ def test_a_build_this_process_still_runs_is_left_alone():
         def commit(self):
             self.commits += 1
 
-    assert mark_orphaned_builds(DB(), still_running=lambda vid: vid == mine.id) == 1
+    assert mark_orphaned_builds(DB(), still_running=lambda vid, status: vid == mine.id) == 1
     assert mine.status == "building"
     assert lost.status == "failed"
 
@@ -243,3 +243,61 @@ def test_the_venv_answer_carries_the_architectures_built():
     )
     assert answer.architectures_built == ["amd64", "arm64"]
     assert VenvResponse(**{**answer.model_dump(), "architectures_built": []}).architectures_built == []
+
+
+def test_delete_answers_at_once_and_removes_from_every_node(monkeypatch):
+    venv = SimpleNamespace(id=uuid.uuid4(), name="mine", status="success", output="ok", is_template=False, completed_at=None)
+    db = FakeDB(venv)
+    removed = []
+
+    async def fake_delete(venv_id):
+        removed.append(venv_id)
+
+    monkeypatch.setattr(jv, "_execute_venv_delete", fake_delete)
+
+    async def scenario():
+        answer = await jv.delete_jupyter_venv(venv.id, db=db, current_user={})
+        assert answer["status"] == "deleting"
+        assert venv.status == "deleting"
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+    assert removed == [str(venv.id)]
+
+
+def test_delete_refuses_a_template_and_a_building_venv():
+    from fastapi import HTTPException
+
+    template = SimpleNamespace(id=uuid.uuid4(), name="agent-dev", status="success", is_template=True)
+    building = SimpleNamespace(id=uuid.uuid4(), name="mine", status="building", is_template=False)
+    for venv in (template, building):
+        try:
+            asyncio.run(jv.delete_jupyter_venv(venv.id, db=FakeDB(venv), current_user={}))
+        except HTTPException as e:
+            assert e.status_code == 400
+        else:
+            raise AssertionError("expected a refusal")
+
+
+def test_a_removal_orphaned_by_a_restart_is_marked_delete_failed():
+    from app.db.init_venvs import mark_orphaned_builds
+
+    removing = SimpleNamespace(id="33333333-3333-3333-3333-333333333333", name="gone", status="deleting", output=None, completed_at=None)
+
+    class Query:
+        def filter(self, *args):
+            return self
+
+        def all(self):
+            return [removing]
+
+    class DB:
+        def query(self, model):
+            return Query()
+
+        def commit(self):
+            pass
+
+    assert mark_orphaned_builds(DB(), still_running=lambda vid, status: False) == 1
+    assert removing.status == "delete_failed" and "delete it again" in removing.output

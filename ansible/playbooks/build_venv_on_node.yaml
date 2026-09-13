@@ -187,6 +187,7 @@
   ansible.builtin.debug:
     msg: "{{ arch_job_logs.log_lines | default(['No logs available']) }}"
 
+# The Job's pod goes with it; without the cascade a completed pod stays.
 - name: "Clean up {{ target_build_arch }} Job"
   kubernetes.core.k8s:
     kubeconfig: "{{ kubeconfig }}"
@@ -195,6 +196,8 @@
     kind: Job
     namespace: "{{ job_namespace }}"
     name: "venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}-{{ target_build_arch }}"
+    delete_options:
+      propagationPolicy: Background
   delegate_to: localhost
 
 - name: "Sync {{ target_build_arch }} venv to other nodes of same arch"
