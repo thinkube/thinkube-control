@@ -427,26 +427,18 @@ async def deploy_template_async(
         db.add(deployment)
         db.commit()
 
-        # Check execution mode
-        if request.execution_mode == "background":
-            # Start deployment in background for API/MCP usage
-            background_tasks.add_task(
-                background_executor.start_deployment, str(deployment.id)
-            )
-            status = "running"
-            message = (
-                "Deployment started in background. Check status endpoint for progress."
-            )
-        else:
-            # Default WebSocket mode - deployment will start when client connects
-            status = "pending"
-            message = "Deployment prepared. Connect to WebSocket to start execution."
+        # The deploy runs on the server, detached from this call. The status
+        # endpoint reports its progress; the deployment websocket follows its
+        # steps as they are recorded.
+        background_tasks.add_task(
+            background_executor.start_deployment, str(deployment.id)
+        )
 
         return DeploymentResponse(
             deployment_id=str(deployment.id),
-            status=status,
-            message=message,
-            websocket_url=f"/ws/template/deploy/{deployment.id}",
+            status="running",
+            message="Deployment started. Check the status endpoint for progress.",
+            websocket_url=f"/ws/deployment/{deployment.id}",
             conflict_warning=(
                 conflict_message if conflict_message and overwrite_confirmed else None
             ),
@@ -552,7 +544,33 @@ async def get_deployment_status(
     if not is_admin and deployment.created_by != current_user.get("preferred_username"):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    return DeploymentStatus.model_validate(deployment.to_dict())
+    status = deployment.to_dict()
+    # Progress from the run's own log rows: the step it is on, and how many
+    # it has passed. A playbook run logs a row per task; a deploy script logs
+    # a row per phase.
+    steps = (
+        db.query(DeploymentLog)
+        .filter(DeploymentLog.deployment_id == deployment.id, DeploymentLog.type.in_(["task", "phase"]))
+        .order_by(DeploymentLog.timestamp.desc())
+        .limit(1)
+        .all()
+    )
+    status["steps_done"] = (
+        db.query(DeploymentLog)
+        .filter(DeploymentLog.deployment_id == deployment.id, DeploymentLog.type.in_(["task", "phase"]))
+        .count()
+    )
+    status["current_step"] = (steps[0].task_name or steps[0].message) if steps else None
+    if deployment.status in ("failed", "cancelled"):
+        last_error = (
+            db.query(DeploymentLog)
+            .filter(DeploymentLog.deployment_id == deployment.id, DeploymentLog.type.in_(["failed", "error"]))
+            .order_by(DeploymentLog.timestamp.desc())
+            .first()
+        )
+        if last_error is not None:
+            status["reason"] = last_error.message
+    return DeploymentStatus.model_validate(status)
 
 
 @router.get(

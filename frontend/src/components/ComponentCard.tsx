@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Check, Download, Trash2 } from "lucide-react"
+import { Check, Download, Loader2, Trash2 } from "lucide-react"
 import {
   TkCard,
   TkCardHeader,
@@ -26,6 +26,7 @@ interface Component {
   requirements?: string[]
   requirements_met?: boolean
   missing_requirements?: string[]
+  activity?: 'installing' | 'uninstalling' | null
 }
 
 interface ComponentCardProps {
@@ -46,13 +47,7 @@ export function ComponentCard({
   const requirementsMet = component.requirements_met ?? true  // Default to true if not specified
   const missingRequirements = component.missing_requirements ?? []
 
-  console.log('🔍 DEBUG ComponentCard render:', {
-    name: component.display_name,
-    isInstalled,
-    requirementsMet,
-    missingRequirements,
-    buttonDisabled: !requirementsMet && !allowForceInstall
-  })
+  const busy = component.activity === 'installing' || component.activity === 'uninstalling'
 
   const isMissingRequirement = (req: string) => {
     return missingRequirements?.includes(req)
@@ -73,7 +68,12 @@ export function ComponentCard({
             <h3 className="text-lg font-semibold mb-2">{component.display_name}</h3>
             <div className="flex items-center gap-2">
               {/* Installation status badge */}
-              {isInstalled ? (
+              {busy ? (
+                <TkBadge status="pending" className="gap-1">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  {component.activity === 'installing' ? 'Installing' : 'Uninstalling'}
+                </TkBadge>
+              ) : isInstalled ? (
                 <TkBadge status="healthy" className="gap-1">
                   <Check className="w-3 h-3" />
                   Installed
@@ -134,11 +134,8 @@ export function ComponentCard({
         <div className="flex justify-end mt-auto pt-4">
           {!isInstalled ? (
             <TkButton
-              onClick={() => {
-                console.log('🔍 DEBUG: Install button clicked for:', component.display_name)
-                onInstall(component)
-              }}
-              disabled={!requirementsMet && !allowForceInstall}
+              onClick={() => onInstall(component)}
+              disabled={busy || (!requirementsMet && !allowForceInstall)}
               intent="secondary"
               size="sm"
               className="gap-2"
@@ -149,6 +146,7 @@ export function ComponentCard({
           ) : (
             <TkButton
               onClick={() => onUninstall(component)}
+              disabled={busy}
               intent="secondary"
               size="sm"
               className="gap-2 text-destructive hover:bg-destructive hover:text-destructive-foreground"

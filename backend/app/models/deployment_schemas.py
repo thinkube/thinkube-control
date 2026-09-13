@@ -47,7 +47,7 @@ class DeploymentResponse(BaseModel):
                 "deployment_id": "123e4567-e89b-12d3-a456-426614174000",
                 "status": "pending",
                 "message": "Deployment queued successfully",
-                "websocket_url": "/ws/template/deploy/123e4567-e89b-12d3-a456-426614174000",
+                "websocket_url": "/ws/deployment/123e4567-e89b-12d3-a456-426614174000",
             }
         }
 
@@ -66,6 +66,9 @@ class DeploymentStatus(BaseModel):
     completed_at: Optional[datetime] = None
     created_by: str
     duration: Optional[float] = None
+    current_step: Optional[str] = None
+    steps_done: Optional[int] = None
+    reason: Optional[str] = None
 
     class Config:
         from_attributes = True

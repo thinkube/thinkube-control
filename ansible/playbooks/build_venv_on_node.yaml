@@ -161,6 +161,11 @@
     msg: "Venv build failed for {{ target_build_arch }}. Check: kubectl logs -n {{ job_namespace }} job/venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}-{{ target_build_arch }}"
   when: arch_job_status.resources[0].status.failed | default(0) > 0
 
+# The backend reads this line to know which architectures the build produced.
+- name: "Report the {{ target_build_arch }} build"
+  ansible.builtin.debug:
+    msg: "Architecture marker written: {{ target_build_arch }}"
+
 - name: "Get {{ target_build_arch }} Job pod name"
   kubernetes.core.k8s_info:
     kubeconfig: "{{ kubeconfig }}"

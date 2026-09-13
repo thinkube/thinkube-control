@@ -186,7 +186,12 @@ class AnsibleEnvironment:
     def get_command_base(
         self, playbook_path: Path, inventory_path: Path, temp_vars_path: str
     ) -> list:
-        """Get the base ansible-playbook command."""
+        """The ansible-playbook command.
+
+        Not verbose: with -v every task's result is printed, and a task that
+        reads a Kubernetes Secret prints its data. Task names, outcomes and
+        failures print without it, which is what progress and diagnosis need.
+        """
         return [
             "ansible-playbook",
             "-i",
@@ -194,7 +199,6 @@ class AnsibleEnvironment:
             str(playbook_path),
             "-e",
             f"@{temp_vars_path}",
-            "-v",
         ]
 
     def get_command_with_buffer(

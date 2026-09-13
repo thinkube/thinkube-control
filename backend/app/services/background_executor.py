@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.deployments import TemplateDeployment, DeploymentLog
 from app.services.ansible_environment import ansible_env
+from app.services.scrub import Scrubber
 
 logger = logging.getLogger(__name__)
 
@@ -208,11 +209,12 @@ class BackgroundExecutor:
         
         # Get environment for optional components
         env = ansible_env.get_environment(context="optional")
+        scrub = Scrubber.for_run(extra_vars, env)
         
         # Execute the playbook using the same pattern as template deployment
         try:
             return await self._execute_ansible_subprocess(
-                cmd, env, deployment, db, full_playbook_path.parent
+                cmd, env, deployment, db, full_playbook_path.parent, scrub=scrub
             )
         finally:
             # Clean up temp file
@@ -258,7 +260,9 @@ class BackgroundExecutor:
             )
 
             # Execute Python script
-            return await self._execute_python_deployment(cmd, deployment, db)
+            return await self._execute_python_deployment(
+                cmd, deployment, db, scrub=Scrubber.for_run(extra_vars, os.environ)
+            )
 
         finally:
             try:
@@ -267,7 +271,7 @@ class BackgroundExecutor:
                 pass
 
     async def _execute_python_deployment(
-        self, cmd: list, deployment: TemplateDeployment, db: Session
+        self, cmd: list, deployment: TemplateDeployment, db: Session, scrub: Optional[Scrubber] = None
     ) -> Dict[str, Any]:
         """
         Execute the Python deployment script and stream output.
@@ -294,6 +298,8 @@ class BackgroundExecutor:
                 line_text = line.decode("utf-8", errors="replace").rstrip()
                 if not line_text:
                     continue
+                if scrub is not None:
+                    line_text = scrub.clean(line_text)
 
                 # Parse output from Python script
                 if "PHASE" in line_text:
@@ -368,7 +374,8 @@ class BackgroundExecutor:
         env: dict,
         deployment: TemplateDeployment,
         db: Session,
-        cwd: Path
+        cwd: Path,
+        scrub: Optional[Scrubber] = None,
     ) -> Dict[str, Any]:
         """
         Common method to execute ansible subprocess and stream output.
@@ -423,6 +430,8 @@ class BackgroundExecutor:
                 line_text = line.decode("utf-8", errors="replace").rstrip()
                 if not line_text:
                     continue
+                if scrub is not None:
+                    line_text = scrub.clean(line_text)
                 
                 # Write to debug file
                 if debug_file:

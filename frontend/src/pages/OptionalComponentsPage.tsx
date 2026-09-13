@@ -1,10 +1,12 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
-import { Loader2 } from 'lucide-react'
+import { useState, useEffect, useMemo } from 'react'
+import { Loader2, CheckCircle2, XCircle } from 'lucide-react'
 import { TkErrorAlert } from 'thinkube-style/components/feedback'
 import { TkPageWrapper } from 'thinkube-style/components/utilities'
+import { TkCard, TkCardContent } from 'thinkube-style/components/cards-data'
+import { TkButton } from 'thinkube-style/components/buttons-badges'
 import { ComponentCard } from '../components/ComponentCard'
-import { PlaybookExecutor, PlaybookExecutorHandle } from '../components/PlaybookExecutor'
 import { useComponentsStore } from '../stores/useComponentsStore'
+import api from '@/lib/axios'
 
 interface OptionalComponent {
   name: string
@@ -13,8 +15,19 @@ interface OptionalComponent {
   description: string
   icon?: string
   is_installed: boolean
+  activity?: 'installing' | 'uninstalling' | null
   requirements: string[]
   [key: string]: any
+}
+
+interface ComponentRun {
+  id: string
+  title: string
+  component: OptionalComponent
+  status: string
+  current_step: string | null
+  steps_done: number
+  reason: string | null
 }
 
 export default function OptionalComponentsPage() {
@@ -22,10 +35,8 @@ export default function OptionalComponentsPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [components, setComponents] = useState<OptionalComponent[]>([])
-  const [installingComponent, setInstallingComponent] = useState<OptionalComponent | null>(null)
-  const [installingTitle, setInstallingTitle] = useState('')
-  const [installingSuccessMessage, setInstallingSuccessMessage] = useState('')
-  const playbookExecutorRef = useRef<PlaybookExecutorHandle>(null)
+  const [run, setRun] = useState<ComponentRun | null>(null)
+  const [logLines, setLogLines] = useState<string[] | null>(null)
 
   // Filter components by category
   const aiComponents = useMemo(() =>
@@ -63,26 +74,25 @@ export default function OptionalComponentsPage() {
     }
   }
 
+  const startRun = (component: OptionalComponent, verb: 'Installing' | 'Uninstalling', deploymentId: string) => {
+    setRun({
+      id: deploymentId,
+      title: `${verb} ${component.display_name}`,
+      component,
+      status: 'running',
+      current_step: null,
+      steps_done: 0,
+      reason: null,
+    })
+    setLogLines(null)
+  }
+
   const handleInstall = async (component: OptionalComponent) => {
-    console.log('🔍 DEBUG: handleInstall called for:', component.name, component)
     try {
-      console.log('🔍 DEBUG: Setting installing state')
-      setInstallingComponent(component)
-      setInstallingTitle(`Installing ${component.display_name}`)
-      setInstallingSuccessMessage(`${component.display_name} has been installed successfully!`)
-
-      console.log('🔍 DEBUG: Calling store.installComponent')
       const response = await store.installComponent(component.name, {})
-      console.log('🔍 DEBUG: Got response from installComponent:', response)
-
-      const wsPath = `/api/v1/ws/optional/${component.name}/install/${response.deployment_id}`
-      console.log('🔍 DEBUG: WebSocket path:', wsPath)
-      console.log('🔍 DEBUG: playbookExecutorRef.current:', playbookExecutorRef.current)
-      playbookExecutorRef.current?.startExecution(wsPath)
-      console.log('🔍 DEBUG: Called startExecution')
+      startRun(component, 'Installing', response.deployment_id)
     } catch (err: any) {
-      console.error('🔍 DEBUG: Error in handleInstall:', err)
-      alert(`Failed to install ${component.display_name}: ${err.message}`)
+      alert(`Failed to install ${component.display_name}: ${err.response?.data?.detail ?? err.message}`)
     }
   }
 
@@ -90,33 +100,51 @@ export default function OptionalComponentsPage() {
     if (!confirm(`Are you sure you want to uninstall ${component.display_name}?`)) {
       return
     }
-
     try {
-      setInstallingComponent(component)
-      setInstallingTitle(`Uninstalling ${component.display_name}`)
-      setInstallingSuccessMessage(`${component.display_name} has been uninstalled successfully!`)
-
       const response = await store.uninstallComponent(component.name)
-
-      const wsPath = `/api/v1/ws/optional/${component.name}/uninstall/${response.deployment_id}`
-      playbookExecutorRef.current?.startExecution(wsPath)
+      startRun(component, 'Uninstalling', response.deployment_id)
     } catch (err: any) {
-      console.error('Failed to uninstall component:', err)
-      alert(`Failed to uninstall ${component.display_name}: ${err.message}`)
+      alert(`Failed to uninstall ${component.display_name}: ${err.response?.data?.detail ?? err.message}`)
     }
   }
 
-  const handleInstallationComplete = (result: { status: string; message?: string }) => {
-    if (result.status === 'success') {
-      console.log(`${installingComponent?.display_name} operation completed successfully`)
+  // The run is state on the server: poll its status until it ends.
+  useEffect(() => {
+    if (!run || (run.status !== 'running' && run.status !== 'pending')) return
+    let stopped = false
+    const poll = async () => {
+      try {
+        const { data } = await api.get(`/templates/deployments/${run.id}`)
+        if (stopped) return
+        setRun(prev => prev && prev.id === run.id ? {
+          ...prev,
+          status: data.status,
+          current_step: data.current_step ?? prev.current_step,
+          steps_done: data.steps_done ?? prev.steps_done,
+          reason: data.reason ?? null,
+        } : prev)
+        if (data.status !== 'running' && data.status !== 'pending') {
+          loadComponents()
+        }
+      } catch (err) {
+        console.error('Failed to read the run status:', err)
+      }
+    }
+    poll()
+    const timer = setInterval(poll, 3000)
+    return () => {
+      stopped = true
+      clearInterval(timer)
+    }
+  }, [run?.id, run?.status])
 
-      setInstallingComponent(null)
-      setInstallingTitle('')
-      setInstallingSuccessMessage('')
-
-      loadComponents()
-    } else if (result.status === 'error') {
-      console.error(`${installingComponent?.display_name} operation failed:`, result.message)
+  const showLog = async () => {
+    if (!run) return
+    try {
+      const { data } = await api.get(`/templates/deployments/${run.id}/logs`, { params: { limit: 1000 } })
+      setLogLines(data.logs.map((l: any) => l.message))
+    } catch (err: any) {
+      setLogLines([`Could not read the log: ${err.message}`])
     }
   }
 
@@ -212,13 +240,51 @@ export default function OptionalComponentsPage() {
         </div>
       )}
 
-      {/* Playbook Executor */}
-      <PlaybookExecutor
-        ref={playbookExecutorRef}
-        title={installingTitle}
-        successMessage={installingSuccessMessage}
-        onComplete={handleInstallationComplete}
-      />
+      {/* The run in progress, or its outcome */}
+      {run && (
+        <TkCard className="mt-8">
+          <TkCardContent className="pt-6 space-y-3">
+            <div className="flex items-center gap-2">
+              {(run.status === 'running' || run.status === 'pending') && (
+                <Loader2 className="h-5 w-5 animate-spin text-primary" />
+              )}
+              {run.status === 'success' && <CheckCircle2 className="h-5 w-5 text-green-600" />}
+              {run.status !== 'running' && run.status !== 'pending' && run.status !== 'success' && (
+                <XCircle className="h-5 w-5 text-destructive" />
+              )}
+              <h3 className="text-lg font-semibold">{run.title}</h3>
+            </div>
+            {(run.status === 'running' || run.status === 'pending') && (
+              <p className="text-sm text-muted-foreground">
+                {run.current_step ? `Step ${run.steps_done}: ${run.current_step}` : 'Starting...'}
+              </p>
+            )}
+            {run.status === 'success' && (
+              <p className="text-sm">{run.component.display_name}: done, {run.steps_done} steps.</p>
+            )}
+            {run.status !== 'running' && run.status !== 'pending' && run.status !== 'success' && (
+              <TkErrorAlert>
+                {run.status}{run.reason ? `: ${run.reason}` : ''}. The component can be submitted again.
+              </TkErrorAlert>
+            )}
+            {logLines && (
+              <pre className="text-xs bg-muted rounded p-3 max-h-80 overflow-auto whitespace-pre-wrap">
+                {logLines.join('\n')}
+              </pre>
+            )}
+            <div className="flex gap-2 justify-end">
+              <TkButton intent="secondary" size="sm" onClick={showLog}>
+                {logLines ? 'Refresh log' : 'View log'}
+              </TkButton>
+              {run.status !== 'running' && run.status !== 'pending' && (
+                <TkButton intent="secondary" size="sm" onClick={() => { setRun(null); setLogLines(null) }}>
+                  Close
+                </TkButton>
+              )}
+            </div>
+          </TkCardContent>
+        </TkCard>
+      )}
     </TkPageWrapper>
   )
 }

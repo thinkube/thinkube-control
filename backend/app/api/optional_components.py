@@ -60,7 +60,7 @@ class InstallResponse(BaseModel):
     component: str
     status: str
     message: str
-    websocket_url: str
+    websocket_url: Optional[str] = None
 
 
 @router.get("/list", response_model=ComponentListResponse, operation_id="list_optional_components")
@@ -143,47 +143,63 @@ async def _install_from_template(
     """Queue a template-backed component through the template deployment path."""
     from app.services.background_executor import background_executor
 
+    from app.api.templates import _extract_domain_from_url
+
+    app_name = template.get("fixed_name") or component
+    domain_name = _extract_domain_from_url()
+    username = current_user.get("preferred_username", "thinkube-user")
+    # The same variables deploy_template records: the deploy script reads the
+    # template address, the namespace and the domain from them.
     deployment = TemplateDeployment(
         id=uuid4(),
-        name=template.get("fixed_name") or component,
+        name=app_name,
         template_url=template["url"],
         status="pending",
         variables={
-            "app_name": template.get("fixed_name") or component,
-            "project_name": template.get("fixed_name") or component,
+            "template_url": template["url"],
+            "app_name": app_name,
+            "deployment_namespace": app_name,
+            "domain_name": domain_name,
+            "admin_username": "tkadmin",
+            "overwrite_existing": True,
+            "project_name": app_name,
             "project_description": component_info.get("description", ""),
-            "author_name": current_user.get("preferred_username", "thinkube-user"),
+            "author_name": username,
+            "author_email": current_user.get("email") or f"{username}@{domain_name}",
         },
         created_by=current_user.get("preferred_username", "unknown"),
     )
     db.add(deployment)
     db.commit()
 
-    background_tasks.add_task(background_executor.start_deployment, str(deployment.id))
+    await background_executor.start_deployment(str(deployment.id))
 
     return InstallResponse(
         deployment_id=str(deployment.id),
         component=component,
-        status="queued",
-        message=f"Installation of {component_info['display_name']} has been queued",
-        websocket_url=f"/ws/template/deploy/{deployment.id}",
+        status="installing",
+        message=f"Installation of {component_info['display_name']} started; poll get_deployment_status with the deployment id",
+        websocket_url=None,
     )
 
 
 @router.post("/{component}/install", response_model=InstallResponse, operation_id="install_optional_component")
 async def install_optional_component(
     component: str,
-    request: ComponentInstallRequest,
-    background_tasks: BackgroundTasks,
+    request: Optional[ComponentInstallRequest] = None,
+    background_tasks: BackgroundTasks = None,
     current_user: dict = Depends(get_current_user_dual_auth),
     db: Session = Depends(get_db)
 ):
+    """Install an optional component; answers at once with a deployment id.
+
+    The install runs on the server, detached from this call. Poll
+    get_deployment_status with the id: it reports the step in progress, then
+    success or failed with the reason; get_deployment_logs has the full log.
+    A component that needs something not installed is refused unless force
+    is set. The body is optional.
     """
-    Install an optional component
-    
-    This endpoint queues the installation and returns immediately with a deployment ID.
-    Use the WebSocket endpoint to monitor installation progress.
-    """
+    request = request or ComponentInstallRequest()
     try:
         service = OptionalComponentService(db)
         
@@ -237,16 +253,19 @@ async def install_optional_component(
         )
         db.add(deployment)
         db.commit()
-        
-        # Don't start background task - execution happens in WebSocket connection
-        # Just like templates!
-        
+
+        from app.services.background_executor import background_executor
+
+        await background_executor.execute_component_playbook(
+            str(deployment.id), playbook_path, dict(request.parameters or {}), component
+        )
+
         return InstallResponse(
             deployment_id=str(deployment.id),
             component=component,
-            status="queued",
-            message=f"Installation of {component_info['display_name']} has been queued",
-            websocket_url=f"/ws/optional/{component}/install/{deployment.id}"
+            status="installing",
+            message=f"Installation of {component_info['display_name']} started; poll get_deployment_status with the deployment id",
+            websocket_url=None,
         )
         
     except HTTPException:
@@ -339,15 +358,18 @@ async def uninstall_optional_component(
         db.add(deployment)
         db.commit()
 
-        # Don't start background task - execution happens in WebSocket connection
-        # Just like installation and templates!
+        from app.services.background_executor import background_executor
+
+        await background_executor.execute_component_playbook(
+            str(deployment.id), playbook_path, {}, component
+        )
 
         return {
             "deployment_id": str(deployment.id),
             "component": component,
-            "status": "queued",
-            "message": f"Uninstallation of {component_info['display_name']} has been queued",
-            "websocket_url": f"/ws/optional/{component}/uninstall/{deployment.id}"
+            "status": "uninstalling",
+            "message": f"Uninstallation of {component_info['display_name']} started; poll get_deployment_status with the deployment id",
+            "websocket_url": None,
         }
         
     except HTTPException:

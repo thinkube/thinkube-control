@@ -26,6 +26,7 @@ from app.core.api_tokens import get_current_user_dual_auth
 from app.db.session import get_db, SessionLocal
 from app.models.jupyter_venvs import JupyterVenv
 from app.services import detached
+from app.services.scrub import Scrubber
 from app.services.ansible_environment import ansible_env
 
 logger = logging.getLogger(__name__)
@@ -587,27 +588,34 @@ async def _execute_venv_build(venv_id: str) -> None:
         db.close()
 
 
-async def read_process_output(stream, log_file) -> List[str]:
+async def read_process_output(stream, log_file, scrub: Optional[Scrubber] = None) -> List[str]:
     """Copy a process's output to the log as it comes and return its lines.
 
     Read in chunks, not lines: a playbook step can answer with one line of
     any length (a sync that lists every file of a venv is megabytes), and a
-    line reader with a limit raises on it and loses the build.
+    line reader with a limit raises on it and loses the build. Credentials
+    are blanked line by line before anything is written.
     """
     lines: List[str] = []
     pending = ""
+
+    def emit(line: str, end: str) -> None:
+        line = scrub.clean(line) if scrub is not None else line
+        lines.append(line.rstrip())
+        log_file.write(line + end)
+
     while True:
         chunk = await stream.read(65536)
         if not chunk:
             break
-        text = chunk.decode("utf-8", errors="replace")
-        log_file.write(text)
-        log_file.flush()
-        pending += text
+        pending += chunk.decode("utf-8", errors="replace")
         *complete, pending = pending.split("\n")
-        lines.extend(line.rstrip() for line in complete)
+        for line in complete:
+            emit(line, "\n")
+        log_file.flush()
     if pending:
-        lines.append(pending.rstrip())
+        emit(pending, "")
+        log_file.flush()
     return lines
 
 
@@ -652,9 +660,9 @@ async def _run_venv_playbook(venv, playbook: str, extra_vars: Dict[str, Any]) ->
         "-i", str(ansible_env.get_inventory_path()),
         str(playbook_path),
         "-e", f"@{temp_vars_path}",
-        "-v",
     ]
     env = ansible_env.get_environment(context="template")
+    scrub = Scrubber.for_run(extra_vars, env)
 
     log_dir = Path("/tmp/thinkube-venvs") / venv.name
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -675,7 +683,7 @@ async def _run_venv_playbook(venv, playbook: str, extra_vars: Dict[str, Any]) ->
                 limit=1024 * 1024,
                 env=env,
             )
-            output_lines = await read_process_output(process.stdout, f)
+            output_lines = await read_process_output(process.stdout, f, scrub)
             return_code = await process.wait()
             f.write(f"\n=== COMPLETED ===\n")
             f.write(f"Return code: {return_code}\n")

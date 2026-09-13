@@ -150,6 +150,7 @@ class OptionalComponentService:
                 **info,
                 "name": name,
                 "installed": installed,
+                "activity": self._activity(name),
                 "component_version": self._get_component_version(name) if installed else None,
                 "requirements_met": self._check_requirements(info["requirements"])
                 and self._architecture_status(info)[0],
@@ -181,6 +182,7 @@ class OptionalComponentService:
             **info,
             "name": component_name,
             "installed": installed,
+            "activity": self._activity(component_name),
             "component_version": self._get_component_version(component_name) if installed else None,
             "requirements_met": self._check_requirements(info["requirements"])
             and self._architecture_status(info)[0],
@@ -189,6 +191,28 @@ class OptionalComponentService:
             "status": self._get_component_status(component_name)
         }
     
+    def _activity(self, component_name: str) -> Optional[str]:
+        """``installing`` or ``uninstalling`` while a run for the component is in flight, else None."""
+        try:
+            from app.models.deployments import TemplateDeployment
+
+            active = (
+                self.db.query(TemplateDeployment)
+                .filter(
+                    TemplateDeployment.template_url.in_(
+                        [f"optional://{component_name}", f"optional://{component_name}/uninstall"]
+                    ),
+                    TemplateDeployment.status.in_(["pending", "running"]),
+                )
+                .order_by(TemplateDeployment.created_at.desc())
+                .first()
+            )
+        except Exception:
+            return None
+        if active is None:
+            return None
+        return "uninstalling" if active.template_url.endswith("/uninstall") else "installing"
+
     def _check_if_installed(self, component_name: str) -> bool:
         """
         Check if a component is installed by looking for its ConfigMap
