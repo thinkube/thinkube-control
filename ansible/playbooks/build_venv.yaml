@@ -3,7 +3,9 @@
 # Description:
 #   Builds a custom venv for ALL architectures present in the cluster.
 #   For each architecture, finds a GPU node and creates a K8s Job.
-#   Venvs are stored at <base>/custom/<venv_name>/<arch>/ so
+#   A custom venv is stored at <base>/custom/<venv_name>/<arch>/; a template
+#   (is_template=true) is the built-in venv and is rebuilt in place at
+#   <base>/<arch>/<venv_name>/, replacing what the release installed, so
 #   arm64 and amd64 builds coexist.
 #
 # Usage:
@@ -39,6 +41,7 @@
     - name: Parse packages if string
       ansible.builtin.set_fact:
         package_list: "{{ packages if packages is sequence and packages is not string else packages | from_json }}"
+        venv_is_template: "{{ is_template | default(false) | bool }}"
 
     - name: Get all cluster nodes
       kubernetes.core.k8s_info:

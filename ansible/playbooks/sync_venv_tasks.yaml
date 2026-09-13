@@ -49,11 +49,24 @@
   ansible.builtin.set_fact:
     source_host: "{{ hostvars[source_node]['ansible_host'] }}"
 
+- name: Resolve the directory to sync
+  ansible.builtin.set_fact:
+    sync_dir_effective: "{{ sync_dir | default(venvs_host_path | default('/var/lib/jupyterhub-venvs') ~ '/' ~ custom_venvs_subpath | default('custom') ~ '/' ~ venv_name ~ '/' ~ effective_filter_arch) }}"
+
+- name: Remove a shadow copy on each target node
+  ansible.builtin.file:
+    path: "{{ remove_dir }}"
+    state: absent
+  delegate_to: "{{ item }}"
+  become: true
+  loop: "{{ target_nodes }}"
+  when: target_nodes | length > 0 and (remove_dir | default('')) != ''
+
 - name: Sync venv to each target node
   delegate_to: "{{ item }}"
   ansible.posix.synchronize:
-    src: "{{ venvs_host_path | default('/var/lib/jupyterhub-venvs') }}/{{ custom_venvs_subpath | default('custom') }}/{{ venv_name }}/{{ effective_filter_arch }}/"
-    dest: "{{ venvs_host_path | default('/var/lib/jupyterhub-venvs') }}/{{ custom_venvs_subpath | default('custom') }}/{{ venv_name }}/{{ effective_filter_arch }}/"
+    src: "{{ sync_dir_effective }}/"
+    dest: "{{ sync_dir_effective }}/"
     mode: pull
     rsync_opts:
       - "--archive"

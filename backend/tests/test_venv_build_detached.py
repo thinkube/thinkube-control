@@ -127,3 +127,42 @@ def test_builds_orphaned_by_a_restart_are_marked_failed():
     assert building.status == "failed" and "restarted" in building.output
     assert done.status == "success"
     assert db.commits == 1
+
+
+def test_a_template_build_tells_the_playbook_so(monkeypatch):
+    """The playbook rebuilds a template in place; it must know which kind it builds."""
+    import app.api.jupyter_venvs as jv_mod
+
+    seen = {}
+
+    class FakeProc:
+        returncode = 0
+        stdout = None
+
+    async def fake_exec(*cmd, **kwargs):
+        # The vars file is the last -e argument.
+        import yaml
+        vars_path = [a for a in cmd if a.startswith("@")][0][1:]
+        seen.update(yaml.safe_load(open(vars_path)))
+        class Out:
+            async def readline(self):
+                return b""
+        proc = FakeProc(); proc.stdout = Out()
+        async def wait():
+            return 0
+        proc.wait = wait
+        return proc
+
+    monkeypatch.setattr(jv_mod.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(jv_mod.Path, "exists", lambda self: True)
+    monkeypatch.setattr(jv_mod.ansible_env, "prepare_auth_vars", lambda v: v)
+    monkeypatch.setattr(jv_mod.ansible_env, "get_inventory_path", lambda: "/tmp/inv.yaml")
+    monkeypatch.setattr(jv_mod.ansible_env, "get_environment", lambda context="template": {})
+
+    template = SimpleNamespace(name="agent-dev", packages=["a"], is_template=True)
+    asyncio.run(jv_mod._run_ansible_build(template))
+    assert seen["is_template"] is True and seen["venv_name"] == "agent-dev"
+
+    custom = SimpleNamespace(name="mine", packages=["a"], is_template=False)
+    asyncio.run(jv_mod._run_ansible_build(custom))
+    assert seen["is_template"] is False

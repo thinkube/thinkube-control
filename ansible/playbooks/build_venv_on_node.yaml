@@ -15,6 +15,28 @@
 #   - custom_venvs_subpath: Subpath for custom venvs
 #   - job_namespace: Namespace for build jobs
 
+# Where the venv lives and what its kernel is called. A template is one of
+# the built-in venvs the notebook server installs from the release under
+# <base>/<arch>/<name>; rebuilding it replaces that venv in place, so the
+# kernel <name> keeps pointing at one venv. A custom venv lives under
+# <base>/custom/<name>/<arch>.
+- name: "Decide the venv location for {{ target_build_arch }}"
+  ansible.builtin.set_fact:
+    venv_rel_path: >-
+      {{ target_build_arch ~ '/' ~ venv_name
+         if (venv_is_template | default(false) | bool)
+         else custom_venvs_subpath ~ '/' ~ venv_name ~ '/' ~ target_build_arch }}
+    venv_display_name: >-
+      {{ venv_name ~ ' (' ~ target_build_arch ~ ')'
+         if (venv_is_template | default(false) | bool)
+         else venv_name ~ ' (custom, ' ~ target_build_arch ~ ')' }}
+
+- name: "Set the venv paths for {{ target_build_arch }}"
+  ansible.builtin.set_fact:
+    venv_host_dir: "{{ venvs_host_path }}/{{ venv_rel_path | trim }}"
+    venv_pod_dir: "/home/thinkube/venvs/{{ venv_rel_path | trim }}"
+    shadow_custom_dir: "{{ venvs_host_path }}/{{ custom_venvs_subpath }}/{{ venv_name }}"
+
 - name: "Create build Job for {{ target_build_arch }} on {{ target_build_node }}"
   kubernetes.core.k8s:
     kubeconfig: "{{ kubeconfig }}"
@@ -56,10 +78,15 @@
                     fi
 
                     echo "=== Building venv: {{ venv_name }} (${ARCH_NAME}) ==="
-                    VENV_PATH="{{ venvs_host_path }}/{{ custom_venvs_subpath }}/{{ venv_name }}/${ARCH_NAME}"
-                    mkdir -p "{{ venvs_host_path }}/{{ custom_venvs_subpath }}/{{ venv_name }}"
+                    VENV_PATH="{{ venv_host_dir }}"
+                    mkdir -p "$(dirname "$VENV_PATH")"
 
                     rm -rf "$VENV_PATH" 2>/dev/null || true
+                    {% if venv_is_template | default(false) | bool %}
+                    # A template is rebuilt in place; a copy under custom/ would
+                    # be registered under the same kernel name and shadow it.
+                    rm -rf "{{ shadow_custom_dir }}" 2>/dev/null || true
+                    {% endif %}
 
                     echo "Creating virtualenv at $VENV_PATH..."
                     python3 -m venv --system-site-packages "$VENV_PATH"
@@ -175,6 +202,8 @@
   vars:
     source_node: "{{ target_build_node }}"
     filter_architecture: "{{ target_build_arch }}"
+    sync_dir: "{{ venv_host_dir }}"
+    remove_dir: "{{ shadow_custom_dir if (venv_is_template | default(false) | bool) else '' }}"
   when: groups['baremetal_gpus'] | length > 1
 
 - name: "Find running Jupyter pods for {{ target_build_arch }}"
@@ -212,11 +241,11 @@
     pod: "{{ item }}"
     container: notebook
     command: >-
-      /home/thinkube/venvs/custom/{{ venv_name }}/{{ target_build_arch }}/bin/python
+      {{ venv_pod_dir }}/bin/python
       -m ipykernel install
       --prefix=/home/thinkube/venvs
       --name={{ venv_name }}
-      --display-name={{ venv_name }} (custom, {{ target_build_arch }})
+      --display-name={{ venv_display_name | trim }}
   delegate_to: localhost
   loop: "{{ matching_jupyter_pods | default([]) }}"
   ignore_errors: true

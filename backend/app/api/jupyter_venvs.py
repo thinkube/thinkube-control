@@ -244,6 +244,11 @@ async def create_jupyter_venv(
     """Create a new Jupyter virtualenv"""
     try:
         # Check if venv name already exists
+        if request.name in VENV_TEMPLATES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{request.name}' is a built-in template; build the template itself to rebuild it, or choose another name",
+            )
         existing = db.query(JupyterVenv).filter_by(name=request.name).first()
         if existing:
             raise HTTPException(status_code=400, detail=f"Venv '{request.name}' already exists")
@@ -361,6 +366,10 @@ async def build_jupyter_venv(
     then the venv is synced to the other GPU nodes. It takes minutes; this
     call does not wait for it. Poll get_jupyter_venv until status is
     success or failed; get_venv_build_logs has the build's log.
+
+    Building a template (fine-tuning, agent-dev) rebuilds the built-in venv
+    in place on every node, from the template's package list, and the
+    kernel keeps its name. A later venvs release replaces it again.
     """
     venv = db.query(JupyterVenv).filter_by(id=venv_id).first()
 
@@ -548,7 +557,11 @@ async def _execute_venv_build(venv_id: str) -> None:
             if result["success"]:
                 venv.status = "success"
                 venv.output = result.get("output", "Build completed successfully")
-                venv.venv_path = f"/var/lib/jupyterhub-venvs/custom/{venv.name}"
+                venv.venv_path = (
+                    f"/var/lib/jupyterhub-venvs/<arch>/{venv.name}"
+                    if venv.is_template
+                    else f"/var/lib/jupyterhub-venvs/custom/{venv.name}"
+                )
                 archs = result.get("architectures", [])
                 venv.architectures_built = archs
                 venv.architecture = archs[0] if archs else result.get("architecture", "unknown")
@@ -583,10 +596,12 @@ async def _run_ansible_build(venv) -> Dict[str, Any]:
     if not playbook_path.exists():
         return {"success": False, "error": f"Playbook not found: {playbook_path}"}
 
-    # Prepare variables
+    # Prepare variables. A template is the built-in venv: its build replaces
+    # the release's copy in place on every node instead of adding a custom one.
     extra_vars = {
         "venv_name": venv.name,
         "packages": json.dumps(venv.packages),  # JSON string for Ansible
+        "is_template": bool(venv.is_template),
     }
 
     # Add auth variables
