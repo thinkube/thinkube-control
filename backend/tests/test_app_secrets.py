@@ -27,6 +27,7 @@ from app_secrets import (  # noqa: E402
     public_env_conflicts,
     refusal,
     secret_data,
+    secret_manifest,
     secret_resource_name,
 )
 
@@ -283,3 +284,35 @@ def test_without_secrets_the_manifest_is_exactly_what_it_was(template, spec):
     )
     assert after == before
     assert "envFrom" not in after
+
+
+# --- the Secret applied in the cluster ----------------------------------------
+
+
+def test_the_secret_holds_only_the_declared_keys_of_a_larger_store():
+    store = Store({f"SECRET_{i}": f"value-{i}" for i in range(10)})
+    declared = declared_secrets(manifest({"name": "SECRET_3"}, {"name": "SECRET_7"}))
+
+    body = secret_manifest(APP, APP, secret_data(declared, store.lookup))
+
+    assert body["stringData"] == {"SECRET_3": "value-3", "SECRET_7": "value-7"}
+
+
+def test_the_secret_is_named_and_placed_for_the_application():
+    body = secret_manifest("wf-check", "wf-check", {"WF_CHECK_TOKEN": "abc"})
+    assert body["kind"] == "Secret"
+    assert body["metadata"]["name"] == "wf-check-secrets"
+    assert body["metadata"]["namespace"] == "wf-check"
+    assert body["metadata"]["labels"]["app.kubernetes.io/name"] == "wf-check"
+
+
+def test_argocd_is_told_the_secret_is_not_its_own():
+    body = secret_manifest(APP, APP, {})
+    assert body["metadata"]["annotations"] == {"argocd.argoproj.io/compare-options": "IgnoreExtraneous"}
+
+
+def test_an_optional_secret_that_is_absent_leaves_a_secret_without_that_key():
+    """The Secret still exists, so every container's envFrom resolves."""
+    declared = declared_secrets(manifest({"name": "WF_CHECK_OPTIONAL", "required": False}))
+    body = secret_manifest(APP, APP, secret_data(declared, Store({}).lookup))
+    assert body["stringData"] == {}

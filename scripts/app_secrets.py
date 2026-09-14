@@ -123,6 +123,30 @@ def secret_data(declared: List[DeclaredSecret], lookup: Callable[[str], Optional
     return data
 
 
+def secret_manifest(app_name: str, namespace: str, data: Dict[str, str]) -> dict:
+    """The <app>-secrets Secret, applied in the cluster and never written to k8s/.
+
+    k8s/ is committed to git and a repository may be published as a template,
+    so the values travel only through the Kubernetes API. ArgoCD does not
+    track the Secret; the annotation keeps it from being reported as extra.
+    """
+    return {
+        'apiVersion': 'v1',
+        'kind': 'Secret',
+        'metadata': {
+            'name': secret_resource_name(app_name),
+            'namespace': namespace,
+            'labels': {
+                'app.kubernetes.io/name': app_name,
+                'app.kubernetes.io/managed-by': 'thinkube-control',
+            },
+            'annotations': {'argocd.argoproj.io/compare-options': 'IgnoreExtraneous'},
+        },
+        'type': 'Opaque',
+        'stringData': dict(data),
+    }
+
+
 def env_from(app_name: str, declared: List[DeclaredSecret]) -> list:
     """The envFrom every container carries. Nothing when nothing is declared."""
     if not declared:

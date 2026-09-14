@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from app.db.session import get_db
 from app.models.secrets import Secret, AppSecret
 from app.services.secrets_service import secrets_service
+from app.services.app_secret_usage import UnknownSecret, record_usage
 from app.core.api_tokens import get_current_user_dual_auth
 
 logger = logging.getLogger(__name__)
@@ -184,31 +185,23 @@ async def decrypt_secret(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class SecretUsage(BaseModel):
+    app_name: str
+    secret_names: List[str]
+
+
 @router.post("/track-usage")
 async def track_secret_usage(
-    usage_data: dict,
+    usage: SecretUsage,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user_dual_auth),
 ):
-    """Track which app is using which secrets"""
-    app_name = usage_data.get("app_name")
-    secret_names = usage_data.get("secret_names", [])
-
-    if not app_name:
-        raise HTTPException(status_code=400, detail="app_name is required")
-
-    # Remove existing mappings for this app
-    db.query(AppSecret).filter(AppSecret.app_name == app_name).delete()
-
-    # Add new mappings
-    for secret_name in secret_names:
-        secret = db.query(Secret).filter(Secret.name == secret_name).first()
-        if secret:
-            app_secret = AppSecret(app_name=app_name, secret_id=secret.id)
-            db.add(app_secret)
-
-    db.commit()
-    return {"message": f"Updated secret usage for app '{app_name}'"}
+    """Record which secrets an application receives, replacing what was recorded."""
+    try:
+        record_usage(db, usage.app_name, usage.secret_names)
+    except UnknownSecret as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"message": f"Updated secret usage for app '{usage.app_name}'"}
 
 
 @router.post("/generate-key")

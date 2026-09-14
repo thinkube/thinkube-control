@@ -481,6 +481,64 @@ git reset --hard origin/main
             raise ValueError("Secrets cannot be delivered:\n" + "\n".join(f"  - {p}" for p in problems))
         DeploymentLogger.log(f"Secrets declared: {', '.join(s.name for s in self.declared_secrets)}")
 
+    async def apply_app_secrets(self):
+        """Make <app>-secrets hold the declared secrets the store holds, and record the usage.
+
+        Values are read through the Secrets API one declared name at a time and
+        go straight into the Secret; they are never written to disk or logged.
+        An application that declares none has no such Secret.
+        """
+        from app_secrets import secret_data, secret_manifest, secret_resource_name
+
+        mcp_secret = await self.k8s_core.read_namespaced_secret('mcp-default-token', 'thinkube-control')
+        headers = {'Authorization': f"Bearer {self._decode_secret_data(mcp_secret, 'token')}"}
+        control = f"https://control.{self.domain}/api/v1/secrets"
+        name = secret_resource_name(self.app_name)
+
+        values = {}
+        async with aiohttp.ClientSession(headers=headers) as session:
+            for secret in self.declared_secrets:
+                async with session.post(f"{control}/decrypt/{secret.name}", ssl=False) as resp:
+                    if resp.status == 404:
+                        if secret.required:
+                            raise RuntimeError(
+                                f"Secret '{secret.name}' is required by {self.app_name} and is not in the Secrets store"
+                            )
+                        continue
+                    if resp.status != 200:
+                        raise RuntimeError(
+                            f"Reading secret '{secret.name}' failed (HTTP {resp.status}): {await resp.text()}"
+                        )
+                    values[secret.name] = (await resp.json())['value']
+            data = secret_data(self.declared_secrets, values.get)
+
+            if not self.declared_secrets:
+                try:
+                    await self.k8s_core.delete_namespaced_secret(name, self.namespace)
+                    DeploymentLogger.log(f"Removed {name}: {self.app_name} declares no secrets")
+                except ApiException as e:
+                    if e.status != 404:
+                        raise
+            else:
+                body = secret_manifest(self.app_name, self.namespace, data)
+                try:
+                    await self.k8s_core.replace_namespaced_secret(name, self.namespace, body)
+                except ApiException as e:
+                    if e.status != 404:
+                        raise
+                    await self.k8s_core.create_namespaced_secret(self.namespace, body)
+                DeploymentLogger.log(f"{name} holds: {', '.join(sorted(data)) or 'no values'}")
+
+            async with session.post(
+                f"{control}/track-usage",
+                json={'app_name': self.app_name, 'secret_names': sorted(data)},
+                ssl=False,
+            ) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(
+                        f"Recording the secrets {self.app_name} uses failed (HTTP {resp.status}): {await resp.text()}"
+                    )
+
     async def _present_secret_names(self, names: List[str]) -> set:
         """Which of these names the Secrets store holds. Values are not read."""
         mcp_secret = await self.k8s_core.read_namespaced_secret('mcp-default-token', 'thinkube-control')
@@ -2273,6 +2331,9 @@ LIMIT 5;"
 
             # Create namespace (idempotent — skips if it already exists)
             await self.create_namespace()
+
+            # Before any manifest is applied: every container reads this Secret.
+            await self.apply_app_secrets()
 
             DeploymentLogger.debug(" Starting Phase 3")
             await self.phase3_create_resources()

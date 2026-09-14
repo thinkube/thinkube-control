@@ -31,6 +31,9 @@ from app_secrets import (
     declared_secrets as _declared_secrets_of,
     env_from as _env_from,
     refusal as _secrets_refusal,
+    secret_data as _secret_data,
+    secret_manifest as _secret_manifest,
+    secret_resource_name as _secret_resource_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -235,6 +238,7 @@ class ManifestGenerator:
         )
         if problems:
             raise ValueError("Secrets cannot be delivered:\n" + "\n".join(f"  - {p}" for p in problems))
+        self._apply_app_secret()
 
         # Set replicas default at parse time (not in Jinja2 templates)
         deployment = self.thinkube_config.get('spec', {}).get('deployment', {})
@@ -433,6 +437,49 @@ images:
             raise FileNotFoundError(f"manifest.yaml not found at {manifest_path}")
         with open(manifest_path, 'r') as f:
             return _declared_secrets_of(yaml.safe_load(f))
+
+    def _apply_app_secret(self):
+        """Make <app>-secrets hold the declared secrets the store holds, and record the usage.
+
+        An application that declares none has no such Secret: one left from an
+        earlier declaration is removed.
+        """
+        from app.db.session import get_session_local
+        from app.models.secrets import Secret
+        from app.services.app_secret_usage import record_usage
+        from app.services.secrets_service import secrets_service
+
+        name = _secret_resource_name(self.app_name)
+        db = get_session_local()()
+        try:
+            names = [s.name for s in self.declared_secrets]
+            stored = {
+                row.name: row
+                for row in (db.query(Secret).filter(Secret.name.in_(names)).all() if names else [])
+            }
+            data = _secret_data(
+                self.declared_secrets,
+                lambda n: secrets_service.decrypt(stored[n].encrypted_value) if n in stored else None,
+            )
+
+            if not self.declared_secrets:
+                try:
+                    self.core_v1.delete_namespaced_secret(name, self.namespace)
+                except ApiException as e:
+                    if e.status != 404:
+                        raise RuntimeError(f"Cannot remove Secret {self.namespace}/{name}: {e.reason}") from e
+            else:
+                body = _secret_manifest(self.app_name, self.namespace, data)
+                try:
+                    self.core_v1.replace_namespaced_secret(name, self.namespace, body)
+                except ApiException as e:
+                    if e.status != 404:
+                        raise RuntimeError(f"Cannot update Secret {self.namespace}/{name}: {e.reason}") from e
+                    self.core_v1.create_namespaced_secret(self.namespace, body)
+
+            record_usage(db, self.app_name, sorted(data))
+        finally:
+            db.close()
 
     @staticmethod
     def _present_secret_names(declared) -> set:
