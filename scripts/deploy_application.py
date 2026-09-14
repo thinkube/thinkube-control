@@ -2122,7 +2122,10 @@ git push -u origin main --force
         except ApiException as e:
             if e.status == 409:
                 # Application already exists - use patch for idempotent updates
-                # Patch avoids optimistic concurrency conflicts from ArgoCD controller
+                # Patch avoids optimistic concurrency conflicts from ArgoCD controller.
+                # The body is the whole object, a merge patch; without the explicit
+                # content type the client sends a dict as a JSON Patch, which the
+                # API refuses with 400.
                 try:
                     await self.k8s_custom.patch_namespaced_custom_object(
                         group="argoproj.io",
@@ -2130,7 +2133,8 @@ git push -u origin main --force
                         namespace=argocd_namespace,
                         plural="applications",
                         name=self.app_name,
-                        body=argocd_app
+                        body=argocd_app,
+                        _content_type='application/merge-patch+json',
                     )
                     DeploymentLogger.log(f"ArgoCD application '{self.app_name}' already exists - verified configuration")
                 except ApiException as patch_error:
