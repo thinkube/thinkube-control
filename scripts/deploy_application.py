@@ -1569,9 +1569,11 @@ fi
                 DeploymentLogger.log(f"Migration generation: {stderr.strip()}")
 
     async def setup_git_hooks(self):
-        """Setup git hooks for thinkube.yaml manifest regeneration."""
-        hooks_dir = Path(self.local_repo_path) / '.git' / 'hooks'
-        hooks_dir.mkdir(parents=True, exist_ok=True)
+        """Write the manifest regeneration hook into the repository's .git-hooks/.
+
+        git_commit_and_push installs it into .git/hooks once the repository
+        exists; on a first deploy .git is only created there.
+        """
         git_hooks_dir = Path(self.local_repo_path) / '.git-hooks'
         git_hooks_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1581,11 +1583,10 @@ fi
 
         pre_commit_content = pre_commit_hook(self.app_name, self.domain, control_url)
 
-        # Write pre-commit hook to both locations
-        for hook_path in [hooks_dir / 'pre-commit', git_hooks_dir / 'pre-commit']:
-            with open(hook_path, 'w') as f:
-                f.write(pre_commit_content)
-            hook_path.chmod(0o755)
+        hook_path = git_hooks_dir / 'pre-commit'
+        with open(hook_path, 'w') as f:
+            f.write(pre_commit_content)
+        hook_path.chmod(0o755)
 
         # Create install-hooks.sh
         install_hooks_content = '''#!/bin/bash
@@ -1816,6 +1817,8 @@ if [ ! -f .git/HEAD ]; then
   rm -rf .git
   git init -b main
 fi
+# The hook git runs lives in .git/hooks, which exists only now on a first deploy.
+install -m 0755 .git-hooks/pre-commit .git/hooks/pre-commit
 git config user.name '{self.admin_username}'
 git config user.email '{self.admin_username}@{self.domain}'
 git remote set-url origin 'https://{self.admin_username}:{gitea_token}@{gitea_hostname}/{org}/{self.gitea_repo_name}.git' 2>/dev/null || \
