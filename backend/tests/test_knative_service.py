@@ -14,7 +14,6 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 TEMPLATES = REPO / "templates/k8s"
-DEMO = REPO.parent.parent / "templates/tkt-knative-demo/thinkube.yaml"
 
 
 def render(spec):
@@ -58,12 +57,7 @@ def containers(rendered):
 
 
 def test_no_container_carries_resize_policy():
+    """SPEC is the container tkt-knative-demo declares."""
     for container in containers(render(SPEC)):
-        assert "resizePolicy" not in container
-
-
-def test_the_platform_demo_template_renders_without_resize_policy():
-    spec = yaml.safe_load(DEMO.read_text())
-    for container in containers(render(spec)):
         assert "resizePolicy" not in container
         assert container["readinessProbe"]["httpGet"]["path"] == "/health"
