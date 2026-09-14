@@ -51,6 +51,10 @@ spec:
           value: '["https://{{ control_subdomain }}.{{ domain_name }}"]'
         - name: DOMAIN_NAME
           value: "{{ domain_name }}"
+        # The share of a unified-memory GPU node's RAM that AI work may use,
+        # leaving the rest to the system. It caps the GPU namespace quota.
+        - name: LLM_UMA_AI_BUDGET_GB
+          value: "96"
         # Dashboard service URLs - only deployed services
         - name: SEAWEEDFS_URL
           value: "https://seaweedfs.{{ domain_name }}"

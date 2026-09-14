@@ -68,7 +68,6 @@ class ApplicationDeployer:
         self.deployment_id = params['deployment_id']
         self.namespace = params['deployment_namespace']
         self.domain = params['domain_name']
-        self.admin_username = params['admin_username']
         self.template_url = params['template_url']
         # Inside container: /home/thinkube is mounted from host's /home/{ansible_user}/shared-code
         # Apps the user works on live under apps/; platform components live
@@ -152,11 +151,14 @@ class ApplicationDeployer:
                 capture_output=True, text=True, timeout=30,
             )
 
-        try:
-            dirty = git("status", "--porcelain").stdout.strip()
-            ahead = git("log", "--oneline", "origin/main..HEAD").stdout.strip()
-        except Exception:
-            return None
+        status = git("status", "--porcelain")
+        if status.returncode != 0:
+            raise RuntimeError(f"Cannot tell whether {repo} has local work: {status.stderr.strip()}")
+        log = git("log", "--oneline", "origin/main..HEAD")
+        if log.returncode != 0:
+            raise RuntimeError(f"Cannot tell whether {repo} has unpushed commits: {log.stderr.strip()}")
+        dirty = status.stdout.strip()
+        ahead = log.stdout.strip()
 
         parts = []
         if dirty:
@@ -174,36 +176,38 @@ class ApplicationDeployer:
             f"WARNING: {self.local_repo_path} has {description}. "
             f"This deploy overwrites the checkout from the template."
         )
-        try:
-            subprocess.run(
-                ["git", "add", "-A"], cwd=str(repo),
-                capture_output=True, text=True, timeout=30, check=False,
-            )
-            subprocess.run(
-                ["git", "stash", "push", "--include-untracked",
-                 "-m", f"thinkube deploy {branch}"],
-                cwd=str(repo), capture_output=True, text=True, timeout=60, check=False,
-            )
-            subprocess.run(
-                ["git", "branch", branch], cwd=str(repo),
-                capture_output=True, text=True, timeout=30, check=False,
-            )
-            DeploymentLogger.log(
-                f"Local work kept on branch {branch} and in the stash; "
-                f"recover it with: git -C {self.local_repo_path} stash list"
-            )
-        except Exception as e:
-            DeploymentLogger.error(f"Could not preserve local changes: {e}")
+        # The deploy overwrites the checkout next, so a step that fails here
+        # stops the deploy rather than letting the work be overwritten.
+        for args, timeout in (
+            (["git", "add", "-A"], 30),
+            (["git", "stash", "push", "--include-untracked", "-m", f"thinkube deploy {branch}"], 60),
+            (["git", "branch", branch], 30),
+        ):
+            result = subprocess.run(args, cwd=str(repo), capture_output=True, text=True, timeout=timeout)
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"Could not preserve local work in {repo}: `{' '.join(args)}` failed: "
+                    f"{result.stderr.strip() or result.stdout.strip()}"
+                )
+        DeploymentLogger.log(
+            f"Local work kept on branch {branch} and in the stash; "
+            f"recover it with: git -C {self.local_repo_path} stash list"
+        )
 
     async def phase1_setup(self):
         """Phase 1: Validate parameters, create namespace, and run Copier."""
         DeploymentLogger.phase(1, "Setup & Validation")
 
         # Validate required parameters
-        required = ['app_name', 'template_url', 'domain_name', 'admin_username', 'github_token']
+        required = ['app_name', 'template_url', 'domain_name', 'github_token']
         for param in required:
             if not self.params.get(param):
                 raise ValueError(f"Required parameter '{param}' is missing")
+
+        # Git identity, Gitea authentication and the Copier answers use the
+        # platform admin, read from the Secret every other step reads.
+        admin_secret = await self.k8s_core.read_namespaced_secret('admin-credentials', 'thinkube-control')
+        self.admin_username = self._decode_secret_data(admin_secret, 'admin-username')
 
         DeploymentLogger.log(f"Deploying {self.app_name} to namespace {self.namespace}")
 
@@ -387,11 +391,13 @@ git reset --hard origin/main
             raise
 
     def _decode_secret_data(self, secret, key: str) -> str:
-        """Helper to decode base64 secret data."""
-        encoded = secret.data.get(key)
-        if encoded:
-            return base64.b64decode(encoded).decode('utf-8')
-        return None
+        """Decode a base64 secret value. The key must be present and non-empty."""
+        encoded = (secret.data or {}).get(key)
+        if not encoded:
+            raise RuntimeError(
+                f"Secret {secret.metadata.namespace}/{secret.metadata.name} has no value for '{key}'"
+            )
+        return base64.b64decode(encoded).decode('utf-8')
 
     async def get_harbor_credentials(self):
         """Fetch Harbor robot credentials."""
@@ -894,16 +900,20 @@ git reset --hard origin/main
         DeploymentLogger.log(f"Resolving {len(dependencies)} dependencies")
 
         for dep in dependencies:
-            dep_type = dep.get('type', '')
-            dep_name = dep.get('name', '')
-            dep_env = dep.get('env', '')
+            dep_name = dep.get('name')
+            dep_type = dep.get('type')
+            dep_env = dep.get('env')
+            if not (dep_name and dep_type and dep_env):
+                raise ValueError(
+                    f"Dependency {dep!r} must have name, type and env; thinkube.yaml requires all three."
+                )
 
             # Look for a Knative service matching the dependency type
             # Convention: service name matches the dependency type, namespace matches the type
             # First try: look for Knative service
             resolved_url = self._find_knative_service_url(dep_type)
 
-            # Fallback: look for a regular k8s service
+            # A dependency may also be a regular Kubernetes service
             if not resolved_url:
                 resolved_url = self._find_k8s_service_url(dep_type)
 
@@ -923,29 +933,28 @@ git reset --hard origin/main
         Searches all namespaces for a Knative service whose name or namespace
         matches the dependency type. Returns the internal cluster URL.
         """
-        try:
-            result = subprocess.run(
-                ['kubectl', 'get', 'ksvc', '--all-namespaces', '-o', 'json'],
-                capture_output=True, text=True, timeout=30
-            )
-            if result.returncode != 0:
+        result = subprocess.run(
+            ['kubectl', 'get', 'ksvc', '--all-namespaces', '-o', 'json'],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            # Knative is an optional component. Without it the API has no
+            # Knative services resource, so no Knative service can match.
+            if "the server doesn't have a resource type" in result.stderr:
                 return None
+            raise RuntimeError(f"Listing Knative services failed: {result.stderr.strip()}")
 
-            data = json.loads(result.stdout)
-            for item in data.get('items', []):
-                name = item['metadata']['name']
-                namespace = item['metadata']['namespace']
-                # Match by service name or namespace containing the dep_type
-                if dep_type in name or dep_type in namespace:
-                    # Use the internal cluster URL from status
-                    status_url = item.get('status', {}).get('address', {}).get('url')
-                    if status_url:
-                        return status_url
-                    # Fallback: construct from name/namespace
-                    port = 80  # Knative services expose port 80 by default
-                    return f"http://{name}.{namespace}.svc.cluster.local"
-        except Exception as e:
-            DeploymentLogger.debug(f"Knative lookup failed for {dep_type}: {e}")
+        for item in json.loads(result.stdout).get('items', []):
+            name = item['metadata']['name']
+            namespace = item['metadata']['namespace']
+            if dep_type in name or dep_type in namespace:
+                status_url = ((item.get('status') or {}).get('address') or {}).get('url')
+                if not status_url:
+                    raise RuntimeError(
+                        f"Knative service {namespace}/{name} matches dependency type "
+                        f"'{dep_type}' but has no address yet: it is not ready."
+                    )
+                return status_url
         return None
 
     def _find_k8s_service_url(self, dep_type: str) -> Optional[str]:
@@ -954,82 +963,47 @@ git reset --hard origin/main
         Searches all namespaces for a Service whose name or namespace
         matches the dependency type. Returns the internal cluster URL.
         """
-        try:
-            result = subprocess.run(
-                ['kubectl', 'get', 'svc', '--all-namespaces', '-o', 'json'],
-                capture_output=True, text=True, timeout=30
-            )
-            if result.returncode != 0:
-                return None
+        result = subprocess.run(
+            ['kubectl', 'get', 'svc', '--all-namespaces', '-o', 'json'],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"Listing services failed: {result.stderr.strip()}")
 
-            data = json.loads(result.stdout)
-            for item in data.get('items', []):
-                name = item['metadata']['name']
-                namespace = item['metadata']['namespace']
-                # Skip kubernetes system services
-                if namespace in ('kube-system', 'kube-public', 'default'):
-                    continue
-                # Match by name containing dep_type, in a namespace containing dep_type
-                if dep_type in name and dep_type in namespace:
-                    ports = item.get('spec', {}).get('ports', [])
-                    port = ports[0]['port'] if ports else 80
-                    return f"http://{name}.{namespace}.svc.cluster.local:{port}"
-            # Second pass: looser match — name contains dep_type in any namespace
-            for item in data.get('items', []):
-                name = item['metadata']['name']
-                namespace = item['metadata']['namespace']
-                if namespace in ('kube-system', 'kube-public', 'default'):
-                    continue
-                if dep_type in name:
-                    ports = item.get('spec', {}).get('ports', [])
-                    port = ports[0]['port'] if ports else 80
-                    return f"http://{name}.{namespace}.svc.cluster.local:{port}"
-        except Exception as e:
-            DeploymentLogger.debug(f"K8s service lookup failed for {dep_type}: {e}")
-        return None
+        items = [
+            item for item in json.loads(result.stdout).get('items', [])
+            if item['metadata']['namespace'] not in ('kube-system', 'kube-public', 'default')
+        ]
+        # Name containing dep_type, in a namespace containing dep_type
+        match = next(
+            (i for i in items if dep_type in i['metadata']['name'] and dep_type in i['metadata']['namespace']),
+            None,
+        )
+        # Second pass: name contains dep_type in any namespace
+        if match is None:
+            match = next((i for i in items if dep_type in i['metadata']['name']), None)
+        if match is None:
+            return None
+        name, namespace = match['metadata']['name'], match['metadata']['namespace']
+        ports = match.get('spec', {}).get('ports') or []
+        if not ports:
+            raise RuntimeError(
+                f"Service {namespace}/{name} matches dependency type '{dep_type}' but exposes no port."
+            )
+        return f"http://{name}.{namespace}.svc.cluster.local:{ports[0]['port']}"
 
     async def _compute_gpu_namespace_quota(self, has_gpu):
-        """Compute (requests.memory, limits.memory) for the namespace quota.
+        """(requests.memory, limits.memory) for the namespace. See scripts/namespace_quota.py."""
+        from namespace_quota import NON_GPU_QUOTA, memory_quota, node_view
 
-        Architecture-aware (never a flat constant):
-          - UMA nodes (DGX Spark / GB10): GPU memory IS host RAM and IS
-            quota-charged, so the quota is a fixed ceiling (LLM_UMA_AI_BUDGET_GB,
-            default 96Gi, clamped to allocatable) leaving the rest for the system.
-          - Discrete nodes (e.g. RTX): VRAM is separate and not quota-charged,
-            so the memory quota stays modest (host overhead only).
-        Returns the max across GPU nodes (UMA dominates a mixed cluster), or the
-        default (8Gi/16Gi) for non-GPU workloads or if nodes can't be read.
-        """
-        default = ("8Gi", "16Gi")
         if not has_gpu:
-            return default
-        uma_cap_gi = int(float(os.environ.get("LLM_UMA_AI_BUDGET_GB", "96")))
-        discrete_limit_gi = 16
-        try:
-            nodes = await self.k8s_core.list_node()
-            best_gi = 0
-            for node in nodes.items:
-                alloc = node.status.allocatable or {}
-                if int(str(alloc.get("nvidia.com/gpu", "0")) or 0) == 0:
-                    continue
-                labels = node.metadata.labels or {}
-                fam = (labels.get("nvidia.com/gpu.family") or "").lower()
-                prod = (labels.get("nvidia.com/gpu.product") or "").lower()
-                is_uma = "blackwell" in fam or "gb10" in prod or "dgx" in prod
-                if is_uma:
-                    mem = str(alloc.get("memory", "0"))
-                    ki = float(mem[:-2]) if mem.endswith("Ki") else float(mem or 0) / 1024
-                    alloc_gi = int(round(ki / (1024 * 1024)))
-                    node_gi = min(alloc_gi, uma_cap_gi)
-                else:
-                    node_gi = discrete_limit_gi
-                best_gi = max(best_gi, node_gi)
-            if best_gi <= 0:
-                return default
-            return (f"{max(best_gi // 2, 8)}Gi", f"{best_gi}Gi")
-        except Exception as e:
-            DeploymentLogger.log(f"GPU namespace quota compute failed, using default: {e}")
-            return default
+            return NON_GPU_QUOTA
+        listed = await self.k8s_core.list_node()
+        nodes = [
+            node_view(n.metadata.name, n.status.allocatable, n.metadata.labels)
+            for n in listed.items
+        ]
+        return memory_quota(True, nodes, os.environ)
 
     def generate_k8s_manifests(self):
         """Generate all Kubernetes manifests from thinkube.yaml specification.
@@ -1070,18 +1044,18 @@ git reset --hard origin/main
         admin_password = self._decode_secret_data(self.secrets['admin'], 'admin-password')
 
         # Get MLflow credentials
-        mlflow_secret = self.secrets.get('mlflow', {}).get('secret')
-        mlflow_keycloak_token_url = self._decode_secret_data(mlflow_secret, 'keycloak-token-url') if mlflow_secret else ''
-        mlflow_keycloak_client_id = self._decode_secret_data(mlflow_secret, 'client-id') if mlflow_secret else ''
-        mlflow_client_secret = self._decode_secret_data(mlflow_secret, 'client-secret') if mlflow_secret else ''
-        mlflow_username = self._decode_secret_data(mlflow_secret, 'username') if mlflow_secret else ''
-        mlflow_password = self._decode_secret_data(mlflow_secret, 'password') if mlflow_secret else admin_password
+        mlflow_secret = self.secrets['mlflow']['secret']
+        mlflow_keycloak_token_url = self._decode_secret_data(mlflow_secret, 'keycloak-token-url')
+        mlflow_keycloak_client_id = self._decode_secret_data(mlflow_secret, 'client-id')
+        mlflow_client_secret = self._decode_secret_data(mlflow_secret, 'client-secret')
+        mlflow_username = self._decode_secret_data(mlflow_secret, 'username')
+        mlflow_password = self._decode_secret_data(mlflow_secret, 'password')
 
         # Get SeaweedFS S3 credentials (from seaweedfs-s3-credentials in seaweedfs namespace)
-        seaweedfs_secret = self.secrets.get('seaweedfs')
-        seaweedfs_password = self._decode_secret_data(seaweedfs_secret, 'secret_key') if seaweedfs_secret else ''
-        seaweedfs_access_key = self._decode_secret_data(seaweedfs_secret, 'access_key') if seaweedfs_secret else ''
-        seaweedfs_endpoint = self._decode_secret_data(seaweedfs_secret, 'endpoint_internal') if seaweedfs_secret else ''
+        seaweedfs_secret = self.secrets['seaweedfs']
+        seaweedfs_password = self._decode_secret_data(seaweedfs_secret, 'secret_key')
+        seaweedfs_access_key = self._decode_secret_data(seaweedfs_secret, 'access_key')
+        seaweedfs_endpoint = self._decode_secret_data(seaweedfs_secret, 'endpoint_internal')
 
         # Build manifest_params from self.params — these are template-specific
         # parameters (e.g., model_id) that should be injected as env vars
@@ -1822,9 +1796,11 @@ git push -u origin main --force
                 plural="workflows",
                 label_selector=f"thinkube.io/app-name={self.app_name}"
             )
-            return {item['metadata']['name'] for item in workflows.get('items', [])}
-        except ApiException:
-            return set()
+        except ApiException as e:
+            raise RuntimeError(
+                f"Cannot list existing builds of {self.app_name}, so the new one cannot be told apart: {e.reason}"
+            ) from e
+        return {item['metadata']['name'] for item in workflows.get('items', [])}
 
     async def wait_for_workflow_trigger(self, timeout: int = 60, exclude_workflows: set = None) -> str:
         """Wait for webhook to trigger a NEW Argo Workflow."""
@@ -2063,9 +2039,10 @@ git push -u origin main --force
                     )
                     DeploymentLogger.log(f"ArgoCD application '{self.app_name}' already exists - verified configuration")
                 except ApiException as patch_error:
-                    # If patch also fails, log warning but don't fail deployment
-                    # The app exists and will be synced by the Harbor webhook
-                    DeploymentLogger.log(f"ArgoCD application '{self.app_name}' already exists (patch skipped: {patch_error.status})")
+                    raise RuntimeError(
+                        f"ArgoCD application '{self.app_name}' exists but could not be updated: "
+                        f"{patch_error.status} {patch_error.reason}"
+                    ) from patch_error
             else:
                 # Other errors should fail the deployment
                 raise
@@ -2075,10 +2052,12 @@ git push -u origin main --force
         # Use MCP default token for API authentication
         try:
             mcp_secret = await self.k8s_core.read_namespaced_secret('mcp-default-token', 'thinkube-control')
-            api_token = self._decode_secret_data(mcp_secret, 'token')
-        except ApiException:
-            DeploymentLogger.error("MCP default token not found, skipping service discovery")
-            return
+        except ApiException as e:
+            raise RuntimeError(
+                f"Cannot read thinkube-control/mcp-default-token, which service discovery "
+                f"authenticates with: {e.reason}"
+            ) from e
+        api_token = self._decode_secret_data(mcp_secret, 'token')
         control_base = f"https://control.{self.domain}"
         app_host = f"{self.app_name}.{self.domain}"
 

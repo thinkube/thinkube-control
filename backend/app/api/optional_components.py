@@ -145,10 +145,10 @@ async def _install_from_template(
     """Queue a template-backed component through the template deployment path."""
     from app.services.background_executor import background_executor
 
-    from app.api.templates import _extract_domain_from_url
+    from app.core.config import settings
 
     app_name = template.get("fixed_name") or component
-    domain_name = _extract_domain_from_url()
+    domain_name = settings.DOMAIN_NAME
     username = current_user.get("preferred_username", "thinkube-user")
     # The same variables deploy_template records: the deploy script reads the
     # template address, the namespace and the domain from them.
@@ -162,7 +162,6 @@ async def _install_from_template(
             "app_name": app_name,
             "deployment_namespace": app_name,
             "domain_name": domain_name,
-            "admin_username": "tkadmin",
             "overwrite_existing": True,
             "project_name": app_name,
             "project_description": component_info.get("description", ""),
