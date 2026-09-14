@@ -7,6 +7,11 @@ defaults unless other values are asked for. These endpoints let Claude Code
 and Thinkube IDE see every node's server, start one where the work needs to
 be, and stop it when the GPU should go back to serving models.
 
+Starting and stopping take from seconds to minutes (an image pull, a pod's
+start), so both answer as soon as the Hub has the request, and the caller
+follows the server's state in jupyter_notebook_status. A start the Hub gives
+up on is watched here, and its reason is reported with the node's state.
+
 An unattended run gets its own named server: started with the resources the
 run needs, told to run the notebook top to bottom, and stopped when the run
 ends, so nothing is left holding a GPU. Progress is polled by thinkube-control
@@ -45,6 +50,9 @@ JOB_SERVER_PREFIX = jupyter_notebooks.JOB_SERVER_PREFIX
 HUB_DEFAULT = jupyter_notebooks.HUB_DEFAULT
 
 _job_tasks: Dict[str, asyncio.Task] = {}
+# Why the last start of a node's server failed, while it has not been started again.
+_start_failures: Dict[str, str] = {}
+_start_watchers: Dict[str, asyncio.Task] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +166,7 @@ class NodeServer(BaseModel):
     extension: Optional[Dict[str, Any]] = Field(None, description="tk-notebook-mcp health inside the server, when running.")
     kernels: Optional[List[Dict[str, Any]]] = Field(None, description="The kernels running on the server, with their notebooks, when running.")
     error: Optional[str] = Field(None, description="Why the server's kernels could not be read.")
+    start_error: Optional[str] = Field(None, description="Why the last start of this server failed, when it did.")
 
 
 class OtherServer(BaseModel):
@@ -222,6 +231,7 @@ async def _servers_status(db: Session) -> ServersStatus:
                 gpus_free=int(nodes[defaults.node]["available"].get("gpu", 0)),
                 url=_url(model),
                 last_activity=(model or {}).get("last_activity"),
+                start_error=_start_failures.get(defaults.node) if state == "stopped" else None,
             )
         )
     running = [e for e in entries if e.state == "running"]
@@ -266,6 +276,17 @@ async def _node_status(db: Session, node: str) -> NodeServer:
     return next(s for s in status.servers if s.node == node)
 
 
+async def watch_start(node: str) -> None:
+    """Wait for a requested start to finish, and keep the reason when the Hub gives up on it."""
+    try:
+        await hub.wait_ready(node, timeout=600.0)
+    except hub.HubError as e:
+        _start_failures[node] = str(e)
+        logger.warning("notebook server on %s did not start: %s", node, e)
+    finally:
+        _start_watchers.pop(node, None)
+
+
 class StartServerRequest(BaseModel):
     cpu_cores: Union[int, str, None] = Field(None, description="CPU cores; defaults to the node's default.")
     memory_gb: Union[int, str, None] = Field(None, description="Memory in GB; defaults to the node's default.")
@@ -279,7 +300,7 @@ async def start_notebook_server(
     current_user: dict = Depends(get_current_user_dual_auth),
     db: Session = Depends(get_db),
 ):
-    """Start the notebook server on a node, for example 'tkspark', with the node's default CPU, memory and GPUs unless others are given. Waits until it is ready. Servers on other nodes keep running."""
+    """Start the notebook server on a node, for example 'tkspark', with the node's default CPU, memory and GPUs unless others are given. Answers at once with state 'starting'; poll jupyter_notebook_status until the node's state is 'running' (its tools answer when extension.status is 'ok') or 'stopped' with start_error. Servers on other nodes keep running."""
     request = request or StartServerRequest()
     placement = await resolve_placement(
         db,
@@ -296,31 +317,22 @@ async def start_notebook_server(
                 status_code=409,
                 detail=f"The notebook server on {node} is already {_state(current)} with {where['gpus']} GPU(s); stop_notebook_server first.",
             )
+        _start_failures.pop(node, None)
         await hub.start_server(node, placement.user_options())
-        await hub.wait_ready(node)
     except hub.HubError as e:
         raise HTTPException(status_code=502, detail=str(e))
-    # The pod answers a moment after the Hub calls it ready.
-    for _ in range(20):
-        try:
-            health = await jupyter_notebooks.extension_health(node)
-        except HTTPException:
-            health = None
-        if health and health.get("status") == "ok":
-            break
-        await asyncio.sleep(3)
+    _start_watchers[node] = asyncio.create_task(watch_start(node))
     return await _node_status(db, node)
 
 
 @router.post("/servers/{node}/stop", response_model=ServersStatus, operation_id="stop_notebook_server")
 async def stop_notebook_server(node: str, current_user: dict = Depends(get_current_user_dual_auth), db: Session = Depends(get_db)):
-    """Stop the notebook server on a node ('default' stops the Hub's default server) and free its memory and GPUs. Its kernels are shut down; notebook files keep their outputs."""
+    """Stop the notebook server on a node ('default' stops the Hub's default server) and free its memory and GPUs. Its kernels are shut down; notebook files keep their outputs. Answers as soon as the Hub has the request; the node's state is 'stopping' until jupyter_notebook_status shows 'stopped'."""
     name = "" if node == HUB_DEFAULT else node
     if name.startswith(JOB_SERVER_PREFIX):
         raise HTTPException(status_code=422, detail="That server belongs to an unattended run; cancel_notebook_job stops it.")
     try:
         await hub.stop_server(name)
-        await hub.wait_stopped(name)
     except hub.HubError as e:
         raise HTTPException(status_code=502, detail=str(e))
     return await _servers_status(db)

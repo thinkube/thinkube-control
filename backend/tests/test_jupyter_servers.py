@@ -157,3 +157,66 @@ def test_the_hub_default_server_is_named_default(monkeypatch):
     running(monkeypatch, [""])
     assert jn.resolve_server(None) == ""
     assert jn.resolve_server("default") == ""
+
+
+class FakeHub:
+    """The Hub as the start endpoint sees it: one server's model, and what was asked of it."""
+
+    HubError = js.hub.HubError
+
+    def __init__(self, model=None, ready_error=None):
+        self.model = model
+        self.ready_error = ready_error
+        self.started = []
+
+    async def server(self, name=""):
+        return self.model
+
+    async def start_server(self, name, user_options):
+        self.started.append((name, user_options))
+        self.model = {"ready": False, "pending": "spawn", "user_options": user_options}
+        return 202
+
+    async def wait_ready(self, name, timeout=240.0, interval=3.0):
+        await asyncio.sleep(0)
+        if self.ready_error:
+            raise js.hub.HubError(self.ready_error)
+        return {"ready": True}
+
+
+def start(monkeypatch, fake_hub, node="tkamd1"):
+    monkeypatch.setattr(js, "hub", fake_hub)
+
+    async def status(db, n):
+        return n
+
+    monkeypatch.setattr(js, "_node_status", status)
+
+    async def run():
+        answer = await js.start_notebook_server(node, None, current_user={}, db=FakeDB())
+        watcher = js._start_watchers.get(node)
+        if watcher:
+            await watcher
+        return answer
+
+    return asyncio.run(run())
+
+
+def test_a_start_answers_once_the_hub_has_it(monkeypatch):
+    fake_hub = FakeHub()
+    assert start(monkeypatch, fake_hub) == "tkamd1"
+    assert fake_hub.started == [("tkamd1", {"profile": "thinkube-notebooks", "node": "tkamd1", "cpu": "4", "memory": "8G", "enable_gpu": "0"})]
+    assert "tkamd1" not in js._start_failures
+
+
+def test_a_start_the_hub_gives_up_on_keeps_its_reason_until_the_next_start(monkeypatch):
+    start(monkeypatch, FakeHub(ready_error="the server 'tkamd1' stopped before it was ready; see the Hub's log"))
+    assert js._start_failures["tkamd1"].startswith("the server 'tkamd1' stopped before it was ready")
+    start(monkeypatch, FakeHub())
+    assert "tkamd1" not in js._start_failures
+
+
+def test_a_running_server_is_not_started_again(monkeypatch):
+    with pytest.raises(HTTPException) as e:
+        start(monkeypatch, FakeHub(model={"ready": True, "user_options": {"enable_gpu": "0"}}))
+    assert e.value.status_code == 409
