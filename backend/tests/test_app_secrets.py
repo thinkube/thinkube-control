@@ -150,8 +150,23 @@ def test_the_refusal_is_a_value_error_so_regeneration_answers_400():
 
 
 @pytest.mark.parametrize(
-    "m", [None, {}, manifest(), {"secrets": None}, {"parameters": []}],
-    ids=["no-manifest", "empty", "empty-list", "null", "parameters-only"],
+    "m", [None, {"secrets": None}, {"secrets": "HF_TOKEN"}, "secrets: []"],
+    ids=["empty-manifest", "null-secrets", "not-a-list", "not-a-mapping"],
+)
+def test_a_manifest_that_is_not_a_valid_declaration_is_refused(m):
+    """Nothing is read as "no secrets" unless the manifest says so."""
+    with pytest.raises(SecretsRefused):
+        declared_secrets(m)
+
+
+def test_a_description_that_is_not_text_is_refused():
+    with pytest.raises(SecretsRefused, match="description must be text"):
+        declared_secrets(manifest({"name": "HF_TOKEN", "description": 42}))
+
+
+@pytest.mark.parametrize(
+    "m", [{}, manifest(), {"parameters": []}],
+    ids=["no-secrets-key", "empty-list", "parameters-only"],
 )
 def test_nothing_declared_means_no_secret_and_no_env_from(m):
     declared = declared_secrets(m)

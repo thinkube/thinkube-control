@@ -459,10 +459,10 @@ git reset --hard origin/main
         from app_secrets import declared_secrets, env_from, refusal
 
         manifest_path = Path(self.local_repo_path) / 'manifest.yaml'
-        manifest = None
-        if manifest_path.exists():
-            with open(manifest_path, 'r') as f:
-                manifest = yaml.safe_load(f)
+        if not manifest_path.exists():
+            raise FileNotFoundError(f"manifest.yaml not found at {manifest_path}")
+        with open(manifest_path, 'r') as f:
+            manifest = yaml.safe_load(f)
 
         self.declared_secrets = declared_secrets(manifest)
         self.deployment_env_from = env_from(self.app_name, self.declared_secrets)

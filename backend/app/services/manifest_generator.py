@@ -471,10 +471,10 @@ images:
 
     @staticmethod
     def _declared_secrets(app_path: Path):
-        """The secrets manifest.yaml declares; none when there is no manifest."""
+        """The secrets manifest.yaml declares. Every application has a manifest."""
         manifest_path = app_path / 'manifest.yaml'
         if not manifest_path.exists():
-            return []
+            raise FileNotFoundError(f"manifest.yaml not found at {manifest_path}")
         with open(manifest_path, 'r') as f:
             return _declared_secrets_of(yaml.safe_load(f))
 

@@ -37,9 +37,17 @@ def secrets_page_url(domain: str) -> str:
     return f'https://control.{domain}/secrets'
 
 
-def declared_secrets(manifest: Optional[dict]) -> List[DeclaredSecret]:
-    """The `secrets:` list of a manifest, validated. Empty when absent."""
-    entries = (manifest or {}).get('secrets') or []
+def declared_secrets(manifest: dict) -> List[DeclaredSecret]:
+    """The `secrets:` list of a manifest, validated.
+
+    A manifest without the `secrets` key declares none. Anything else that is
+    not a list of valid entries is refused.
+    """
+    if not isinstance(manifest, dict):
+        raise SecretsRefused("manifest.yaml is empty or is not a mapping.")
+    if 'secrets' not in manifest:
+        return []
+    entries = manifest['secrets']
     if not isinstance(entries, list):
         raise SecretsRefused("manifest.yaml: secrets must be a list.")
 
@@ -51,19 +59,25 @@ def declared_secrets(manifest: Optional[dict]) -> List[DeclaredSecret]:
         if not isinstance(name, str) or not name:
             errors.append(f"manifest.yaml: a secrets entry has no name: {entry!r}")
             continue
+        entry_errors = []
         if not NAME_PATTERN.match(name):
-            errors.append(
+            entry_errors.append(
                 f"manifest.yaml: secret name '{name}' must be uppercase letters, "
                 "digits and underscores, starting with a letter."
             )
         if name in seen:
-            errors.append(f"manifest.yaml: secret '{name}' is declared more than once.")
+            entry_errors.append(f"manifest.yaml: secret '{name}' is declared more than once.")
         seen.add(name)
         required = entry.get('required', True)
         if not isinstance(required, bool):
-            errors.append(f"manifest.yaml: secret '{name}': required must be true or false.")
-            required = True
-        declared.append(DeclaredSecret(name, entry.get('description') or '', required))
+            entry_errors.append(f"manifest.yaml: secret '{name}': required must be true or false.")
+        description = entry.get('description', '')
+        if not isinstance(description, str):
+            entry_errors.append(f"manifest.yaml: secret '{name}': description must be text.")
+        if entry_errors:
+            errors.extend(entry_errors)
+            continue
+        declared.append(DeclaredSecret(name, description, required))
 
     if errors:
         raise SecretsRefused('\n'.join(errors))
