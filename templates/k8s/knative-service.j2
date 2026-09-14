@@ -237,11 +237,6 @@ spec:
               cpu: "500m"
             {% endif %}
 {% endif %}
-          resizePolicy:
-            - resourceName: cpu
-              restartPolicy: NotRequired
-            - resourceName: memory
-              restartPolicy: RestartContainer
 {% if container.health is defined %}
           readinessProbe:
             httpGet:

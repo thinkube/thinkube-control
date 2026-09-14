@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import desc, and_
 
 from app.core.api_tokens import get_current_user_dual_auth
+from app.core.config import settings
 from app.utils.copier_generator import CopierGenerator
 from app.db.session import get_db
 from app.models.deployments import TemplateDeployment, DeploymentLog
@@ -41,40 +42,6 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["templates"])
-
-
-def _extract_domain_from_url():
-    """Extract domain from FRONTEND_URL or KEYCLOAK_URL"""
-    frontend_url = os.environ.get("FRONTEND_URL", "")
-    if frontend_url:
-        # Extract domain from https://control.example.com -> example.com
-        from urllib.parse import urlparse
-
-        parsed = urlparse(frontend_url)
-        if parsed.hostname:
-            # Remove subdomain (control.) to get base domain
-            parts = parsed.hostname.split(".")
-            if len(parts) > 2:
-                return ".".join(parts[-2:])
-            return parsed.hostname
-
-    # Fallback to KEYCLOAK_URL
-    keycloak_url = os.environ.get("KEYCLOAK_URL", "")
-    if keycloak_url:
-        from urllib.parse import urlparse
-
-        parsed = urlparse(keycloak_url)
-        if parsed.hostname:
-            # Remove subdomain (auth.) to get base domain
-            parts = parsed.hostname.split(".")
-            if len(parts) > 2:
-                return ".".join(parts[-2:])
-            return parsed.hostname
-
-    # No domain found - this is a critical error
-    raise RuntimeError(
-        "Cannot determine domain_name from FRONTEND_URL or KEYCLOAK_URL environment variables"
-    )
 
 
 class TemplateParameter(BaseModel):
@@ -113,7 +80,7 @@ class TemplateSecret(BaseModel):
 
 
 class TemplateMetadata(BaseModel):
-    """Template metadata from template.yaml"""
+    """Template metadata from manifest.yaml"""
 
     apiVersion: str
     kind: str
@@ -181,9 +148,9 @@ async def get_template_metadata(
     template_url: str, current_user: dict = Depends(get_current_user_dual_auth)
 ):
     """
-    Fetch template metadata from template.yaml
+    Fetch template metadata from manifest.yaml
 
-    Downloads template.yaml from the GitHub repository and parses it
+    Downloads manifest.yaml from the GitHub repository and parses it
     to extract parameter definitions for dynamic form generation.
     """
     try:
@@ -195,42 +162,31 @@ async def get_template_metadata(
         org = url_parts[-2]
         repo = url_parts[-1]
 
-        # Try to fetch manifest.yaml first, then template.yaml for backward compatibility
-        manifest_urls = [
-            f"https://raw.githubusercontent.com/{org}/{repo}/main/manifest.yaml",
-            f"https://raw.githubusercontent.com/{org}/{repo}/master/manifest.yaml",
-            f"https://raw.githubusercontent.com/{org}/{repo}/main/template.yaml",  # backward compat
-            f"https://raw.githubusercontent.com/{org}/{repo}/master/template.yaml",  # backward compat
-        ]
+        # Every template carries manifest.yaml at the root of its main branch.
+        manifest_url = f"https://raw.githubusercontent.com/{org}/{repo}/main/manifest.yaml"
 
-        # Always send GitHub token — it grants access to all repos the user can
-        # access (any org), not just GITHUB_ORG. Safe for public repos too.
-        github_token = os.environ.get("GITHUB_TOKEN", "")
-        headers = {}
-        if github_token:
-            headers["Authorization"] = f"token {github_token}"
+        # The GitHub token grants access to every repository the user can
+        # reach, in any organization, and public repositories accept it too.
+        github_token = os.environ.get("GITHUB_TOKEN")
+        if not github_token:
+            raise HTTPException(status_code=500, detail="GITHUB_TOKEN is not set in thinkube-control.")
+        headers = {"Authorization": f"token {github_token}"}
 
-        content = None
         async with aiohttp.ClientSession(headers=headers) as session:
-            for url in manifest_urls:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        content = await response.text()
-                        logger.info(f"Found template manifest at: {url}")
-                        break
+            async with session.get(manifest_url) as response:
+                if response.status != 200:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Template has no manifest.yaml on its main branch ({manifest_url}: HTTP {response.status}).",
+                    )
+                content = await response.text()
 
-            if content is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Template does not have a manifest.yaml or template.yaml file. All templates must include this manifest.",
-                )
-
-        # Parse template.yaml
+        # Parse manifest.yaml
         try:
             template_data = yaml.safe_load(content)
         except yaml.YAMLError as e:
             raise HTTPException(
-                status_code=400, detail=f"Invalid YAML in template.yaml: {str(e)}"
+                status_code=400, detail=f"Invalid YAML in manifest.yaml: {str(e)}"
             )
 
         # Validate and extract metadata
@@ -238,7 +194,7 @@ async def get_template_metadata(
             # Not a valid Thinkube template
             raise HTTPException(
                 status_code=400,
-                detail="Invalid template.yaml: must have apiVersion: thinkube.io/v1",
+                detail="Invalid manifest.yaml: must have apiVersion: thinkube.io/v1",
             )
 
         # Convert parameters to Pydantic models
@@ -276,9 +232,10 @@ async def get_template_metadata(
                     choices = filtered_models
                     logger.info(f"Dynamic choices for {param_data['name']}: {len(choices)} models")
                 except Exception as e:
-                    logger.error(f"Failed to fetch dynamic choices from model catalog: {e}")
-                    # Keep static choices or empty list as fallback
-                    pass
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Cannot list models for parameter '{param_data['name']}' from the model catalog: {e}",
+                    ) from e
 
             param = TemplateParameter(
                 name=param_data["name"],
@@ -402,7 +359,7 @@ async def deploy_template_async(
             )
 
         # Extract domain for use in defaults
-        domain_name = _extract_domain_from_url()
+        domain_name = settings.DOMAIN_NAME
 
         # Prepare variables with smart defaults
         deployment_vars = {
@@ -412,7 +369,6 @@ async def deploy_template_async(
             **request.variables,
             # Add system variables
             "domain_name": domain_name,
-            "admin_username": "tkadmin",  # Default admin username
             # NOTE: github_token is intentionally NOT stored here. It is injected
             # at execution time by ansible_env.prepare_auth_vars() so the secret
             # never persists in the deployment record (and never leaks back out
@@ -924,7 +880,7 @@ async def regenerate_app_manifests(
     """
     from app.services.manifest_generator import ManifestGenerator
 
-    domain_name = _extract_domain_from_url()
+    domain_name = settings.DOMAIN_NAME
 
     # Validate the app exists
     app_path = Path(f"/home/thinkube/apps/{app_name}")

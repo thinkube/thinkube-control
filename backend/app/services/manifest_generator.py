@@ -26,6 +26,7 @@ from thinkube_yaml_validator import (
     validate_replicas as _validate_replicas,
 )
 from manifest_plan import kustomization_resources as _kustomization_resources
+from namespace_quota import NON_GPU_QUOTA as _NON_GPU_QUOTA, memory_quota as _memory_quota, node_view as _node_view
 from app_secrets import (
     declared_secrets as _declared_secrets_of,
     env_from as _env_from,
@@ -47,51 +48,15 @@ def _get_k8s_client():
 
 
 def _gpu_namespace_quota(has_gpu):
-    """Compute (requests.memory, limits.memory) for a namespace's ResourceQuota.
-
-    GPU/AI workloads need an architecture-aware ceiling derived from the actual
-    GPU nodes, never a flat constant:
-      - UMA nodes (DGX Spark / GB10): GPU memory IS host RAM and IS quota-charged,
-        so the quota must be large — a fraction of the node's allocatable RAM.
-      - Discrete nodes (e.g. RTX): VRAM is separate and not quota-charged, so the
-        memory quota only needs modest host overhead.
-    Returns the max requirement across GPU nodes (UMA dominates a mixed cluster),
-    or the default (8Gi/16Gi) for non-GPU workloads or if the cluster can't be
-    queried.
-    """
-    default = ("8Gi", "16Gi")
+    """(requests.memory, limits.memory) for a namespace. See scripts/namespace_quota.py."""
     if not has_gpu:
-        return default
-    uma_cap_gi = int(float(os.environ.get("LLM_UMA_AI_BUDGET_GB", "96")))
-    discrete_limit_gi = 16
-    try:
-        try:
-            config.load_incluster_config()
-        except Exception:
-            config.load_kube_config()
-        v1 = client.CoreV1Api()
-        best_gi = 0
-        for node in v1.list_node().items:
-            alloc = node.status.allocatable or {}
-            if int(str(alloc.get("nvidia.com/gpu", "0")) or 0) == 0:
-                continue
-            labels = node.metadata.labels or {}
-            fam = (labels.get("nvidia.com/gpu.family") or "").lower()
-            prod = (labels.get("nvidia.com/gpu.product") or "").lower()
-            is_uma = "blackwell" in fam or "gb10" in prod or "dgx" in prod
-            if is_uma:
-                mem = str(alloc.get("memory", "0"))
-                ki = float(mem[:-2]) if mem.endswith("Ki") else float(mem or 0) / 1024
-                alloc_gi = int(round(ki / (1024 * 1024)))
-                node_gi = min(alloc_gi, uma_cap_gi)
-            else:
-                node_gi = discrete_limit_gi
-            best_gi = max(best_gi, node_gi)
-        if best_gi <= 0:
-            return default
-        return (f"{max(best_gi // 2, 8)}Gi", f"{best_gi}Gi")
-    except Exception:
-        return default
+        return _NON_GPU_QUOTA
+    config.load_incluster_config()
+    nodes = [
+        _node_view(n.metadata.name, n.status.allocatable, n.metadata.labels)
+        for n in client.CoreV1Api().list_node().items
+    ]
+    return _memory_quota(True, nodes, os.environ)
 
 
 def _get_custom_objects_client():
@@ -134,47 +99,35 @@ class ManifestGenerator:
             raise RuntimeError(f"Failed to read secret {namespace}/{name}: {e.reason}")
 
     def _decode_secret(self, secret: dict, key: str) -> str:
-        """Decode a base64 secret value."""
-        encoded = secret.get('data', {}).get(key, '')
-        if encoded:
-            if isinstance(encoded, bytes):
-                return encoded.decode('utf-8')
-            return base64.b64decode(encoded).decode('utf-8')
-        return ''
+        """Decode a base64 secret value. The key must be present and non-empty."""
+        encoded = (secret.get('data') or {}).get(key)
+        if not encoded:
+            name = secret.get('metadata', {})
+            raise RuntimeError(
+                f"Secret {name.get('namespace')}/{name.get('name')} has no value for '{key}'"
+            )
+        if isinstance(encoded, bytes):
+            return encoded.decode('utf-8')
+        return base64.b64decode(encoded).decode('utf-8')
 
     def _fetch_secrets(self):
-        """Fetch all required secrets from the cluster."""
-        # Admin password
+        """Read the secrets the manifests are rendered with. Each must exist."""
         admin_secret = self._read_secret('thinkube-control', 'admin-credentials')
+        self.secrets['admin_username'] = self._decode_secret(admin_secret, 'admin-username')
         self.secrets['admin_password'] = self._decode_secret(admin_secret, 'admin-password')
 
-        # MLflow credentials
-        try:
-            mlflow_secret = self._read_secret('mlflow', 'mlflow-server-credentials')
-            self.secrets['mlflow_keycloak_token_url'] = self._decode_secret(mlflow_secret, 'keycloak-token-url')
-            self.secrets['mlflow_keycloak_client_id'] = self._decode_secret(mlflow_secret, 'client-id')
-            self.secrets['mlflow_client_secret'] = self._decode_secret(mlflow_secret, 'client-secret')
-            self.secrets['mlflow_username'] = self._decode_secret(mlflow_secret, 'username')
-            self.secrets['mlflow_password'] = self._decode_secret(mlflow_secret, 'password') or self.secrets['admin_password']
-        except Exception as e:
-            logger.warning(f"MLflow credentials not available: {e}")
-            self.secrets.setdefault('mlflow_keycloak_token_url', '')
-            self.secrets.setdefault('mlflow_keycloak_client_id', '')
-            self.secrets.setdefault('mlflow_client_secret', '')
-            self.secrets.setdefault('mlflow_username', '')
-            self.secrets.setdefault('mlflow_password', self.secrets.get('admin_password', ''))
+        # The secret the first deploy reads in scripts/deploy_application.py.
+        mlflow_secret = self._read_secret('thinkube-control', 'mlflow-auth-config')
+        self.secrets['mlflow_keycloak_token_url'] = self._decode_secret(mlflow_secret, 'keycloak-token-url')
+        self.secrets['mlflow_keycloak_client_id'] = self._decode_secret(mlflow_secret, 'client-id')
+        self.secrets['mlflow_client_secret'] = self._decode_secret(mlflow_secret, 'client-secret')
+        self.secrets['mlflow_username'] = self._decode_secret(mlflow_secret, 'username')
+        self.secrets['mlflow_password'] = self._decode_secret(mlflow_secret, 'password')
 
-        # SeaweedFS credentials
-        try:
-            seaweedfs_secret = self._read_secret('seaweedfs', 'seaweedfs-s3-credentials')
-            self.secrets['seaweedfs_password'] = self._decode_secret(seaweedfs_secret, 'secret_key')
-            self.secrets['seaweedfs_access_key'] = self._decode_secret(seaweedfs_secret, 'access_key')
-            self.secrets['seaweedfs_endpoint'] = self._decode_secret(seaweedfs_secret, 'endpoint_internal')
-        except Exception as e:
-            logger.warning(f"SeaweedFS credentials not available: {e}")
-            self.secrets.setdefault('seaweedfs_password', '')
-            self.secrets.setdefault('seaweedfs_access_key', '')
-            self.secrets.setdefault('seaweedfs_endpoint', '')
+        seaweedfs_secret = self._read_secret('seaweedfs', 'seaweedfs-s3-credentials')
+        self.secrets['seaweedfs_password'] = self._decode_secret(seaweedfs_secret, 'secret_key')
+        self.secrets['seaweedfs_access_key'] = self._decode_secret(seaweedfs_secret, 'access_key')
+        self.secrets['seaweedfs_endpoint'] = self._decode_secret(seaweedfs_secret, 'endpoint_internal')
 
     def _resolve_dependencies(self):
         """Resolve dependency URLs from the cluster."""
@@ -183,7 +136,9 @@ class ManifestGenerator:
             return
 
         for dep in dependencies:
-            dep_type = dep.get('type', '')
+            dep_type = dep.get('type')
+            if not dep_type:
+                raise ValueError(f"Dependency '{dep.get('name')}' has no type; thinkube.yaml requires one.")
             resolved_url = self._find_knative_service_url(dep_type) or self._find_k8s_service_url(dep_type)
             if resolved_url:
                 dep['resolved_url'] = resolved_url
@@ -200,46 +155,49 @@ class ManifestGenerator:
                 version="v1",
                 plural="services",
             ).get('items', [])
-            for item in items:
-                name = item['metadata']['name']
-                namespace = item['metadata']['namespace']
-                if dep_type in name or dep_type in namespace:
-                    status_url = (item.get('status', {}).get('address', {}) or {}).get('url')
-                    if status_url:
-                        return status_url
-                    return f"http://{name}.{namespace}.svc.cluster.local"
-        except Exception:
-            pass
+        except ApiException as e:
+            # Knative is an optional component. Without it the API has no
+            # Knative services resource, so no Knative service can match.
+            if e.status == 404:
+                return None
+            raise RuntimeError(f"Listing Knative services failed: {e.reason}") from e
+        for item in items:
+            name = item['metadata']['name']
+            namespace = item['metadata']['namespace']
+            if dep_type in name or dep_type in namespace:
+                status_url = ((item.get('status') or {}).get('address') or {}).get('url')
+                if not status_url:
+                    raise RuntimeError(
+                        f"Knative service {namespace}/{name} matches dependency type "
+                        f"'{dep_type}' but has no address yet: it is not ready."
+                    )
+                return status_url
         return None
 
     def _find_k8s_service_url(self, dep_type: str) -> Optional[str]:
         """Find a regular K8s service URL matching the dependency type."""
         try:
             svc_list = self.core_v1.list_service_for_all_namespaces()
-            skip_ns = {'kube-system', 'kube-public', 'default'}
-            # First pass: match both name and namespace
-            for svc in svc_list.items:
-                name = svc.metadata.name
-                namespace = svc.metadata.namespace
-                if namespace in skip_ns:
-                    continue
-                if dep_type in name and dep_type in namespace:
-                    ports = svc.spec.ports or []
-                    port = ports[0].port if ports else 80
-                    return f"http://{name}.{namespace}.svc.cluster.local:{port}"
-            # Second pass: match name only
-            for svc in svc_list.items:
-                name = svc.metadata.name
-                namespace = svc.metadata.namespace
-                if namespace in skip_ns:
-                    continue
-                if dep_type in name:
-                    ports = svc.spec.ports or []
-                    port = ports[0].port if ports else 80
-                    return f"http://{name}.{namespace}.svc.cluster.local:{port}"
-        except Exception:
-            pass
-        return None
+        except ApiException as e:
+            raise RuntimeError(f"Listing services failed: {e.reason}") from e
+        skip_ns = {'kube-system', 'kube-public', 'default'}
+        candidates = [s for s in svc_list.items if s.metadata.namespace not in skip_ns]
+        # First pass: match both name and namespace
+        match = next(
+            (s for s in candidates if dep_type in s.metadata.name and dep_type in s.metadata.namespace),
+            None,
+        )
+        # Second pass: match name only
+        if match is None:
+            match = next((s for s in candidates if dep_type in s.metadata.name), None)
+        if match is None:
+            return None
+        name, namespace = match.metadata.name, match.metadata.namespace
+        if not match.spec.ports:
+            raise RuntimeError(
+                f"Service {namespace}/{name} matches dependency type '{dep_type}' but exposes no port."
+            )
+        return f"http://{name}.{namespace}.svc.cluster.local:{match.spec.ports[0].port}"
 
     def regenerate(self) -> Dict[str, str]:
         """Regenerate all k8s/ manifests and return them as a dict of {filename: content}.
@@ -309,25 +267,23 @@ class ManifestGenerator:
         env.filters['to_json'] = lambda x: json.dumps(x)
 
         container_registry = f"registry.{self.domain}"
-        admin_username = os.environ.get('ADMIN_USERNAME', 'tkadmin')
-
         template_vars = {
             'project_name': self.app_name,
             'k8s_namespace': self.namespace,
             'domain_name': self.domain,
             'container_registry': container_registry,
-            'admin_username': admin_username,
+            'admin_username': self.secrets['admin_username'],
             'admin_password': self.secrets['admin_password'],
             'thinkube_spec': self.thinkube_config,
             'manifest_params': manifest_params,
-            'mlflow_keycloak_token_url': self.secrets.get('mlflow_keycloak_token_url', ''),
-            'mlflow_keycloak_client_id': self.secrets.get('mlflow_keycloak_client_id', ''),
-            'mlflow_client_secret': self.secrets.get('mlflow_client_secret', ''),
-            'mlflow_username': self.secrets.get('mlflow_username', ''),
-            'mlflow_password': self.secrets.get('mlflow_password', ''),
-            'seaweedfs_password': self.secrets.get('seaweedfs_password', ''),
-            'seaweedfs_access_key': self.secrets.get('seaweedfs_access_key', ''),
-            'seaweedfs_endpoint': self.secrets.get('seaweedfs_endpoint', ''),
+            'mlflow_keycloak_token_url': self.secrets['mlflow_keycloak_token_url'],
+            'mlflow_keycloak_client_id': self.secrets['mlflow_keycloak_client_id'],
+            'mlflow_client_secret': self.secrets['mlflow_client_secret'],
+            'mlflow_username': self.secrets['mlflow_username'],
+            'mlflow_password': self.secrets['mlflow_password'],
+            'seaweedfs_password': self.secrets['seaweedfs_password'],
+            'seaweedfs_access_key': self.secrets['seaweedfs_access_key'],
+            'seaweedfs_endpoint': self.secrets['seaweedfs_endpoint'],
             'deployment_env_from': _env_from(self.app_name, self.declared_secrets),
         }
 
@@ -497,18 +453,16 @@ images:
         """Read manifest parameters from the app-metadata ConfigMap on the cluster.
 
         These are the template-specific parameters (e.g., model_id) that were
-        provided at deploy time and should be preserved during regeneration.
+        provided at deploy time. Regenerating without them would drop them from
+        the manifests, so a ConfigMap that cannot be read stops the regeneration.
         """
+        name = f'{self.app_name}-metadata'
         try:
-            cm = self.core_v1.read_namespaced_config_map(
-                f'{self.app_name}-metadata', self.namespace
-            )
-            data = cm.data or {}
-            known_keys = {'app_name', 'containers'}
-            return {k: v for k, v in data.items() if k not in known_keys}
+            cm = self.core_v1.read_namespaced_config_map(name, self.namespace)
         except ApiException as e:
-            logger.warning(f"Could not read app-metadata ConfigMap: {e.reason}")
-            return {}
-        except Exception as e:
-            logger.warning(f"Could not read manifest params: {e}")
-            return {}
+            raise RuntimeError(
+                f"Cannot read ConfigMap {self.namespace}/{name}, which holds the "
+                f"parameters {self.app_name} was deployed with: {e.reason}"
+            ) from e
+        known_keys = {'app_name', 'containers'}
+        return {k: v for k, v in (cm.data or {}).items() if k not in known_keys}

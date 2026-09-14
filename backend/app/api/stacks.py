@@ -27,54 +27,28 @@ from app.models.deployment_schemas import (
 from app.services.background_executor import background_executor
 
 logger = logging.getLogger(__name__)
+from app.core.config import settings
+
 router = APIRouter(tags=["stacks"])
 
 
-def _extract_domain_from_url():
-    """Extract domain from FRONTEND_URL or KEYCLOAK_URL."""
-    frontend_url = os.environ.get("FRONTEND_URL", "")
-    if frontend_url:
-        from urllib.parse import urlparse
-        parsed = urlparse(frontend_url)
-        if parsed.hostname:
-            parts = parsed.hostname.split(".")
-            if len(parts) > 2:
-                return ".".join(parts[-2:])
-            return parsed.hostname
+async def _fetch_thinkube_yaml(org: str, repo: str) -> dict:
+    """Fetch and parse thinkube.yaml from the main branch of a GitHub repository.
 
-    keycloak_url = os.environ.get("KEYCLOAK_URL", "")
-    if keycloak_url:
-        from urllib.parse import urlparse
-        parsed = urlparse(keycloak_url)
-        if parsed.hostname:
-            parts = parsed.hostname.split(".")
-            if len(parts) > 2:
-                return ".".join(parts[-2:])
-            return parsed.hostname
-
-    raise RuntimeError(
-        "Cannot determine domain_name from FRONTEND_URL or KEYCLOAK_URL"
-    )
-
-
-async def _fetch_thinkube_yaml(org: str, repo: str) -> Optional[dict]:
-    """Fetch and parse thinkube.yaml from a GitHub repository."""
-    urls = [
-        f"https://raw.githubusercontent.com/{org}/{repo}/main/thinkube.yaml",
-        f"https://raw.githubusercontent.com/{org}/{repo}/master/thinkube.yaml",
-    ]
-
-    async with aiohttp.ClientSession() as session:
-        for url in urls:
-            try:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        content = await response.text()
-                        return yaml.safe_load(content)
-            except Exception as e:
-                logger.debug(f"Failed to fetch {url}: {e}")
-
-    return None
+    The dependency graph is built from these files, so one that cannot be read
+    stops the stack: a template read as having no dependencies could be
+    deployed before the services it needs.
+    """
+    url = f"https://raw.githubusercontent.com/{org}/{repo}/main/thinkube.yaml"
+    headers = {"Authorization": f"token {os.environ['GITHUB_TOKEN']}"}
+    async with aiohttp.ClientSession(headers=headers) as session:
+        async with session.get(url) as response:
+            if response.status != 200:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Cannot read thinkube.yaml of {org}/{repo} ({url}: HTTP {response.status}).",
+                )
+            return yaml.safe_load(await response.text())
 
 
 def _build_dependency_graph(
@@ -198,14 +172,7 @@ async def deploy_stack(
                     detail=f"Invalid repo format '{repo}': expected 'org/repo'",
                 )
 
-            config = await _fetch_thinkube_yaml(parts[0], parts[1])
-            if config:
-                thinkube_configs[template["name"]] = config
-            else:
-                logger.warning(
-                    f"Could not fetch thinkube.yaml for {repo}, "
-                    f"assuming no dependencies"
-                )
+            thinkube_configs[template["name"]] = await _fetch_thinkube_yaml(parts[0], parts[1])
 
         # Build dependency graph and compute deployment order
         template_names = [t["name"] for t in templates]
@@ -227,7 +194,7 @@ async def deploy_stack(
         ]
 
         # Start sequential deployment in background
-        domain_name = _extract_domain_from_url()
+        domain_name = settings.DOMAIN_NAME
         username = current_user.get("preferred_username", "thinkube-user")
         email = current_user.get("email") or f"{username}@{domain_name}"
 
@@ -307,8 +274,7 @@ async def _deploy_stack_sequential(
                 "app_name": template_name,
                 "deployment_namespace": template_name,
                 "domain_name": domain_name,
-                "admin_username": "tkadmin",
-                "github_token": os.environ.get("GITHUB_TOKEN", ""),
+                "github_token": os.environ["GITHUB_TOKEN"],
                 "project_name": template_name,
                 "project_description": f"Stack component: {template_name}",
                 "author_name": username,

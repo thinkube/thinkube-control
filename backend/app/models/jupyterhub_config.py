@@ -1,14 +1,15 @@
 """
-SQLAlchemy model for JupyterHub configuration
+SQLAlchemy models for the notebook servers' default resources.
 
-This model stores default resource allocations for JupyterHub spawner.
-Maximum limits are calculated dynamically from cluster resources.
+Each node runs at most one interactive notebook server, and each node has its
+own defaults: the CPU cores, memory and GPUs a server there starts with.
+``jupyterhub_config`` keeps one row with the values a node without its own
+row starts from. Maximum limits are calculated from cluster resources.
 
-Note: Image selection was removed - we now use a fixed tk-jupyter-base image
-with venvs providing different Python environments via kernel selection.
+The image is fixed to tk-jupyter-base; venvs provide the Python environments
+through kernel selection.
 """
 
-from datetime import datetime
 from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
@@ -18,58 +19,37 @@ from app.db.session import Base
 
 
 class JupyterHubConfig(Base):
-    """Configuration for JupyterHub defaults
-
-    This is a single-row configuration table that stores the default
-    node selection and resource allocations.
-
-    Note: Image is fixed to tk-jupyter-base. Users select Python
-    environments via Jupyter kernel dropdown (ml-gpu, fine-tuning, agent-dev).
-    """
+    """The values a node without its own defaults starts from (single row)."""
 
     __tablename__ = "jupyterhub_config"
 
-    # Primary key
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
 
-    # Node configuration
-    default_node = Column(String, nullable=True)
-
-    # Default resource allocations (what's pre-selected in dropdowns)
     default_cpu_cores = Column(Integer, nullable=False, default=4)
     default_memory_gb = Column(Integer, nullable=False, default=8)
     default_gpu_count = Column(Integer, nullable=False, default=0)
 
-    # Timestamps
-    created_at = Column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        nullable=False
-    )
-    updated_at = Column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        onupdate=func.now(),
-        nullable=False
-    )
-
-    def to_dict(self):
-        """Convert model to dictionary for API responses"""
-        return {
-            "id": str(self.id),
-            "default_node": self.default_node,
-            "default_cpu_cores": self.default_cpu_cores,
-            "default_memory_gb": self.default_memory_gb,
-            "default_gpu_count": self.default_gpu_count,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     def __repr__(self):
         return (
-            f"<JupyterHubConfig("
-            f"node={self.default_node}, "
-            f"cpu={self.default_cpu_cores}, "
-            f"mem={self.default_memory_gb}GB, "
-            f"gpu={self.default_gpu_count})>"
+            f"<JupyterHubConfig(cpu={self.default_cpu_cores}, "
+            f"mem={self.default_memory_gb}GB, gpu={self.default_gpu_count})>"
         )
+
+
+class JupyterHubNodeDefaults(Base):
+    """The resources the notebook server on one node starts with."""
+
+    __tablename__ = "jupyterhub_node_defaults"
+
+    node = Column(String, primary_key=True)
+    cpu_cores = Column(Integer, nullable=False)
+    memory_gb = Column(Integer, nullable=False)
+    gpus = Column(Integer, nullable=False)
+
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    def __repr__(self):
+        return f"<JupyterHubNodeDefaults({self.node}: cpu={self.cpu_cores}, mem={self.memory_gb}GB, gpu={self.gpus})>"
