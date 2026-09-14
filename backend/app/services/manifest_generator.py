@@ -25,6 +25,7 @@ from thinkube_yaml_validator import (
     validate_component_constraints as _validate_component_constraints,
     validate_replicas as _validate_replicas,
 )
+from manifest_plan import kustomization_resources as _kustomization_resources
 
 logger = logging.getLogger(__name__)
 
@@ -327,6 +328,7 @@ class ManifestGenerator:
         containers = self.thinkube_config.get('spec', {}).get('containers', [])
         services = self.thinkube_config.get('spec', {}).get('services', [])
         has_database = 'database' in services
+        has_workflows = 'workflows' in services
         has_gpu = any(c.get('gpu', {}).get('count') for c in containers)
         quota_req_mem, quota_lim_mem = _gpu_namespace_quota(has_gpu)
         needs_storage = (
@@ -404,6 +406,9 @@ data:
         if needs_storage:
             generated_files['storage-pvc.yaml'] = env.get_template('storage-pvc.j2').render(**template_vars)
 
+        if has_workflows:
+            generated_files['workflows.yaml'] = env.get_template('workflows.j2').render(**template_vars)
+
         # build-workflow.yaml
         system_username = os.environ.get('SYSTEM_USERNAME')
         master_node_name = os.environ.get('MASTER_NODE_NAME')
@@ -415,21 +420,12 @@ data:
         generated_files['build-workflow.yaml'] = env.get_template('build-workflow.j2').render(**workflow_vars)
 
         # kustomization.yaml
-        if is_knative:
-            kustomization_resources = [
-                'namespace.yaml', 'resource-policies.yaml', 'mlflow-secrets.yaml', 'app-metadata.yaml',
-                'knative-service.yaml',
-            ]
-        else:
-            kustomization_resources = [
-                'namespace.yaml', 'resource-policies.yaml', 'mlflow-secrets.yaml', 'app-metadata.yaml',
-                'deployments.yaml', 'services.yaml', 'ingress.yaml',
-            ]
-        if has_database:
-            kustomization_resources.append('postgresql.yaml')
-        if needs_storage:
-            kustomization_resources.append('storage-pvc.yaml')
-        kustomization_resources.append('argocd-postsync-hook.yaml')
+        kustomization_resources = _kustomization_resources(
+            is_knative=is_knative,
+            has_database=has_database,
+            needs_storage=needs_storage,
+            has_workflows=has_workflows,
+        )
 
         images_list = []
         for container in containers:

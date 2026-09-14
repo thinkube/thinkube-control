@@ -8,6 +8,11 @@ Knative services must remain portable to cloud serverless platforms
 import re
 from typing import Any, Dict, List
 
+# Services that tie a workload to this cluster: storage to a volume that must
+# follow the pod, workflows to an Argo controller and a namespace of its own.
+# Neither survives the move to a cloud serverless platform.
+KNATIVE_FORBIDDEN_SERVICES = ('storage', 'workflows')
+
 
 def validate_knative_constraints(config: Dict[str, Any]) -> List[str]:
     """Return a list of constraint violations for Knative deployments.
@@ -61,9 +66,9 @@ def validate_knative_constraints(config: Dict[str, Any]) -> List[str]:
 
     for svc in spec.get('services', []):
         svc_type = svc.split(':')[0]
-        if svc_type == 'storage':
+        if svc_type in KNATIVE_FORBIDDEN_SERVICES:
             errors.append(
-                f"Service '{svc}': storage is not allowed in Knative services. "
+                f"Service '{svc}': {svc_type} is not allowed in Knative services. "
                 "database, cache, and queue are allowed."
             )
 

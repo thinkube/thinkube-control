@@ -1233,6 +1233,13 @@ data:
             storage_content = storage_template.render(**template_vars)
             (k8s_dir / 'storage-pvc.yaml').write_text(storage_content)
 
+        # 9b. Generate workflows.yaml (conditional)
+        has_workflows = 'workflows' in services
+        if has_workflows:
+            workflows_template = env.get_template('workflows.j2')
+            workflows_content = workflows_template.render(**template_vars)
+            (k8s_dir / 'workflows.yaml').write_text(workflows_content)
+
         # 10. Generate build-workflow.yaml
         workflow_template = env.get_template('build-workflow.j2')
         system_username = self.params.get('system_username') or os.environ.get('SYSTEM_USERNAME')
@@ -1246,29 +1253,14 @@ data:
         (k8s_dir / 'build-workflow.yaml').write_text(workflow_content)
 
         # 11. Generate kustomization.yaml
-        if is_knative:
-            kustomization_resources = [
-                'namespace.yaml',
-                'resource-policies.yaml',
-                'mlflow-secrets.yaml',
-                'app-metadata.yaml',
-                'knative-service.yaml',
-            ]
-        else:
-            kustomization_resources = [
-                'namespace.yaml',
-                'resource-policies.yaml',
-                'mlflow-secrets.yaml',
-                'app-metadata.yaml',
-                'deployments.yaml',
-                'services.yaml',
-                'ingress.yaml',
-            ]
-        if has_database:
-            kustomization_resources.append('postgresql.yaml')
-        if needs_storage:
-            kustomization_resources.append('storage-pvc.yaml')
-        kustomization_resources.append('argocd-postsync-hook.yaml')
+        from manifest_plan import kustomization_resources as build_kustomization_resources
+
+        kustomization_resources = build_kustomization_resources(
+            is_knative=is_knative,
+            has_database=has_database,
+            needs_storage=needs_storage,
+            has_workflows=has_workflows,
+        )
 
         # Build images list
         images_list = []

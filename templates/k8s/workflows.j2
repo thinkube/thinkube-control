@@ -1,0 +1,99 @@
+#jinja2: lstrip_blocks: True, trim_blocks: True
+# Argo Workflows access for {{ project_name }}
+#
+# The application submits workflows into its own namespace. Its secrets, its
+# image pull secret and its ResourceQuota are already there, workflow pods
+# count against that quota, and deleting the application deletes its runs.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ project_name }}-workflows
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/managed-by: argocd
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ project_name }}-workflows
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/managed-by: argocd
+rules:
+  # What a submitter needs: to create runs and read back what they did.
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows", "workflowtemplates", "cronworkflows"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # What the executor needs: it reports each step's result as it finishes.
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflowtaskresults"]
+    verbs: ["create", "patch"]
+  # The executor reads the pod it runs in, and the step logs are read from it.
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ project_name }}-workflows
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/managed-by: argocd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ project_name }}-workflows
+subjects:
+  - kind: ServiceAccount
+    name: {{ project_name }}-workflows
+    namespace: {{ k8s_namespace }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: argo-artifacts-s3
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/managed-by: argocd
+type: Opaque
+stringData:
+  accesskey: "{{ seaweedfs_access_key }}"
+  secretkey: "{{ seaweedfs_password }}"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: artifact-repositories
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    # The repository a workflow in this namespace uses when it names none.
+    workflows.argoproj.io/default-artifact-repository: default-v1
+data:
+  # Thinkube Storage, under a prefix of this application's own. The endpoint
+  # is the platform's internal S3 address with its scheme removed, which is
+  # the form Argo expects.
+  default-v1: |
+    archiveLogs: true
+    s3:
+      endpoint: {{ seaweedfs_endpoint | replace('https://', '') | replace('http://', '') }}
+      bucket: argo-artifacts
+      keyFormat: "{{ project_name }}/{% raw %}{{workflow.name}}/{{pod.name}}{% endraw %}"
+      insecure: true
+      disableSSL: true
+      s3ForcePathStyle: true
+      useSDKCreds: false
+      accessKeySecret:
+        name: argo-artifacts-s3
+        key: accesskey
+      secretKeySecret:
+        name: argo-artifacts-s3
+        key: secretkey

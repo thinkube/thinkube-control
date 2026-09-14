@@ -31,6 +31,11 @@ spec:
       priorityClassName: thinkube-workload
       imagePullSecrets:
         - name: app-pull-secret
+{% if thinkube_spec.spec.services is defined and 'workflows' in thinkube_spec.spec.services %}
+      # The projected token of this account is what authorises the pod to
+      # submit workflows into this namespace.
+      serviceAccountName: {{ project_name }}-workflows
+{% endif %}
 {% if container.gpu is defined and container.gpu.memory is defined %}
       affinity:
         nodeAffinity:
@@ -105,6 +110,22 @@ spec:
             {% if thinkube_spec.spec.services is defined and 'queue' in thinkube_spec.spec.services %}
             - name: QUEUE_URL
               value: "redis://valkey-master.valkey.svc.cluster.local:6379"
+            {% endif %}
+            {% if thinkube_spec.spec.services is defined and 'workflows' in thinkube_spec.spec.services %}
+            - name: WORKFLOWS_NAMESPACE
+              value: "{{ k8s_namespace }}"
+            - name: WORKFLOWS_SERVER_URL
+              value: "http://argo-workflows-server.argo.svc.cluster.local:2746"
+            - name: WORKFLOWS_SERVICE_ACCOUNT
+              value: "{{ project_name }}-workflows"
+            - name: WORKFLOWS_UI_URL
+              value: "https://argo.{{ domain_name }}/workflows/{{ k8s_namespace }}"
+            # A step runs in one of this application's own images, named here
+            # so a workflow never has to assemble the reference itself.
+            {% for c in thinkube_spec.spec.containers %}
+            - name: CONTAINER_IMAGE_{{ c.name | upper | replace('-', '_') }}
+              value: "{{ container_registry }}/thinkube/{{ project_name }}-{{ c.name }}:latest"
+            {% endfor %}
             {% endif %}
             # Dependency-injected environment variables
             {% if thinkube_spec.spec.dependencies is defined %}
