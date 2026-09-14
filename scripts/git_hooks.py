@@ -36,12 +36,13 @@ NC='\033[0m'
 '''
         + _values(app_name, domain, control_url)
         + r'''
-# Check if thinkube.yaml has been modified in this commit
-if ! git diff --cached --name-only | grep -q '^thinkube\.yaml$'; then
+# thinkube.yaml describes the application and manifest.yaml declares the
+# secrets it receives; the manifests are generated from both.
+if ! git diff --cached --name-only | grep -qE '^(thinkube|manifest)\.yaml$'; then
     exit 0
 fi
 
-echo -e "${YELLOW}Pre-commit hook: thinkube.yaml changed, regenerating k8s/ manifests...${NC}"
+echo -e "${YELLOW}Pre-commit hook: thinkube.yaml or manifest.yaml changed, regenerating k8s/ manifests...${NC}"
 '''
         + TOKEN_SHELL
         + r'''

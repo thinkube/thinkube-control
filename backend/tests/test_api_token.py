@@ -237,3 +237,12 @@ def test_the_hook_blocks_the_commit_when_the_token_is_rejected(tmp_path):
     assert box.tokens_sent() == [STALE]
     assert not box.git_adds.exists()
     assert not box.kubectl_was_called()
+
+
+def test_a_commit_that_changes_manifest_yaml_regenerates_the_manifests(tmp_path):
+    """manifest.yaml declares the secrets the manifests reference."""
+    box = Box(tmp_path, kubectl=False).with_token_file(GOOD)
+    r = box.run(HOOK, {"STAGED": "manifest.yaml"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert box.tokens_sent() == [GOOD]
+    assert box.git_adds.exists()
