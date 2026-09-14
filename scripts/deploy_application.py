@@ -1592,18 +1592,22 @@ no transformation needed.
 
         The copy is rewritten whenever it differs from the secret, so a file
         that outlives the installation whose token it holds is corrected.
+        Without the secret the deploy stops: the hooks it installs could not work.
         """
         from api_token import SECRET_NAME, SECRET_NAMESPACE, TOKEN_FILE, needs_writing, write_token_file
 
         try:
             mcp_secret = await self.k8s_core.read_namespaced_secret(SECRET_NAME, SECRET_NAMESPACE)
-            api_token = self._decode_secret_data(mcp_secret, 'token')
-            if not needs_writing(TOKEN_FILE, api_token):
-                return
-            write_token_file(TOKEN_FILE, api_token)
-            DeploymentLogger.log("Wrote the API token for git hooks")
-        except ApiException:
-            DeploymentLogger.error("MCP token not found — git hooks for thinkube.yaml regeneration will not work")
+        except ApiException as e:
+            raise RuntimeError(
+                f"Cannot read the secret {SECRET_NAMESPACE}/{SECRET_NAME} that the git hooks "
+                f"authenticate with: {e.reason}"
+            ) from e
+        api_token = self._decode_secret_data(mcp_secret, 'token')
+        if not needs_writing(TOKEN_FILE, api_token):
+            return
+        write_token_file(TOKEN_FILE, api_token)
+        DeploymentLogger.log("Wrote the API token for git hooks")
 
 
     async def configure_webhook(self):
