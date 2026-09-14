@@ -46,7 +46,7 @@ class SecretResponse(BaseModel):
     used_by_apps: List[str]
 
 
-@router.get("/", response_model=List[SecretResponse])
+@router.get("/", response_model=List[SecretResponse], operation_id="list_secrets")
 async def list_secrets(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user_dual_auth),
@@ -56,7 +56,7 @@ async def list_secrets(
     return [SecretResponse(**secret.to_dict()) for secret in secrets]
 
 
-@router.get("/{secret_id}", response_model=SecretResponse)
+@router.get("/{secret_id}", response_model=SecretResponse, operation_id="get_secret")
 async def get_secret(
     secret_id: int,
     db: Session = Depends(get_db),
@@ -70,7 +70,7 @@ async def get_secret(
     return SecretResponse(**secret.to_dict())
 
 
-@router.post("/", response_model=SecretResponse)
+@router.post("/", response_model=SecretResponse, operation_id="create_secret")
 async def create_secret(
     secret_data: SecretCreate,
     db: Session = Depends(get_db),
@@ -108,7 +108,7 @@ class SecretUpdateResponse(SecretResponse):
     failed_apps: Dict[str, str]
 
 
-@router.put("/{secret_id}", response_model=SecretUpdateResponse)
+@router.put("/{secret_id}", response_model=SecretUpdateResponse, operation_id="update_secret")
 async def update_secret(
     secret_id: int,
     secret_update: SecretUpdate,
@@ -145,7 +145,7 @@ async def update_secret(
     return SecretUpdateResponse(**secret.to_dict(), restarted_apps=restarted, failed_apps=failed)
 
 
-@router.delete("/{secret_id}")
+@router.delete("/{secret_id}", operation_id="delete_secret")
 async def delete_secret(
     secret_id: int,
     db: Session = Depends(get_db),
@@ -170,7 +170,7 @@ async def delete_secret(
     return {"message": f"Secret '{secret.name}' deleted successfully"}
 
 
-@router.get("/{secret_id}/apps", response_model=List[str])
+@router.get("/{secret_id}/apps", response_model=List[str], operation_id="get_secret_apps")
 async def get_secret_apps(
     secret_id: int,
     db: Session = Depends(get_db),
