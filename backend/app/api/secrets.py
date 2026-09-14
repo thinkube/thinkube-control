@@ -3,7 +3,7 @@ API endpoints for secrets management
 """
 
 import logging
-from typing import List, Optional
+from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
@@ -12,6 +12,8 @@ from app.db.session import get_db
 from app.models.secrets import Secret, AppSecret
 from app.services.secrets_service import secrets_service
 from app.services.app_secret_usage import UnknownSecret, record_usage
+from app.services.app_secret_propagation import propagate
+from app.services.deploy_identity import deploy_api_client
 from app.core.api_tokens import get_current_user_dual_auth
 
 logger = logging.getLogger(__name__)
@@ -101,7 +103,12 @@ async def create_secret(
     return SecretResponse(**secret.to_dict())
 
 
-@router.put("/{secret_id}", response_model=SecretResponse)
+class SecretUpdateResponse(SecretResponse):
+    restarted_apps: List[str]
+    failed_apps: Dict[str, str]
+
+
+@router.put("/{secret_id}", response_model=SecretUpdateResponse)
 async def update_secret(
     secret_id: int,
     secret_update: SecretUpdate,
@@ -125,7 +132,17 @@ async def update_secret(
     db.commit()
     db.refresh(secret)
 
-    return SecretResponse(**secret.to_dict())
+    # A new value reaches every application that receives this secret.
+    restarted, failed = [], {}
+    if secret_update.value is not None and secret.app_secrets:
+        restarted, failed = propagate(
+            secret.name,
+            secret_update.value,
+            [app_secret.app_name for app_secret in secret.app_secrets],
+            deploy_api_client(),
+        )
+
+    return SecretUpdateResponse(**secret.to_dict(), restarted_apps=restarted, failed_apps=failed)
 
 
 @router.delete("/{secret_id}")

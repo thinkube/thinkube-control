@@ -62,22 +62,6 @@ def _gpu_namespace_quota(has_gpu):
     return _memory_quota(True, nodes, os.environ)
 
 
-# The kubeconfig the first deploy loads in scripts/deploy_application.py. The
-# backend's own account only reads Secrets, so an application's <app>-secrets
-# is written with the same identity as at its first deploy.
-DEPLOY_KUBECONFIG = Path("/home/thinkube/.kube/config")
-
-
-def _deploy_core_client():
-    """A CoreV1Api client with the deploy's identity, used only to write <app>-secrets."""
-    if not DEPLOY_KUBECONFIG.exists():
-        raise RuntimeError(
-            f"{DEPLOY_KUBECONFIG} not found. Regeneration writes the application's "
-            "Secret with the kubeconfig the first deploy uses."
-        )
-    return client.CoreV1Api(config.new_client_from_config(config_file=str(DEPLOY_KUBECONFIG)))
-
-
 def _get_custom_objects_client():
     """Load in-cluster config and return a CustomObjectsApi client."""
     config.load_incluster_config()
@@ -478,7 +462,9 @@ images:
                 lambda n: secrets_service.decrypt(stored[n].encrypted_value) if n in stored else None,
             )
 
-            writer = _deploy_core_client()
+            from app.services.deploy_identity import deploy_api_client
+
+            writer = client.CoreV1Api(deploy_api_client())
             if not self.declared_secrets:
                 try:
                     writer.delete_namespaced_secret(name, self.namespace)
