@@ -1,124 +1,149 @@
-"""API endpoints for JupyterHub configuration management
+"""API endpoints for the notebook servers' default resources, one set per node.
 
-Note: Image selection was removed - we now use a fixed tk-jupyter-base image
-with venvs providing different Python environments via kernel selection.
+Each node runs at most one interactive notebook server, which starts with its
+node's defaults unless the caller asks for other values. JupyterHub's profile
+generator reads the same endpoint for its Server Options form.
+
+The image is fixed to tk-jupyter-base; venvs provide the Python environments
+through kernel selection.
 """
 
 import logging
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from typing import Optional
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List
 
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from app.api.cluster_resources import get_cluster_resources
 from app.core.api_tokens import get_current_user_dual_auth
 from app.db.session import get_db
-from app.models.jupyterhub_config import JupyterHubConfig
+from app.models.jupyterhub_config import JupyterHubConfig, JupyterHubNodeDefaults
+from app.services import notebook_resources as res
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/jupyterhub", tags=["jupyterhub-config"])
 
 
-# Pydantic models for request/response
-class JupyterHubConfigUpdate(BaseModel):
-    """Request model for updating JupyterHub configuration"""
-    default_node: Optional[str] = Field(None, description="Default node to pre-select")
-    default_cpu_cores: int = Field(ge=1, le=128, description="Default CPU cores")
-    default_memory_gb: int = Field(ge=1, le=512, description="Default memory in GB")
-    default_gpu_count: int = Field(ge=0, le=8, description="Default GPU count")
+class ResourceValues(BaseModel):
+    cpu_cores: int
+    memory_gb: int
+    gpus: int
+
+
+class NodeDefaults(ResourceValues):
+    node: str
+    capacity: ResourceValues = Field(..., description="The most a server on this node can be given.")
+    choices: Dict[str, List[int]] = Field(..., description="The values JupyterHub accepts on this node, per resource.")
 
 
 class JupyterHubConfigResponse(BaseModel):
-    """Response model for JupyterHub configuration"""
-    id: str
-    default_node: Optional[str]
-    default_cpu_cores: int
+    nodes: List[NodeDefaults] = Field(..., description="Each node's defaults for its notebook server.")
+    default_cpu_cores: int = Field(..., description="What a node without its own defaults starts from.")
     default_memory_gb: int
     default_gpu_count: int
-    created_at: str
-    updated_at: str
+
+
+class NodeDefaultsUpdate(ResourceValues):
+    node: str
+
+
+class JupyterHubConfigUpdate(BaseModel):
+    nodes: List[NodeDefaultsUpdate]
+
+
+def _fallback(db: Session) -> JupyterHubConfig:
+    row = db.query(JupyterHubConfig).first()
+    if row is None:
+        row = JupyterHubConfig(
+            default_cpu_cores=res.FALLBACK_CPU_CORES,
+            default_memory_gb=res.FALLBACK_MEMORY_GB,
+            default_gpu_count=res.FALLBACK_GPUS,
+        )
+    return row
+
+
+def defaults_for_nodes(db: Session, nodes: List[Dict[str, Any]]) -> List[NodeDefaults]:
+    """Every node's defaults: its own row when saved, else the fallback, moved onto the node's choices."""
+    fallback = _fallback(db)
+    saved = {row.node: row for row in db.query(JupyterHubNodeDefaults).all()}
+    result = []
+    for node in sorted(nodes, key=lambda n: n["name"]):
+        row = saved.get(node["name"])
+        wanted = (
+            (row.cpu_cores, row.memory_gb, row.gpus)
+            if row
+            else (fallback.default_cpu_cores, fallback.default_memory_gb, fallback.default_gpu_count)
+        )
+        result.append(
+            NodeDefaults(
+                node=node["name"],
+                capacity=ResourceValues(**res.node_capacity(node)),
+                choices=res.node_choices(node),
+                **res.fit_to_node(node, *wanted),
+            )
+        )
+    return result
+
+
+async def _cluster_nodes() -> List[Dict[str, Any]]:
+    nodes = await get_cluster_resources()
+    if not nodes:
+        raise HTTPException(status_code=503, detail="The cluster's node resources are not known yet; try again in a moment.")
+    return nodes
 
 
 @router.get("/config", response_model=JupyterHubConfigResponse, operation_id="get_jupyterhub_config")
-def get_jupyterhub_config(
-    db: Session = Depends(get_db)
-):
-    """Get JupyterHub configuration
+async def get_jupyterhub_config(db: Session = Depends(get_db)):
+    """Each node's default CPU cores, memory and GPUs for its notebook server, with the values the node allows.
 
-    This endpoint is called by JupyterHub to get default resource allocations.
-    No authentication required as it's called from within the cluster.
-
-    Returns the current configuration or creates a default one if none exists.
+    JupyterHub calls this from inside the cluster, so no authentication is required.
     """
-    try:
-        # Get or create configuration (single row table)
-        config = db.query(JupyterHubConfig).first()
-
-        if not config:
-            logger.info("No JupyterHub configuration found, creating default")
-            config = JupyterHubConfig(
-                default_node=None,
-                default_cpu_cores=4,
-                default_memory_gb=8,
-                default_gpu_count=0
-            )
-            db.add(config)
-            db.commit()
-            db.refresh(config)
-
-        return JupyterHubConfigResponse(**config.to_dict())
-
-    except Exception as e:
-        logger.error(f"Error getting JupyterHub configuration: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to get JupyterHub configuration: {str(e)}"
-        )
+    fallback = _fallback(db)
+    return JupyterHubConfigResponse(
+        nodes=defaults_for_nodes(db, await _cluster_nodes()),
+        default_cpu_cores=fallback.default_cpu_cores,
+        default_memory_gb=fallback.default_memory_gb,
+        default_gpu_count=fallback.default_gpu_count,
+    )
 
 
 @router.put("/config", response_model=JupyterHubConfigResponse, operation_id="update_jupyterhub_config")
-def update_jupyterhub_config(
+async def update_jupyterhub_config(
     config_update: JupyterHubConfigUpdate,
     db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user_dual_auth)
+    current_user: dict = Depends(get_current_user_dual_auth),
 ):
-    """Update JupyterHub configuration (admin only)
+    """Save the defaults of one or more nodes. Each value must be one of the node's choices."""
+    nodes = {n["name"]: n for n in await _cluster_nodes()}
+    problems = []
+    for update in config_update.nodes:
+        node = nodes.get(update.node)
+        if node is None:
+            problems.append(f"node '{update.node}' is not in the cluster")
+            continue
+        choices = res.node_choices(node)
+        for field in ("cpu_cores", "memory_gb", "gpus"):
+            value = getattr(update, field)
+            if value not in choices[field]:
+                problems.append(f"{update.node}: {field} {value} is not one of {choices[field]}")
+    if problems:
+        raise HTTPException(status_code=422, detail="; ".join(problems))
 
-    Updates the default image, node, and resource allocations.
-    Requires authentication.
-    """
-    try:
+    for update in config_update.nodes:
+        row = db.query(JupyterHubNodeDefaults).filter(JupyterHubNodeDefaults.node == update.node).first()
+        if row is None:
+            row = JupyterHubNodeDefaults(node=update.node)
+            db.add(row)
+        row.cpu_cores = update.cpu_cores
+        row.memory_gb = update.memory_gb
+        row.gpus = update.gpus
+    db.commit()
 
-        # Get or create configuration
-        config = db.query(JupyterHubConfig).first()
-
-        if not config:
-            logger.info("Creating new JupyterHub configuration")
-            config = JupyterHubConfig()
-            db.add(config)
-
-        # Update fields
-        config.default_node = config_update.default_node
-        config.default_cpu_cores = config_update.default_cpu_cores
-        config.default_memory_gb = config_update.default_memory_gb
-        config.default_gpu_count = config_update.default_gpu_count
-
-        db.commit()
-        db.refresh(config)
-
-        logger.info(
-            f"JupyterHub configuration updated by {current_user.get('preferred_username', 'unknown')}: "
-            f"node={config.default_node}, "
-            f"defaults=({config.default_cpu_cores}CPU, {config.default_memory_gb}GB, {config.default_gpu_count}GPU)"
-        )
-
-        return JupyterHubConfigResponse(**config.to_dict())
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error updating JupyterHub configuration: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update JupyterHub configuration: {str(e)}"
-        )
+    logger.info(
+        "notebook server defaults updated by %s: %s",
+        current_user.get("preferred_username", "unknown"),
+        ", ".join(f"{u.node}=({u.cpu_cores}CPU, {u.memory_gb}GB, {u.gpus}GPU)" for u in config_update.nodes),
+    )
+    return await get_jupyterhub_config(db)
