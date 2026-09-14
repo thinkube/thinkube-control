@@ -52,7 +52,7 @@ Every card's *details* page shows the service's health status and the health his
 
 | Jupyter Kernels | Notebook environments built from definitions. Start from the `fine-tuning` or `agent-dev` template, add packages, and build it for every GPU architecture in the cluster. A built environment appears as a kernel in Thinkube Notebooks. Building a template itself rebuilds the built-in environment in place, and a custom environment cannot take a template's name. Deleting an environment removes it from every node.
 | JupyterHub Config | The defaults a new notebook server starts with: node, CPU cores, memory and GPU count. The form shows what each node has, and the defaults cannot exceed it.
-| Secrets | Secrets your applications read, and which applications use each one.
+| Secrets | Secrets your applications read, and which applications use each one. Changing a value restarts those applications.
 | API Tokens | Tokens for calling thinkube-control and the LLM Gateway from outside the browser. They start with `tk_`.
 |===
 
