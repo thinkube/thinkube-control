@@ -1,9 +1,9 @@
 """The scripts written into each application to regenerate its k8s/ manifests.
 
 Two scripts call the same control endpoint: the pre-commit hook, when
-thinkube.yaml changes, and regenerate-manifests.sh, on demand. Both obtain the
-API token through the shell in api_token.TOKEN_SHELL, so a rejected token is
-refreshed from the platform in one place for both.
+thinkube.yaml changes, and regenerate-manifests.sh, on demand. Both read the
+API token through the shell in api_token.TOKEN_SHELL, and both stop with the
+same instructions when it is missing or rejected.
 
 The bodies are raw strings so that shell syntax is written as the shell reads
 it; only the three values below are substituted.
@@ -46,7 +46,7 @@ echo -e "${YELLOW}Pre-commit hook: thinkube.yaml changed, regenerating k8s/ mani
         + TOKEN_SHELL
         + r'''
 if [ -z "$API_TOKEN" ]; then
-    echo -e "${RED}ERROR: No API token found.${NC}"
+    echo -e "${RED}ERROR: No API token at $TOKEN_FILE.${NC}"
 '''
         + TOKEN_HELP_SHELL
         + r'''    exit 1
@@ -92,7 +92,7 @@ def regenerate_script(app_name: str, domain: str, control_url: str) -> str:
         + TOKEN_SHELL
         + r'''
 if [ -z "$API_TOKEN" ]; then
-    echo "ERROR: No API token found."
+    echo "ERROR: No API token at $TOKEN_FILE."
 '''
         + TOKEN_HELP_SHELL
         + r'''    exit 1

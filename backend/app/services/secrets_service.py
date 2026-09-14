@@ -1,44 +1,34 @@
 """
 Service for managing secrets encryption and decryption
 Uses Fernet symmetric encryption for storing secrets
+
+The key comes from THINKUBE_ENCRYPTION_KEY, which the backend Deployment reads
+from the Secret thinkube-control/thinkube-encryption-key. There is no other
+source: without the key the backend does not start.
 """
 
 import os
-import base64
 from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 
 class SecretsService:
     """Handle encryption and decryption of secrets"""
 
     def __init__(self):
-        # Get or generate encryption key
-        self.fernet = self._get_or_create_fernet()
+        self.fernet = self._fernet(os.environ.get("THINKUBE_ENCRYPTION_KEY"))
 
-    def _get_or_create_fernet(self) -> Fernet:
-        """Get or create Fernet encryption instance"""
-        # Try to get key from environment
-        encryption_key = os.environ.get("THINKUBE_ENCRYPTION_KEY")
-
-        if encryption_key:
-            # Use provided key
+    @staticmethod
+    def _fernet(encryption_key) -> Fernet:
+        if not encryption_key:
+            raise RuntimeError(
+                "THINKUBE_ENCRYPTION_KEY is not set. It is read from the Secret "
+                "thinkube-control/thinkube-encryption-key, which the thinkube-control "
+                "deploy playbooks create."
+            )
+        try:
             return Fernet(encryption_key.encode())
-
-        # Generate key from password (for development)
-        # In production, always use THINKUBE_ENCRYPTION_KEY
-        password = os.environ.get("ENCRYPTION_PASSWORD", "thinkube-secret-key")
-        salt = os.environ.get("ENCRYPTION_SALT", "thinkube-salt").encode()
-
-        kdf = PBKDF2HMAC(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=salt,
-            iterations=100000,
-        )
-        key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
-        return Fernet(key)
+        except ValueError as e:
+            raise RuntimeError(f"THINKUBE_ENCRYPTION_KEY is not a valid Fernet key: {e}") from e
 
     def encrypt(self, value: str) -> str:
         """Encrypt a secret value"""

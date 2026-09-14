@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""The API token the git hooks use stays equal to the platform's.
+"""The API token the git hooks use, read from one file and nothing else.
 
 The shell cases run the generated scripts in bash, with curl, kubectl and git
-replaced by stubs on PATH. The control API accepts one token, GOOD; the
-kubectl stub hands out GOOD as the secret's value when it is present.
+replaced by stubs on PATH. The control API accepts one token, GOOD. A kubectl
+stub is present in most cases so that the tests prove the scripts never call it.
 """
 
 import base64
@@ -160,7 +160,7 @@ def test_the_generated_script_is_valid_bash(tmp_path, script):
     assert result.returncode == 0, result.stderr
 
 
-def test_a_current_token_is_used_without_asking_the_cluster(tmp_path):
+def test_a_current_token_is_used(tmp_path):
     box = Box(tmp_path, kubectl=True).with_token_file(GOOD)
     r = box.run(REGEN)
     assert r.returncode == 0, r.stdout + r.stderr
@@ -168,23 +168,16 @@ def test_a_current_token_is_used_without_asking_the_cluster(tmp_path):
     assert not box.kubectl_was_called()
 
 
-def test_a_stale_token_is_refreshed_from_the_secret_and_the_call_retried(tmp_path):
+def test_a_rejected_token_stops_with_instructions_and_nothing_else_is_tried(tmp_path):
+    """kubectl is available here on purpose: the script must not reach for it."""
     box = Box(tmp_path, kubectl=True).with_token_file(STALE)
-    r = box.run(REGEN)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert box.tokens_sent() == [STALE, GOOD], "rejected once, then accepted"
-    assert box.token_file.read_text() == GOOD, "the copy now equals the secret"
-    assert stat.S_IMODE(box.token_file.stat().st_mode) == 0o600
-
-
-def test_without_kubectl_a_stale_token_fails_and_says_how_to_fix_it(tmp_path):
-    box = Box(tmp_path, kubectl=False).with_token_file(STALE)
     r = box.run(REGEN)
     assert r.returncode == 1
     assert "HTTP 401" in r.stdout
     assert "mcp-default-token" in r.stdout
-    assert box.tokens_sent() == [STALE], "no retry without a fresh token"
-    assert box.token_file.read_text() == STALE, "nothing to replace it with"
+    assert box.tokens_sent() == [STALE], "asked once, no retry"
+    assert not box.kubectl_was_called()
+    assert box.token_file.read_text() == STALE, "the script does not rewrite the file"
 
 
 def test_the_help_prints_the_command_exactly(tmp_path):
@@ -195,27 +188,23 @@ def test_the_help_prints_the_command_exactly(tmp_path):
         assert line in r.stdout
 
 
-def test_no_file_and_no_variable_takes_the_token_from_the_secret(tmp_path):
+def test_a_missing_file_stops_before_calling_the_api(tmp_path):
     box = Box(tmp_path, kubectl=True)
     r = box.run(REGEN)
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert box.tokens_sent() == [GOOD]
-    assert box.token_file.read_text() == GOOD
-
-
-def test_no_token_anywhere_stops_before_calling_the_api(tmp_path):
-    box = Box(tmp_path, kubectl=False)
-    r = box.run(REGEN)
     assert r.returncode == 1
-    assert "No API token found" in r.stdout
+    assert "No API token at" in r.stdout
     assert box.tokens_sent() == []
+    assert not box.kubectl_was_called()
+    assert not box.token_file.exists()
 
 
-def test_the_variable_is_used_when_there_is_no_file(tmp_path):
+def test_the_environment_variable_is_not_read(tmp_path):
+    """The file is the only source; a variable does not stand in for it."""
     box = Box(tmp_path, kubectl=False)
     r = box.run(REGEN, {"THINKUBE_API_TOKEN": GOOD})
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert box.tokens_sent() == [GOOD]
+    assert r.returncode == 1
+    assert "No API token at" in r.stdout
+    assert box.tokens_sent() == []
 
 
 # --- the pre-commit hook -----------------------------------------------------
@@ -230,18 +219,21 @@ def test_a_commit_that_does_not_touch_thinkube_yaml_does_nothing(tmp_path):
     assert not box.kubectl_was_called()
 
 
-def test_the_hook_recovers_a_stale_token_and_stages_the_manifests(tmp_path):
-    box = Box(tmp_path, kubectl=True).with_token_file(STALE)
+def test_the_hook_regenerates_and_stages_the_manifests(tmp_path):
+    box = Box(tmp_path, kubectl=True).with_token_file(GOOD)
     r = box.run(HOOK, {"STAGED": "thinkube.yaml"})
     assert r.returncode == 0, r.stdout + r.stderr
-    assert box.tokens_sent() == [STALE, GOOD]
+    assert box.tokens_sent() == [GOOD]
     assert box.git_adds.exists(), "k8s/ was staged"
-    assert box.token_file.read_text() == GOOD
+    assert not box.kubectl_was_called()
 
 
-def test_the_hook_blocks_the_commit_when_it_cannot_recover(tmp_path):
-    box = Box(tmp_path, kubectl=False).with_token_file(STALE)
+def test_the_hook_blocks_the_commit_when_the_token_is_rejected(tmp_path):
+    box = Box(tmp_path, kubectl=True).with_token_file(STALE)
     r = box.run(HOOK, {"STAGED": "thinkube.yaml"})
     assert r.returncode == 1
     assert "git commit --no-verify" in r.stdout
+    assert "mcp-default-token" in r.stdout
+    assert box.tokens_sent() == [STALE]
     assert not box.git_adds.exists()
+    assert not box.kubectl_was_called()
