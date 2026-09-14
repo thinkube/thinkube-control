@@ -193,3 +193,12 @@ def test_a_dependency_without_a_type_is_refused():
     g.thinkube_config = {"spec": {"dependencies": [{"name": "splitter", "env": "SPLITTER_URL"}]}}
     with pytest.raises(ValueError, match="has no type"):
         g._resolve_dependencies()
+
+
+# --- the identity that writes <app>-secrets -----------------------------------
+
+
+def test_writing_the_app_secret_needs_the_deploy_kubeconfig(tmp_path, monkeypatch):
+    monkeypatch.setattr(mg, "DEPLOY_KUBECONFIG", tmp_path / "missing" / "config")
+    with pytest.raises(RuntimeError, match="kubeconfig the first deploy uses"):
+        mg._deploy_core_client()
