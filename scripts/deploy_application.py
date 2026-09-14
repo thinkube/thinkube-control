@@ -1508,70 +1508,9 @@ fi
 
         control_url = f"https://control.{self.domain}"
 
-        # Pre-commit hook — regenerates k8s/ manifests when thinkube.yaml changes
-        pre_commit_content = f'''#!/bin/bash
-# Git pre-commit hook to regenerate k8s/ manifests when thinkube.yaml changes
-# AUTO-GENERATED - DO NOT EDIT
+        from git_hooks import pre_commit_hook, regenerate_script
 
-GREEN='\\033[0;32m'
-YELLOW='\\033[1;33m'
-RED='\\033[0;31m'
-NC='\\033[0m'
-
-APP_NAME="{self.app_name}"
-DOMAIN_NAME="{self.domain}"
-CONTROL_URL="{control_url}"
-
-# Check if thinkube.yaml has been modified in this commit
-if ! git diff --cached --name-only | grep -q '^thinkube\\.yaml$'; then
-    exit 0
-fi
-
-echo -e "${{YELLOW}}Pre-commit hook: thinkube.yaml changed, regenerating k8s/ manifests...${{NC}}"
-
-# Get auth token
-TOKEN_FILE="$HOME/.thinkube/api-token"
-if [ -f "$TOKEN_FILE" ]; then
-    API_TOKEN=$(cat "$TOKEN_FILE")
-else
-    API_TOKEN="${{THINKUBE_API_TOKEN:-}}"
-fi
-
-if [ -z "$API_TOKEN" ]; then
-    echo -e "${{RED}}ERROR: No API token found.${{NC}}"
-    echo "Set THINKUBE_API_TOKEN or create $TOKEN_FILE"
-    echo "You can generate an API token at ${{CONTROL_URL}}/api-tokens"
-    exit 1
-fi
-
-# Call thinkube-control API to regenerate manifests
-RESPONSE=$(curl -s -w "\\n%{{http_code}}" \\
-    -X POST \\
-    -H "Authorization: Bearer ${{API_TOKEN}}" \\
-    -H "Content-Type: application/json" \\
-    "${{CONTROL_URL}}/api/v1/templates/apps/${{APP_NAME}}/regenerate-manifests" \\
-    2>&1)
-
-HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-BODY=$(echo "$RESPONSE" | sed '$d')
-
-if [ "$HTTP_CODE" != "200" ]; then
-    echo -e "${{RED}}ERROR: Failed to regenerate manifests (HTTP ${{HTTP_CODE}})${{NC}}"
-    echo "$BODY"
-    echo ""
-    echo "You can still commit without manifest regeneration by using:"
-    echo "  git commit --no-verify"
-    exit 1
-fi
-
-# Stage the regenerated k8s/ files
-if [ -d "k8s" ]; then
-    git add k8s/
-    echo -e "${{GREEN}}k8s/ manifests regenerated and staged for commit.${{NC}}"
-fi
-
-exit 0
-'''
+        pre_commit_content = pre_commit_hook(self.app_name, self.domain, control_url)
 
         # Write pre-commit hook to both locations
         for hook_path in [hooks_dir / 'pre-commit', git_hooks_dir / 'pre-commit']:
@@ -1595,47 +1534,7 @@ echo "When you modify thinkube.yaml and commit, k8s/ manifests are automatically
         install_hooks_path.chmod(0o755)
 
         # Create regenerate-manifests.sh
-        regen_content = f'''#!/bin/bash
-# Manually regenerate k8s/ manifests from thinkube.yaml
-# AUTO-GENERATED - DO NOT EDIT
-
-APP_NAME="{self.app_name}"
-DOMAIN_NAME="{self.domain}"
-CONTROL_URL="{control_url}"
-
-TOKEN_FILE="$HOME/.thinkube/api-token"
-if [ -f "$TOKEN_FILE" ]; then
-    API_TOKEN=$(cat "$TOKEN_FILE")
-else
-    API_TOKEN="${{THINKUBE_API_TOKEN:-}}"
-fi
-
-if [ -z "$API_TOKEN" ]; then
-    echo "ERROR: No API token found."
-    echo "Set THINKUBE_API_TOKEN or create $TOKEN_FILE"
-    exit 1
-fi
-
-echo "Regenerating k8s/ manifests for ${{APP_NAME}}..."
-
-RESPONSE=$(curl -s -w "\\n%{{http_code}}" \\
-    -X POST \\
-    -H "Authorization: Bearer ${{API_TOKEN}}" \\
-    -H "Content-Type: application/json" \\
-    "${{CONTROL_URL}}/api/v1/templates/apps/${{APP_NAME}}/regenerate-manifests")
-
-HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-BODY=$(echo "$RESPONSE" | sed '$d')
-
-if [ "$HTTP_CODE" = "200" ]; then
-    echo "Manifests regenerated successfully."
-    echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f\\"Files: {{', '.join(d['files_generated'])}}\\")" 2>/dev/null || true
-else
-    echo "ERROR: Failed (HTTP ${{HTTP_CODE}})"
-    echo "$BODY"
-    exit 1
-fi
-'''
+        regen_content = regenerate_script(self.app_name, self.domain, control_url)
         regen_path = Path(self.local_repo_path) / 'regenerate-manifests.sh'
         with open(regen_path, 'w') as f:
             f.write(regen_content)
@@ -1689,18 +1588,20 @@ no transformation needed.
         DeploymentLogger.log("Setup git hooks and helper scripts")
 
     async def ensure_api_token_file(self):
-        """Provision the API token file so git hooks can call thinkube-control API."""
-        token_dir = Path('/home/thinkube/.thinkube')
-        token_file = token_dir / 'api-token'
-        if token_file.exists():
-            return
+        """Make the git hooks' copy of the API token equal the platform's.
+
+        The copy is rewritten whenever it differs from the secret, so a file
+        that outlives the installation whose token it holds is corrected.
+        """
+        from api_token import SECRET_NAME, SECRET_NAMESPACE, TOKEN_FILE, needs_writing, write_token_file
+
         try:
-            mcp_secret = await self.k8s_core.read_namespaced_secret('mcp-default-token', 'thinkube-control')
+            mcp_secret = await self.k8s_core.read_namespaced_secret(SECRET_NAME, SECRET_NAMESPACE)
             api_token = self._decode_secret_data(mcp_secret, 'token')
-            token_dir.mkdir(parents=True, exist_ok=True)
-            token_file.write_text(api_token)
-            token_file.chmod(0o600)
-            DeploymentLogger.log("Provisioned API token for git hooks")
+            if not needs_writing(TOKEN_FILE, api_token):
+                return
+            write_token_file(TOKEN_FILE, api_token)
+            DeploymentLogger.log("Wrote the API token for git hooks")
         except ApiException:
             DeploymentLogger.error("MCP token not found — git hooks for thinkube.yaml regeneration will not work")
 
