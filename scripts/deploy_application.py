@@ -454,6 +454,42 @@ git reset --hard origin/main
             DeploymentLogger.error(f"Failed to get Gitea token: {e}")
             raise
 
+    async def resolve_app_secrets(self):
+        """Read the secrets manifest.yaml declares and check the store holds them."""
+        from app_secrets import declared_secrets, env_from, refusal
+
+        manifest_path = Path(self.local_repo_path) / 'manifest.yaml'
+        manifest = None
+        if manifest_path.exists():
+            with open(manifest_path, 'r') as f:
+                manifest = yaml.safe_load(f)
+
+        self.declared_secrets = declared_secrets(manifest)
+        self.deployment_env_from = env_from(self.app_name, self.declared_secrets)
+        if not self.declared_secrets:
+            return
+
+        present = await self._present_secret_names([s.name for s in self.declared_secrets])
+        problems = refusal(self.app_name, self.domain, self.thinkube_config, self.declared_secrets, present)
+        if problems:
+            raise ValueError("Secrets cannot be delivered:\n" + "\n".join(f"  - {p}" for p in problems))
+        DeploymentLogger.log(f"Secrets declared: {', '.join(s.name for s in self.declared_secrets)}")
+
+    async def _present_secret_names(self, names: List[str]) -> set:
+        """Which of these names the Secrets store holds. Values are not read."""
+        mcp_secret = await self.k8s_core.read_namespaced_secret('mcp-default-token', 'thinkube-control')
+        api_token = self._decode_secret_data(mcp_secret, 'token')
+        url = f"https://control.{self.domain}/api/v1/secrets/"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers={'Authorization': f'Bearer {api_token}'}, ssl=False) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(
+                        f"Could not read the Secrets store (HTTP {resp.status}): {await resp.text()}"
+                    )
+                listed = await resp.json()
+        wanted = set(names)
+        return {item['name'] for item in listed if item.get('name') in wanted}
+
     async def parse_thinkube_yaml(self):
         """Parse and validate thinkube.yaml configuration."""
         from thinkube_yaml_validator import validate_knative_constraints, validate_component_constraints, validate_replicas
@@ -1113,6 +1149,7 @@ git reset --hard origin/main
             'seaweedfs_password': seaweedfs_password,
             'seaweedfs_access_key': seaweedfs_access_key,
             'seaweedfs_endpoint': seaweedfs_endpoint,
+            'deployment_env_from': self.deployment_env_from,
         }
 
         # 1. Generate namespace.yaml
@@ -2246,6 +2283,10 @@ LIMIT 5;"
             DeploymentLogger.debug(" Starting Phase 2")
             await self.phase2_gather_resources()
             DeploymentLogger.debug(" Phase 2 complete")
+
+            # A required secret missing from the store stops the deploy here,
+            # before the namespace or anything in the cluster is created.
+            await self.resolve_app_secrets()
 
             # Create namespace (idempotent — skips if it already exists)
             await self.create_namespace()

@@ -13,6 +13,7 @@ from pathlib import Path
 import asyncio
 import logging
 import os
+import sys
 
 from sqlalchemy.orm import Session
 from sqlalchemy import desc, and_
@@ -99,6 +100,18 @@ class TemplateParameter(BaseModel):
     filter: Optional[Dict[str, Any]] = None  # Filter criteria for dynamic choices
 
 
+class TemplateSecret(BaseModel):
+    """A secret the template's application reads from the Secrets store.
+
+    The name is the variable the containers receive. Names are validated by
+    scripts/app_secrets.py, which both deploy paths also use.
+    """
+
+    name: str
+    description: str = ""
+    required: bool = True
+
+
 class TemplateMetadata(BaseModel):
     """Template metadata from template.yaml"""
 
@@ -106,6 +119,7 @@ class TemplateMetadata(BaseModel):
     kind: str
     metadata: Dict[str, Any]
     parameters: list[TemplateParameter]
+    secrets: list[TemplateSecret] = []
 
 
 @router.get("/list", operation_id="list_templates")
@@ -286,11 +300,23 @@ async def get_template_metadata(
             )
             parameters.append(param)
 
+        sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
+        from app_secrets import SecretsRefused, declared_secrets
+
+        try:
+            secrets = [
+                TemplateSecret(name=s.name, description=s.description, required=s.required)
+                for s in declared_secrets(template_data)
+            ]
+        except SecretsRefused as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
         return TemplateMetadata(
             apiVersion=template_data["apiVersion"],
             kind=template_data["kind"],
             metadata=template_data.get("metadata", {}),
             parameters=parameters,
+            secrets=secrets,
         )
 
     except HTTPException:

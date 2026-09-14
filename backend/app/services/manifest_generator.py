@@ -26,6 +26,11 @@ from thinkube_yaml_validator import (
     validate_replicas as _validate_replicas,
 )
 from manifest_plan import kustomization_resources as _kustomization_resources
+from app_secrets import (
+    declared_secrets as _declared_secrets_of,
+    env_from as _env_from,
+    refusal as _secrets_refusal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -264,6 +269,15 @@ class ManifestGenerator:
             msg = "thinkube.yaml validation failed:\n" + "\n".join(f"  - {v}" for v in violations)
             raise ValueError(msg)
 
+        # Secrets declared in manifest.yaml, checked against the store by name
+        self.declared_secrets = self._declared_secrets(app_path)
+        problems = _secrets_refusal(
+            self.app_name, self.domain, self.thinkube_config, self.declared_secrets,
+            self._present_secret_names(self.declared_secrets),
+        )
+        if problems:
+            raise ValueError("Secrets cannot be delivered:\n" + "\n".join(f"  - {p}" for p in problems))
+
         # Set replicas default at parse time (not in Jinja2 templates)
         deployment = self.thinkube_config.get('spec', {}).get('deployment', {})
         if 'replicas' not in deployment:
@@ -314,6 +328,7 @@ class ManifestGenerator:
             'seaweedfs_password': self.secrets.get('seaweedfs_password', ''),
             'seaweedfs_access_key': self.secrets.get('seaweedfs_access_key', ''),
             'seaweedfs_endpoint': self.secrets.get('seaweedfs_endpoint', ''),
+            'deployment_env_from': _env_from(self.app_name, self.declared_secrets),
         }
 
         k8s_dir = app_path / 'k8s'
@@ -453,6 +468,30 @@ images:
 
         logger.info(f"Regenerated {len(generated_files)} manifest files for {self.app_name}")
         return generated_files
+
+    @staticmethod
+    def _declared_secrets(app_path: Path):
+        """The secrets manifest.yaml declares; none when there is no manifest."""
+        manifest_path = app_path / 'manifest.yaml'
+        if not manifest_path.exists():
+            return []
+        with open(manifest_path, 'r') as f:
+            return _declared_secrets_of(yaml.safe_load(f))
+
+    @staticmethod
+    def _present_secret_names(declared) -> set:
+        """Which declared names the Secrets store holds. Only those names are asked."""
+        if not declared:
+            return set()
+        from app.db.session import get_session_local
+        from app.models.secrets import Secret
+
+        db = get_session_local()()
+        try:
+            rows = db.query(Secret.name).filter(Secret.name.in_([s.name for s in declared])).all()
+            return {row[0] for row in rows}
+        finally:
+            db.close()
 
     def _read_manifest_params(self) -> Dict[str, str]:
         """Read manifest parameters from the app-metadata ConfigMap on the cluster.
