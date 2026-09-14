@@ -36,6 +36,13 @@ spec:
             secretKeyRef:
               name: {{ namespace }}-keycloak
               key: client_secret
+        # Encrypts the values in the Secrets store. Created once by the
+        # thinkube-control deploy playbooks and never replaced.
+        - name: THINKUBE_ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: thinkube-encryption-key
+              key: key
         - name: KEYCLOAK_VERIFY_SSL
           value: "true"
         - name: FRONTEND_URL
