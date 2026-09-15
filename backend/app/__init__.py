@@ -212,6 +212,14 @@ async def app_lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Could not resume notebook jobs: {e}")
 
+    # Deployment runs end with the backend process; rows a previous process
+    # left pending or running would otherwise say so for ever.
+    try:
+        from app.db.init_deployments import mark_interrupted_runs
+        mark_interrupted_runs()
+    except Exception as e:
+        logger.warning(f"Could not mark interrupted deployment runs: {e}")
+
     # A venv build lives as a task in one backend process. When a rollout
     # replaces the pod under a build, the new pod never had the task, so the
     # record would say building for ever; this loop marks such records failed.
@@ -408,6 +416,10 @@ def create_app() -> FastAPI:
                 "get_component_status",        # Resource
                 "install_optional_component",  # Tool
                 "uninstall_optional_component", # Tool
+
+                # === code-server ===
+                "redeploy_code_server",        # Tool
+                "get_code_server_redeploy",    # Resource
 
                 # === Knative ===
                 "list_knative_services",       # Resource

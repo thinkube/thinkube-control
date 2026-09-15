@@ -29,6 +29,7 @@ from app.api import (
     jupyter_servers,
     nodes,
     docs_search,
+    code_server,
 )
 from app.api.llm.router import llm_router
 
@@ -50,6 +51,7 @@ api_router.include_router(
 api_router.include_router(secrets.router, prefix="/secrets", tags=["secrets"])
 api_router.include_router(resource_status.router, prefix="/resource-status", tags=["resource-status"])
 api_router.include_router(optional_components.router, prefix="/optional-components", tags=["optional-components"])
+api_router.include_router(code_server.router, prefix="/code-server", tags=["code-server"])
 api_router.include_router(harbor_images.router, tags=["harbor-images"])
 api_router.include_router(jupyter_images.router, tags=["jupyter-images"])
 api_router.include_router(cluster_resources.router, tags=["cluster-resources"])

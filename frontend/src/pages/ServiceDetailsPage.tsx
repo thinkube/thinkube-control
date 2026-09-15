@@ -29,6 +29,7 @@ import { TkFolderTabs, TkFolderTabsList, TkFolderTabsTrigger } from 'thinkube-st
 import { toast } from 'sonner';
 import { HealthHistoryChart } from '@/components/HealthHistoryChart';
 import { PodResourceEditor } from '@/components/PodResourceEditor';
+import { CodeServerRedeploy } from '@/components/CodeServerRedeploy';
 
 // Type interfaces
 interface HealthData {
@@ -495,6 +496,9 @@ export default function ServiceDetailsPage() {
               </TkTooltip>
             )}
           </div>
+
+          {/* code-server cannot redeploy itself: thinkube-control runs it */}
+          {service.name === 'code-server' && <CodeServerRedeploy />}
 
           {/* Toggle */}
           {service.can_be_disabled && (

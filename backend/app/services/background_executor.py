@@ -133,7 +133,12 @@ class BackgroundExecutor:
             db.commit()
 
             logger.info(f"Starting optional component deployment {deployment_id} for {component_name}")
-            verb = "uninstall" if deployment.template_url.endswith("/uninstall") else "install"
+            if deployment.template_url.endswith("/uninstall"):
+                verb = "uninstall"
+            elif deployment.template_url.endswith("/redeploy"):
+                verb = "redeploy"
+            else:
+                verb = "install"
 
             # Execute the playbook directly
             try:
