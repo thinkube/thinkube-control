@@ -22,6 +22,13 @@ from app.services.scrub import Scrubber
 logger = logging.getLogger(__name__)
 
 
+def _wake_queue() -> None:
+    """A run ended: the queue can start the next one."""
+    from app.services.run_queue import run_queue
+
+    run_queue.wake()
+
+
 class BackgroundExecutor:
     """Handles background execution of template deployments."""
 
@@ -104,6 +111,7 @@ class BackgroundExecutor:
 
                 # Remove from running deployments
                 self.running_deployments.pop(deployment_id, None)
+                _wake_queue()
 
         finally:
             db.close()
@@ -164,6 +172,7 @@ class BackgroundExecutor:
                 deployment.completed_at = datetime.now(timezone.utc)
                 db.commit()
                 self.running_deployments.pop(deployment_id, None)
+                _wake_queue()
 
         finally:
             db.close()

@@ -38,6 +38,7 @@ class EndpointClassifier:
         "remirror_harbor_image",
         "bulk_mirror_images",
         "redeploy_code_server",
+        "cancel_queued_run",
     }
 
     # Known operation IDs that should be resources
@@ -104,6 +105,8 @@ class EndpointClassifier:
         "get_component_status",
         # code-server
         "get_code_server_redeploy",
+        # Run queue
+        "list_runs",
         # Knative
         "list_knative_services",
         "get_knative_service",

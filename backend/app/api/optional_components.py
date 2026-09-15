@@ -63,6 +63,18 @@ class InstallResponse(BaseModel):
     status: str
     message: str
     websocket_url: Optional[str] = None
+    # Place in the run queue, 1 being the next to start.
+    queue_position: Optional[int] = None
+
+
+def _enqueue_or_refuse(db: Session, deployment: TemplateDeployment) -> int:
+    """Queue the run; the same run already queued or in flight is refused with 409."""
+    from app.services.run_queue import DuplicateRun, enqueue
+
+    try:
+        return enqueue(db, deployment)
+    except DuplicateRun as duplicate:
+        raise HTTPException(status_code=409, detail=str(duplicate))
 
 
 @router.get("/list", response_model=ComponentListResponse, operation_id="list_optional_components")
@@ -143,8 +155,6 @@ async def _install_from_template(
     current_user: dict,
 ) -> InstallResponse:
     """Queue a template-backed component through the template deployment path."""
-    from app.services.background_executor import background_executor
-
     from app.core.config import settings
 
     app_name = template.get("fixed_name") or component
@@ -170,17 +180,15 @@ async def _install_from_template(
         },
         created_by=current_user.get("preferred_username", "unknown"),
     )
-    db.add(deployment)
-    db.commit()
-
-    await background_executor.start_deployment(str(deployment.id))
+    queue_position = _enqueue_or_refuse(db, deployment)
 
     return InstallResponse(
         deployment_id=str(deployment.id),
         component=component,
-        status="installing",
-        message=f"Installation of {component_info['display_name']} started; poll get_deployment_status with the deployment id",
+        status="queued",
+        message=f"Installation of {component_info['display_name']} queued at position {queue_position}; poll get_deployment_status with the deployment id",
         websocket_url=None,
+        queue_position=queue_position,
     )
 
 
@@ -252,21 +260,15 @@ async def install_optional_component(
             },
             created_by=current_user.get("preferred_username", "unknown")
         )
-        db.add(deployment)
-        db.commit()
-
-        from app.services.background_executor import background_executor
-
-        await background_executor.execute_component_playbook(
-            str(deployment.id), playbook_path, dict(request.parameters or {}), component
-        )
+        queue_position = _enqueue_or_refuse(db, deployment)
 
         return InstallResponse(
             deployment_id=str(deployment.id),
             component=component,
-            status="installing",
-            message=f"Installation of {component_info['display_name']} started; poll get_deployment_status with the deployment id",
+            status="queued",
+            message=f"Installation of {component_info['display_name']} queued at position {queue_position}; poll get_deployment_status with the deployment id",
             websocket_url=None,
+            queue_position=queue_position,
         )
         
     except HTTPException:
@@ -356,21 +358,15 @@ async def uninstall_optional_component(
             },
             created_by=current_user.get("preferred_username", "unknown")
         )
-        db.add(deployment)
-        db.commit()
-
-        from app.services.background_executor import background_executor
-
-        await background_executor.execute_component_playbook(
-            str(deployment.id), playbook_path, {}, component
-        )
+        queue_position = _enqueue_or_refuse(db, deployment)
 
         return {
             "deployment_id": str(deployment.id),
             "component": component,
-            "status": "uninstalling",
-            "message": f"Uninstallation of {component_info['display_name']} started; poll get_deployment_status with the deployment id",
+            "status": "queued",
+            "message": f"Uninstallation of {component_info['display_name']} queued at position {queue_position}; poll get_deployment_status with the deployment id",
             "websocket_url": None,
+            "queue_position": queue_position,
         }
         
     except HTTPException:

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Check, Download, Loader2, Trash2 } from "lucide-react"
+import { Check, Clock, Download, Loader2, Trash2 } from "lucide-react"
 import {
   TkCard,
   TkCardHeader,
@@ -26,7 +26,7 @@ interface Component {
   requirements?: string[]
   requirements_met?: boolean
   missing_requirements?: string[]
-  activity?: 'installing' | 'uninstalling' | null
+  activity?: 'queued' | 'installing' | 'uninstalling' | null
 }
 
 interface ComponentCardProps {
@@ -47,7 +47,8 @@ export function ComponentCard({
   const requirementsMet = component.requirements_met ?? true  // Default to true if not specified
   const missingRequirements = component.missing_requirements ?? []
 
-  const busy = component.activity === 'installing' || component.activity === 'uninstalling'
+  // A queued run for the component counts as busy: it will run, so the card offers no second action.
+  const busy = !!component.activity
 
   const isMissingRequirement = (req: string) => {
     return missingRequirements?.includes(req)
@@ -70,8 +71,8 @@ export function ComponentCard({
               {/* Installation status badge */}
               {busy ? (
                 <TkBadge status="pending" className="gap-1">
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  {component.activity === 'installing' ? 'Installing' : 'Uninstalling'}
+                  {component.activity === 'queued' ? <Clock className="w-3 h-3" /> : <Loader2 className="w-3 h-3 animate-spin" />}
+                  {component.activity === 'queued' ? 'Queued' : component.activity === 'installing' ? 'Installing' : 'Uninstalling'}
                 </TkBadge>
               ) : isInstalled ? (
                 <TkBadge status="healthy" className="gap-1">

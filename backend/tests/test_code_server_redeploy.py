@@ -1,7 +1,6 @@
 """A code-server redeploy runs its playbook from thinkube-control and answers at once."""
 
 import asyncio
-import sys
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,7 +8,6 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-import app.services.background_executor  # noqa: F401  the module, so it can be patched by name
 import app.api.code_server as cs
 from app.db.init_deployments import INTERRUPTED, mark_interrupted_runs
 
@@ -48,40 +46,43 @@ class FakeDB:
 
 
 @pytest.fixture
-def executor(monkeypatch):
-    calls = []
+def queued(monkeypatch):
+    """Runs go to the run queue; record what was queued instead of starting anything."""
+    rows = []
 
-    class Executor:
-        async def execute_component_playbook(self, deployment_id, playbook_path, extra_vars, component):
-            calls.append((deployment_id, playbook_path, extra_vars, component))
+    def enqueue(db, deployment):
+        deployment.status = "queued"
+        db.add(deployment)
+        db.commit()
+        rows.append(deployment)
+        return len(rows)
 
-    monkeypatch.setattr(sys.modules["app.services.background_executor"], "background_executor", Executor())
-    return calls
+    import app.services.run_queue as run_queue
+
+    monkeypatch.setattr(run_queue, "enqueue", enqueue)
+    return rows
 
 
-def test_redeploy_records_the_run_and_starts_the_playbook(executor):
+def test_redeploy_queues_the_playbook_and_answers(queued):
     db = FakeDB()
     answer = asyncio.run(cs.redeploy_code_server(current_user={"preferred_username": "u"}, db=db))
     row = db.added[0]
-    assert row.template_url == "core://code-server/redeploy" and row.status == "pending" and db.commits == 1
-    assert executor == [(str(row.id), "ansible/40_thinkube/core/code-server/20_redeploy.yaml", {}, "code-server")]
-    assert answer.deployment_id == str(row.id) and answer.status == "redeploying"
+    assert queued == [row] and row.template_url == "core://code-server/redeploy" and row.status == "queued"
+    assert row.variables == {"playbook": "ansible/40_thinkube/core/code-server/20_redeploy.yaml", "component": "code-server"}
+    assert answer.deployment_id == str(row.id) and answer.status == "queued" and answer.queue_position == 1
     assert "get_deployment_status" in answer.message
 
 
-@pytest.mark.parametrize("status", ["pending", "running"])
-def test_a_redeploy_in_flight_refuses_a_second_one(executor, status):
-    db = FakeDB([SimpleNamespace(id="d1", status=status)])
+def test_a_redeploy_already_queued_refuses_a_second_one(monkeypatch):
+    import app.services.run_queue as run_queue
+
+    def enqueue(db, deployment):
+        raise run_queue.DuplicateRun(SimpleNamespace(name="redeploy-code-server", status="running", id="d1"))
+
+    monkeypatch.setattr(run_queue, "enqueue", enqueue)
     with pytest.raises(HTTPException) as refused:
-        asyncio.run(cs.redeploy_code_server(current_user={}, db=db))
+        asyncio.run(cs.redeploy_code_server(current_user={}, db=FakeDB()))
     assert refused.value.status_code == 409 and "d1" in refused.value.detail
-    assert executor == [] and db.added == []
-
-
-def test_a_finished_redeploy_allows_a_new_one(executor):
-    db = FakeDB([SimpleNamespace(id="d1", status="failed")])
-    asyncio.run(cs.redeploy_code_server(current_user={}, db=db))
-    assert len(executor) == 1
 
 
 def test_the_latest_run_is_reported():

@@ -406,26 +406,29 @@ async def deploy_template_async(
             variables=deployment_vars,
             created_by=current_user.get("preferred_username") or "unknown",
         )
-        db.add(deployment)
-        db.commit()
+        # The deploy waits in the run queue and runs on the server, detached
+        # from this call. The status endpoint reports its place and progress;
+        # the deployment websocket follows its steps as they are recorded.
+        from app.services.run_queue import DuplicateRun, enqueue
 
-        # The deploy runs on the server, detached from this call. The status
-        # endpoint reports its progress; the deployment websocket follows its
-        # steps as they are recorded.
-        background_tasks.add_task(
-            background_executor.start_deployment, str(deployment.id)
-        )
+        try:
+            queue_position = enqueue(db, deployment)
+        except DuplicateRun as duplicate:
+            raise HTTPException(status_code=409, detail=str(duplicate))
 
         return DeploymentResponse(
             deployment_id=str(deployment.id),
-            status="running",
-            message="Deployment started. Check the status endpoint for progress.",
+            status="queued",
+            message=f"Deployment queued at position {queue_position}. Check the status endpoint for progress.",
+            queue_position=queue_position,
             websocket_url=f"/ws/deployment/{deployment.id}",
             conflict_warning=(
                 conflict_message if conflict_message and overwrite_confirmed else None
             ),
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to create deployment: {e}")
         raise HTTPException(
@@ -543,6 +546,10 @@ async def get_deployment_status(
         .count()
     )
     status["current_step"] = (steps[0].task_name or steps[0].message) if steps else None
+    if deployment.status == "queued":
+        from app.services.run_queue import position
+
+        status["queue_position"] = position(db, deployment)
     if deployment.status in ("failed", "cancelled"):
         last_error = (
             db.query(DeploymentLog)
@@ -603,9 +610,9 @@ async def cancel_deployment(
     current_user: dict = Depends(get_current_user_dual_auth),
 ):
     """
-    Cancel a pending or running deployment
+    Cancel a deployment, or remove it from the run queue
 
-    Only deployments in 'pending' or 'running' status can be cancelled.
+    Only deployments in 'queued', 'pending' or 'running' status can be cancelled.
     """
     deployment = db.query(TemplateDeployment).filter_by(id=deployment_id).first()
 
@@ -616,6 +623,11 @@ async def cancel_deployment(
     is_admin = "admin" in current_user.get("realm_access", {}).get("roles", [])
     if not is_admin and deployment.created_by != current_user.get("preferred_username"):
         raise HTTPException(status_code=403, detail="Access denied")
+
+    from app.services.run_queue import cancel_queued
+
+    if cancel_queued(db, deployment):
+        return {"message": "Deployment removed from the queue"}
 
     # Check if deployment can be cancelled
     if deployment.status not in ["pending", "running"]:

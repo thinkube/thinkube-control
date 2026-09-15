@@ -220,6 +220,11 @@ async def app_lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Could not mark interrupted deployment runs: {e}")
 
+    # Deployment runs start one at a time from the run queue; queued runs
+    # recorded before this start are picked up again.
+    from app.services.run_queue import run_queue
+    run_queue.start()
+
     # A venv build lives as a task in one backend process. When a rollout
     # replaces the pod under a build, the new pod never had the task, so the
     # record would say building for ever; this loop marks such records failed.
@@ -420,6 +425,10 @@ def create_app() -> FastAPI:
                 # === code-server ===
                 "redeploy_code_server",        # Tool
                 "get_code_server_redeploy",    # Resource
+
+                # === Run queue ===
+                "list_runs",                   # Resource
+                "cancel_queued_run",           # Tool
 
                 # === Knative ===
                 "list_knative_services",       # Resource

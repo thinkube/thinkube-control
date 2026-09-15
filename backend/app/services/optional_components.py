@@ -192,7 +192,7 @@ class OptionalComponentService:
         }
     
     def _activity(self, component_name: str) -> Optional[str]:
-        """``installing`` or ``uninstalling`` while a run for the component is in flight, else None."""
+        """``queued`` while a run for the component waits, ``installing`` or ``uninstalling`` while it runs, else None."""
         try:
             from app.models.deployments import TemplateDeployment
 
@@ -202,7 +202,7 @@ class OptionalComponentService:
                     TemplateDeployment.template_url.in_(
                         [f"optional://{component_name}", f"optional://{component_name}/uninstall"]
                     ),
-                    TemplateDeployment.status.in_(["pending", "running"]),
+                    TemplateDeployment.status.in_(["queued", "pending", "running"]),
                 )
                 .order_by(TemplateDeployment.created_at.desc())
                 .first()
@@ -211,6 +211,8 @@ class OptionalComponentService:
             return None
         if active is None:
             return None
+        if active.status == "queued":
+            return "queued"
         return "uninstalling" if active.template_url.endswith("/uninstall") else "installing"
 
     def _check_if_installed(self, component_name: str) -> bool:

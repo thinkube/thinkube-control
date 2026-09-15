@@ -24,7 +24,6 @@ router = APIRouter(tags=["code-server"])
 # Relative to the thinkube repository root, like optional component playbooks.
 REDEPLOY_PLAYBOOK = "ansible/40_thinkube/core/code-server/20_redeploy.yaml"
 REDEPLOY_URL = "core://code-server/redeploy"
-IN_FLIGHT = ("pending", "running")
 
 
 class RedeployResponse(BaseModel):
@@ -32,6 +31,8 @@ class RedeployResponse(BaseModel):
     deployment_id: str
     status: str
     message: str
+    # Place in the run queue, 1 being the next to start.
+    queue_position: Optional[int] = None
 
 
 class RedeployRunResponse(BaseModel):
@@ -57,43 +58,35 @@ async def redeploy_code_server(
     current_user: dict = Depends(get_current_user_dual_auth),
     db: Session = Depends(get_db),
 ):
-    """Rebuild the code-server image and redeploy code-server; answers at once with a deployment id.
+    """Queue a rebuild of the code-server image and a redeploy of code-server; answers at once with a deployment id.
 
-    The run takes place in thinkube-control, so it keeps going while the
-    code-server pod restarts. It leaves the workspace repositories untouched.
-    Poll get_deployment_status with the id for the step in progress and the
-    outcome; get_deployment_logs has the full log. A second redeploy is refused
-    while one is pending or running.
+    Runs start one at a time from the run queue. The redeploy takes place in
+    thinkube-control, so it keeps going while the code-server pod restarts,
+    and it leaves the workspace repositories untouched. Poll
+    get_deployment_status with the id for the queue position, the step in
+    progress and the outcome; get_deployment_logs has the full log. A second
+    redeploy is refused while one is queued or in flight.
     """
-    latest = _latest_run(db)
-    if latest is not None and latest.status in IN_FLIGHT:
-        raise HTTPException(
-            status_code=409,
-            detail=f"A code-server redeploy is already {latest.status}: {latest.id}",
-        )
+    from app.services.run_queue import DuplicateRun, enqueue
 
     deployment = TemplateDeployment(
         id=uuid4(),
         name="redeploy-code-server",
         template_url=REDEPLOY_URL,
-        status="pending",
-        variables={"playbook": REDEPLOY_PLAYBOOK},
+        variables={"playbook": REDEPLOY_PLAYBOOK, "component": "code-server"},
         created_by=current_user.get("preferred_username", "unknown"),
     )
-    db.add(deployment)
-    db.commit()
-
-    from app.services.background_executor import background_executor
-
-    await background_executor.execute_component_playbook(
-        str(deployment.id), REDEPLOY_PLAYBOOK, {}, "code-server"
-    )
-    logger.info(f"code-server redeploy {deployment.id} started")
+    try:
+        queue_position = enqueue(db, deployment)
+    except DuplicateRun as duplicate:
+        raise HTTPException(status_code=409, detail=str(duplicate))
+    logger.info(f"code-server redeploy {deployment.id} queued at position {queue_position}")
 
     return RedeployResponse(
         deployment_id=str(deployment.id),
-        status="redeploying",
-        message="code-server redeploy started; poll get_deployment_status with the deployment id",
+        status="queued",
+        message=f"code-server redeploy queued at position {queue_position}; poll get_deployment_status with the deployment id",
+        queue_position=queue_position,
     )
 
 

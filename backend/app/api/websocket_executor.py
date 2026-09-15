@@ -415,14 +415,14 @@ async def _stream_deployment_logs(websocket: WebSocket, deployment_id: str):
             await asyncio.sleep(0.01)
 
         # If deployment is still running, wait for new logs
-        if deployment.status in ["pending", "running"]:
+        if deployment.status in ["queued", "pending", "running"]:
             await websocket.send_json(
                 {"type": "info", "message": "Waiting for new logs..."}
             )
 
             # Poll for new logs
             last_log_id = logs[-1].id if logs else None
-            while deployment.status in ["pending", "running"]:
+            while deployment.status in ["queued", "pending", "running"]:
                 # Get new logs
                 query = db.query(DeploymentLog).filter_by(deployment_id=deployment_id)
                 if last_log_id:

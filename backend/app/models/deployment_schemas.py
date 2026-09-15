@@ -40,6 +40,8 @@ class DeploymentResponse(BaseModel):
     websocket_url: Optional[str] = None
     requires_confirmation: Optional[bool] = False
     conflict_warning: Optional[str] = None
+    # Place in the run queue, 1 being the next to start.
+    queue_position: Optional[int] = None
 
     class Config:
         json_schema_extra = {
@@ -69,6 +71,8 @@ class DeploymentStatus(BaseModel):
     current_step: Optional[str] = None
     steps_done: Optional[int] = None
     reason: Optional[str] = None
+    # Place in the run queue while the run waits to start.
+    queue_position: Optional[int] = None
 
     class Config:
         from_attributes = True

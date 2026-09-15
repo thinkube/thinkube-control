@@ -16,6 +16,7 @@ import yaml
 from sqlalchemy.orm import Session
 
 from app.core.api_tokens import get_current_user_dual_auth
+from app.services.run_queue import enqueue
 from app.db.session import get_db
 from app.models.deployments import TemplateDeployment
 from app.models.deployment_schemas import (
@@ -24,7 +25,6 @@ from app.models.deployment_schemas import (
     StackTemplateStatus,
     TemplateDeployAsyncRequest,
 )
-from app.services.background_executor import background_executor
 
 logger = logging.getLogger(__name__)
 from app.core.config import settings
@@ -298,22 +298,19 @@ async def _deploy_stack_sequential(
                     id=uuid4(),
                     name=template_name,
                     template_url=github_url,
-                    status="pending",
                     variables=deployment_vars,
                     created_by=username,
                 )
-                db.add(deployment)
-                db.commit()
+                # The run queue deploys the stack's templates one after the
+                # other, in the order they are queued here.
+                position = enqueue(db, deployment)
                 deployment_id = str(deployment.id)
             finally:
                 db.close()
 
-            # Start deployment and wait for completion
-            await background_executor.start_deployment(deployment_id)
-
             logger.info(
                 f"[Stack {stack_name}] Template '{template_name}' deployment "
-                f"completed (id: {deployment_id})"
+                f"queued at position {position} (id: {deployment_id})"
             )
 
         except Exception as e:

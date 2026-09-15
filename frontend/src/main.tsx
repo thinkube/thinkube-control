@@ -14,6 +14,7 @@ import { ThemeToggle } from './components/ThemeToggle';
 import { UserMenu } from './components/UserMenu';
 import ErrorBoundary from './components/ErrorBoundary';
 import { DownloadIndicator } from './components/DownloadIndicator';
+import { RunsIndicator } from './components/RunsIndicator';
 
 // Pages
 import HomePage from './pages/HomePage';
@@ -215,6 +216,7 @@ function AppContent() {
       topBarTitle={getPageTitle()}
       topBarContent={
         <div className="flex items-center gap-3">
+          <RunsIndicator />
           <DownloadIndicator />
           <ThemeToggle />
           <UserMenu />

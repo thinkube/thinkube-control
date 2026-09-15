@@ -41,53 +41,69 @@ class FakeService:
 
 
 @pytest.fixture
-def executor(monkeypatch):
-    calls = []
+def queued(monkeypatch):
+    """Runs go to the run queue; record what was queued instead of starting anything."""
+    rows = []
 
-    class Executor:
-        async def execute_component_playbook(self, deployment_id, playbook_path, extra_vars, component):
-            calls.append(("playbook", deployment_id, playbook_path, extra_vars, component))
+    def enqueue(db, deployment):
+        deployment.status = "queued"
+        db.add(deployment)
+        db.commit()
+        rows.append(deployment)
+        return len(rows)
 
-        async def start_deployment(self, deployment_id):
-            calls.append(("deployment", deployment_id))
+    import app.services.run_queue as run_queue
 
-    import sys
-
-    monkeypatch.setattr(sys.modules["app.services.background_executor"], "background_executor", Executor())
-    return calls
+    monkeypatch.setattr(run_queue, "enqueue", enqueue)
+    return rows
 
 
-def test_install_without_a_body_starts_the_playbook_and_answers(monkeypatch, executor):
+def test_install_without_a_body_queues_the_playbook_and_answers(monkeypatch, queued):
     monkeypatch.setattr(oc, "OptionalComponentService", FakeService)
     db = FakeDB()
     answer = asyncio.run(oc.install_optional_component("nats", None, None, current_user={"preferred_username": "u"}, db=db))
-    assert answer.status == "installing"
+    assert answer.status == "queued" and answer.queue_position == 1
     assert answer.websocket_url is None
     assert "get_deployment_status" in answer.message
     row = db.added[0]
-    assert row.template_url == "optional://nats" and db.commits == 1
-    assert executor == [("playbook", str(row.id), "/playbooks/nats/install.yaml", {}, "nats")]
+    assert queued == [row] and row.template_url == "optional://nats" and db.commits == 1
+    assert row.variables["playbook"] == "/playbooks/nats/install.yaml" and row.variables["component"] == "nats"
     assert answer.deployment_id == str(row.id)
 
 
-def test_install_passes_the_parameters_to_the_playbook(monkeypatch, executor):
+def test_install_keeps_the_parameters_for_the_playbook(monkeypatch, queued):
     monkeypatch.setattr(oc, "OptionalComponentService", FakeService)
     body = oc.ComponentInstallRequest(parameters={"replicas": 3})
     asyncio.run(oc.install_optional_component("nats", body, None, current_user={}, db=FakeDB()))
-    assert executor[0][3] == {"replicas": 3}
+    assert queued[0].variables["parameters"] == {"replicas": 3}
 
 
-def test_uninstall_starts_its_playbook_and_answers(monkeypatch, executor):
+def test_uninstall_queues_its_playbook_and_answers(monkeypatch, queued):
     monkeypatch.setattr(oc, "OptionalComponentService", FakeService)
     db = FakeDB()
     answer = asyncio.run(oc.uninstall_optional_component("nats", current_user={"preferred_username": "u"}, db=db))
-    assert answer["status"] == "uninstalling" and answer["websocket_url"] is None
+    assert answer["status"] == "queued" and answer["queue_position"] == 1 and answer["websocket_url"] is None
     row = db.added[0]
-    assert row.template_url == "optional://nats/uninstall"
-    assert executor == [("playbook", str(row.id), "/playbooks/nats/uninstall.yaml", {}, "nats")]
+    assert queued == [row] and row.template_url == "optional://nats/uninstall"
+    assert row.variables["playbook"] == "/playbooks/nats/uninstall.yaml"
 
 
-def test_a_template_backed_install_records_what_a_deploy_needs(monkeypatch, executor):
+def test_the_same_install_queued_twice_is_refused(monkeypatch):
+    from fastapi import HTTPException
+
+    import app.services.run_queue as run_queue
+
+    def enqueue(db, deployment):
+        raise run_queue.DuplicateRun(SimpleNamespace(name="optional-nats", status="queued", id="d1"))
+
+    monkeypatch.setattr(run_queue, "enqueue", enqueue)
+    monkeypatch.setattr(oc, "OptionalComponentService", FakeService)
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(oc.install_optional_component("nats", None, None, current_user={}, db=FakeDB()))
+    assert refused.value.status_code == 409 and "d1" in refused.value.detail
+
+
+def test_a_template_backed_install_records_what_a_deploy_needs(monkeypatch, queued):
     template = {"url": "https://github.com/thinkube/tkt-ollama", "fixed_name": "ollama"}
     monkeypatch.setattr(oc, "OptionalComponentService", lambda db: FakeService(db, template))
     import app.api.templates as templates
@@ -96,8 +112,8 @@ def test_a_template_backed_install_records_what_a_deploy_needs(monkeypatch, exec
     db = FakeDB()
     answer = asyncio.run(oc.install_optional_component("ollama", None, None, current_user={"preferred_username": "u"}, db=db))
     row = db.added[0]
-    assert answer.status == "installing" and answer.websocket_url is None
-    assert executor == [("deployment", str(row.id))]
+    assert answer.status == "queued" and answer.websocket_url is None
+    assert queued == [row] and not row.template_url.startswith(("optional://", "core://"))
     assert row.variables["template_url"] == template["url"]
     assert row.variables["deployment_namespace"] == "ollama"
     assert row.variables["domain_name"] == "example.test"
@@ -134,6 +150,8 @@ def test_a_component_in_flight_reports_its_activity():
     assert service._activity("nats") == "uninstalling"
     service.db = DB(SimpleNamespace(template_url="optional://nats", status="pending"))
     assert service._activity("nats") == "installing"
+    service.db = DB(SimpleNamespace(template_url="optional://nats", status="queued"))
+    assert service._activity("nats") == "queued"
     service.db = DB(None)
     assert service._activity("nats") is None
 
