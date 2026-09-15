@@ -25,7 +25,7 @@ from thinkube_yaml_validator import (
     validate_component_constraints as _validate_component_constraints,
     validate_replicas as _validate_replicas,
 )
-from manifest_plan import kustomization_resources as _kustomization_resources
+from manifest_plan import kustomization_content as _kustomization_content, kustomization_resources as _kustomization_resources
 from namespace_quota import NON_GPU_QUOTA as _NON_GPU_QUOTA, memory_quota as _memory_quota, node_view as _node_view
 from app_secrets import (
     declared_secrets as _declared_secrets_of,
@@ -395,26 +395,18 @@ data:
         generated_files['build-workflow.yaml'] = env.get_template('build-workflow.j2').render(**workflow_vars)
 
         # kustomization.yaml
-        kustomization_resources = _kustomization_resources(
-            is_knative=is_knative,
-            has_database=has_database,
-            needs_storage=needs_storage,
+        generated_files['kustomization.yaml'] = _kustomization_content(
+            app_name=self.app_name,
+            container_registry=container_registry,
+            containers=containers,
+            resources=_kustomization_resources(
+                is_knative=is_knative,
+                has_database=has_database,
+                needs_storage=needs_storage,
+                has_workflows=has_workflows,
+            ),
             has_workflows=has_workflows,
         )
-
-        images_list = []
-        for container in containers:
-            images_list.append(f"  - name: {container_registry}/thinkube/{self.app_name}-{container['name']}\n    newTag: latest")
-
-        generated_files['kustomization.yaml'] = f"""apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-
-resources:
-{chr(10).join(f"  - {r}" for r in kustomization_resources)}
-
-images:
-{chr(10).join(images_list)}
-"""
 
         # argocd-postsync-hook.yaml — read existing one rather than regenerate
         # (it contains deployment reporting logic that doesn't change)

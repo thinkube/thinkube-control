@@ -1322,30 +1322,20 @@ data:
         (k8s_dir / 'build-workflow.yaml').write_text(workflow_content)
 
         # 11. Generate kustomization.yaml
-        from manifest_plan import kustomization_resources as build_kustomization_resources
+        from manifest_plan import kustomization_content, kustomization_resources as build_kustomization_resources
 
-        kustomization_resources = build_kustomization_resources(
-            is_knative=is_knative,
-            has_database=has_database,
-            needs_storage=needs_storage,
+        (k8s_dir / 'kustomization.yaml').write_text(kustomization_content(
+            app_name=self.app_name,
+            container_registry=container_registry,
+            containers=containers,
+            resources=build_kustomization_resources(
+                is_knative=is_knative,
+                has_database=has_database,
+                needs_storage=needs_storage,
+                has_workflows=has_workflows,
+            ),
             has_workflows=has_workflows,
-        )
-
-        # Build images list
-        images_list = []
-        for container in containers:
-            images_list.append(f"  - name: {container_registry}/thinkube/{self.app_name}-{container['name']}\n    newTag: latest")
-
-        kustomization_content = f"""apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-
-resources:
-{chr(10).join(f"  - {r}" for r in kustomization_resources)}
-
-images:
-{chr(10).join(images_list)}
-"""
-        (k8s_dir / 'kustomization.yaml').write_text(kustomization_content)
+        ))
 
         # 12. Generate argocd-postsync-hook.yaml
         postsync_content = f"""apiVersion: batch/v1

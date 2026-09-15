@@ -17,7 +17,7 @@ REPO = Path(__file__).resolve().parents[2]
 TEMPLATES = REPO / "templates/k8s"
 sys.path.insert(0, str(REPO / "scripts"))
 
-from manifest_plan import kustomization_resources  # noqa: E402
+from manifest_plan import kustomization_content, kustomization_resources  # noqa: E402
 from thinkube_yaml_validator import validate_knative_constraints  # noqa: E402
 
 
@@ -318,6 +318,43 @@ def test_a_knative_app_still_lists_its_own_resources():
         "knative-service.yaml",
         "argocd-postsync-hook.yaml",
     ]
+
+
+def _kustomization(has_workflows):
+    return yaml.safe_load(kustomization_content(
+        app_name="wf-check",
+        container_registry="registry.thinkube.com",
+        containers=[{"name": "backend"}, {"name": "api-server"}],
+        resources=["deployments.yaml"],
+        has_workflows=has_workflows,
+    ))
+
+
+def test_the_step_image_variable_follows_the_image_the_deployment_runs():
+    doc = _kustomization(True)
+    assert doc["images"] == [
+        {"name": "registry.thinkube.com/thinkube/wf-check-backend", "newTag": "latest"},
+        {"name": "registry.thinkube.com/thinkube/wf-check-api-server", "newTag": "latest"},
+    ]
+    by_source = {r["source"]["name"]: r for r in doc["replacements"]}
+    backend = by_source["wf-check-backend"]
+    assert backend["source"] == {
+        "kind": "Deployment", "name": "wf-check-backend",
+        "fieldPath": "spec.template.spec.containers.[name=backend].image",
+    }
+    assert [t["select"]["name"] for t in backend["targets"]] == ["wf-check-backend", "wf-check-api-server"]
+    assert backend["targets"][1]["fieldPaths"] == [
+        "spec.template.spec.containers.[name=api-server].env.[name=CONTAINER_IMAGE_BACKEND].value"
+    ]
+    assert by_source["wf-check-api-server"]["targets"][0]["fieldPaths"] == [
+        "spec.template.spec.containers.[name=backend].env.[name=CONTAINER_IMAGE_API_SERVER].value"
+    ]
+
+
+def test_without_workflows_the_kustomization_has_no_replacements():
+    doc = _kustomization(False)
+    assert "replacements" not in doc
+    assert doc["resources"] == ["deployments.yaml"]
 
 
 # --- knative refuses it ------------------------------------------------------
