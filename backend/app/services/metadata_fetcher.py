@@ -3,7 +3,7 @@ Shared metadata fetcher for thinkube-control.
 
 Fetches catalog JSON files from two sources:
 1. thinkube/thinkube-metadata (platform catalog, public)
-2. {GITHUB_ORG}/{GITHUB_ORG}-metadata (user catalog, private, authenticated)
+2. {GITHUB_USERNAME}/{GITHUB_USERNAME}-metadata (user catalog, private, authenticated)
 
 Merges results and caches with the standard fallback chain:
 memory cache (5min TTL) → fetch → stale memory → persistent cache.
@@ -106,10 +106,10 @@ def _merge_dict(platform: Dict, user: Dict) -> Dict:
 
 
 def _get_github_config():
-    """Get GitHub org and token from environment (via Settings or direct env)."""
-    github_org = os.environ.get("GITHUB_ORG", "")
+    """Get the GitHub username and token from the environment."""
+    github_username = os.environ.get("GITHUB_USERNAME", "")
     github_token = os.environ.get("GITHUB_TOKEN", "")
-    return github_org, github_token
+    return github_username, github_token
 
 
 def fetch_merged_catalog(
@@ -139,7 +139,7 @@ def fetch_merged_catalog(
     if cache_entry and (now - cache_entry["time"]) < _CACHE_TTL:
         return cache_entry["data"]
 
-    github_org, github_token = _get_github_config()
+    github_username, github_token = _get_github_config()
 
     # Fetch platform catalog (public, no auth)
     platform_url = _github_raw_url(_PLATFORM_ORG, _PLATFORM_METADATA_REPO, file_name)
@@ -153,9 +153,9 @@ def fetch_merged_catalog(
 
     # Fetch user catalog (private, with auth)
     user_items = None
-    if github_org and github_token:
-        user_repo = f"{github_org}-metadata"
-        user_url = _github_raw_url(github_org, user_repo, file_name)
+    if github_username and github_token:
+        user_repo = f"{github_username}-metadata"
+        user_url = _github_raw_url(github_username, user_repo, file_name)
         user_data = _fetch_json(user_url, token=github_token)
         if user_data:
             user_items = user_data.get(extract_key, [] if merge_strategy == "list" else {})
@@ -164,7 +164,7 @@ def fetch_merged_catalog(
                 for item in user_items:
                     item.setdefault("_source", "user")
             logger.info(
-                f"Fetched {catalog_name} from user metadata ({github_org}/{user_repo}): "
+                f"Fetched {catalog_name} from user metadata ({github_username}/{user_repo}): "
                 f"{len(user_items)} entries"
             )
 

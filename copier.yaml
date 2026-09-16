@@ -44,10 +44,9 @@ keycloak_realm:
   default: thinkube
   help: "Keycloak realm name"
 
-github_org:
+github_username:
   type: str
-  default: "{{ domain_name.split('.')[0] }}"
-  help: "GitHub organization for the repository"
+  help: "GitHub account that owns the token; repositories are created there"
 
 enable_dev_mode:
   type: bool
@@ -109,7 +108,7 @@ _message_after_copy: |
   Next steps:
   1. cd {{ project_name }}
   2. git init && git add . && git commit -m "Initial commit"
-  3. git remote add origin git@github.com:{{ github_org }}/{{ project_name }}.git
+  3. git remote add origin git@github.com:{{ github_username }}/{{ project_name }}.git
   4. git push -u origin main
   
   To deploy:

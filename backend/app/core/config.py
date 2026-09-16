@@ -50,7 +50,7 @@ class Settings(BaseSettings):
 
     # GitHub integration
     GITHUB_TOKEN: str = ""
-    GITHUB_ORG: str = ""
+    GITHUB_USERNAME: str = ""
 
     # Dashboard service URLs - configured via environment variables
     SEAWEEDFS_URL: str

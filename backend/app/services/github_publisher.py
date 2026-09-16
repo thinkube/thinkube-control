@@ -1,7 +1,7 @@
 """
 GitHub publisher service for Thinkube Control.
 
-Publishes deployed apps as reusable templates to the user's GitHub org.
+Publishes deployed apps as reusable templates to the user's GitHub account.
 Handles repo creation, code push, and metadata repo updates.
 """
 
@@ -33,17 +33,17 @@ PUBLISH_EXCLUDE_PATTERNS = {
 
 
 class GitHubPublisher:
-    """Publishes deployed apps as templates to the user's GitHub org."""
+    """Publishes deployed apps as templates to the user's GitHub account."""
 
     def __init__(self):
         self.github_token = os.environ.get("GITHUB_TOKEN", "")
-        self.github_org = os.environ.get("GITHUB_ORG", "")
+        self.github_username = os.environ.get("GITHUB_USERNAME", "")
         self.api_base = "https://api.github.com"
 
         if not self.github_token:
             raise RuntimeError("GITHUB_TOKEN not configured")
-        if not self.github_org:
-            raise RuntimeError("GITHUB_ORG not configured")
+        if not self.github_username:
+            raise RuntimeError("GITHUB_USERNAME not configured")
 
     @property
     def _headers(self) -> Dict[str, str]:
@@ -62,11 +62,11 @@ class GitHubPublisher:
         """Create a GitHub repo in the user's org, or return existing one."""
         async with aiohttp.ClientSession(headers=self._headers) as session:
             # Check if repo exists
-            url = f"{self.api_base}/repos/{self.github_org}/{name}"
+            url = f"{self.api_base}/repos/{self.github_username}/{name}"
             async with session.get(url) as resp:
                 if resp.status == 200:
                     repo_data = await resp.json()
-                    logger.info(f"Repo {self.github_org}/{name} already exists, will update")
+                    logger.info(f"Repo {self.github_username}/{name} already exists, will update")
 
                     # Update description if changed
                     if repo_data.get("description") != description:
@@ -79,8 +79,8 @@ class GitHubPublisher:
 
                     return repo_data
 
-            # Create new repo
-            create_url = f"{self.api_base}/orgs/{self.github_org}/repos"
+            # Create new repo in the token owner's account
+            create_url = f"{self.api_base}/user/repos"
             payload = {
                 "name": name,
                 "description": description,
@@ -94,22 +94,10 @@ class GitHubPublisher:
             async with session.post(create_url, json=payload) as resp:
                 if resp.status == 201:
                     repo_data = await resp.json()
-                    logger.info(f"Created repo {self.github_org}/{name}")
+                    logger.info(f"Created repo {self.github_username}/{name}")
                     return repo_data
-                elif resp.status == 422:
-                    # Might be a personal account, try user endpoint
-                    create_url = f"{self.api_base}/user/repos"
-                    payload["name"] = name
-                    async with session.post(create_url, json=payload) as resp2:
-                        if resp2.status == 201:
-                            repo_data = await resp2.json()
-                            logger.info(f"Created repo {self.github_org}/{name} (user account)")
-                            return repo_data
-                        body = await resp2.text()
-                        raise RuntimeError(f"Failed to create repo: {resp2.status} {body}")
-                else:
-                    body = await resp.text()
-                    raise RuntimeError(f"Failed to create repo: {resp.status} {body}")
+                body = await resp.text()
+                raise RuntimeError(f"Failed to create repo: {resp.status} {body}")
 
     def push_template_code(
         self,
@@ -136,7 +124,7 @@ class GitHubPublisher:
                     shutil.copy2(item, dest)
 
             # Init git and push
-            remote_url = f"https://x-access-token:{self.github_token}@github.com/{self.github_org}/{repo_name}.git"
+            remote_url = f"https://x-access-token:{self.github_token}@github.com/{self.github_username}/{repo_name}.git"
 
             cmds = [
                 ["git", "init"],
@@ -164,7 +152,7 @@ class GitHubPublisher:
                         f"stderr: {result.stderr}"
                     )
 
-            logger.info(f"Pushed template code to {self.github_org}/{repo_name}")
+            logger.info(f"Pushed template code to {self.github_username}/{repo_name}")
 
         finally:
             shutil.rmtree(staging_dir, ignore_errors=True)
@@ -174,7 +162,7 @@ class GitHubPublisher:
         template_entry: Dict,
     ) -> None:
         """Add or update a template entry in the user's metadata repo."""
-        metadata_repo = f"{self.github_org}-metadata"
+        metadata_repo = f"{self.github_username}-metadata"
         file_path = "repositories.json"
 
         async with aiohttp.ClientSession(headers=self._headers) as session:
@@ -182,7 +170,7 @@ class GitHubPublisher:
             await self._ensure_metadata_repo(session, metadata_repo)
 
             # Fetch current repositories.json
-            url = f"{self.api_base}/repos/{self.github_org}/{metadata_repo}/contents/{file_path}"
+            url = f"{self.api_base}/repos/{self.github_username}/{metadata_repo}/contents/{file_path}"
             current_data = None
             sha = None
 
@@ -197,7 +185,7 @@ class GitHubPublisher:
             if current_data is None:
                 current_data = {
                     "version": "1.0.0",
-                    "description": f"Template metadata for {self.github_org}",
+                    "description": f"Template metadata for {self.github_username}",
                     "repositories": [],
                 }
 
@@ -242,40 +230,28 @@ class GitHubPublisher:
         repo_name: str,
     ) -> None:
         """Create the metadata repo if it doesn't exist."""
-        url = f"{self.api_base}/repos/{self.github_org}/{repo_name}"
+        url = f"{self.api_base}/repos/{self.github_username}/{repo_name}"
         async with session.get(url) as resp:
             if resp.status == 200:
                 return
 
-        # Create it
-        create_url = f"{self.api_base}/orgs/{self.github_org}/repos"
+        # Create it in the token owner's account
+        create_url = f"{self.api_base}/user/repos"
         payload = {
             "name": repo_name,
-            "description": f"Template metadata for {self.github_org}",
+            "description": f"Template metadata for {self.github_username}",
             "private": True,
             "auto_init": True,
         }
 
         async with session.post(create_url, json=payload) as resp:
-            if resp.status == 201:
-                logger.info(f"Created metadata repo {self.github_org}/{repo_name}")
-                # Wait a moment for GitHub to initialize the repo
-                import asyncio
-                await asyncio.sleep(2)
-            elif resp.status == 422:
-                # Try user endpoint
-                create_url = f"{self.api_base}/user/repos"
-                async with session.post(create_url, json=payload) as resp2:
-                    if resp2.status == 201:
-                        logger.info(f"Created metadata repo {self.github_org}/{repo_name} (user account)")
-                        import asyncio
-                        await asyncio.sleep(2)
-                    else:
-                        body = await resp2.text()
-                        raise RuntimeError(f"Failed to create metadata repo: {resp2.status} {body}")
-            else:
+            if resp.status != 201:
                 body = await resp.text()
                 raise RuntimeError(f"Failed to create metadata repo: {resp.status} {body}")
+            logger.info(f"Created metadata repo {self.github_username}/{repo_name}")
+            # Wait a moment for GitHub to initialize the repo
+            import asyncio
+            await asyncio.sleep(2)
 
     async def publish_app_as_template(
         self,
@@ -311,7 +287,7 @@ class GitHubPublisher:
             description=description,
             private=private,
         )
-        repo_url = repo_data.get("html_url", f"https://github.com/{self.github_org}/{template_name}")
+        repo_url = repo_data.get("html_url", f"https://github.com/{self.github_username}/{template_name}")
 
         # Step 2: Push code
         self.push_template_code(
@@ -322,12 +298,12 @@ class GitHubPublisher:
         # Step 3: Update metadata repo
         template_entry = {
             "name": template_name,
-            "org": self.github_org,
-            "full_name": f"{self.github_org}/{template_name}",
+            "org": self.github_username,
+            "full_name": f"{self.github_username}/{template_name}",
             "description": description,
             "type": "application_template",
             "github_url": repo_url,
-            "ssh_url": f"git@github.com:{self.github_org}/{template_name}.git",
+            "ssh_url": f"git@github.com:{self.github_username}/{template_name}.git",
             "clone_for_development": False,
         }
 
@@ -354,6 +330,6 @@ class GitHubPublisher:
         return {
             "template_name": template_name,
             "repo_url": repo_url,
-            "org": self.github_org,
+            "org": self.github_username,
             "metadata_updated": True,
         }
