@@ -65,6 +65,14 @@ async def list_models(
     server_type: Optional[str] = Query(None, description="Filter by server type"),
     task: Optional[str] = Query(None, description="Filter by task (e.g., text-generation, feature-extraction)"),
 ):
+    """The mirrored models the gateway can serve, with their state.
+
+    A model appears here once mirrored into MLflow (see get_model_catalog for
+    the whole catalog and submit_model_mirror). Its server_type names the
+    backend it runs on: vllm, tensorrt-llm and text-embeddings pods serve one
+    model per node and are created by the load; ollama serves several.
+    installed_backend_types lists the backend types installed as components.
+    """
     models = llm_model_registry.list_models()
 
     # Auxiliary models (e.g. DFlash speculative-decoding drafters) are catalogued and
@@ -133,6 +141,13 @@ async def resolve_model(
     operation_id="get_llm_model_status",
 )
 async def get_model_status(model_id: str):
+    """The model's state and the backends serving it.
+
+    States: registered (in the catalog, not mirrored), deployable (mirrored,
+    not loaded), loading, available (served; backend_id names the pod, such as
+    vllm-tkspark), unloading. A load that failed leaves the model deployable
+    with last_error saying why.
+    """
     entry = llm_model_registry.get_model(model_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")

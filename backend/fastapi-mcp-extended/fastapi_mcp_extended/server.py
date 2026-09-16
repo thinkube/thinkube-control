@@ -1,8 +1,8 @@
 """Extended FastAPI MCP server with resource and prompt support."""
 
 import logging
-from typing import Dict, Optional, List, Any, Union
-from fastapi import FastAPI, APIRouter
+from typing import Dict, Optional, List, Any
+from fastapi import FastAPI
 from fastapi_mcp import FastApiMCP
 import mcp.types as types
 
@@ -29,7 +29,6 @@ class ExtendedFastApiMCP(FastApiMCP):
         tool_patterns: Optional[List[str]] = None,
         # Prompt configuration
         prompt_definitions: Optional[List[PromptDefinition]] = None,
-        add_default_prompts: bool = True,
         # Pass through to parent
         **kwargs,
     ):
@@ -43,14 +42,14 @@ class ExtendedFastApiMCP(FastApiMCP):
             dual_exposure: Expose GET endpoints as both tools and resources
             resource_patterns: Regex patterns for resource endpoints
             tool_patterns: Regex patterns for tool endpoints
-            prompt_definitions: List of prompt definitions
-            add_default_prompts: Whether to add default prompts
+            prompt_definitions: The prompts the server offers; each one is
+                checked by PromptHandler.add_prompt, so a defective prompt
+                stops the server from starting
             *args, **kwargs: Passed to parent FastApiMCP
         """
         # Store patterns BEFORE calling parent init (which calls setup_server)
         self._resource_patterns = resource_patterns
         self._tool_patterns = tool_patterns
-        self._add_default_prompts = add_default_prompts
         self._prompt_definitions = prompt_definitions
         self.resource_mapping = resource_mapping or ResourceMapping()
         self.auto_convert_resources = auto_convert_resources
@@ -74,8 +73,6 @@ class ExtendedFastApiMCP(FastApiMCP):
         self.prompt_handler = PromptHandler()
 
         # Add prompts
-        if self._add_default_prompts:
-            self.prompt_handler.add_default_prompts()
         if self._prompt_definitions:
             for prompt_def in self._prompt_definitions:
                 self.prompt_handler.add_prompt(prompt_def)
@@ -215,8 +212,12 @@ class ExtendedFastApiMCP(FastApiMCP):
         Args:
             name: Prompt name
             description: Prompt description
-            messages: List of message templates
-            arguments: Optional list of argument definitions
+            messages: List of message templates, each {"role", "content"}
+            arguments: Optional list of argument definitions, each
+                {"name", "description", "required", "default"}
+
+        Raises:
+            ValueError: the prompt breaks a rule of PromptHandler.add_prompt
         """
         from .types import PromptMessage, PromptArgument
 

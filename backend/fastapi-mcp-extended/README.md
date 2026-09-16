@@ -67,25 +67,53 @@ mcp = ExtendedFastApiMCP(
 
 ### Adding Prompts
 
-```python
-mcp = ExtendedFastApiMCP(app)
+The server offers the prompts it is given; it has none of its own.
 
-# Add a custom prompt
-mcp.add_prompt(
-    name="deploy-app",
-    description="Deploy a new application",
-    messages=[
-        {
-            "role": "user",
-            "content": "Help me deploy {{app_name}} using template {{template}}"
-        }
+```python
+from fastapi_mcp_extended import ExtendedFastApiMCP, PromptDefinition
+from fastapi_mcp_extended.types import PromptArgument, PromptMessage
+
+mcp = ExtendedFastApiMCP(
+    app,
+    prompt_definitions=[
+        PromptDefinition(
+            name="deploy-app",
+            description="Deploy a new application",
+            messages=[
+                PromptMessage(
+                    role="user",
+                    content="Deploy {{app_name}} from the template {{template}}.",
+                )
+            ],
+            arguments=[
+                PromptArgument(name="app_name", description="Application name"),
+                PromptArgument(
+                    name="template",
+                    description="Template to use",
+                    required=False,
+                    default="tkt-webapp-react-fastapi",
+                ),
+            ],
+        )
     ],
-    arguments=[
-        {"name": "app_name", "description": "Application name", "required": True},
-        {"name": "template", "description": "Template to use", "required": True}
-    ]
 )
+
+# The same, after construction, from plain dicts
+mcp.add_prompt(name=..., description=..., messages=[{"role": ..., "content": ...}], arguments=[...])
 ```
+
+Rules, checked when a prompt is added (a broken prompt raises `ValueError`
+and the server does not start):
+
+- Roles are `user` or `assistant`, the two the MCP protocol allows.
+- Every `{{placeholder}}` names a declared argument, and every declared
+  argument is used.
+- A required argument has no default. An optional argument has one, and it
+  fills the placeholder when the caller leaves the argument out.
+
+When a client gets a prompt, a missing required argument and an argument the
+prompt does not declare are refused with an error naming the prompt's
+arguments.
 
 ## How It Works
 

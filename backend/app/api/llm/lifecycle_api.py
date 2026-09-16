@@ -22,6 +22,20 @@ router = APIRouter()
     operation_id="get_llm_load_options",
 )
 async def get_load_options(model_id: str):
+    """What a load of this model can use: the GPU nodes and the memory it needs.
+
+    gpu_nodes is every GPU node with its ai_remaining_gb, available_slots and
+    the models allocated on it; a node fits when ai_remaining_gb covers
+    estimated_memory_gb (the estimate is for the default context, the largest
+    of 32768, 16384 and 8192 the model allows) and a slot is free.
+
+    compatible_backends lists only the backend pods running now whose type the
+    model supports. It is not the list of nodes that can serve the model: a
+    vLLM, TensorRT-LLM or text-embeddings pod is created on the chosen node by
+    the load itself, so a node without a pod is a valid target. Each such pod
+    serves one model; a node whose allocations already hold a backend of the
+    same type refuses a second model until the first is unloaded.
+    """
     from app.services.llm_backend_discovery import llm_backend_discovery
     from app.services.llm_gpu_tracker import llm_gpu_tracker
 
@@ -63,6 +77,21 @@ async def get_load_options(model_id: str):
     operation_id="load_llm_model",
 )
 async def load_model(model_id: str, request: ModelLoadRequest = ModelLoadRequest()):
+    """Load a mirrored model on a GPU node; answers at once, the load runs on.
+
+    node names the target; without it the node with the most AI memory left
+    takes the model. backend is a type (vllm, tensorrt-llm, text-embeddings,
+    ollama) or a discovered backend id such as vllm-tkspark, which also names
+    the node. max_context_length defaults to the largest of 32768, 16384 and
+    8192 that the model allows and the node has memory for.
+
+    The answer is HTTP 200 whether the load was accepted or refused: state
+    "loading" with a backend_id means accepted, any other state means refused
+    and message says why (already loaded, node taken by another model of the
+    same one-model backend, does not fit the node, backend disabled). Follow
+    the load with get_llm_model_status until the state is "available", or
+    "deployable" with last_error when it failed.
+    """
     entry = llm_model_registry.get_model(model_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
@@ -85,6 +114,13 @@ async def load_model(model_id: str, request: ModelLoadRequest = ModelLoadRequest
     operation_id="unload_llm_model",
 )
 async def unload_model(model_id: str, request: ModelUnloadRequest = ModelUnloadRequest()):
+    """Unload a served model and free its GPU memory.
+
+    Only a model in state "available" can be unloaded; the answer's message
+    names the state otherwise. The last model on a vLLM, TensorRT-LLM or
+    text-embeddings pod takes the pod down with it. Other users may be calling
+    the model: unload only what you loaded or what the user asked to stop.
+    """
     entry = llm_model_registry.get_model(model_id)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")

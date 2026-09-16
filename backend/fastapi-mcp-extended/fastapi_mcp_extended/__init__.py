@@ -5,7 +5,7 @@ This package extends fastapi-mcp to provide full MCP protocol support including
 resources and prompts in addition to tools.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from .server import ExtendedFastApiMCP
 from .types import ResourceMapping, PromptDefinition

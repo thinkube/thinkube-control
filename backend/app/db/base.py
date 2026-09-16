@@ -1,23 +1,12 @@
 # app/db/base.py
-"""Import all models to register them with SQLAlchemy."""
+"""Base with every model registered, for code that creates the schema.
 
-# Import Base first
+app.models imports every model module, and importing a model registers its
+table with Base.metadata; nothing here needs to name them.
+"""
+
 from app.db.session import Base
 
-# Import all models to register them
-from app.models import (
-    Pipeline,
-    PipelineStage,
-    Service,
-    ServiceHealth,
-    ServiceAction,
-    TemplateDeployment,
-    DeploymentLog,
-    JupyterHubConfig,
-    JupyterHubNodeDefaults,
-    NotebookJob,
-)
-from app.models.secrets import Secret, AppSecret
+import app.models  # noqa: F401  registers every model with Base.metadata
 
-# This ensures all models are registered with the Base metadata
 __all__ = ["Base"]
