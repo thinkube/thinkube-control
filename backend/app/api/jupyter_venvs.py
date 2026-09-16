@@ -310,14 +310,24 @@ async def build_jupyter_venv(
     call does not wait for it. Poll get_jupyter_venv until status is
     success or failed; get_venv_build_logs has the build's log.
 
-    Building a template (fine-tuning, agent-dev) rebuilds the built-in venv
-    in place on every node, from the template's package list, and the
-    kernel keeps its name. A later venvs release replaces it again.
+    The built-in venvs (fine-tuning, agent-dev) are not built here: they
+    come from the venvs release that notebook servers download, built by
+    99_build_venvs.yaml. A template is the starting point of a custom venv.
     """
     venv = db.query(JupyterVenv).filter_by(id=venv_id).first()
 
     if not venv:
         raise HTTPException(status_code=404, detail="Venv not found")
+
+    if venv.is_template:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{venv.name}' is a built-in venv from the venvs release and is not built here. "
+                "Rebuild the release with ansible/40_thinkube/core/jupyterhub/99_build_venvs.yaml, "
+                "or create a custom venv from this template."
+            ),
+        )
 
     # Check if already building
     if venv.status == "building":
