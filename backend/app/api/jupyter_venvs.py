@@ -34,130 +34,70 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/jupyter-venvs", tags=["jupyter-venvs"])
 
 
-# Package lists for templates (from build-venvs.sh)
-BASE_PACKAGES = [
-    "ipykernel",
-    "transformers",
-    # transformers loads Hub kernels through this and bitsandbytes looks for
-    # it; without it both warn on import. Pure Python, no torch ABI.
-    "kernels",
-    # Pinned for Unsloth compatibility (4.4.x causes recursion errors)
-    "datasets==4.3.0",
-    # torchvision is deliberately absent: it declares an exact torch== pin, so
-    # naming it installs a PyPI torch into the venv, shadowing the base image
-    # build that every compiled extension here was built against.
-    "accelerate==1.10.1",
-    "nvidia-modelopt",
-    "pandas==2.3.2",
-    "scikit-learn==1.7.2",
-    "matplotlib==3.10.6",
-    "seaborn==0.13.2",
-    "plotly==6.3.0",
-    "psycopg2-binary==2.9.10",
-    "redis==6.4.0",
-    "qdrant-client==1.15.1",
-    "opensearch-py==3.0.0",
-    "mlflow==3.4.0",
-    "boto3==1.40.40",
-    "clickhouse-connect",
-    "chromadb",
-    "nats-py",
-    "weaviate-client==4.17.0",
-    "litellm==1.97.0",
-    "kubernetes",
-    "PyGithub",
-    "hera-workflows",
-    "argilla",
-    "cvat-sdk",
-    "langfuse",
-    "openai",
-    "arxiv",
-    "python-dotenv==1.1.1",
-    "requests==2.34.2",
-    "httpx",
-    "pydantic",
-    "sqlalchemy",
-    "alembic",
-    "ipywidgets",
-    "jupyterlab-widgets",
-    "tqdm",
-    "Pillow",
-    "opencv-python",
-    "sentence-transformers",
-    "spacy",
-    "grpcio",
-    "grpcio-tools",
-    "gql",
-    "websockets",
-    "claude-agent-sdk",
-    "openai-harmony",
-]
+# The package lists of the built-in environments live in one file in the
+# thinkube repository, read by the install (build-venvs.sh) and by a rebuild
+# from here, so the two builds cannot drift apart.
+VENV_PACKAGES_FILE = Path(
+    "/home/thinkube/thinkube-platform/core/thinkube/ansible/40_thinkube/core/jupyterhub/venv-packages.txt"
+)
 
-FINETUNING_PACKAGES = [
-    "bitsandbytes>=0.48.2",
-    "peft>=0.17.1",
-    "trl",
-    "tyro",
-    "hf_transfer",
-    "sentencepiece",
-    "protobuf",
-    "openpyxl",
-    # Puzzle generator for the zebra-grpo example notebook
-    "python-constraint",
-    # peft rejects the base image's own torchao and raises during LoRA
-    # creation, so a floor is needed. The old ceiling (0.17+ needs torch 2.11)
-    # no longer applies: the base image ships torch 2.11.
-    "torchao>=0.16",
-    # Kernels for hybrid-attention models (Qwen3.5 GatedDeltaNet layers).
-    # Without them transformers falls back to a slow torch implementation.
-    "flash-linear-attention",
-    # causal-conv1d is deliberately absent: it ships a compiled CUDA extension
-    # that must be BUILT against the base image's torch, which this flat
-    # package list cannot express (it needs CAUSAL_CONV1D_FORCE_BUILD plus
-    # --no-binary/--no-build-isolation). build-venvs.sh installs it in its own
-    # step; see that script for why each flag is required.
-]
-
-# One set pip resolves together in the base image, with ag2 held at 0.10 because
-# the example notebooks import it as `autogen`; pydantic and httpx come from the
-# image. Re-resolve the set as a whole when moving any one of them.
-AGENT_PACKAGES = [
-    "langchain==1.4.0",
-    "langchain-core==1.6.3",
-    "langchain-community==0.4.2",
-    "langchain-openai==1.6.2",
-    "ag2[openai]==0.10.2",
-    "langgraph==1.2.11",
-    "openai-agents==0.20.0",
-    "crewai==1.6.1",
-    "crewai-tools==1.6.1",
-    "faiss-cpu==1.12.0",
-    "opentelemetry-sdk==1.39.0",
-    "opentelemetry-exporter-otlp==1.39.0",
-    "opentelemetry-api==1.39.0",
-    "tiktoken",
-]
-
-# Venv templates (built-in)
-VENV_TEMPLATES = {
+# Installs that need their own pip flags, added after a template's packages.
+TEMPLATE_DETAILS = {
     "fine-tuning": {
-        "name": "fine-tuning",
         "description": "Fine-tuning venv with bitsandbytes, peft, trl, and Unsloth",
-        "packages": BASE_PACKAGES + FINETUNING_PACKAGES,
         "special_installs": [
             "git+https://github.com/unslothai/unsloth-zoo.git --no-deps",
             "unsloth[cu130onlytorch291] @ git+https://github.com/unslothai/unsloth.git --no-build-isolation --no-deps",
         ],
     },
     "agent-dev": {
-        "name": "agent-dev",
         "description": "Agent development venv with LangChain, CrewAI, AG2, and more",
-        "packages": BASE_PACKAGES + AGENT_PACKAGES,
         "special_installs": [
             "openlit --no-deps",
         ],
     },
 }
+
+
+def read_package_sections(path: Path = VENV_PACKAGES_FILE) -> Dict[str, List[str]]:
+    """Read venv-packages.txt: [section] headers, one package per line, # comments."""
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"{path} not found; it holds the package lists of the built-in venvs "
+            "and comes with the thinkube repository"
+        )
+    sections: Dict[str, List[str]] = {}
+    current = None
+    for raw in path.read_text().splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        header = re.fullmatch(r"\[([a-z-]+)\]", line)
+        if header:
+            current = header.group(1)
+            sections[current] = []
+        elif current is None:
+            raise ValueError(f"{path}: package '{line}' is outside any [section]")
+        else:
+            sections[current].append(line)
+    return sections
+
+
+def venv_templates() -> Dict[str, Dict[str, Any]]:
+    """The built-in venv templates, their packages read from venv-packages.txt."""
+    sections = read_package_sections()
+    for name in ("base", *TEMPLATE_DETAILS):
+        if not sections.get(name):
+            raise ValueError(f"{VENV_PACKAGES_FILE}: section [{name}] is missing or empty")
+    return {
+        name: {
+            "name": name,
+            "description": details["description"],
+            "packages": sections["base"] + sections[name],
+            "special_installs": details["special_installs"],
+        }
+        for name, details in TEMPLATE_DETAILS.items()
+    }
 
 
 # Pydantic models
@@ -208,7 +148,7 @@ def get_venv_templates(
 ):
     """Get available venv templates"""
     templates = []
-    for key, template in VENV_TEMPLATES.items():
+    for key, template in venv_templates().items():
         templates.append({
             "id": key,
             "name": template["name"],
@@ -225,10 +165,10 @@ def get_venv_template_details(
     current_user: dict = Depends(get_current_user_dual_auth)
 ):
     """Get details of a specific venv template"""
-    if template_id not in VENV_TEMPLATES:
+    if template_id not in venv_templates():
         raise HTTPException(status_code=404, detail="Template not found")
 
-    template = VENV_TEMPLATES[template_id]
+    template = venv_templates()[template_id]
     return {
         "id": template_id,
         "name": template["name"],
@@ -247,7 +187,7 @@ async def create_jupyter_venv(
     """Create a new Jupyter virtualenv"""
     try:
         # Check if venv name already exists
-        if request.name in VENV_TEMPLATES:
+        if request.name in venv_templates():
             raise HTTPException(
                 status_code=400,
                 detail=f"'{request.name}' is a built-in template; build the template itself to rebuild it, or choose another name",
@@ -269,11 +209,11 @@ async def create_jupyter_venv(
         parent_template_id = None
 
         if request.parent_template:
-            if request.parent_template not in VENV_TEMPLATES:
+            if request.parent_template not in venv_templates():
                 raise HTTPException(status_code=400, detail=f"Unknown template: {request.parent_template}")
 
             # Get template packages
-            template = VENV_TEMPLATES[request.parent_template]
+            template = venv_templates()[request.parent_template]
             packages = template["packages"].copy()
 
             # Find or create template record

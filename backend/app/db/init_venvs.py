@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from app.db.session import SessionLocal
 from app.models.jupyter_venvs import JupyterVenv
-from app.api.jupyter_venvs import VENV_TEMPLATES
+from app.api.jupyter_venvs import venv_templates
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ def init_venvs(db: Session = None):
         # brought to the current package list, a missing one is created.
         created = 0
         updated = 0
-        for template_id, template_data in VENV_TEMPLATES.items():
+        for template_id, template_data in venv_templates().items():
             all_packages = template_data["packages"].copy()
             for special in template_data.get("special_installs", []):
                 all_packages.append(special)
