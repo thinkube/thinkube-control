@@ -24,6 +24,7 @@ PUBLISH_EXCLUDE_PATTERNS = {
     ".deployment-trigger",
     "k8s",  # Generated K8s manifests (platform-specific)
     ".copier-answers.yml",
+    "regenerate-manifests.sh",  # Written per deployment with that app's name
     "__pycache__",
     ".pytest_cache",
     "node_modules",
