@@ -35,7 +35,6 @@ router = APIRouter(prefix="/jupyter/notebooks", tags=["jupyter-notebooks"])
 EXTENSION_PREFIX = "/api/tk-notebook/mcp"
 NO_SERVER = "No notebook server is running. Ask for start_notebook_server with a node, or start one from Thinkube Notebooks."
 JOB_SERVER_PREFIX = "job-"
-HUB_DEFAULT = "default"
 
 # The extension's blocking tools wait for the kernel; the forward waits a little longer.
 QUICK_TIMEOUT = 60.0
@@ -58,32 +57,35 @@ def _load_kube():
 
 
 def running_server_pods() -> Dict[str, Any]:
-    """The running single-user pods, by server name ('' for the Hub's default server)."""
+    """The running named single-user pods, by server name.
+
+    Notebook servers are named servers: one per node, named after it, and one
+    per unattended run. A pod without a server name is the Hub's default
+    server, which the platform does not use, and is not listed.
+    """
     v1 = _load_kube()
     pods = v1.list_namespaced_pod("jupyterhub", label_selector="component=singleuser-server")
     running = {}
     for pod in pods.items:
         if pod.metadata.deletion_timestamp is not None or pod.status.phase != "Running":
             continue
-        running[(pod.metadata.labels or {}).get("hub.jupyter.org/servername", "")] = pod
+        name = (pod.metadata.labels or {}).get("hub.jupyter.org/servername")
+        if name:
+            running[name] = pod
     return running
 
 
-def find_server_pod(server_name: str = "") -> Optional[Any]:
-    """The running single-user pod of one server: the default one, or a named one."""
+def find_server_pod(server_name: str) -> Optional[Any]:
+    """The running single-user pod of one named server."""
     return running_server_pods().get(server_name)
-
-
-def _label(server_name: str) -> str:
-    return server_name or HUB_DEFAULT
 
 
 def resolve_server(node: Optional[str]) -> str:
     """The server name a notebook operation acts on.
 
-    ``node`` names the node whose server is meant, or 'default' for the Hub's
-    default server. Without it the single interactive server running is used;
-    unattended runs' servers are never picked this way.
+    ``node`` names the node whose server is meant. Without it the single
+    node server running is used; unattended runs' servers are never picked
+    this way.
     """
     try:
         running = running_server_pods()
@@ -91,25 +93,24 @@ def resolve_server(node: Optional[str]) -> str:
         logger.error("could not list notebook server pods: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"could not reach the Kubernetes API: {e}")
     if node:
-        name = "" if node == HUB_DEFAULT else node
-        if name not in running:
+        if node not in running:
             raise HTTPException(
                 status_code=503,
                 detail=f"No notebook server is running on {node}. Ask for start_notebook_server with node '{node}'.",
             )
-        return name
+        return node
     interactive = sorted(n for n in running if not n.startswith(JOB_SERVER_PREFIX))
     if not interactive:
         raise HTTPException(status_code=503, detail=NO_SERVER)
     if len(interactive) > 1:
         raise HTTPException(
             status_code=409,
-            detail=f"Notebook servers are running on {', '.join(_label(n) for n in interactive)}; say which with node.",
+            detail=f"Notebook servers are running on {', '.join(interactive)}; say which with node.",
         )
     return interactive[0]
 
 
-def server_access(server_name: str = "") -> tuple[str, str]:
+def server_access(server_name: str) -> tuple[str, str]:
     """``(base_url, token)`` of a running server, from its pod."""
     try:
         pod = find_server_pod(server_name)
@@ -136,7 +137,7 @@ def server_access(server_name: str = "") -> tuple[str, str]:
     return f"http://{pod.status.pod_ip}:8888{prefix}", token
 
 
-async def extension_health(server_name: str = "") -> Dict[str, Any]:
+async def extension_health(server_name: str) -> Dict[str, Any]:
     base_url, token = server_access(server_name)
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -216,7 +217,7 @@ NotebookPath = Field(..., description="Path of the notebook, relative to the not
 CellIndex = Field(..., description="0-based position of the cell (not its execution count).")
 Position = Field("end", description="Where the new cell goes: 'end', or 'above' or 'below' cell_index.")
 Timeout = Field(None, description="Seconds to wait for the cell; past it the kernel is interrupted. Default 600.")
-NODE_DESCRIPTION = "The node whose notebook server is meant, or 'default' for the Hub's default server. Optional when one server is running."
+NODE_DESCRIPTION = "The node whose notebook server is meant, for example 'tkspark'. Optional when one server is running."
 Node = Field(None, description=NODE_DESCRIPTION)
 
 
@@ -341,8 +342,8 @@ async def jupyter_use_notebook(request: UseNotebookRequest, current_user: dict =
         single = result["url_path"].replace("/lab/tree/", "/notebooks/", 1)
         result["url"] = f"https://notebooks.{settings.DOMAIN_NAME}{single}"
         result["lab_url"] = f"https://notebooks.{settings.DOMAIN_NAME}{result['url_path']}"
-        result["node"] = _label(server_name)
-        result["open_in_ide"] = f"tk-notebook-open --node {_label(server_name)} {result.get('notebook_path', request.notebook_path)}"
+        result["node"] = server_name
+        result["open_in_ide"] = f"tk-notebook-open --node {server_name} {result.get('notebook_path', request.notebook_path)}"
     return ToolResultResponse(result=result)
 
 

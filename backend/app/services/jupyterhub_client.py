@@ -99,10 +99,13 @@ async def user() -> Dict[str, Any]:
 
 
 def server_path(name: str) -> str:
-    return "server" if not name else f"servers/{name}"
+    """The Hub API path of a named server; the platform uses named servers only."""
+    if not name:
+        raise HubError("a notebook server name is required; the Hub's default server is not used")
+    return f"servers/{name}"
 
 
-async def server(name: str = "") -> Optional[Dict[str, Any]]:
+async def server(name: str) -> Optional[Dict[str, Any]]:
     """The Hub's model of one server, or None when it does not exist."""
     return (await user()).get("servers", {}).get(name)
 
@@ -113,7 +116,7 @@ async def start_server(name: str, user_options: Dict[str, Any]) -> int:
     return status
 
 
-async def stop_server(name: str = "") -> None:
+async def stop_server(name: str) -> None:
     """Ask the Hub to stop a server; a server that is not running is not an error."""
     try:
         await request("DELETE", f"/users/{await username()}/{server_path(name)}", timeout=60)
@@ -129,13 +132,13 @@ async def wait_ready(name: str, timeout: float = 240.0, interval: float = 3.0) -
     while True:
         model = await server(name)
         if model is None:
-            raise HubError(f"the server '{name or 'default'}' stopped before it was ready; see the Hub's log")
+            raise HubError(f"the server '{name}' stopped before it was ready; see the Hub's log")
         if model.get("ready"):
             return model
         if not model.get("pending"):
-            raise HubError(f"the server '{name or 'default'}' failed to start: {model.get('state') or 'no reason given'}")
+            raise HubError(f"the server '{name}' failed to start: {model.get('state') or 'no reason given'}")
         if loop.time() > deadline:
-            raise HubError(f"the server '{name or 'default'}' did not become ready in {int(timeout)} seconds")
+            raise HubError(f"the server '{name}' did not become ready in {int(timeout)} seconds")
         await asyncio.sleep(interval)
 
 
@@ -147,4 +150,4 @@ async def wait_stopped(name: str, timeout: float = 90.0, interval: float = 2.0) 
         if model is None or (not model.get("ready") and not model.get("pending")):
             return
         await asyncio.sleep(interval)
-    raise HubError(f"the server '{name or 'default'}' did not stop in {int(timeout)} seconds")
+    raise HubError(f"the server '{name}' did not stop in {int(timeout)} seconds")

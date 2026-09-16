@@ -47,7 +47,6 @@ router = APIRouter(prefix="/jupyter", tags=["jupyter-server"])
 PROFILE = "thinkube-notebooks"
 JOB_POLL_SECONDS = 15
 JOB_SERVER_PREFIX = jupyter_notebooks.JOB_SERVER_PREFIX
-HUB_DEFAULT = jupyter_notebooks.HUB_DEFAULT
 
 _job_tasks: Dict[str, asyncio.Task] = {}
 # Why the last start of a node's server failed, while it has not been started again.
@@ -170,8 +169,8 @@ class NodeServer(BaseModel):
 
 
 class OtherServer(BaseModel):
-    server_name: str = Field(..., description="'default' for the Hub's default server, or an unattended run's server.")
-    kind: str = Field(..., description="'hub-default' or 'unattended-run'.")
+    server_name: str = Field(..., description="The unattended run's server.")
+    kind: str = Field(..., description="'unattended-run'.")
     state: str
     node: Optional[str] = None
     cpu_cores: Optional[int] = None
@@ -182,7 +181,7 @@ class OtherServer(BaseModel):
 
 class ServersStatus(BaseModel):
     servers: List[NodeServer] = Field(..., description="One entry per node.")
-    other_servers: List[OtherServer] = Field(default_factory=list, description="The Hub's default server and the servers of unattended runs.")
+    other_servers: List[OtherServer] = Field(default_factory=list, description="The servers of unattended runs.")
     message: str
 
 
@@ -241,17 +240,15 @@ async def _servers_status(db: Session) -> ServersStatus:
 
     others = []
     for name, model in models.items():
-        if name in nodes:
-            continue
-        if name and not name.startswith(JOB_SERVER_PREFIX):
+        if not name.startswith(JOB_SERVER_PREFIX):
             continue
         state = _state(model)
         if state == "stopped":
             continue
         others.append(
             OtherServer(
-                server_name=name or HUB_DEFAULT,
-                kind="unattended-run" if name else "hub-default",
+                server_name=name,
+                kind="unattended-run",
                 state=state,
                 url=_url(model),
                 **_placement_of(model),
@@ -327,12 +324,12 @@ async def start_notebook_server(
 
 @router.post("/servers/{node}/stop", response_model=ServersStatus, operation_id="stop_notebook_server")
 async def stop_notebook_server(node: str, current_user: dict = Depends(get_current_user_dual_auth), db: Session = Depends(get_db)):
-    """Stop the notebook server on a node ('default' stops the Hub's default server) and free its memory and GPUs. Its kernels are shut down; notebook files keep their outputs. Answers as soon as the Hub has the request; the node's state is 'stopping' until jupyter_notebook_status shows 'stopped'."""
-    name = "" if node == HUB_DEFAULT else node
-    if name.startswith(JOB_SERVER_PREFIX):
-        raise HTTPException(status_code=422, detail="That server belongs to an unattended run; cancel_notebook_job stops it.")
+    """Stop the notebook server on a node and free its memory and GPUs. Its kernels are shut down; notebook files keep their outputs. Answers as soon as the Hub has the request; the node's state is 'stopping' until jupyter_notebook_status shows 'stopped'."""
+    nodes = await _nodes()
+    if node not in nodes:
+        raise HTTPException(status_code=422, detail=f"node '{node}' is not in the cluster; the nodes are {sorted(nodes)}")
     try:
-        await hub.stop_server(name)
+        await hub.stop_server(node)
     except hub.HubError as e:
         raise HTTPException(status_code=502, detail=str(e))
     return await _servers_status(db)

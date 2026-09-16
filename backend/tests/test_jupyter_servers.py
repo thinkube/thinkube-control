@@ -153,10 +153,23 @@ def test_a_node_without_a_server_and_no_server_at_all(monkeypatch):
     assert e.value.status_code == 503
 
 
-def test_the_hub_default_server_is_named_default(monkeypatch):
-    running(monkeypatch, [""])
-    assert jn.resolve_server(None) == ""
-    assert jn.resolve_server("default") == ""
+class FakePod:
+    def __init__(self, labels):
+        self.metadata = type("Meta", (), {"labels": labels, "deletion_timestamp": None})()
+        self.status = type("Status", (), {"phase": "Running"})()
+
+
+def test_the_hub_default_server_is_not_a_notebook_server(monkeypatch):
+    pods = [FakePod({"hub.jupyter.org/servername": "tkspark"}), FakePod({}), FakePod({"hub.jupyter.org/servername": ""})]
+
+    class FakeV1:
+        def list_namespaced_pod(self, namespace, label_selector):
+            return type("List", (), {"items": pods})()
+
+    monkeypatch.setattr(jn, "_load_kube", lambda: FakeV1())
+    assert list(jn.running_server_pods()) == ["tkspark"]
+    with pytest.raises(js.hub.HubError):
+        js.hub.server_path("")
 
 
 class FakeHub:
