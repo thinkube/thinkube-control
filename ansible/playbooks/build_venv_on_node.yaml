@@ -101,6 +101,9 @@
                     # would silently leave the whole venv without dependencies.
                     # Those are installed individually instead.
                     echo "Installing packages..."
+                    # Thinkube's own packages, such as tk-llm, are in Thinkube
+                    # Packages, not on PyPI: the same index the install uses.
+                    EXTRA_INDEX="--extra-index-url https://{{ devpi_api_hostname }}/root/{{ devpi_index_name }}/+simple/"
                     PKGS=({{ package_list | map('quote') | join(' ') }})
                     PLAIN=()
                     for p in "${PKGS[@]}"; do
@@ -108,13 +111,13 @@
                         *" --"*)
                           echo "  (own flags) $p"
                           # deliberately unquoted: the flags must split into words
-                          "$VENV_PATH/bin/pip" install $p
+                          "$VENV_PATH/bin/pip" install $EXTRA_INDEX $p
                           ;;
                         *) PLAIN+=("$p") ;;
                       esac
                     done
                     if [ -n "${PLAIN[*]}" ]; then
-                      "$VENV_PATH/bin/pip" install "${PLAIN[@]}"
+                      "$VENV_PATH/bin/pip" install $EXTRA_INDEX "${PLAIN[@]}"
                     fi
 
                     echo "Installing ipykernel..."
