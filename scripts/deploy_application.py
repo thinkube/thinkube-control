@@ -289,12 +289,27 @@ git reset --hard origin/main
                 raise
 
     def _run_copier_sync(self, copier_cmd: list, cwd: str) -> tuple:
-        """Synchronous Copier execution (runs in thread pool to avoid blocking event loop)."""
+        """Synchronous Copier execution (runs in thread pool to avoid blocking event loop).
+
+        Templates published from an app are private GitHub repositories, so the
+        clone Copier makes authenticates with the platform's GitHub token. The
+        token is handed to git for this process only, as a URL rewrite in the
+        environment: nothing is written to a git config file, and the template
+        address Copier records in .copier-answers.yml stays without it.
+        """
+        github_token = os.environ.get("GITHUB_TOKEN")
+        if not github_token:
+            raise RuntimeError("GITHUB_TOKEN is not set; thinkube-control receives it from the github-token secret")
+        env = dict(os.environ)
+        env["GIT_CONFIG_COUNT"] = "1"
+        env["GIT_CONFIG_KEY_0"] = f"url.https://x-access-token:{github_token}@github.com/.insteadOf"
+        env["GIT_CONFIG_VALUE_0"] = "https://github.com/"
         result = subprocess.run(
             copier_cmd,
             capture_output=True,
             text=True,
             cwd=cwd,
+            env=env,
             timeout=300  # 5 minute timeout for Copier
         )
         return result.returncode, result.stdout, result.stderr
