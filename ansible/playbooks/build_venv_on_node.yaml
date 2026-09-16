@@ -37,6 +37,20 @@
     venv_pod_dir: "/home/thinkube/venvs/{{ venv_rel_path | trim }}"
     shadow_custom_dir: "{{ venvs_host_path }}/{{ custom_venvs_subpath }}/{{ venv_name }}"
 
+# A Job's pod template cannot be changed, and a failed build keeps its Job
+# for an hour: remove the previous one so this build can be created.
+- name: "Remove the previous build Job for {{ target_build_arch }}"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ kubeconfig }}"
+    state: absent
+    api_version: batch/v1
+    kind: Job
+    name: "venv-build-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}-{{ target_build_arch }}"
+    namespace: "{{ job_namespace }}"
+    delete_options:
+      propagationPolicy: Foreground
+    wait: true
+
 - name: "Create build Job for {{ target_build_arch }} on {{ target_build_node }}"
   kubernetes.core.k8s:
     kubeconfig: "{{ kubeconfig }}"
