@@ -52,19 +52,8 @@ subjects:
   - kind: ServiceAccount
     name: {{ project_name }}-workflows
     namespace: {{ k8s_namespace }}
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: argo-artifacts-s3
-  namespace: {{ k8s_namespace }}
-  labels:
-    app.kubernetes.io/name: {{ project_name }}
-    app.kubernetes.io/managed-by: argocd
-type: Opaque
-stringData:
-  accesskey: "{{ seaweedfs_access_key }}"
-  secretkey: "{{ seaweedfs_password }}"
+# The artifact repository's credentials are the Secret argo-artifacts-s3,
+# written through the Kubernetes API at deploy time.
 ---
 apiVersion: v1
 kind: ConfigMap

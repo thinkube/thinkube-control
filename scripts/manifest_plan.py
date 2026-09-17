@@ -12,7 +12,6 @@ import yaml
 BASE_RESOURCES = [
     'namespace.yaml',
     'resource-policies.yaml',
-    'mlflow-secrets.yaml',
     'app-metadata.yaml',
 ]
 
@@ -44,15 +43,12 @@ def needs_storage(config: Dict[str, Any]) -> bool:
 def kustomization_resources(
     *,
     is_knative: bool,
-    has_database: bool,
     needs_storage: bool,
     has_workflows: bool,
 ) -> List[str]:
     """The resources kustomization.yaml lists, in the order it lists them."""
     resources = list(BASE_RESOURCES)
     resources.extend(KNATIVE_RESOURCES if is_knative else APP_RESOURCES)
-    if has_database:
-        resources.append('postgresql.yaml')
     if needs_storage:
         resources.append('storage-pvc.yaml')
     if has_workflows:

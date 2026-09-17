@@ -554,6 +554,42 @@ git reset --hard origin/main
                         f"Recording the secrets {self.app_name} uses failed (HTTP {resp.status}): {await resp.text()}"
                     )
 
+    async def apply_platform_credentials(self):
+        """Write the database, Experiments, Storage and build credentials as Secrets.
+
+        The manifests in k8s/ name these Secrets and carry no value, so the
+        generated files a repository commits hold no credential.
+        """
+        from platform_credentials import PlatformValues, platform_secrets
+
+        mlflow = self.secrets['mlflow']['secret']
+        seaweedfs = self.secrets['seaweedfs']
+        values = PlatformValues(
+            admin_username=self.admin_username,
+            admin_password=self._decode_secret_data(self.secrets['admin'], 'admin-password'),
+            mlflow_keycloak_token_url=self._decode_secret_data(mlflow, 'keycloak-token-url'),
+            mlflow_keycloak_client_id=self._decode_secret_data(mlflow, 'client-id'),
+            mlflow_client_secret=self._decode_secret_data(mlflow, 'client-secret'),
+            mlflow_username=self._decode_secret_data(mlflow, 'username'),
+            mlflow_password=self._decode_secret_data(mlflow, 'password'),
+            seaweedfs_endpoint=self._decode_secret_data(seaweedfs, 'endpoint_internal'),
+            seaweedfs_access_key=self._decode_secret_data(seaweedfs, 'access_key'),
+            seaweedfs_secret_key=self._decode_secret_data(seaweedfs, 'secret_key'),
+        )
+        services = self.thinkube_config.get('spec', {}).get('services', []) or []
+        for body in platform_secrets(
+            self.app_name, self.namespace, values,
+            has_database='database' in services, has_workflows='workflows' in services,
+        ):
+            name, namespace = body['metadata']['name'], body['metadata']['namespace']
+            try:
+                await self.k8s_core.replace_namespaced_secret(name, namespace, body)
+            except ApiException as e:
+                if e.status != 404:
+                    raise
+                await self.k8s_core.create_namespaced_secret(namespace, body)
+            DeploymentLogger.log(f"Wrote Secret {namespace}/{name}")
+
     async def _present_secret_names(self, names: List[str]) -> set:
         """Which of these names the Secrets store holds. Values are not read."""
         mcp_secret = await self.k8s_core.read_namespaced_secret('mcp-default-token', 'thinkube-control')
@@ -956,18 +992,17 @@ git reset --hard origin/main
         template = env.from_string(template_content)
 
         # Get required variables
-        system_username = self.params.get('system_username') or os.environ.get('SYSTEM_USERNAME')
+        system_username = os.environ.get('SYSTEM_USERNAME')
         if not system_username:
-            raise ValueError("system_username not in params and SYSTEM_USERNAME env var not set")
-        master_node_name = self.params.get('master_node_name') or os.environ.get('MASTER_NODE_NAME')
+            raise ValueError("SYSTEM_USERNAME env var not set")
+        master_node_name = os.environ.get('MASTER_NODE_NAME')
         if not master_node_name:
-            raise ValueError("master_node_name not in params and MASTER_NODE_NAME env var not set")
-        admin_password = self._decode_secret_data(self.secrets['admin'], 'admin-password')
+            raise ValueError("MASTER_NODE_NAME env var not set")
 
         # Detect unique architectures across cluster nodes
         nodes = await self.k8s_core.list_node()
         architectures = sorted({
-            n.metadata.labels.get('kubernetes.io/arch', 'amd64')
+            n.metadata.labels['kubernetes.io/arch']
             for n in nodes.items
         })
         DeploymentLogger.log(f"Cluster architectures: {architectures}")
@@ -980,7 +1015,6 @@ git reset --hard origin/main
             container_registry=f"registry.{self.domain}",
             domain_name=self.domain,
             admin_username=self.admin_username,
-            admin_password=admin_password,
             thinkube_spec=self.thinkube_config,
             gitea_org="thinkube-deployments",
         )
@@ -1148,23 +1182,10 @@ git reset --hard origin/main
         env.filters['to_yaml'] = lambda x: yaml.dump(x, default_flow_style=False)
         env.filters['to_json'] = lambda x: json.dumps(x)
 
-        # Common template variables
+        # Common template variables. Credentials are not among them: the
+        # manifests name the Secrets apply_platform_credentials writes.
         container_registry = f"registry.{self.domain}"
-        admin_password = self._decode_secret_data(self.secrets['admin'], 'admin-password')
-
-        # Get MLflow credentials
-        mlflow_secret = self.secrets['mlflow']['secret']
-        mlflow_keycloak_token_url = self._decode_secret_data(mlflow_secret, 'keycloak-token-url')
-        mlflow_keycloak_client_id = self._decode_secret_data(mlflow_secret, 'client-id')
-        mlflow_client_secret = self._decode_secret_data(mlflow_secret, 'client-secret')
-        mlflow_username = self._decode_secret_data(mlflow_secret, 'username')
-        mlflow_password = self._decode_secret_data(mlflow_secret, 'password')
-
-        # Get SeaweedFS S3 credentials (from seaweedfs-s3-credentials in seaweedfs namespace)
-        seaweedfs_secret = self.secrets['seaweedfs']
-        seaweedfs_password = self._decode_secret_data(seaweedfs_secret, 'secret_key')
-        seaweedfs_access_key = self._decode_secret_data(seaweedfs_secret, 'access_key')
-        seaweedfs_endpoint = self._decode_secret_data(seaweedfs_secret, 'endpoint_internal')
+        seaweedfs_endpoint = self._decode_secret_data(self.secrets['seaweedfs'], 'endpoint_internal')
 
         # Build manifest_params from self.params — these are template-specific
         # parameters (e.g., model_id) that should be injected as env vars
@@ -1185,16 +1206,8 @@ git reset --hard origin/main
             'domain_name': self.domain,
             'container_registry': container_registry,
             'admin_username': self.admin_username,
-            'admin_password': admin_password,
             'thinkube_spec': self.thinkube_config,
             'manifest_params': manifest_params,
-            'mlflow_keycloak_token_url': mlflow_keycloak_token_url,
-            'mlflow_keycloak_client_id': mlflow_keycloak_client_id,
-            'mlflow_client_secret': mlflow_client_secret,
-            'mlflow_username': mlflow_username,
-            'mlflow_password': mlflow_password,
-            'seaweedfs_password': seaweedfs_password,
-            'seaweedfs_access_key': seaweedfs_access_key,
             'seaweedfs_endpoint': seaweedfs_endpoint,
             'deployment_env_from': self.deployment_env_from,
         }
@@ -1241,10 +1254,10 @@ spec:
 """
         (k8s_dir / 'resource-policies.yaml').write_text(resource_policies_content)
 
-        # 2. Generate mlflow-secrets.yaml from template
-        mlflow_template = env.get_template('mlflow-secrets.j2')
-        mlflow_content = mlflow_template.render(**template_vars)
-        (k8s_dir / 'mlflow-secrets.yaml').write_text(mlflow_content)
+        # 2. Files an earlier generator wrote with credentials in them
+        from platform_credentials import RETIRED_MANIFESTS
+        for retired in RETIRED_MANIFESTS:
+            (k8s_dir / retired).unlink(missing_ok=True)
 
         # 3. Generate app-metadata.yaml
         containers_json = json.dumps(self.thinkube_config.get('spec', {}).get('containers', []))
@@ -1297,13 +1310,8 @@ data:
             paused_content = paused_template.render(**template_vars)
             (k8s_dir / 'paused-backend.yaml').write_text(paused_content)
 
-        # 8. Generate postgresql.yaml (conditional)
+        # 8. The database's credentials are a Secret; only the services matter here
         services = self.thinkube_config.get('spec', {}).get('services', [])
-        has_database = 'database' in services
-        if has_database:
-            postgresql_template = env.get_template('postgresql.j2')
-            postgresql_content = postgresql_template.render(**template_vars)
-            (k8s_dir / 'postgresql.yaml').write_text(postgresql_content)
 
         # 9. Generate storage-pvc.yaml (conditional)
         containers = self.thinkube_config.get('spec', {}).get('containers', [])
@@ -1326,12 +1334,12 @@ data:
 
         # 10. Generate build-workflow.yaml
         workflow_template = env.get_template('build-workflow.j2')
-        system_username = self.params.get('system_username') or os.environ.get('SYSTEM_USERNAME')
+        system_username = os.environ.get('SYSTEM_USERNAME')
         if not system_username:
-            raise ValueError("system_username not in params and SYSTEM_USERNAME env var not set")
-        master_node_name = self.params.get('master_node_name') or os.environ.get('MASTER_NODE_NAME')
+            raise ValueError("SYSTEM_USERNAME env var not set")
+        master_node_name = os.environ.get('MASTER_NODE_NAME')
         if not master_node_name:
-            raise ValueError("master_node_name not in params and MASTER_NODE_NAME env var not set")
+            raise ValueError("MASTER_NODE_NAME env var not set")
         workflow_vars = {**template_vars, 'system_username': system_username, 'master_node_name': master_node_name}
         workflow_content = workflow_template.render(**workflow_vars)
         (k8s_dir / 'build-workflow.yaml').write_text(workflow_content)
@@ -1345,7 +1353,6 @@ data:
             containers=containers,
             resources=build_kustomization_resources(
                 is_knative=is_knative,
-                has_database=has_database,
                 needs_storage=needs_storage,
                 has_workflows=has_workflows,
             ),
@@ -2346,6 +2353,9 @@ LIMIT 5;"
 
             # Before any manifest is applied: every container reads this Secret.
             await self.apply_app_secrets()
+
+            # The credentials the manifests name, written here and never into k8s/.
+            await self.apply_platform_credentials()
 
             DeploymentLogger.debug(" Starting Phase 3")
             await self.phase3_create_resources()

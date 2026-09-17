@@ -177,14 +177,13 @@ def test_the_key_format_keeps_argos_own_placeholders(workflows_docs):
     assert "{{pod.name}}" in repo["s3"]["keyFormat"]
 
 
-def test_the_repository_names_the_secret_rendered_beside_it(workflows_docs):
+def test_the_repository_names_the_secret_the_deploy_writes(workflows_docs):
+    from platform_credentials import ARTIFACT_SECRET_NAME
     cm = by_kind(workflows_docs, "ConfigMap")[0]
     repo = yaml.safe_load(cm["data"]["default-v1"])
-    secret = by_kind(workflows_docs, "Secret")[0]
-    assert repo["s3"]["accessKeySecret"]["name"] == secret["metadata"]["name"]
-    assert repo["s3"]["secretKeySecret"]["name"] == secret["metadata"]["name"]
-    assert secret["stringData"]["accesskey"] == "AKIAEXAMPLE"
-    assert secret["stringData"]["secretkey"] == "s3cr3t"
+    assert repo["s3"]["accessKeySecret"] == {"name": ARTIFACT_SECRET_NAME, "key": "accesskey"}
+    assert repo["s3"]["secretKeySecret"] == {"name": ARTIFACT_SECRET_NAME, "key": "secretkey"}
+    assert not by_kind(workflows_docs, "Secret")
 
 
 # --- the deployment ----------------------------------------------------------
@@ -271,37 +270,35 @@ def test_without_any_services_at_all_nothing_changes():
 
 def test_workflows_yaml_is_listed_when_declared():
     resources = kustomization_resources(
-        is_knative=False, has_database=True, needs_storage=False, has_workflows=True
+        is_knative=False, needs_storage=False, has_workflows=True
     )
     assert "workflows.yaml" in resources
 
 
 def test_workflows_yaml_is_absent_when_not_declared():
     resources = kustomization_resources(
-        is_knative=False, has_database=True, needs_storage=False, has_workflows=False
+        is_knative=False, needs_storage=False, has_workflows=False
     )
     assert "workflows.yaml" not in resources
 
 
 def test_the_post_sync_hook_stays_last():
     resources = kustomization_resources(
-        is_knative=False, has_database=True, needs_storage=True, has_workflows=True
+        is_knative=False, needs_storage=True, has_workflows=True
     )
     assert resources[-1] == "argocd-postsync-hook.yaml"
 
 
 def test_the_existing_order_is_unchanged_for_an_app_without_workflows():
     assert kustomization_resources(
-        is_knative=False, has_database=True, needs_storage=True, has_workflows=False
+        is_knative=False, needs_storage=True, has_workflows=False
     ) == [
         "namespace.yaml",
         "resource-policies.yaml",
-        "mlflow-secrets.yaml",
         "app-metadata.yaml",
         "deployments.yaml",
         "services.yaml",
         "ingress.yaml",
-        "postgresql.yaml",
         "storage-pvc.yaml",
         "argocd-postsync-hook.yaml",
     ]
@@ -309,11 +306,10 @@ def test_the_existing_order_is_unchanged_for_an_app_without_workflows():
 
 def test_a_knative_app_still_lists_its_own_resources():
     assert kustomization_resources(
-        is_knative=True, has_database=False, needs_storage=False, has_workflows=False
+        is_knative=True, needs_storage=False, has_workflows=False
     ) == [
         "namespace.yaml",
         "resource-policies.yaml",
-        "mlflow-secrets.yaml",
         "app-metadata.yaml",
         "knative-service.yaml",
         "argocd-postsync-hook.yaml",

@@ -218,9 +218,15 @@ spec:
             - name: SEAWEEDFS_ENDPOINT
               value: "{{ seaweedfs_endpoint }}"
             - name: SEAWEEDFS_ACCESS_KEY
-              value: "{{ seaweedfs_access_key }}"
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-storage-credentials
+                  key: access-key
             - name: SEAWEEDFS_SECRET_KEY
-              value: "{{ seaweedfs_password }}"
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-storage-credentials
+                  key: secret-key
 {% if container.gpu is defined and container.gpu.count is defined %}
             # Persist FlashInfer's JIT kernel cache on the NVMe hostPath so the
             # ~150s kernel build is reused across restarts instead of recompiled

@@ -156,9 +156,15 @@ spec:
         command: ["/bin/sh", "-c"]
         env:
           - name: ADMIN_USERNAME
-            value: "{{ admin_username }}"
+            valueFrom:
+              secretKeyRef:
+                name: {{ project_name }}-build-credentials
+                key: username
           - name: ADMIN_PASSWORD
-            value: "{{ admin_password }}"
+            valueFrom:
+              secretKeyRef:
+                name: {{ project_name }}-build-credentials
+                key: password
           # The store this app's tests own, named after the app so two
           # apps never write into each other's rows.
           - name: TEST_DATABASE_NAME
@@ -261,9 +267,20 @@ spec:
         - name: git-clone
           image: {{ container_registry }}/library/ci-utils:latest
           command: ["/bin/sh", "-c"]
+          env:
+            - name: GIT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-build-credentials
+                  key: username
+            - name: GIT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-build-credentials
+                  key: password
           args:
             - |
-              git clone --depth 1 https://{{ admin_username }}:{{ admin_password }}@git.{{ domain_name }}/{{ gitea_org | default('thinkube-deployments') }}/{{ project_name }}.git /workspace
+              git clone --depth 1 "https://${GIT_USERNAME}:${GIT_PASSWORD}@git.{{ domain_name }}/{{ gitea_org | default('thinkube-deployments') }}/{{ project_name }}.git" /workspace
           resources:
             requests:
               memory: "128Mi"

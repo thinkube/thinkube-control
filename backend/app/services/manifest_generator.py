@@ -26,6 +26,11 @@ from thinkube_yaml_validator import (
     validate_replicas as _validate_replicas,
 )
 from manifest_plan import kustomization_content as _kustomization_content, kustomization_resources as _kustomization_resources
+from platform_credentials import (
+    RETIRED_MANIFESTS as _RETIRED_MANIFESTS,
+    PlatformValues as _PlatformValues,
+    platform_secrets as _platform_secrets,
+)
 from namespace_quota import NON_GPU_QUOTA as _NON_GPU_QUOTA, memory_quota as _memory_quota, node_view as _node_view
 from app_secrets import (
     declared_secrets as _declared_secrets_of,
@@ -131,6 +136,40 @@ class ManifestGenerator:
         self.secrets['seaweedfs_password'] = self._decode_secret(seaweedfs_secret, 'secret_key')
         self.secrets['seaweedfs_access_key'] = self._decode_secret(seaweedfs_secret, 'access_key')
         self.secrets['seaweedfs_endpoint'] = self._decode_secret(seaweedfs_secret, 'endpoint_internal')
+
+    def _apply_platform_credentials(self):
+        """Write the database, Experiments, Storage and build credentials as Secrets.
+
+        The manifests in k8s/ name these Secrets and carry no value, so the
+        generated files a repository commits hold no credential.
+        """
+        from app.services.deploy_identity import deploy_api_client
+
+        values = _PlatformValues(
+            admin_username=self.secrets['admin_username'],
+            admin_password=self.secrets['admin_password'],
+            mlflow_keycloak_token_url=self.secrets['mlflow_keycloak_token_url'],
+            mlflow_keycloak_client_id=self.secrets['mlflow_keycloak_client_id'],
+            mlflow_client_secret=self.secrets['mlflow_client_secret'],
+            mlflow_username=self.secrets['mlflow_username'],
+            mlflow_password=self.secrets['mlflow_password'],
+            seaweedfs_endpoint=self.secrets['seaweedfs_endpoint'],
+            seaweedfs_access_key=self.secrets['seaweedfs_access_key'],
+            seaweedfs_secret_key=self.secrets['seaweedfs_password'],
+        )
+        services = self.thinkube_config.get('spec', {}).get('services', []) or []
+        writer = client.CoreV1Api(deploy_api_client())
+        for body in _platform_secrets(
+            self.app_name, self.namespace, values,
+            has_database='database' in services, has_workflows='workflows' in services,
+        ):
+            name, namespace = body['metadata']['name'], body['metadata']['namespace']
+            try:
+                writer.replace_namespaced_secret(name, namespace, body)
+            except ApiException as e:
+                if e.status != 404:
+                    raise RuntimeError(f"Cannot update Secret {namespace}/{name}: {e.reason}") from e
+                writer.create_namespaced_secret(namespace, body)
 
     def _resolve_dependencies(self):
         """Resolve dependency URLs from the cluster."""
@@ -247,8 +286,9 @@ class ManifestGenerator:
                 self.thinkube_config['spec']['deployment'] = {}
             self.thinkube_config['spec']['deployment']['replicas'] = 1
 
-        # Fetch cluster secrets
+        # Fetch cluster secrets, and write the ones the manifests name
         self._fetch_secrets()
+        self._apply_platform_credentials()
 
         # Resolve dependencies
         self._resolve_dependencies()
@@ -277,16 +317,8 @@ class ManifestGenerator:
             'domain_name': self.domain,
             'container_registry': container_registry,
             'admin_username': self.secrets['admin_username'],
-            'admin_password': self.secrets['admin_password'],
             'thinkube_spec': self.thinkube_config,
             'manifest_params': manifest_params,
-            'mlflow_keycloak_token_url': self.secrets['mlflow_keycloak_token_url'],
-            'mlflow_keycloak_client_id': self.secrets['mlflow_keycloak_client_id'],
-            'mlflow_client_secret': self.secrets['mlflow_client_secret'],
-            'mlflow_username': self.secrets['mlflow_username'],
-            'mlflow_password': self.secrets['mlflow_password'],
-            'seaweedfs_password': self.secrets['seaweedfs_password'],
-            'seaweedfs_access_key': self.secrets['seaweedfs_access_key'],
             'seaweedfs_endpoint': self.secrets['seaweedfs_endpoint'],
             'deployment_env_from': _env_from(self.app_name, self.declared_secrets),
         }
@@ -302,7 +334,6 @@ class ManifestGenerator:
         is_knative = deployment_type == 'knative'
         containers = self.thinkube_config.get('spec', {}).get('containers', [])
         services = self.thinkube_config.get('spec', {}).get('services', [])
-        has_database = 'database' in services
         has_workflows = 'workflows' in services
         has_gpu = any(c.get('gpu', {}).get('count') for c in containers)
         quota_req_mem, quota_lim_mem = _gpu_namespace_quota(has_gpu)
@@ -351,8 +382,9 @@ spec:
     limits.cpu: "8"
 """
 
-        # 2. mlflow-secrets.yaml
-        generated_files['mlflow-secrets.yaml'] = env.get_template('mlflow-secrets.j2').render(**template_vars)
+        # 2. Files an earlier generator wrote with credentials in them
+        for retired in _RETIRED_MANIFESTS:
+            (k8s_dir / retired).unlink(missing_ok=True)
 
         # 3. app-metadata.yaml
         containers_json = json.dumps(containers)
@@ -374,9 +406,6 @@ data:
             generated_files['services.yaml'] = env.get_template('services-separate.j2').render(**template_vars)
             generated_files['ingress.yaml'] = env.get_template('httproute.j2').render(**template_vars)
             generated_files['paused-backend.yaml'] = env.get_template('paused-backend.yaml.j2').render(**template_vars)
-
-        if has_database:
-            generated_files['postgresql.yaml'] = env.get_template('postgresql.j2').render(**template_vars)
 
         if needs_storage:
             generated_files['storage-pvc.yaml'] = env.get_template('storage-pvc.j2').render(**template_vars)
@@ -401,7 +430,6 @@ data:
             containers=containers,
             resources=_kustomization_resources(
                 is_knative=is_knative,
-                has_database=has_database,
                 needs_storage=needs_storage,
                 has_workflows=has_workflows,
             ),
