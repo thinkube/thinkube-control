@@ -37,6 +37,7 @@ from manifest_parameters import (
     declared_parameter_names as _declared_parameter_names,
     recorded_values as _recorded_parameter_values,
 )
+from dependency_resolution import knative_url, knative_view, service_url, service_view
 from namespace_quota import NON_GPU_QUOTA as _NON_GPU_QUOTA, memory_quota as _memory_quota, node_view as _node_view
 from app_secrets import (
     declared_secrets as _declared_secrets_of,
@@ -209,18 +210,7 @@ class ManifestGenerator:
             if e.status == 404:
                 return None
             raise RuntimeError(f"Listing Knative services failed: {e.reason}") from e
-        for item in items:
-            name = item['metadata']['name']
-            namespace = item['metadata']['namespace']
-            if dep_type in name or dep_type in namespace:
-                status_url = ((item.get('status') or {}).get('address') or {}).get('url')
-                if not status_url:
-                    raise RuntimeError(
-                        f"Knative service {namespace}/{name} matches dependency type "
-                        f"'{dep_type}' but has no address yet: it is not ready."
-                    )
-                return status_url
-        return None
+        return knative_url([knative_view(item) for item in items], dep_type)
 
     def _find_k8s_service_url(self, dep_type: str) -> Optional[str]:
         """Find a regular K8s service URL matching the dependency type."""
@@ -228,24 +218,7 @@ class ManifestGenerator:
             svc_list = self.core_v1.list_service_for_all_namespaces()
         except ApiException as e:
             raise RuntimeError(f"Listing services failed: {e.reason}") from e
-        skip_ns = {'kube-system', 'kube-public', 'default'}
-        candidates = [s for s in svc_list.items if s.metadata.namespace not in skip_ns]
-        # First pass: match both name and namespace
-        match = next(
-            (s for s in candidates if dep_type in s.metadata.name and dep_type in s.metadata.namespace),
-            None,
-        )
-        # Second pass: match name only
-        if match is None:
-            match = next((s for s in candidates if dep_type in s.metadata.name), None)
-        if match is None:
-            return None
-        name, namespace = match.metadata.name, match.metadata.namespace
-        if not match.spec.ports:
-            raise RuntimeError(
-                f"Service {namespace}/{name} matches dependency type '{dep_type}' but exposes no port."
-            )
-        return f"http://{name}.{namespace}.svc.cluster.local:{match.spec.ports[0].port}"
+        return service_url([service_view(s) for s in svc_list.items], dep_type)
 
     def regenerate(self) -> Dict[str, str]:
         """Regenerate all k8s/ manifests and return them as a dict of {filename: content}.

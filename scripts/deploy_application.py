@@ -1035,19 +1035,37 @@ git reset --hard origin/main
 
         return workflow_spec
 
-    def _resolve_dependencies(self):
+    async def _resolve_dependencies(self):
         """Resolve dependency URLs and inject them into thinkube_config.
 
         For each dependency declared in spec.dependencies, looks up the running
         service on the cluster and resolves its internal URL. The resolved URL
         is stored as 'resolved_url' on the dependency dict so templates can
-        inject it as an environment variable.
+        inject it as an environment variable. See scripts/dependency_resolution.py.
         """
+        from dependency_resolution import knative_url, knative_view, service_url, service_view
+
         dependencies = self.thinkube_config.get('spec', {}).get('dependencies', [])
         if not dependencies:
             return
 
         DeploymentLogger.log(f"Resolving {len(dependencies)} dependencies")
+
+        try:
+            listed = await self.k8s_custom.list_cluster_custom_object(
+                group="serving.knative.dev", version="v1", plural="services",
+            )
+            knative = [knative_view(item) for item in listed.get('items', [])]
+        except ApiException as e:
+            # Knative is an optional component. Without it the API has no
+            # Knative services resource, so no Knative service can match.
+            if e.status != 404:
+                raise RuntimeError(f"Listing Knative services failed: {e.reason}") from e
+            knative = []
+        try:
+            services = [service_view(s) for s in (await self.k8s_core.list_service_for_all_namespaces()).items]
+        except ApiException as e:
+            raise RuntimeError(f"Listing services failed: {e.reason}") from e
 
         for dep in dependencies:
             dep_name = dep.get('name')
@@ -1058,15 +1076,7 @@ git reset --hard origin/main
                     f"Dependency {dep!r} must have name, type and env; thinkube.yaml requires all three."
                 )
 
-            # Look for a Knative service matching the dependency type
-            # Convention: service name matches the dependency type, namespace matches the type
-            # First try: look for Knative service
-            resolved_url = self._find_knative_service_url(dep_type)
-
-            # A dependency may also be a regular Kubernetes service
-            if not resolved_url:
-                resolved_url = self._find_k8s_service_url(dep_type)
-
+            resolved_url = knative_url(knative, dep_type) or service_url(services, dep_type)
             if resolved_url:
                 dep['resolved_url'] = resolved_url
                 DeploymentLogger.log(f"  Resolved {dep_name} ({dep_type}) -> {dep_env}={resolved_url}")
@@ -1076,71 +1086,6 @@ git reset --hard origin/main
                     f"Dependency '{dep_name}' (type: {dep_type}) is not deployed. "
                     f"Deploy it first, then retry."
                 )
-
-    def _find_knative_service_url(self, dep_type: str) -> Optional[str]:
-        """Find a Knative service URL matching the dependency type.
-
-        Searches all namespaces for a Knative service whose name or namespace
-        matches the dependency type. Returns the internal cluster URL.
-        """
-        result = subprocess.run(
-            ['kubectl', 'get', 'ksvc', '--all-namespaces', '-o', 'json'],
-            capture_output=True, text=True, timeout=30
-        )
-        if result.returncode != 0:
-            # Knative is an optional component. Without it the API has no
-            # Knative services resource, so no Knative service can match.
-            if "the server doesn't have a resource type" in result.stderr:
-                return None
-            raise RuntimeError(f"Listing Knative services failed: {result.stderr.strip()}")
-
-        for item in json.loads(result.stdout).get('items', []):
-            name = item['metadata']['name']
-            namespace = item['metadata']['namespace']
-            if dep_type in name or dep_type in namespace:
-                status_url = ((item.get('status') or {}).get('address') or {}).get('url')
-                if not status_url:
-                    raise RuntimeError(
-                        f"Knative service {namespace}/{name} matches dependency type "
-                        f"'{dep_type}' but has no address yet: it is not ready."
-                    )
-                return status_url
-        return None
-
-    def _find_k8s_service_url(self, dep_type: str) -> Optional[str]:
-        """Find a regular Kubernetes service URL matching the dependency type.
-
-        Searches all namespaces for a Service whose name or namespace
-        matches the dependency type. Returns the internal cluster URL.
-        """
-        result = subprocess.run(
-            ['kubectl', 'get', 'svc', '--all-namespaces', '-o', 'json'],
-            capture_output=True, text=True, timeout=30
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"Listing services failed: {result.stderr.strip()}")
-
-        items = [
-            item for item in json.loads(result.stdout).get('items', [])
-            if item['metadata']['namespace'] not in ('kube-system', 'kube-public', 'default')
-        ]
-        # Name containing dep_type, in a namespace containing dep_type
-        match = next(
-            (i for i in items if dep_type in i['metadata']['name'] and dep_type in i['metadata']['namespace']),
-            None,
-        )
-        # Second pass: name contains dep_type in any namespace
-        if match is None:
-            match = next((i for i in items if dep_type in i['metadata']['name']), None)
-        if match is None:
-            return None
-        name, namespace = match['metadata']['name'], match['metadata']['namespace']
-        ports = match.get('spec', {}).get('ports') or []
-        if not ports:
-            raise RuntimeError(
-                f"Service {namespace}/{name} matches dependency type '{dep_type}' but exposes no port."
-            )
-        return f"http://{name}.{namespace}.svc.cluster.local:{ports[0]['port']}"
 
     async def _compute_gpu_namespace_quota(self, has_gpu):
         """(requests.memory, limits.memory) for the namespace. See scripts/namespace_quota.py."""
@@ -1275,9 +1220,6 @@ data:
         deployment_config = self.thinkube_config.get('spec', {}).get('deployment', {})
         deployment_type = deployment_config.get('type', 'app')
         is_knative = deployment_type == 'knative'
-
-        # Resolve dependencies before rendering templates
-        self._resolve_dependencies()
 
         if is_knative:
             # 4. Generate knative-service.yaml from knative-service.j2
@@ -1464,6 +1406,8 @@ spec:
         _containers = self.thinkube_config.get('spec', {}).get('containers', [])
         _has_gpu = any(c.get('gpu', {}).get('count') for c in _containers)
         self._gpu_quota = await self._compute_gpu_namespace_quota(_has_gpu)
+        # Dependencies are resolved before the manifests that inject them are rendered.
+        await self._resolve_dependencies()
 
         # Generate k8s manifests from thinkube.yaml (mirrors Ansible generate_k8s_manifests.yaml)
         # Run in thread pool to avoid blocking the event loop

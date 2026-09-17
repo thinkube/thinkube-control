@@ -20,6 +20,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 # The module adds the runtime checkout's scripts/ to the path when it loads;
 # importing the repository's modules first makes it use those.
+import dependency_resolution  # noqa: E402,F401
 import manifest_plan  # noqa: E402,F401
 import namespace_quota  # noqa: E402,F401
 import thinkube_yaml_validator  # noqa: E402,F401
