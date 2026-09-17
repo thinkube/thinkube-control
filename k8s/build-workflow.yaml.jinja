@@ -69,7 +69,7 @@ spec:
           - name: component
             value: "backend"
           - name: dockerfile
-            value: "backend/Dockerfile"
+            value: "backend/Containerfile"
           - name: context
             value: "backend"
 
@@ -84,7 +84,7 @@ spec:
           - name: component
             value: "frontend"
           - name: dockerfile
-            value: "frontend/Dockerfile"
+            value: "frontend/Containerfile"
           - name: context
             value: "frontend"
 
@@ -99,7 +99,7 @@ spec:
           - name: component
             value: "llm-proxy"
           - name: dockerfile
-            value: "proxy/Dockerfile"
+            value: "proxy/Containerfile"
           - name: context
             value: "proxy"
 {% endfor %}
@@ -176,7 +176,7 @@ spec:
     container:
       image: {{ container_registry }}/library/kaniko-executor:latest
       args:
-      - --dockerfile=/workspace/backend/Dockerfile
+      - --dockerfile=/workspace/backend/Containerfile
       - --context=/workspace/backend
       - --destination={{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-backend:{% raw %}{{inputs.parameters.image-tag}}{% endraw %}
       - --build-arg=REGISTRY={{ container_registry }}
@@ -206,7 +206,7 @@ spec:
     container:
       image: {{ container_registry }}/library/kaniko-executor:latest
       args:
-      - --dockerfile=/workspace/frontend/Dockerfile
+      - --dockerfile=/workspace/frontend/Containerfile
       - --context=/workspace/frontend
       - --destination={{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-frontend:{% raw %}{{inputs.parameters.image-tag}}{% endraw %}
       - --build-arg=REGISTRY={{ container_registry }}
@@ -236,7 +236,7 @@ spec:
     container:
       image: {{ container_registry }}/library/kaniko-executor:latest
       args:
-      - --dockerfile=/workspace/proxy/Dockerfile
+      - --dockerfile=/workspace/proxy/Containerfile
       - --context=/workspace/proxy
       - --destination={{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-llm-proxy:{% raw %}{{inputs.parameters.image-tag}}{% endraw %}
       - --build-arg=REGISTRY={{ container_registry }}

@@ -322,7 +322,7 @@ git reset --hard origin/main
         Path(self.local_repo_path).parent.mkdir(parents=True, exist_ok=True)
 
         # Build copier command with all template parameters
-        # container_registry is critical for Dockerfile base images
+        # container_registry is critical for Containerfile base images
         container_registry = f"registry.{self.domain}"
         copier_cmd = [
             "copier", "copy",

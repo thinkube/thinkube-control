@@ -76,7 +76,7 @@ spec:
               - name: container_name
                 value: "{{ container.name }}"
               - name: dockerfile_path
-                value: "{{ container.build | replace('./', '') }}/Dockerfile"
+                value: "{{ container.build | replace('./', '') }}/Containerfile"
               - name: context_path
                 value: "{{ container.build | replace('./', '') }}"
               - name: target_arch
@@ -104,7 +104,7 @@ spec:
               - name: container_name
                 value: "{{ container.name }}"
               - name: dockerfile_path
-                value: "{{ container.build | replace('./', '') }}/Dockerfile"
+                value: "{{ container.build | replace('./', '') }}/Containerfile"
               - name: context_path
                 value: "{{ container.build | replace('./', '') }}"
 {% endif %}
