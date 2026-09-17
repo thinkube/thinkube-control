@@ -32,6 +32,8 @@ from platform_credentials import (
     platform_secrets as _platform_secrets,
 )
 from manifest_parameters import (
+    PARAMETERS_KEY as _PARAMETERS_KEY,
+    encode as _encode_parameters,
     declared_parameter_names as _declared_parameter_names,
     recorded_values as _recorded_parameter_values,
 )
@@ -401,6 +403,7 @@ data:
   app_name: "{self.app_name}"
   containers: |
     {containers_json}
+  {_PARAMETERS_KEY}: {json.dumps(_encode_parameters(manifest_params))}
 """
 
         if is_knative:

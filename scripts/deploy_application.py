@@ -1256,6 +1256,7 @@ spec:
             (k8s_dir / retired).unlink(missing_ok=True)
 
         # 3. Generate app-metadata.yaml
+        from manifest_parameters import PARAMETERS_KEY, encode
         containers_json = json.dumps(self.thinkube_config.get('spec', {}).get('containers', []))
         app_metadata_content = f"""apiVersion: v1
 kind: ConfigMap
@@ -1266,6 +1267,7 @@ data:
   app_name: "{self.app_name}"
   containers: |
     {containers_json}
+  {PARAMETERS_KEY}: {json.dumps(encode(self.manifest_params))}
 """
         (k8s_dir / 'app-metadata.yaml').write_text(app_metadata_content)
 
