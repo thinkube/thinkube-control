@@ -15,6 +15,7 @@ from manifest_parameters import (  # noqa: E402
     deployed_values,
     encode,
     recorded_values,
+    values_in_use,
 )
 
 DEPLOY_PARAMS = {
@@ -45,6 +46,25 @@ def test_regeneration_reads_back_what_the_deploy_recorded():
     data = {"config": "spec: {}", PARAMETERS_KEY: encode(values)}
     assert recorded_values(["model_id"], data, "sd") == values
     assert json.loads(data[PARAMETERS_KEY]) == {"model_id": "Qwen/Qwen3.5-4B"}
+
+
+def test_an_app_deployed_before_the_values_were_recorded_keeps_them_from_its_containers():
+    # its ConfigMap has no parameters key; the running containers still carry the values
+    running = {"model_id": "Qwen/Qwen3.5-4B", "POSTGRES_HOST": "postgres", "SUBJECT": "peri-implantitis"}
+
+    assert values_in_use(["model_id"], running) == {"model_id": "Qwen/Qwen3.5-4B"}
+    assert recorded_values(["model_id"], {"config": "spec: {}"}, "sd", running) == {"model_id": "Qwen/Qwen3.5-4B"}
+
+
+def test_a_parameter_in_neither_place_stops_the_regeneration():
+    with pytest.raises(RuntimeError, match="do not carry them either"):
+        recorded_values(["model_id"], {"config": "spec: {}"}, "sd", {"POSTGRES_HOST": "postgres"})
+
+
+def test_what_the_configmap_records_is_preferred_to_what_the_containers_carry():
+    data = {PARAMETERS_KEY: encode({"model_id": "recorded"})}
+
+    assert recorded_values(["model_id"], data, "sd", {"model_id": "in-use"}) == {"model_id": "recorded"}
 
 
 def test_every_template_declares_its_parameters():

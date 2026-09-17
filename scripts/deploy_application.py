@@ -153,8 +153,9 @@ class ApplicationDeployer:
     async def pull_latest_from_gitea(self):
         """Bring the checkout to the Gitea repository's main, after checking what a template deploy would replace.
 
-        A component's commits pushed after its last template deploy are running; the deploy stops on them unless
-        the replacement was confirmed, and keeps them on a branch before going ahead.
+        Commits pushed after the last template deploy are running, whether the
+        deploy is a component's or an app's: the deploy stops on them unless
+        the replacement was confirmed, and keeps them on a branch first.
         """
         if not (Path(self.local_repo_path).exists() and Path(self.local_repo_path, '.git').exists()):
             DeploymentLogger.log("No existing git repository, will be created fresh")
@@ -176,24 +177,23 @@ git fetch origin main
 """
         await self._git_or_raise(fetch_script, "fetch the repository from Gitea")
 
-        if self.deployment_type == "component":
-            log = await self._git_or_raise(
-                f"cd {self.local_repo_path} && git log --format='%H%x09%an%x09%s' origin/main",
-                "read the component's history",
+        log = await self._git_or_raise(
+            f"cd {self.local_repo_path} && git log --format='%H%x09%an%x09%s' origin/main",
+            "read the repository's history",
+        )
+        pushed = developer_commits(parse_log(log), self.app_name, self.domain)
+        if pushed and not self.replace_developer_commits:
+            raise RuntimeError(refusal(self.app_name, pushed))
+        if pushed:
+            branch = f"developer-changes-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            await self._git_or_raise(
+                f"cd {self.local_repo_path} && git push origin origin/main:refs/heads/{branch}",
+                f"keep the developer commits on branch {branch}",
             )
-            pushed = developer_commits(parse_log(log), self.app_name, self.domain)
-            if pushed and not self.replace_developer_commits:
-                raise RuntimeError(refusal(self.app_name, pushed))
-            if pushed:
-                branch = f"developer-changes-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-                await self._git_or_raise(
-                    f"cd {self.local_repo_path} && git push origin origin/main:refs/heads/{branch}",
-                    f"keep the developer commits on branch {branch}",
-                )
-                DeploymentLogger.log(
-                    f"WARNING: replacing {len(pushed)} commit(s) pushed after the last template deploy of "
-                    f"{self.app_name}, as confirmed; they are kept on branch {branch} in Gitea"
-                )
+            DeploymentLogger.log(
+                f"WARNING: replacing {len(pushed)} commit(s) pushed after the last template deploy of "
+                f"{self.app_name}, as confirmed; they are kept on branch {branch} in Gitea"
+            )
 
         await self._git_or_raise(
             f"cd {self.local_repo_path} && git reset --hard origin/main",

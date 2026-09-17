@@ -34,14 +34,35 @@ def encode(values: Mapping[str, str]) -> str:
     return json.dumps(dict(values), sort_keys=True)
 
 
-def recorded_values(names: List[str], config_map_data: Mapping[str, str], app_name: str) -> Dict[str, str]:
-    """The declared parameters' values, as the metadata ConfigMap records them."""
+def values_in_use(names: List[str], container_env: Mapping[str, str]) -> Dict[str, str]:
+    """The declared parameters as the running containers carry them.
+
+    An application deployed before the values were recorded has them nowhere
+    in its ConfigMap, but its containers were given them as environment
+    variables and still hold them. Reading them there is reading the same
+    values, not guessing at them.
+    """
+    return {name: str(container_env[name]) for name in names if container_env.get(name)}
+
+
+def recorded_values(names: List[str], config_map_data: Mapping[str, str], app_name: str,
+                    container_env: Mapping[str, str] | None = None) -> Dict[str, str]:
+    """The declared parameters' values: as the metadata ConfigMap records them, else as the containers carry them.
+
+    Regenerating without the values would drop the variables from the
+    manifests, so when neither the ConfigMap nor the running containers hold a
+    declared parameter the regeneration stops and says which.
+    """
     if not names:
         return {}
-    if PARAMETERS_KEY not in config_map_data:
-        raise RuntimeError(
-            f"The metadata ConfigMap of {app_name} does not record the values of its "
-            f"parameters ({', '.join(names)}). Redeploy {app_name} to record them."
-        )
-    values = json.loads(config_map_data[PARAMETERS_KEY])
-    return {name: values[name] for name in names if name in values}
+    if PARAMETERS_KEY in config_map_data:
+        values = json.loads(config_map_data[PARAMETERS_KEY])
+        return {name: values[name] for name in names if name in values}
+    in_use = values_in_use(names, container_env or {})
+    if in_use:
+        return in_use
+    raise RuntimeError(
+        f"The metadata ConfigMap of {app_name} does not record the values of its parameters "
+        f"({', '.join(names)}), and its containers do not carry them either. Deploy {app_name} "
+        f"with those parameters to record them."
+    )

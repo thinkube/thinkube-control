@@ -499,12 +499,33 @@ data:
         finally:
             db.close()
 
+    def _container_env(self) -> Dict[str, str]:
+        """The plain environment variables the app's running containers carry, by name.
+
+        An app deployed before the parameter values were recorded still holds
+        them here, which is what lets a regeneration keep them.
+        """
+        config.load_incluster_config()
+        out: Dict[str, str] = {}
+        try:
+            deployments = client.AppsV1Api().list_namespaced_deployment(self.namespace).items
+        except ApiException:
+            return out
+        for deployment in deployments:
+            for container in deployment.spec.template.spec.containers or []:
+                for variable in container.env or []:
+                    if variable.value is not None:
+                        out.setdefault(variable.name, variable.value)
+        return out
+
     def _read_manifest_params(self, app_path: Path) -> Dict[str, str]:
         """The parameters manifest.yaml declares, with the values the app was deployed with.
 
-        The values are in the app-metadata ConfigMap. Regenerating without them
-        would drop them from the manifests, so a ConfigMap that cannot be read
-        stops the regeneration.
+        The values are in the app-metadata ConfigMap; an app deployed before
+        they were recorded has them in its running containers instead, and
+        regenerating writes them back. Regenerating without them would drop
+        them from the manifests, so a parameter found in neither place stops
+        the regeneration.
         """
         with open(app_path / 'manifest.yaml', 'r') as f:
             names = _declared_parameter_names(yaml.safe_load(f))
@@ -518,4 +539,4 @@ data:
                 f"Cannot read ConfigMap {self.namespace}/{name}, which holds the "
                 f"parameters {self.app_name} was deployed with: {e.reason}"
             ) from e
-        return _recorded_parameter_values(names, cm.data or {}, self.app_name)
+        return _recorded_parameter_values(names, cm.data or {}, self.app_name, self._container_env())
