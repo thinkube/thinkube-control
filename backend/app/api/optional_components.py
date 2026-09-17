@@ -173,6 +173,8 @@ async def _install_from_template(
             "deployment_namespace": app_name,
             "domain_name": domain_name,
             "overwrite_existing": True,
+            "deployment_type": "component",
+            "replace_developer_commits": False,
             "project_name": app_name,
             "project_description": component_info.get("description", ""),
             "author_name": username,

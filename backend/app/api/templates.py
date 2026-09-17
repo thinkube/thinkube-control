@@ -89,6 +89,25 @@ class TemplateMetadata(BaseModel):
     secrets: list[TemplateSecret] = []
 
 
+def catalog_template(template_url: str) -> Optional[dict]:
+    """The template catalog's entry for a template address, or None when the catalog does not list it."""
+    wanted = template_url.rstrip("/")
+    repositories = fetch_merged_catalog(
+        catalog_name="repositories",
+        file_name="repositories.json",
+        extract_key="repositories",
+        merge_strategy="list",
+        dedup_key="name",
+    )
+    return next((r for r in repositories if r.get("github_url", "").rstrip("/") == wanted), None)
+
+
+def deployment_type(template_url: str) -> str:
+    """component when the template catalog lists the template as one, otherwise user_app."""
+    entry = catalog_template(template_url)
+    return "component" if entry and entry.get("deployment_type") == "component" else "user_app"
+
+
 @router.get("/list", operation_id="list_templates")
 async def list_available_templates(
     current_user: dict = Depends(get_current_user_dual_auth),
@@ -308,22 +327,12 @@ async def deploy_template_async(
 
         # Extract overwrite flag from variables
         overwrite_confirmed = request.variables.pop("_overwrite_confirmed", False)
+        # A component's commits pushed after its last template deploy are replaced only when confirmed.
+        replace_developer_commits = request.variables.pop("_replace_developer_commits", False) is True
 
         # Determine if this is a component deployment
-        template_url_str = str(request.template_url).rstrip("/")
-        repositories = fetch_merged_catalog(
-            catalog_name="repositories",
-            file_name="repositories.json",
-            extract_key="repositories",
-
-            merge_strategy="list",
-            dedup_key="name",
-        )
-        template_repo = next(
-            (r for r in repositories if r.get("github_url", "").rstrip("/") == template_url_str),
-            None,
-        )
-        is_component = template_repo and template_repo.get("deployment_type") == "component"
+        template_repo = catalog_template(str(request.template_url))
+        is_component = bool(template_repo) and template_repo.get("deployment_type") == "component"
         service_type = "component" if is_component else "user_app"
 
         if is_component:
@@ -374,6 +383,9 @@ async def deploy_template_async(
             # never persists in the deployment record (and never leaks back out
             # through list_deployments / get_deployment_status responses).
             "overwrite_existing": overwrite_confirmed,  # Pass to deployment
+            # Where the checkout lives and what the deploy checks before replacing it.
+            "deployment_type": service_type,
+            "replace_developer_commits": replace_developer_commits,
         }
 
         # Provide sensible defaults for standard parameters from CopierGenerator

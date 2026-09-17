@@ -105,6 +105,11 @@ Rules that the tools do not state:
   "conflict" with requires_confirmation. Overwriting is the user's decision: confirm with
   them, then call `redeploy_template` with the same body. A name held by another kind of
   service is refused (HTTP 400). HTTP 409 means this deploy is already queued or running.
+- Deploying a component's template again stops when the component runs commits pushed after
+  its last template deploy (a developer's change, such as a new model feature); the failure
+  lists them. Replacing them is the user's decision: confirm with them, then redeploy with
+  the variable `_replace_developer_commits` set to true. The commits are kept on a
+  developer-changes branch of the component's Gitea repository first.
 
 Steps:
 1. `list_templates`: find the template by name (or accept a GitHub URL). Note url,

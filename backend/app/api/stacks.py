@@ -28,6 +28,7 @@ from app.models.deployment_schemas import (
 
 logger = logging.getLogger(__name__)
 from app.core.config import settings
+from app.api.templates import deployment_type
 
 router = APIRouter(tags=["stacks"])
 
@@ -280,6 +281,8 @@ async def _deploy_stack_sequential(
                 "author_name": username,
                 "author_email": email,
                 "overwrite_existing": False,
+                "deployment_type": deployment_type(github_url),
+                "replace_developer_commits": False,
             }
 
             # Apply param overrides from stack manifest
