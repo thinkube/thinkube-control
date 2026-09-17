@@ -6,12 +6,14 @@ without a cluster and without importing the rest of the application.
 """
 
 import base64
+import json
 import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from kubernetes.client.rest import ApiException
 
 REPO = Path(__file__).resolve().parents[2]
@@ -138,14 +140,36 @@ def test_a_secret_without_the_key_stops_instead_of_rendering_empty():
 # --- template parameters ------------------------------------------------------
 
 
-def test_parameters_are_read_from_the_app_metadata_config_map():
-    g = generator(Core(config_map={"app_name": "wf-check", "containers": "[]", "model_id": "m"}))
-    assert g._read_manifest_params() == {"model_id": "m"}
+def app_with_manifest(tmp_path, parameters):
+    (tmp_path / "manifest.yaml").write_text(yaml.safe_dump({"name": "wf-check", "parameters": parameters}))
+    return tmp_path
 
 
-def test_an_unreadable_config_map_stops_rather_than_dropping_parameters():
+def test_parameters_are_the_declared_ones_with_their_recorded_values(tmp_path):
+    app = app_with_manifest(tmp_path, [{"name": "model_id"}])
+    g = generator(Core(config_map={
+        "app_name": "wf-check", "domain": "thinkube.com", "namespace": "wf-check", "config": "spec: {}",
+        "parameters": json.dumps({"model_id": "m"}),
+    }))
+    assert g._read_manifest_params(app) == {"model_id": "m"}
+
+
+def test_a_template_without_parameters_renders_none_of_the_config_map(tmp_path):
+    app = app_with_manifest(tmp_path, [])
+    g = generator(Core(config_map={"domain": "thinkube.com", "config": "spec: {}"}))
+    assert g._read_manifest_params(app) == {}
+
+
+def test_values_not_recorded_stop_rather_than_dropping_parameters(tmp_path):
+    app = app_with_manifest(tmp_path, [{"name": "model_id"}])
+    with pytest.raises(RuntimeError, match="Redeploy wf-check"):
+        generator(Core(config_map={"app_name": "wf-check"}))._read_manifest_params(app)
+
+
+def test_an_unreadable_config_map_stops_rather_than_dropping_parameters(tmp_path):
+    app = app_with_manifest(tmp_path, [{"name": "model_id"}])
     with pytest.raises(RuntimeError, match="wf-check-metadata"):
-        generator(Core(config_map=None))._read_manifest_params()
+        generator(Core(config_map=None))._read_manifest_params(app)
 
 
 # --- dependencies -------------------------------------------------------------

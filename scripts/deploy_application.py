@@ -478,6 +478,7 @@ git reset --hard origin/main
     async def resolve_app_secrets(self):
         """Read the secrets manifest.yaml declares and check the store holds them."""
         from app_secrets import declared_secrets, env_from, refusal
+        from manifest_parameters import declared_parameter_names, deployed_values
 
         manifest_path = Path(self.local_repo_path) / 'manifest.yaml'
         if not manifest_path.exists():
@@ -487,6 +488,7 @@ git reset --hard origin/main
 
         self.declared_secrets = declared_secrets(manifest)
         self.deployment_env_from = env_from(self.app_name, self.declared_secrets)
+        self.manifest_params = deployed_values(declared_parameter_names(manifest), self.params)
         if not self.declared_secrets:
             return
 
@@ -811,22 +813,27 @@ git reset --hard origin/main
                 DeploymentLogger.log("Updated MLflow config secret")
 
     async def create_app_metadata(self):
-        """Create application metadata ConfigMap."""
+        """Create or replace the application metadata ConfigMap."""
+        from manifest_parameters import PARAMETERS_KEY, encode
+
         metadata = client.V1ConfigMap(
             metadata=client.V1ObjectMeta(name=f'{self.app_name}-metadata', namespace=self.namespace),
             data={
                 'app_name': self.app_name,
                 'domain': self.domain,
                 'namespace': self.namespace,
-                'config': yaml.dump(self.thinkube_config)
+                'config': yaml.dump(self.thinkube_config),
+                PARAMETERS_KEY: encode(self.manifest_params),
             }
         )
         try:
             await self.k8s_core.create_namespaced_config_map(self.namespace, metadata)
             DeploymentLogger.log(f"Created app metadata: {self.app_name}-metadata")
         except ApiException as e:
-            if e.status == 409:
-                DeploymentLogger.log("App metadata already exists")
+            if e.status != 409:
+                raise
+            await self.k8s_core.replace_namespaced_config_map(f'{self.app_name}-metadata', self.namespace, metadata)
+            DeploymentLogger.log(f"Replaced app metadata: {self.app_name}-metadata")
 
     async def create_keycloak_client(self):
         """Create Keycloak OIDC client for the application (matches Ansible keycloak_client role)."""
@@ -1187,18 +1194,7 @@ git reset --hard origin/main
         container_registry = f"registry.{self.domain}"
         seaweedfs_endpoint = self._decode_secret_data(self.secrets['seaweedfs'], 'endpoint_internal')
 
-        # Build manifest_params from self.params — these are template-specific
-        # parameters (e.g., model_id) that should be injected as env vars
-        standard_params = {
-            'app_name', 'template_url', 'deployment_namespace',
-            'domain_name', 'admin_username', 'github_token',
-            'namespace', 'k8s_namespace', 'container_registry',
-            'registry_subdomain', 'project_name',
-        }
-        manifest_params = {
-            k: v for k, v in self.params.items()
-            if k not in standard_params and v
-        }
+        manifest_params = self.manifest_params
 
         template_vars = {
             'project_name': self.app_name,

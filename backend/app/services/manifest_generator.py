@@ -31,6 +31,10 @@ from platform_credentials import (
     PlatformValues as _PlatformValues,
     platform_secrets as _platform_secrets,
 )
+from manifest_parameters import (
+    declared_parameter_names as _declared_parameter_names,
+    recorded_values as _recorded_parameter_values,
+)
 from namespace_quota import NON_GPU_QUOTA as _NON_GPU_QUOTA, memory_quota as _memory_quota, node_view as _node_view
 from app_secrets import (
     declared_secrets as _declared_secrets_of,
@@ -293,8 +297,8 @@ class ManifestGenerator:
         # Resolve dependencies
         self._resolve_dependencies()
 
-        # Build manifest_params from app-metadata ConfigMap (parameters from original deploy)
-        manifest_params = self._read_manifest_params()
+        # The declared parameters, with the values the app was deployed with
+        manifest_params = self._read_manifest_params(app_path)
 
         # Setup Jinja2
         templates_dir = TEMPLATES_DIR
@@ -519,13 +523,17 @@ data:
         finally:
             db.close()
 
-    def _read_manifest_params(self) -> Dict[str, str]:
-        """Read manifest parameters from the app-metadata ConfigMap on the cluster.
+    def _read_manifest_params(self, app_path: Path) -> Dict[str, str]:
+        """The parameters manifest.yaml declares, with the values the app was deployed with.
 
-        These are the template-specific parameters (e.g., model_id) that were
-        provided at deploy time. Regenerating without them would drop them from
-        the manifests, so a ConfigMap that cannot be read stops the regeneration.
+        The values are in the app-metadata ConfigMap. Regenerating without them
+        would drop them from the manifests, so a ConfigMap that cannot be read
+        stops the regeneration.
         """
+        with open(app_path / 'manifest.yaml', 'r') as f:
+            names = _declared_parameter_names(yaml.safe_load(f))
+        if not names:
+            return {}
         name = f'{self.app_name}-metadata'
         try:
             cm = self.core_v1.read_namespaced_config_map(name, self.namespace)
@@ -534,5 +542,4 @@ data:
                 f"Cannot read ConfigMap {self.namespace}/{name}, which holds the "
                 f"parameters {self.app_name} was deployed with: {e.reason}"
             ) from e
-        known_keys = {'app_name', 'containers'}
-        return {k: v for k, v in (cm.data or {}).items() if k not in known_keys}
+        return _recorded_parameter_values(names, cm.data or {}, self.app_name)
