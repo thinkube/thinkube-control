@@ -10,7 +10,6 @@ import json
 import os
 import subprocess
 import sys
-import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from functools import partial
@@ -1082,10 +1081,16 @@ git fetch origin main
         deployments + services + ingress.
         """
         DeploymentLogger.log("Generating Kubernetes manifests from thinkube.yaml")
-        started = time.time()
 
         k8s_dir = Path(self.local_repo_path) / 'k8s'
         k8s_dir.mkdir(parents=True, exist_ok=True)
+
+        # The deployment log names every file written here.
+        written = []
+
+        def write(name: str, content: str) -> None:
+            (k8s_dir / name).write_text(content)
+            written.append(name)
 
         # Load thinkube.yaml if not already loaded
         if not self.thinkube_config:
@@ -1134,7 +1139,7 @@ metadata:
     app.kubernetes.io/name: {self.app_name}
     app.kubernetes.io/managed-by: argocd
 """
-        (k8s_dir / 'namespace.yaml').write_text(namespace_content)
+        write('namespace.yaml', namespace_content)
 
         # 1b. Generate resource-policies.yaml (LimitRange + ResourceQuota for namespace)
         quota_req_mem, quota_lim_mem = getattr(self, '_gpu_quota', ('8Gi', '16Gi'))
@@ -1165,7 +1170,7 @@ spec:
     requests.cpu: "4"
     limits.cpu: "8"
 """
-        (k8s_dir / 'resource-policies.yaml').write_text(resource_policies_content)
+        write('resource-policies.yaml', resource_policies_content)
 
         # 2. Files an earlier generator wrote with credentials in them
         from platform_credentials import RETIRED_MANIFESTS
@@ -1186,7 +1191,7 @@ data:
     {containers_json}
   {PARAMETERS_KEY}: {json.dumps(encode(self.manifest_params))}
 """
-        (k8s_dir / 'app-metadata.yaml').write_text(app_metadata_content)
+        write('app-metadata.yaml', app_metadata_content)
 
         # Determine deployment type: "app" (default) or "knative"
         deployment_config = self.thinkube_config.get('spec', {}).get('deployment', {})
@@ -1198,29 +1203,29 @@ data:
             DeploymentLogger.log(f"Generating Knative Service manifests (type: knative)")
             knative_template = env.get_template('knative-service.j2')
             knative_content = knative_template.render(**template_vars)
-            (k8s_dir / 'knative-service.yaml').write_text(knative_content)
+            write('knative-service.yaml', knative_content)
 
         else:
             # 4. Generate deployments.yaml from deployment-separate.j2
             deployment_template = env.get_template('deployment-separate.j2')
             deployment_content = deployment_template.render(**template_vars)
-            (k8s_dir / 'deployments.yaml').write_text(deployment_content)
+            write('deployments.yaml', deployment_content)
 
             # 5. Generate services.yaml from services-separate.j2
             services_template = env.get_template('services-separate.j2')
             services_content = services_template.render(**template_vars)
-            (k8s_dir / 'services.yaml').write_text(services_content)
+            write('services.yaml', services_content)
 
             # 6. Generate HTTPRoute (ingress.yaml) from httproute.j2
             httproute_template = env.get_template('httproute.j2')
             httproute_content = httproute_template.render(**template_vars)
-            (k8s_dir / 'ingress.yaml').write_text(httproute_content)
+            write('ingress.yaml', httproute_content)
 
         # 7. Generate paused-backend.yaml from template (apps only)
         if not is_knative:
             paused_template = env.get_template('paused-backend.yaml.j2')
             paused_content = paused_template.render(**template_vars)
-            (k8s_dir / 'paused-backend.yaml').write_text(paused_content)
+            write('paused-backend.yaml', paused_content)
 
         # 8. The database's credentials are a Secret; only the services matter here
         services = self.thinkube_config.get('spec', {}).get('services', [])
@@ -1235,14 +1240,14 @@ data:
         if needs_storage:
             storage_template = env.get_template('storage-pvc.j2')
             storage_content = storage_template.render(**template_vars)
-            (k8s_dir / 'storage-pvc.yaml').write_text(storage_content)
+            write('storage-pvc.yaml', storage_content)
 
         # 9b. Generate workflows.yaml (conditional)
         has_workflows = 'workflows' in services
         if has_workflows:
             workflows_template = env.get_template('workflows.j2')
             workflows_content = workflows_template.render(**template_vars)
-            (k8s_dir / 'workflows.yaml').write_text(workflows_content)
+            write('workflows.yaml', workflows_content)
 
         # 10. Generate build-workflow.yaml
         workflow_template = env.get_template('build-workflow.j2')
@@ -1254,12 +1259,12 @@ data:
             raise ValueError("MASTER_NODE_NAME env var not set")
         workflow_vars = {**template_vars, 'system_username': system_username, 'master_node_name': master_node_name}
         workflow_content = workflow_template.render(**workflow_vars)
-        (k8s_dir / 'build-workflow.yaml').write_text(workflow_content)
+        write('build-workflow.yaml', workflow_content)
 
         # 11. Generate kustomization.yaml
         from manifest_plan import kustomization_content, kustomization_resources as build_kustomization_resources
 
-        (k8s_dir / 'kustomization.yaml').write_text(kustomization_content(
+        write('kustomization.yaml', kustomization_content(
             app_name=self.app_name,
             container_registry=container_registry,
             containers=containers,
@@ -1292,7 +1297,7 @@ spec:
         args:
           - echo "Deployment of {self.app_name} completed successfully at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 """
-        (k8s_dir / 'argocd-postsync-hook.yaml').write_text(postsync_content)
+        write('argocd-postsync-hook.yaml', postsync_content)
 
         # 13. Generate argocd-syncfail-hook.yaml
         syncfail_content = f"""apiVersion: batch/v1
@@ -1315,12 +1320,10 @@ spec:
         args:
           - echo "Deployment of {self.app_name} FAILED at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 """
-        (k8s_dir / 'argocd-syncfail-hook.yaml').write_text(syncfail_content)
+        write('argocd-syncfail-hook.yaml', syncfail_content)
 
-        manifests = sorted(k8s_dir.glob('*.yaml'))
-        written = [p.name for p in manifests if p.stat().st_mtime >= started]
-        DeploymentLogger.success(f"Regenerated {len(written)} files in {k8s_dir}: {', '.join(written)}")
-        kept = [p.name for p in manifests if p.name not in written]
+        DeploymentLogger.success(f"Regenerated {len(written)} files in {k8s_dir}: {', '.join(sorted(written))}")
+        kept = sorted(p.name for p in k8s_dir.glob('*.yaml') if p.name not in written)
         if kept:
             DeploymentLogger.log(f"Files in {k8s_dir} this deploy did not write: {', '.join(kept)}")
 
