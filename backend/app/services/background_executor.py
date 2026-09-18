@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import json
+import sys
 import yaml
 import tempfile
 from pathlib import Path
@@ -291,7 +292,12 @@ class BackgroundExecutor:
         """
         Execute the Python deployment script and stream output.
         """
+        # The script's line format is defined beside the script.
+        sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
+        from deploy_log import entry_type
+
         process = None
+        error_lines = []
 
         try:
             # Create subprocess
@@ -316,15 +322,11 @@ class BackgroundExecutor:
                 if scrub is not None:
                     line_text = scrub.clean(line_text)
 
-                # Parse output from Python script
-                if "PHASE" in line_text:
-                    self._log_to_db(db, deployment.id, "phase", line_text)
-                elif "ERROR" in line_text:
-                    self._log_to_db(db, deployment.id, "error", line_text)
-                elif "SUCCESS" in line_text or "✅" in line_text:
-                    self._log_to_db(db, deployment.id, "success", line_text)
-                elif any(keyword in line_text for keyword in ["Created", "Updated", "Failed", "Workflow", "Argo"]):
-                    self._log_to_db(db, deployment.id, "info", line_text)
+                # Every line is stored, typed by the level the script gave it.
+                kind = entry_type(line_text)
+                self._log_to_db(db, deployment.id, kind, line_text)
+                if kind == "error":
+                    error_lines.append(line_text)
 
             # Wait for completion
             return_code = await process.wait()
@@ -339,13 +341,10 @@ class BackgroundExecutor:
                 )
                 return {"success": True}
             else:
-                self._log_to_db(
-                    db,
-                    deployment.id,
-                    "error",
-                    f"Deployment failed with return code: {return_code}",
-                )
-                return {"success": False, "error": f"Return code: {return_code}"}
+                # The script's own error lines say why; the run's status carries them.
+                failure = "\n".join([f"Deployment failed with return code {return_code}:", *error_lines])
+                self._log_to_db(db, deployment.id, "error", failure)
+                return {"success": False, "error": failure}
 
         except Exception as e:
             logger.error(f"Error executing Python deployment: {e}")

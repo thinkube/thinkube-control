@@ -378,6 +378,7 @@ MCP_OPERATIONS = [
     "cancel_deployment",           # Tool
     "list_deployed_apps",          # Resource
     "publish_template",            # Tool
+    "get_commit_rollout",          # Resource
 
     # === Harbor Images ===
     "list_harbor_images",          # Resource

@@ -1,6 +1,9 @@
 # app/api/cicd.py
 """CI/CD monitoring endpoints - queries Argo Workflows directly from Kubernetes."""
 
+import base64
+import json
+import sys
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query, Depends
@@ -488,3 +491,156 @@ async def get_step_logs(
     except Exception as e:
         logger.error(f"Error getting step logs: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+GITEA_ORG = "thinkube-deployments"
+# Pages of 50 read from Gitea before the answer is refused as out of reach.
+GITEA_MAX_PAGES = 20
+
+
+def _gitea_get(path: str, token: str, params: Dict[str, Any]) -> Any:
+    """One GET of Gitea's API as the platform admin; an error names the path and Gitea's answer."""
+    import urllib3
+    from app.core.config import settings
+
+    http = urllib3.PoolManager(cert_reqs="CERT_NONE")
+    urllib3.disable_warnings()
+    response = http.request(
+        "GET",
+        f"{settings.GITEA_URL}/api/v1{path}",
+        fields=params,
+        headers={"Authorization": f"token {token}"},
+    )
+    if response.status == 404:
+        raise HTTPException(status_code=404, detail=f"Gitea has no {path}")
+    if response.status != 200:
+        raise HTTPException(
+            status_code=502, detail=f"Gitea answered {response.status} for {path}: {response.data.decode()[:300]}"
+        )
+    return json.loads(response.data)
+
+
+@router.get("/apps/{app_name}/commits/{commit}/rollout", operation_id="get_commit_rollout")
+def get_commit_rollout(
+    app_name: str,
+    commit: str,
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """Is a commit pushed to an app's Gitea repository live? Answers "has my push rolled out?".
+
+    commit: the full or abbreviated sha of a commit on main of thinkube-deployments/<app_name>.
+
+    Answers:
+    - commit: the commit, and push: when Gitea received the push that delivered it.
+    - build: the build workflow that push started, with its phase (Running, Succeeded,
+      Failed) and image tag, or null with build_note saying why none is known.
+    - automatic_update_commit: the "build: automatic update of <app> to <tag>" commit the
+      build made when its images were in the registry, or null while there is none.
+    - running: each deployment of the app with the image it runs now, whether its rollout is
+      complete, and source: this_commit, later_commit (a later commit's build, which includes
+      this one), earlier_commit (not live yet) or unknown.
+    - live and summary: true when every deployment runs an image built from this commit or a
+      later one and its rollout is complete.
+
+    A push to main is the deploy: it builds, tests and rolls out the app with no other call.
+    """
+    sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
+    import commit_rollout as cr
+
+    try:
+        custom_api, core_v1, apps_v1 = _get_k8s_clients()
+        secret = core_v1.read_namespaced_secret("gitea-admin-token", "gitea")
+        token = base64.b64decode(secret.data["token"]).decode()
+        repo = f"/repos/{GITEA_ORG}/{app_name}"
+
+        main: List[cr.MainCommit] = []
+        for page in range(1, GITEA_MAX_PAGES + 1):
+            listed = _gitea_get(
+                f"{repo}/commits", token,
+                {"sha": "main", "limit": "50", "page": str(page), "stat": "false",
+                 "verification": "false", "files": "false"},
+            )
+            main.extend(cr.MainCommit(c["sha"], c["commit"]["message"].split("\n", 1)[0]) for c in listed)
+            if any(c["sha"].startswith(commit.lower()) for c in listed) or len(listed) < 50:
+                break
+        try:
+            at = cr.find_commit(main, commit)
+        except LookupError as e:
+            raise HTTPException(status_code=404, detail=f"{app_name}: {e}")
+        position = {c.sha: i for i, c in enumerate(main)}
+
+        # The feed is read back until a push older than the commit, so the first
+        # push that delivered it is among the entries read.
+        entries: List[dict] = []
+        for page in range(1, GITEA_MAX_PAGES + 1):
+            listed = _gitea_get(f"{repo}/activities/feeds", token, {"limit": "50", "page": str(page)})
+            entries.extend(listed)
+            older = [
+                p for p in cr.parse_feed(listed) if p.ref == cr.MAIN and p.head in position and position[p.head] > at
+            ]
+            if older or len(listed) < 50:
+                break
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{app_name}: the push of {commit} is more than {GITEA_MAX_PAGES * 50} feed entries back",
+            )
+        pushes = cr.parse_feed(entries)
+        try:
+            push = cr.delivering_push(pushes, position, at)
+        except LookupError as e:
+            raise HTTPException(status_code=404, detail=f"{app_name}: {e}")
+
+        workflows = custom_api.list_namespaced_custom_object(
+            group="argoproj.io", version="v1alpha1", namespace=ARGO_NAMESPACE, plural="workflows",
+            label_selector=f"thinkube.io/app-name={app_name}",
+        )
+        builds = [cr.parse_build(w) for w in workflows.get("items", [])]
+        build, build_note = cr.build_of_push(push, pushes, builds)
+        update = cr.automatic_update(main, app_name, build.uid) if build else None
+
+        running = []
+        for d in apps_v1.list_namespaced_deployment(app_name).items:
+            for c in d.spec.template.spec.containers:
+                if f"/thinkube/{app_name}-" not in c.image:
+                    continue
+                state = {
+                    "replicas": d.spec.replicas or 0,
+                    "updated_replicas": d.status.updated_replicas or 0,
+                    "available_replicas": d.status.available_replicas or 0,
+                }
+                running.append({
+                    "deployment": d.metadata.name,
+                    "container": c.name,
+                    "image": c.image,
+                    **state,
+                    "rollout_complete": cr.rollout_complete(state),
+                    **cr.image_source(cr.image_tag(c.image), build, builds, pushes, main, position, at),
+                })
+        live, summary = cr.verdict(running)
+
+        return {
+            "app": app_name,
+            "commit": {"sha": main[at].sha, "subject": main[at].subject},
+            "push": {"time": push.time.isoformat(), "head": push.head},
+            "build": None if build is None else {
+                "name": build.name,
+                "phase": build.phase,
+                "image_tag": build.uid,
+                "started_at": build.started_at,
+                "finished_at": build.finished_at,
+            },
+            "build_note": build_note,
+            "automatic_update_commit": None if update is None else {"sha": update.sha, "subject": update.subject},
+            "running": running,
+            "live": live,
+            "summary": summary,
+        }
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=f"{app_name}: {e}")
+    except ApiException as e:
+        logger.error(f"K8s API error answering the rollout of {app_name} {commit}: {e}")
+        raise HTTPException(status_code=502, detail=f"Kubernetes API error: {e.reason}")

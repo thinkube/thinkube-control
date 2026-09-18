@@ -313,7 +313,11 @@ async def restart_service(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user_dual_auth),
 ):
-    """Restart a service"""
+    """Restart a service: its pods start again with the image they already run.
+
+    A restart does not ship code. For a user app, commit and push to its Gitea repository:
+    the push builds and rolls out the new image. get_commit_rollout says when it is live.
+    """
     service = db.query(ServiceModel).filter(ServiceModel.id == service_id).first()
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")

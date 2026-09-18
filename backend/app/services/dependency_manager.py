@@ -298,19 +298,19 @@ class DependencyManager:
             if existing.type == "user_app" and service_type == "user_app":
                 return (
                     True,
-                    f"A user application named '{name}' already exists and will be overwritten",
+                    f"A user application named '{name}' already exists",
                 )
             elif existing.type == "component" and service_type == "component":
                 return (
                     True,
-                    f"Component '{name}' already exists and will be redeployed",
+                    f"Component '{name}' already exists",
                 )
             elif existing.type == "user_app" and service_type == "component":
                 existing.type = "component"
                 self.db.commit()
                 return (
                     True,
-                    f"'{name}' upgraded from user_app to component and will be redeployed",
+                    f"'{name}' upgraded from user_app to component",
                 )
             else:
                 return (

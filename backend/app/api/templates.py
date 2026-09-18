@@ -43,6 +43,10 @@ import aiohttp
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["templates"])
 
+# Where a deploy's checkout lives, as scripts/deploy_application.py places it.
+APPS_DIR = "/home/thinkube/apps"
+COMPONENTS_DIR = "/home/thinkube/components"
+
 
 class TemplateParameter(BaseModel):
     """Template parameter definition"""
@@ -314,10 +318,19 @@ async def deploy_template_async(
     current_user: dict = Depends(get_current_user_dual_auth),
 ):
     """
-    Deploy a template asynchronously
+    Create an application from a template: the first deploy of a new app.
 
-    This endpoint queues a deployment and returns immediately with a deployment ID.
-    Use the deployment ID to track progress via the status and logs endpoints.
+    Queues the deploy and answers at once with a deployment ID; get_deployment_status and
+    get_deployment_logs follow it. The deploy copies the template into the checkout
+    /home/thinkube/apps/<name> (components: /home/thinkube/components/<name>), generates
+    k8s/ from thinkube.yaml, creates the app's database if it needs one, creates the Gitea
+    repository thinkube-deployments/<name>, pushes to it, and waits for the build.
+
+    Do NOT use this to ship code changes to an app that exists. For code, commit and push
+    to the app's Gitea repository: the push is the deploy (it builds, tests and rolls
+    out). get_commit_rollout says when a pushed commit is live. A name that belongs to an
+    existing app answers status "conflict"; see redeploy_template for what a redeploy
+    replaces.
     """
     try:
         # Extract org and repo from URL
@@ -357,12 +370,20 @@ async def deploy_template_async(
                 or f"Service name '{request.template_name}' is not available",
             )
 
+        # What the deploy replaces in the checkout the developer works in; nothing when there is none.
+        sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
+        from checkout_state import replacement_warning
+        from component_checkout import checkout_path
+
+        checkout = checkout_path(APPS_DIR, COMPONENTS_DIR, request.template_name, service_type)
+        replaced = replacement_warning(checkout, Path(checkout, ".git").exists())
+
         # Components auto-confirm overwrites; user apps need explicit confirmation
         if conflict_message and not is_component and not overwrite_confirmed:
             return DeploymentResponse(
                 deployment_id="",
                 status="conflict",
-                message=conflict_message,
+                message=f"{conflict_message}. {replaced}" if replaced else f"{conflict_message}.",
                 requires_confirmation=True,
                 websocket_url="",
             )
@@ -434,9 +455,7 @@ async def deploy_template_async(
             message=f"Deployment queued at position {queue_position}. Check the status endpoint for progress.",
             queue_position=queue_position,
             websocket_url=f"/ws/deployment/{deployment.id}",
-            conflict_warning=(
-                conflict_message if conflict_message and overwrite_confirmed else None
-            ),
+            conflict_warning=replaced,
         )
 
     except HTTPException:
@@ -460,10 +479,25 @@ async def redeploy_template_async(
     current_user: dict = Depends(get_current_user_dual_auth),
 ):
     """
-    Redeploy an existing template
+    Render an existing app again from its template. Not the way to ship code changes.
 
-    Like deploy, but automatically confirms overwrite of existing user applications.
-    Use this when you know the app already exists and want to update it.
+    What it does, in order, in the checkout /home/thinkube/apps/<name> the IDE edits
+    (components: /home/thinkube/components/<name>):
+    1. Resets the checkout to Gitea's main with git reset --hard. Uncommitted changes and
+       unpushed commits there would be destroyed, so the redeploy refuses and names them
+       when the checkout has any.
+    2. Copies the template over the checkout with copier copy --force.
+    3. Regenerates k8s/ from thinkube.yaml.
+    4. Creates the app's database if it is missing; an existing database is kept.
+    5. Commits and pushes the result to Gitea, and waits for the build.
+
+    Use it after changing thinkube.yaml, or to render the app again from its template, and
+    only on a checkout that is clean and fully pushed.
+
+    Do NOT use it to ship code changes. For code, commit and push to the app's Gitea
+    repository (git pull --rebase first: every build commits the new image tag): the push
+    is the deploy, it builds, tests and rolls out the app. get_commit_rollout says whether a
+    pushed commit is live.
     """
     request.variables["_overwrite_confirmed"] = True
     return await deploy_template_async(request, background_tasks, db, current_user)

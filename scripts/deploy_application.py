@@ -10,6 +10,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from functools import partial
@@ -24,7 +25,10 @@ from kubernetes_asyncio.client.rest import ApiException
 from kubernetes_asyncio.stream import WsApiClient
 
 from app_databases import create_statement, database_names, exists, exists_query
+from checkout_state import STATUS_COMMAND, UNPUSHED_COMMAND, changed_files
+from checkout_state import refusal as checkout_refusal
 from component_checkout import check_declared_type, checkout_path, developer_commits, parse_log, refusal
+from deploy_log import format_line
 
 
 APPS_DIR = "/home/thinkube/apps"
@@ -39,8 +43,10 @@ class DeploymentLogger:
 
     @staticmethod
     def log(message: str, level: str = "INFO"):
-        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-        print(f"[{timestamp}] [{level}] {message}", flush=True)
+        # Each line of a message carries the level, so the backend stores all of them under it.
+        now = datetime.now()
+        for line in str(message).splitlines() or [""]:
+            print(format_line(level, line, now), flush=True)
 
     @staticmethod
     def debug(message: str):
@@ -145,8 +151,6 @@ class ApplicationDeployer:
         # Pull latest changes from Gitea before running Copier
         await self.pull_latest_from_gitea()
 
-        # Run Copier
-        DeploymentLogger.log(f"Running Copier for template: {self.template_url}")
         await self.run_copier()
 
         DeploymentLogger.success("Phase 1B complete")
@@ -178,6 +182,20 @@ git fetch origin main
 """
         await self._git_or_raise(fetch_script, "fetch the repository from Gitea")
 
+        # The reset below destroys uncommitted changes and unpushed commits;
+        # the deploy stops before it when the checkout holds any.
+        status = await self._git_or_raise(
+            f"cd {self.local_repo_path} && {STATUS_COMMAND}", "read the checkout's uncommitted changes"
+        )
+        unpushed = await self._git_or_raise(
+            f"cd {self.local_repo_path} && {UNPUSHED_COMMAND}", "read the checkout's unpushed commits"
+        )
+        refused = checkout_refusal(
+            self.app_name, self.local_repo_path, changed_files(status), parse_log(unpushed)
+        )
+        if refused:
+            raise RuntimeError(refused)
+
         log = await self._git_or_raise(
             f"cd {self.local_repo_path} && git log --format='%H%x09%an%x09%s' origin/main",
             "read the repository's history",
@@ -196,11 +214,20 @@ git fetch origin main
                 f"{self.app_name}, as confirmed; they are kept on branch {branch} in Gitea"
             )
 
+        before = (await self._git_or_raise(
+            f"cd {self.local_repo_path} && git rev-parse HEAD", "read the checkout's commit"
+        )).strip()
         await self._git_or_raise(
             f"cd {self.local_repo_path} && git reset --hard origin/main",
             "reset the checkout to the repository's main",
         )
-        DeploymentLogger.log("Successfully pulled latest changes")
+        after = (await self._git_or_raise(
+            f"cd {self.local_repo_path} && git rev-parse HEAD", "read the checkout's commit"
+        )).strip()
+        DeploymentLogger.log(
+            f"Reset checkout {self.local_repo_path} with git reset --hard origin/main: "
+            f"from {before[:10]} to {after[:10]}"
+        )
 
     async def _git_or_raise(self, script: str, what: str) -> str:
         """Run a git shell script in the checkout; its output, or an error naming what could not be done."""
@@ -264,7 +291,9 @@ git fetch origin main
 
     async def run_copier(self):
         """Run Copier to process the template (in thread pool to keep event loop responsive)."""
-        DeploymentLogger.log(f"Processing template: {self.template_url}")
+        DeploymentLogger.log(
+            f"Copying template {self.template_url} (ref HEAD) over {self.local_repo_path} with copier copy --force"
+        )
 
         # Ensure apps/ directory exists
         Path(self.local_repo_path).parent.mkdir(parents=True, exist_ok=True)
@@ -1053,6 +1082,7 @@ git fetch origin main
         deployments + services + ingress.
         """
         DeploymentLogger.log("Generating Kubernetes manifests from thinkube.yaml")
+        started = time.time()
 
         k8s_dir = Path(self.local_repo_path) / 'k8s'
         k8s_dir.mkdir(parents=True, exist_ok=True)
@@ -1287,9 +1317,12 @@ spec:
 """
         (k8s_dir / 'argocd-syncfail-hook.yaml').write_text(syncfail_content)
 
-        # Count generated files
-        generated_files = list(k8s_dir.glob('*.yaml'))
-        DeploymentLogger.success(f"Generated {len(generated_files)} Kubernetes manifest files in k8s/")
+        manifests = sorted(k8s_dir.glob('*.yaml'))
+        written = [p.name for p in manifests if p.stat().st_mtime >= started]
+        DeploymentLogger.success(f"Regenerated {len(written)} files in {k8s_dir}: {', '.join(written)}")
+        kept = [p.name for p in manifests if p.name not in written]
+        if kept:
+            DeploymentLogger.log(f"Files in {k8s_dir} this deploy did not write: {', '.join(kept)}")
 
     async def deploy_workflow_template(self):
         """Deploy Argo Workflow template."""
@@ -1732,6 +1765,7 @@ fi
 # the working tree (avoids stale refs/remotes/origin/main conflicts)
 git fetch origin 2>/dev/null || true
 git push -u origin main --force
+printf 'PUSHED\\t%s\\n' "$(git log -1 --format='%H %s')"
 """
 
             # Run git operations in thread pool to avoid blocking the event loop
@@ -1744,7 +1778,12 @@ git push -u origin main --force
                 )
 
             if returncode == 0:
-                DeploymentLogger.success("Pushed changes to Gitea")
+                pushed = [line.split("\t", 1)[1] for line in stdout.splitlines() if line.startswith("PUSHED\t")]
+                if len(pushed) != 1:
+                    raise RuntimeError(f"The push to Gitea did not report the commit it pushed: {stdout.strip()}")
+                DeploymentLogger.success(
+                    f"Pushed commit {pushed[0]} to Gitea {org}/{self.gitea_repo_name} main (git push --force)"
+                )
                 return
 
             # Recoverable errors — retry

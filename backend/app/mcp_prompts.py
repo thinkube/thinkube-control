@@ -101,9 +101,16 @@ Rules that the tools do not state:
 - A deploy runs from a queue, one run at a time, detached from the call. Its success means
   the image was built and pushed, and ArgoCD received the manifests; the pods come up right
   after.
+- This guide creates an app. To ship code changes to an app that exists, commit and push to
+  its Gitea repository: the push is the deploy (build, tests, rollout).
+  `get_commit_rollout` with the app and the commit says when it is live. Never deploy or
+  redeploy the template to ship code.
 - A name that belongs to an existing user app makes `deploy_template` answer status
-  "conflict" with requires_confirmation. Overwriting is the user's decision: confirm with
-  them, then call `redeploy_template` with the same body. A name held by another kind of
+  "conflict" with requires_confirmation; the message says what a redeploy replaces. A
+  redeploy resets the checkout /home/thinkube/apps/<name> to Gitea's main, copies the
+  template over it and regenerates k8s/; it refuses when the checkout has uncommitted
+  changes or unpushed commits. It is the user's decision: confirm with them, then call
+  `redeploy_template` with the same body. A name held by another kind of
   service is refused (HTTP 400). HTTP 409 means this deploy is already queued or running.
 - Deploying a component's template again stops when the component runs commits pushed after
   its last template deploy (a developer's change, such as a new model feature); the failure
@@ -253,8 +260,10 @@ Steps:
    - user_app: `list_deployments` lists deploy runs newest first; take the latest one with
      this name and read `get_deployment_status` with its id (status, reason) and
      `get_deployment_logs` for the failing step. `list_runs` shows a run still queued or in
-     progress. A knative app: `get_knative_service` with namespace and name (both the app
-     name), whose status and ready_condition say why a revision is not ready.
+     progress. `get_commit_rollout` with the app and its last pushed commit says whether
+     that push built and rolled out, and which image runs. A knative app:
+     `get_knative_service` with namespace and name (both the app name), whose status and
+     ready_condition say why a revision is not ready.
    - optional or component: `get_component_status` with the component name (pods running,
      failed) and `get_component_info` (installed, requirements, missing_requirements).
    - vllm, tensorrt, text-embeddings or ollama: also `get_llm_backends` (which pods answer
@@ -266,8 +275,10 @@ Steps:
    the symptom, and `get_thinkube_doc` for the page.
 5. Propose the action: restart (`restart_service` with the id), enable (`toggle_service`
    with the id and is_enabled true), redeploy (`redeploy_template` with the app's
-   template_url and variables from its last deployment), or nothing. Do it only with the
-   user's agreement, then check `get_service_details` again.
+   template_url and variables from its last deployment), or nothing. Redeploy only to
+   apply a changed thinkube.yaml, never to ship code: it resets the app's checkout to
+   Gitea's main and copies the template over it. Do it only with the user's agreement,
+   then check `get_service_details` again.
 
 Report: the service and its type, what is wrong in one sentence, the evidence (health,
 pods, logs, run status), the likely cause, and the action taken or proposed.
