@@ -23,6 +23,7 @@ from kubernetes_asyncio import client, config
 from kubernetes_asyncio.client.rest import ApiException
 from kubernetes_asyncio.stream import WsApiClient
 
+from app_databases import create_statement, database_names, exists, exists_query
 from component_checkout import check_declared_type, checkout_path, developer_commits, parse_log, refusal
 
 
@@ -871,7 +872,7 @@ git fetch origin main
             return resp
 
     async def manage_databases(self):
-        """Create PostgreSQL databases using kubernetes exec (matches Ansible k8s_exec)."""
+        """Create the app's PostgreSQL databases that are missing, using kubernetes exec; never drop one."""
         # Check if database is needed
         services = self.thinkube_config.get('spec', {}).get('services', [])
         if 'database' not in services:
@@ -880,43 +881,38 @@ git fetch origin main
 
         admin_username = self._decode_secret_data(self.secrets['admin'], 'admin-username')
 
-        # Create database with hyphens replaced by underscores (matches postgresql.j2 template)
-        db_name = self.app_name.replace('-', '_')
-        databases = [db_name]
-
         # An app whose tests need a database gets one of its own, named
         # after the app. A store shared by every app built from the same
         # template mixes their rows together, and the tests of one app then
         # fail on data another app left behind.
         containers = self.thinkube_config.get('spec', {}).get('containers', [])
-        if any(c.get('test', {}).get('enabled') for c in containers):
-            databases.append(f'test_{db_name}')
+        tests_enabled = any(c.get('test', {}).get('enabled') for c in containers)
 
-        for name in databases:
-            # DROP then CREATE using k8s exec (exactly like Ansible)
-            drop_sql = f'DROP DATABASE IF EXISTS {name};'
-            create_sql = f'CREATE DATABASE {name} OWNER {admin_username};'
-
-            # Run DROP
+        # A redeploy runs this again: a database that exists holds the app's
+        # data and is kept; only a missing one is created.
+        for name in database_names(self.app_name, tests_enabled):
+            psql = ['psql', '-U', admin_username, '-d', 'postgres', '-tA', '-c']
             try:
-                drop_result = await self._exec_in_pod(
+                answer = await self._exec_in_pod(
                     namespace='postgres',
                     pod='postgresql-official-0',
                     container='postgres',
-                    command=['psql', '-U', admin_username, '-d', 'postgres', '-c', drop_sql]
+                    command=psql + [exists_query(name)]
                 )
-                DeploymentLogger.log(f"Dropped database {name}")
             except Exception as e:
-                DeploymentLogger.error(f"DROP DATABASE {name} failed: {e}")
-                raise RuntimeError(f"DROP DATABASE {name} failed: {e}")
+                DeploymentLogger.error(f"Checking whether database {name} exists failed: {e}")
+                raise RuntimeError(f"Checking whether database {name} exists failed: {e}")
 
-            # Run CREATE
+            statement = create_statement(name, admin_username, exists(answer))
+            if statement is None:
+                DeploymentLogger.log(f"Kept database {name}: it exists and holds the app's data")
+                continue
             try:
-                create_result = await self._exec_in_pod(
+                await self._exec_in_pod(
                     namespace='postgres',
                     pod='postgresql-official-0',
                     container='postgres',
-                    command=['psql', '-U', admin_username, '-d', 'postgres', '-c', create_sql]
+                    command=psql + [statement]
                 )
                 DeploymentLogger.log(f"Created database {name}")
             except Exception as e:
