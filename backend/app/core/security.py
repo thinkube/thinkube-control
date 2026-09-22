@@ -3,7 +3,8 @@ from typing import Dict, Optional, List
 import logging
 from datetime import datetime, timedelta
 import httpx
-from jose import jwt, JWTError
+import jwt
+from jwt import InvalidTokenError
 from fastapi import Depends, HTTPException, status, Security
 from fastapi.security import OAuth2AuthorizationCodeBearer
 from pydantic import BaseModel
@@ -106,7 +107,7 @@ async def verify_token(token: str) -> Dict:
 
         return payload
 
-    except JWTError as e:
+    except InvalidTokenError as e:
         logger.error(f"JWT verification failed: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
