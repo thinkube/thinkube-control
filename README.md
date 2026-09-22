@@ -1,4 +1,6 @@
-# ⚠️ Under Development - Not Ready for Use
+# thinkube-control
+
+The control plane of the Thinkube platform: the API, the web interface and the MCP server. The Thinkube installer deploys it as a core component.
 
 ## MLflow Integration
 
