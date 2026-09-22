@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """The Secrets store has one key, and without it the backend does not start.
 
 The module is loaded from its file so that importing it runs the singleton

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """A deploy never resets a checkout that holds work Gitea does not have, and says what it replaces."""
 
 import subprocess

@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """The venv build endpoint answers before the build runs, and the build still runs."""
 
 import asyncio

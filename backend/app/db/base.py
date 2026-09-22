@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 # app/db/base.py
 """Base with every model registered, for code that creates the schema.
 

@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Teardown for components deployed through the template process.
 
 A template deployment leaves an ArgoCD application, a namespace, a Gitea

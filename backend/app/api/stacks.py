@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Stack deployment API endpoints.
 Handles deploying ThinkubeStack manifests — groups of connected templates

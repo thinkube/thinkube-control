@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Component installs answer at once and run on the server; their output hides credentials."""
 
 import asyncio

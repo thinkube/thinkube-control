@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Carry a changed secret value to the applications that receive it.
 
 For each application recorded as using the secret, the value is written into

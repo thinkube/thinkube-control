@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Service Discovery ConfigMap Generator
 Generates properly formatted service.yaml content for Kubernetes ConfigMaps

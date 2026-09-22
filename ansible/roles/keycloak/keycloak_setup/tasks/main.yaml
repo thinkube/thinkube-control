@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 # IMPORTANT: This file has a duplicate that must be kept in sync!
 # Original: /home/thinkube/thinkube/ansible/roles/keycloak/keycloak_setup/tasks/main.yaml
 # Copy: /home/thinkube/thinkube/thinkube-control/ansible/roles/keycloak/keycloak_setup/tasks/main.yaml

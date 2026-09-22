@@ -1,3 +1,8 @@
+/*
+ * Copyright Alejandro Martínez Corriá and the Thinkube contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 export { useAuthStore } from './useAuthStore';
 export { useServicesStore } from './useServicesStore';
 export { useHarborStore } from './useHarborStore';

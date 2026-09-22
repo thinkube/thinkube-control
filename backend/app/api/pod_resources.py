@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Pod resource management API endpoints for in-place resize (K8s 1.35 GA)"""
 
 import logging

@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Node management service for discovering, adding, and removing cluster nodes."""
 
 import asyncio

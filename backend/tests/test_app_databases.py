@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """A deploy creates an app's missing databases and never drops one that holds the app's data."""
 
 import sys

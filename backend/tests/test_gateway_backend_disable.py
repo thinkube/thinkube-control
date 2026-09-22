@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests that disabling a gateway-managed backend actually stops it.
 
 A gateway-managed backend rests at zero replicas and serves from per-node

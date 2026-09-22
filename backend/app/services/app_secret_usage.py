@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Which applications use which secrets from the Secrets store.
 
 Both deploy paths record usage here: regeneration calls record_usage directly,

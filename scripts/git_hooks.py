@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """The scripts written into each application to regenerate its k8s/ manifests.
 
 Two scripts call the same control endpoint: the pre-commit hook, when

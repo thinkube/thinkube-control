@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Whether a commit pushed to an app's Gitea repository is live, from what Gitea and the cluster record.
 
 A push to main of thinkube-deployments/<app> makes Gitea send a webhook; the

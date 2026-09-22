@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """The lines deploy_application.py prints, and the deployment log entry each one becomes.
 
 The script prints every step as `[HH:MM:SS.mmm] [LEVEL] message`. The backend

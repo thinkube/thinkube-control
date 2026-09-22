@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """What a notebook server may be given on each node.
 
 JupyterHub's Server Options form offers CPU and memory from fixed lists and

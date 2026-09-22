@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """The prompts thinkube-control's MCP server offers.
 
 Each prompt guides a client such as Claude Code through one multi-step task

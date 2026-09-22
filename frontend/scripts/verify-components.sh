@@ -1,4 +1,8 @@
 #!/bin/bash
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 # Verify no custom styled components in app/
 
 echo "🔍 Checking for custom component violations..."

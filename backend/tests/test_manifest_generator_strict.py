@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Regeneration reads what it needs or stops, and never renders a substitute.
 
 The module is loaded from its file with fake Kubernetes clients, so these run

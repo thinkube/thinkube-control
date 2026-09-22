@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """
 SQLAlchemy models for Jupyter virtualenv management
 Following the exact same pattern as CustomImageBuild

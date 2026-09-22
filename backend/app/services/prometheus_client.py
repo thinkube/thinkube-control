@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Prometheus client for querying metrics from kube-prometheus stack.
 
 Prometheus is an optional component — it may or may not be installed.

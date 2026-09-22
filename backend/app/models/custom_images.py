@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """
 SQLAlchemy models for custom Docker image management
 Following the exact same pattern as TemplateDeployment

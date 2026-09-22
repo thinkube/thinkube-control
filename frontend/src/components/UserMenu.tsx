@@ -1,3 +1,8 @@
+/*
+ * Copyright Alejandro Martínez Corriá and the Thinkube contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { TkDropdownMenu } from 'thinkube-style';
 import { TkButton } from 'thinkube-style/components/buttons-badges';
 import { User, LogOut } from 'lucide-react';

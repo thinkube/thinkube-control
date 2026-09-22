@@ -1,3 +1,8 @@
+/*
+ * Copyright Alejandro Martínez Corriá and the Thinkube contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { useState, useEffect, useMemo } from 'react'
 import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'

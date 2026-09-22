@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """A pushed commit is traced to its push, its build, the build's image-tag commit and the images running now."""
 
 import json

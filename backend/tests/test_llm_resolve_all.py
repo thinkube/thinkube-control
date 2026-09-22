@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """resolve_all(): in-memory bulk resolution for the proxy snapshot (SP-tgnbej SL-2)."""
 
 import app.services.llm_backend_discovery as disc_mod

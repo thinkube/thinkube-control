@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Database models for Thinkube Control"""
 
 from app.models.services import Service, ServiceHealth, ServiceAction

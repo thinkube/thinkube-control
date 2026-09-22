@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests that one menu can carry two install mechanisms.
 
 Every component is listed under Optional Components. The platform ones run an

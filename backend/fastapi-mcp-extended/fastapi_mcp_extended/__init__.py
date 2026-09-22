@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """
 FastAPI-MCP-Extended: Extended FastAPI-MCP server with resource and prompt support.
 

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for pinning architecture-limited optional components to capable nodes.
 
 cvat publishes single-arch linux/amd64 images, and the cluster has arm nodes,

@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Background executor for template deployments.
 Based on the working WebSocket executor with minimal modifications.

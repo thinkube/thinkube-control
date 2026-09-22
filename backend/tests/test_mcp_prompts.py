@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """MCP prompts: the rules of the fork's PromptHandler, and thinkube-control's prompt set.
 
 The handler is checked on its own with small prompts. The prompt set is

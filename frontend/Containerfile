@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 # Multi-stage Dockerfile for Vite + React
 # Builds static files and serves with nginx
 #

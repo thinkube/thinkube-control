@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for verify_token, which checks Keycloak access tokens.
 
 Keycloak signs access tokens with RS256. verify_token accepts a token only when

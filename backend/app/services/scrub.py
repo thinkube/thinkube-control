@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Credentials are blanked from run output before it is written anywhere.
 
 A run's output goes to a log file and to the deployment's log rows, and

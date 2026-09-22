@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Fast parallel application deployment script for Thinkube.
 Replaces the Ansible playbook with optimized Python code.

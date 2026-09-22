@@ -1,3 +1,8 @@
+/*
+ * Copyright Alejandro Martínez Corriá and the Thinkube contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 // Token storage utilities - separate to avoid circular dependencies
 
 const TOKEN_KEY = 'access_token';

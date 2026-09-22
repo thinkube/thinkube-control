@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """The notebook forwards: each endpoint calls the right tk-notebook-mcp tool with the right arguments.
 
 ``call_tool`` is replaced by a recorder, so no server is needed.

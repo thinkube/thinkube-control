@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 from enum import Enum
 from typing import List, Optional
 from pydantic import BaseModel, Field, model_validator

@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 # app/models/dashboards.py
 from typing import List, Optional
 from pydantic import BaseModel

@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """A code-server redeploy runs its playbook from thinkube-control and answers at once."""
 
 import asyncio

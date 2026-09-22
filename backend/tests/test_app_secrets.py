@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Secrets an application declares, and what it receives from the store.
 
 The helper is the one both deploy paths use. The rendering cases render the

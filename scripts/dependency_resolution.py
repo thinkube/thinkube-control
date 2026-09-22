@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Which running service a thinkube.yaml dependency names, and its cluster URL.
 
 A dependency's `type` is matched against the services the cluster runs: a

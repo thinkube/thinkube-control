@@ -1,3 +1,8 @@
+/*
+ * Copyright Alejandro Martínez Corriá and the Thinkube contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { useState, useEffect, useRef } from 'react'
 import { Loader2, AlertCircle, CheckCircle2, Info, Plus, Trash2, Play, Package, Edit2 } from 'lucide-react'
 import { TkPageWrapper } from 'thinkube-style/components/utilities'

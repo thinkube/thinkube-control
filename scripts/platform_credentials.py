@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """The platform credentials an application's workloads read.
 
 The database, Thinkube Experiments, Thinkube Storage and the build's clone of

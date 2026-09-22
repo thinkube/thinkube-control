@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests that a component registers as a component, not as a user app.
 
 The ConfigMap label is set from `_is_component()` in deploy_application.py while

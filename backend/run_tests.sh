@@ -1,4 +1,8 @@
 #!/bin/bash
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 # run_tests.sh - Run backend tests with coverage
 
 set -e

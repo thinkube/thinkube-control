@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """The API token the git hooks use, and the one place it comes from.
 
 The token lives in the thinkube-control secret mcp-default-token. The hooks in

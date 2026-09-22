@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Notebook servers per node: defaults fill the gaps, the node's choices and capacity bound the ask, and a notebook operation finds its server."""
 
 import asyncio

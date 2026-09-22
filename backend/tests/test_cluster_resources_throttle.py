@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """cluster-resources refresh must not stall the event loop (SP-tgnbej SL-3).
 
 Deterministic structural checks (not flaky timing): the refresh is throttled and

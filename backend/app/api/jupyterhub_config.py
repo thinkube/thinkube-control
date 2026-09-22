@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """API endpoints for the notebook servers' default resources, one set per node.
 
 Each node runs at most one interactive notebook server, which starts with its

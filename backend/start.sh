@@ -1,4 +1,8 @@
 #!/bin/bash
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 # Startup script for thinkube-control backend
 set -e
 

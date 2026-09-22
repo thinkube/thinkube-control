@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """A small client for the JupyterHub REST API.
 
 thinkube-control is registered with the Hub as the service ``thinkube-control``

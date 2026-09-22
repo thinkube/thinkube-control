@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """A changed secret value reaches the applications that receive it.
 
 The modules are loaded from their files, with fake Kubernetes clients, so

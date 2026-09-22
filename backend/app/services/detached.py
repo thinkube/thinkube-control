@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Work that outlives the request that asked for it.
 
 FastAPI's ``BackgroundTasks`` run inside the same ASGI call as the response.

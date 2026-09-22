@@ -1,3 +1,8 @@
+/*
+ * Copyright Alejandro Martínez Corriá and the Thinkube contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 'use client'
 
 import { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react'

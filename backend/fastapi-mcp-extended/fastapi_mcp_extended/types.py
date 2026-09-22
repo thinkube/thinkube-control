@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Type definitions for fastapi-mcp-extended."""
 
 from typing import List, Optional, Pattern

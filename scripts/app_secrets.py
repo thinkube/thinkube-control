@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Secrets an application declares, and what it receives from the store.
 
 An application names the secrets it needs under `secrets:` in manifest.yaml.

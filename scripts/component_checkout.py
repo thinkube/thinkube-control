@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Where a deploy's checkout lives, and which deployed commits a template deploy would replace.
 
 An app the user works on lives under apps/, a platform component under

@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Docs-as-MCP — search the *deployed* Thinkube documentation.
 
 Folds the Context7-style docs lookup into thinkube-control's existing MCP surface,

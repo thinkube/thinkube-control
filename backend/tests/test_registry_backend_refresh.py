@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests that the registry re-probes backends before reconciling model states.
 
 _reconcile_states decides which models are serving by reading the discovered

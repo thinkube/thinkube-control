@@ -1,3 +1,8 @@
+/*
+ * Copyright Alejandro Martínez Corriá and the Thinkube contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { useState, useEffect } from 'react';
 import { Copy, Loader2, CheckCircle2, XCircle, Clock, ExternalLink, Trash2, Lock } from 'lucide-react';
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent } from 'thinkube-style/components/cards-data';

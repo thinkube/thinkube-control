@@ -1,3 +1,8 @@
+/*
+ * Copyright Alejandro Martínez Corriá and the Thinkube contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { useState } from 'react';
 import { useServicesStore } from '@/stores/useServicesStore';
 import { TkButton } from 'thinkube-style/components/buttons-badges';

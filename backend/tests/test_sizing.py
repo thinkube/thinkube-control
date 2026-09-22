@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Sizing tests for LLMLifecycleManager._estimate_memory (SP-tgkxea, SL-1).
 
 Guards the multimodal under-count crashloop: for unsloth/Qwen3.6-27B-NVFP4 the

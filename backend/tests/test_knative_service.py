@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """The Knative Service the generator renders is one Knative Serving accepts.
 
 Knative Serving decodes a Service strictly and refuses a container field it

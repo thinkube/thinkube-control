@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 #
 # LLM Gateway E2E test suite
 # Run against a deployed gateway: ./e2e_test.sh BASE_URL [API_KEY]

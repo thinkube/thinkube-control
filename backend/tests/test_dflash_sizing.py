@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """DFlash drafter sizing + config-injection tests (SP-tgkm1m, SL-2).
 
 DFlash speculative decoding loads a *separate* drafter model into the target's

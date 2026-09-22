@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Auxiliary-role (drafter) handling tests (SP-tgkm1m, SL-1).
 
 A DFlash speculative-decoding drafter is catalogued and mirrored so the gateway

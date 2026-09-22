@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """The parameters a template declares, and the values an application was deployed with.
 
 manifest.yaml lists a template's parameters under `parameters:`. Each one given a

@@ -1,3 +1,8 @@
+/*
+ * Copyright Alejandro Martínez Corriá and the Thinkube contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useHarborStore, type HarborImage } from '../stores/useHarborStore'
 import axios from 'axios'

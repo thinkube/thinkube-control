@@ -1,3 +1,8 @@
+/*
+ * Copyright Alejandro Martínez Corriá and the Thinkube contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { useEffect, useRef, useState } from 'react';
 import { ListChecks, Loader2, CheckCircle2, XCircle, Clock, Ban } from 'lucide-react';
 import {

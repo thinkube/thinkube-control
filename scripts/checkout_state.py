@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """What a template deploy would destroy in the checkout the developer works in, and what it replaces there.
 
 A template deploy resets the checkout (apps/<name> or components/<name>) to

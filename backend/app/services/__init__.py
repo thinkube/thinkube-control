@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Service layer for business logic"""
 
 from app.services.discovery import ServiceDiscovery

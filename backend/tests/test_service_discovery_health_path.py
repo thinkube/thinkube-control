@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for resolve_health_path (thinkube.yaml spec -> web endpoint health path).
 
 The generated web endpoint points at the app host root, so its health check has

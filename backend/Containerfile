@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 # Use optimized base image with common dependencies from library
 # Cache bust: 2025-11-30 - force pull new base image with thinkube user
 ARG REGISTRY

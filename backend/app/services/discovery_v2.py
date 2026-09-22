@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Service discovery v2 - Dynamic discovery based on Kubernetes annotations"""
 
 import logging

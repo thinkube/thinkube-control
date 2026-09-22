@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 # app/api/cicd.py
 """CI/CD monitoring endpoints - queries Argo Workflows directly from Kubernetes."""
 

@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests that a failed catalog fetch does not empty the menu for a whole TTL.
 
 The catalog is fetched from thinkube-metadata and cached. Caching the empty

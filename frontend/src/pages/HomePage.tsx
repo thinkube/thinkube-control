@@ -1,3 +1,8 @@
+/*
+ * Copyright Alejandro Martínez Corriá and the Thinkube contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { Navigate } from 'react-router-dom';
 import { isAuthenticated } from '@/lib/auth';
 

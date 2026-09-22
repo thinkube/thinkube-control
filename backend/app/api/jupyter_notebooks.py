@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Notebook operations, forwarded to tk-notebook-mcp inside the notebook server.
 
 Every endpoint here is a thin forward: the arguments go to the extension's

@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Notebook servers, one per node, and unattended notebook runs.
 
 A notebook server is a pod that JupyterHub starts on one node with a CPU,

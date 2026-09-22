@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Network discovery service for finding nodes available to join the cluster.
 
 Pings nodes on the LAN and checks SSH banners for Ubuntu hosts. Overlay-IP

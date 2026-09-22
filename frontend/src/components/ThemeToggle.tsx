@@ -1,3 +1,8 @@
+/*
+ * Copyright Alejandro Martínez Corriá and the Thinkube contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { Moon, Sun } from 'lucide-react';
 import { TkButton } from 'thinkube-style/components/buttons-badges';
 import { useTheme } from './ThemeProvider';

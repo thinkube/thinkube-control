@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """
 WebSocket endpoint for streaming Ansible playbook execution
 Adapted from installer for thinkube-control

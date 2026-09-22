@@ -1,4 +1,8 @@
 #!/bin/bash
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 # Post-Tool-Use Hook for Migration Reminders
 # Reminds about documentation and validation after file changes
 

@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """API endpoints for Jupyter virtualenv management
 
 Uses Kubernetes Jobs via Ansible playbook for venv builds on GPU nodes.

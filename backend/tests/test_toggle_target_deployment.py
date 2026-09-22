@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests that enable/disable scale the deployment that actually exists.
 
 Services are rarely named after their deployment: todo runs todo-backend, vllm

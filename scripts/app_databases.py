@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """What a deploy does to an app's databases: create the ones missing, keep the ones that exist.
 
 A deploy runs again for every redeploy of an app: a new image, a changed

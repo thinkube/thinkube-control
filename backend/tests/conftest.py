@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 # tests/conftest.py
 """Pytest configuration and fixtures for thinkube-control backend tests."""
 

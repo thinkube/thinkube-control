@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """The memory quota of an application's namespace.
 
 An application without GPU work gets NON_GPU_QUOTA. With GPU work the quota

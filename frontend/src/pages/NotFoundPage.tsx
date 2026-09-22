@@ -1,3 +1,8 @@
+/*
+ * Copyright Alejandro Martínez Corriá and the Thinkube contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 import { Link } from 'react-router-dom'
 import { TkButton } from 'thinkube-style/components/buttons-badges'
 import { TkCard, TkCardContent, TkCardHeader, TkCardTitle } from 'thinkube-style/components/cards-data'

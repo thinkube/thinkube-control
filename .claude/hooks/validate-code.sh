@@ -1,4 +1,8 @@
 #!/bin/bash
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 # PostToolUse Hook for React/thinkube-style validation
 # Validates proper component usage after Edit/Write operations
 

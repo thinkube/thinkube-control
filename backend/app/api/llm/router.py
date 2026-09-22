@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 from fastapi import APIRouter
 
 from app.api.llm import models_api, backends_api, gpu_api, refresh_api, lifecycle_api

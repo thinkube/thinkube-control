@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests that discovery buckets every service type it can encounter.
 
 discover_all groups services by type before syncing. The bucket dict was fixed

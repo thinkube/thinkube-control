@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Which manifests an application's thinkube.yaml calls for.
 
 The initial deploy and a later regeneration write the same k8s/ directory

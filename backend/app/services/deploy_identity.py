@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """The identity that writes into application namespaces.
 
 The first deploy (scripts/deploy_application.py) loads /home/thinkube/.kube/config.

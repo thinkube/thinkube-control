@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Shared Ansible environment configuration for all executors.
 Ensures WebSocket and background executors use identical context.

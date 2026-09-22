@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """The API token the git hooks use, read from one file and nothing else.
 
 The shell cases run the generated scripts in bash, with curl, kubectl and git

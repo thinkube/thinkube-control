@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """A notebook run on its own server, started and stopped by thinkube-control."""
 
 import uuid

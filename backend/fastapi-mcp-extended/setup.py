@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """Setup script for fastapi-mcp-extended."""
 
 from setuptools import setup, find_packages

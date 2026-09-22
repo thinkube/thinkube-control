@@ -1,3 +1,6 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """How load_llm_model resolves the backend, the node and the default context."""
 
 import asyncio

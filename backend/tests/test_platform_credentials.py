@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
 """The platform credentials reach an application as Secrets, never as manifest text.
 
 Runs without a cluster: the module is pure, and the templates render from the
