@@ -334,7 +334,20 @@ async def deploy_template_async(
     out). get_commit_rollout says when a pushed commit is live. A name that belongs to an
     existing app answers status "conflict"; see redeploy_template for what a redeploy
     replaces.
+
+    Optional components that are templates (vllm, tensorrt, text-embeddings) are refused
+    here: install_optional_component installs them.
     """
+    return await _queue_template_deploy(request, db, current_user, first_deploy=True)
+
+
+async def _queue_template_deploy(
+    request: TemplateDeployAsyncRequest,
+    db: Session,
+    current_user: dict,
+    first_deploy: bool,
+) -> DeploymentResponse:
+    """Queue a template deploy. A first deploy of a component template is refused."""
     try:
         # Extract org and repo from URL
         url_parts = str(request.template_url).rstrip("/").split("/")
@@ -350,6 +363,18 @@ async def deploy_template_async(
         template_repo = catalog_template(str(request.template_url))
         is_component = bool(template_repo) and template_repo.get("deployment_type") == "component"
         service_type = "component" if is_component else "user_app"
+
+        # A component is installed from Optional Components, which records its
+        # deployment itself; this endpoint only renders an installed one again.
+        if is_component and first_deploy:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{template_repo.get('name')} is the optional component "
+                    f"'{template_repo.get('fixed_name')}', not an application template. "
+                    "Install it from Optional Components."
+                ),
+            )
 
         if is_component:
             expected_name = template_repo.get("fixed_name")
@@ -503,7 +528,7 @@ async def redeploy_template_async(
     pushed commit is live.
     """
     request.variables["_overwrite_confirmed"] = True
-    return await deploy_template_async(request, background_tasks, db, current_user)
+    return await _queue_template_deploy(request, db, current_user, first_deploy=False)
 
 
 @router.get(
