@@ -1,36 +1,42 @@
 # Ansible Directory Structure
 
-This directory contains Ansible-related files for thinkube-control template deployment.
+This directory holds Ansible playbooks and roles that thinkube-control runs
+itself.
 
 ## Directory Structure
 
 ```
 ansible/
-├── roles/              # Ansible roles that travel with source code
-│   └── (template deployment roles)
-└── inventory/          # SENSITIVE - Deployed by installer, NOT in source control
-    └── inventory.yaml  # Generated at deployment time
+├── playbooks/   # Build, sync and delete Jupyter venvs; add_node.yaml
+└── roles/       # Roles on ANSIBLE_ROLES_PATH for these runs
 ```
 
 ## Important Notes
 
-1. **Roles** (`ansible/roles/`):
-   - These roles travel with the thinkube-control source code
-   - Used by templates for deployment automation
+1. **Playbooks** (`ansible/playbooks/`):
+   - The backend runs the venv playbooks from
+     `/home/thinkube/thinkube-control/ansible/playbooks/`
+     (`backend/app/api/jupyter_venvs.py`, `backend/app/api/nodes.py`,
+     `backend/app/api/websocket_executor.py`)
+
+2. **Roles** (`ansible/roles/`):
+   - Set as `ANSIBLE_ROLES_PATH` for these runs
+     (`get_roles_path` in `backend/app/services/ansible_environment.py`)
+   - Optional component playbooks use the roles of the `thinkube`
+     repository instead
    - Can be safely committed to version control
 
-2. **Inventory** (`ansible/inventory/`):
-   - **NEVER COMMIT TO VERSION CONTROL**
-   - Contains sensitive installation-specific data
-   - Deployed by the installer during thinkube-control setup
-   - Listed in `.gitignore` to prevent accidental commits
+3. **Template deployment** does not use Ansible. It runs
+   `scripts/deploy_application.py`.
 
-## Usage
-
-When thinkube-control executes template deployments:
-1. Templates download their `ansible/deploy.yaml` playbook
-2. The playbook uses roles from `/home/thinkube/thinkube-control/ansible/roles/`
-3. The inventory at `/home/thinkube/thinkube-control/ansible/inventory/inventory.yaml` provides host information
+4. **Inventory** is not in this directory:
+   - Every run reads `/home/thinkube/.ansible/inventory/inventory.yaml`
+     (`get_inventory_path` in `backend/app/services/ansible_environment.py`)
+   - The code-server playbook copies it there from the installer's
+     inventory (`ansible/40_thinkube/core/code-server/15_configure_environment.yaml`
+     in the `thinkube` repository)
+   - `ansible/inventory/` is listed in `.gitignore` to prevent accidental
+     commits
 
 ## Security
 
@@ -40,4 +46,4 @@ The inventory file contains sensitive data such as:
 - Domain names
 - Service passwords
 
-This is why it must never be included in source control and is generated/deployed separately by the installer.
+This is why it must never be included in source control.
