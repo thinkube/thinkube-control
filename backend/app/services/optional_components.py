@@ -17,6 +17,8 @@ from sqlalchemy.orm import Session
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
+from app.services.metadata_fetcher import CatalogUnavailableError
+
 logger = logging.getLogger(__name__)
 
 # Component catalog: fetched from thinkube-metadata at runtime, cached in memory.
@@ -37,8 +39,11 @@ _COMPONENTS_CATALOG_TTL: float = 300  # 5 minutes
 
 def get_components_catalog() -> Dict[str, Any]:
     """
-    Get the components catalog, fetching from thinkube-metadata if cache expired.
-    Falls back to bundled copy if fetch fails.
+    Get the components catalog, fetching from thinkube-metadata when the
+    in-memory copy is older than the TTL.
+
+    Raises:
+        CatalogUnavailableError: the catalog could not be fetched or read.
     """
     global _COMPONENTS_CATALOG_CACHE, _COMPONENTS_CATALOG_CACHE_TIME
 
@@ -46,29 +51,27 @@ def get_components_catalog() -> Dict[str, Any]:
     if _COMPONENTS_CATALOG_CACHE is not None and (now - _COMPONENTS_CATALOG_CACHE_TIME) < _COMPONENTS_CATALOG_TTL:
         return _COMPONENTS_CATALOG_CACHE
 
+    import urllib.request
+    req = urllib.request.Request(_COMPONENTS_CATALOG_URL, headers={"User-Agent": "thinkube-control"})
     try:
-        import urllib.request
-        req = urllib.request.Request(_COMPONENTS_CATALOG_URL, headers={"User-Agent": "thinkube-control"})
         with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-            components = data.get("components", {})
-            _COMPONENTS_CATALOG_CACHE = components
-            _COMPONENTS_CATALOG_CACHE_TIME = now
-            logger.info(f"Fetched components catalog from thinkube-metadata: {len(components)} components")
-            return components
+            body = resp.read().decode()
     except Exception as e:
-        logger.warning(f"Failed to fetch components catalog from thinkube-metadata: {e}")
+        raise CatalogUnavailableError(f"Cannot fetch catalog {_COMPONENTS_CATALOG_URL}: {e}") from e
+    try:
+        data = json.loads(body)
+    except ValueError as e:
+        raise CatalogUnavailableError(f"Catalog {_COMPONENTS_CATALOG_URL} is not valid JSON: {e}") from e
+    components = data.get("components") if isinstance(data, dict) else None
+    if not isinstance(components, dict):
+        raise CatalogUnavailableError(
+            f"Catalog {_COMPONENTS_CATALOG_URL} has no 'components' mapping"
+        )
 
-    # Fallback to cached value if available
-    if _COMPONENTS_CATALOG_CACHE is not None:
-        logger.info("Using stale cached components catalog")
-        return _COMPONENTS_CATALOG_CACHE
-
-    # Do not cache the empty result: storing it with a fresh timestamp would
-    # hold the menu empty for a whole TTL after one transient network failure,
-    # and every expiry would re-poison it.
-    logger.error("No components catalog available (fetch failed, no cache)")
-    return {}
+    _COMPONENTS_CATALOG_CACHE = components
+    _COMPONENTS_CATALOG_CACHE_TIME = now
+    logger.info(f"Fetched components catalog from thinkube-metadata: {len(components)} components")
+    return components
 
 
 class OptionalComponentService:

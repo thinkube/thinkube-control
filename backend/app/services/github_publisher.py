@@ -18,6 +18,7 @@ from typing import Dict, List, Optional
 from urllib.parse import quote
 
 import aiohttp
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +135,7 @@ class GitHubPublisher:
                 ["git", "init"],
                 ["git", "checkout", "-b", "main"],
                 ["git", "config", "user.name", "thinkube-control"],
-                ["git", "config", "user.email", f"thinkube-control@{os.environ.get('DOMAIN_NAME', 'thinkube.com')}"],
+                ["git", "config", "user.email", f"thinkube-control@{settings.DOMAIN_NAME}"],
                 ["git", "add", "-A"],
                 ["git", "commit", "-m", "Publish as template from Thinkube"],
                 ["git", "remote", "add", "origin", remote_url],

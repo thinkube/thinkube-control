@@ -8,6 +8,7 @@ import logging
 import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi_mcp import FastApiMCP
 from fastapi_mcp_extended import ExtendedFastApiMCP
 from app.core.config import settings
@@ -27,6 +28,7 @@ from app.services.llm_model_registry import llm_model_registry
 from app.services.llm_backend_discovery import llm_backend_discovery
 from app.services.llm_ollama_client import ollama_client
 from app.services.llm_pod_manager import llm_pod_manager
+from app.services.metadata_fetcher import CatalogUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -295,6 +297,11 @@ def create_app() -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    # A metadata catalog that cannot be fetched is an upstream failure.
+    @app.exception_handler(CatalogUnavailableError)
+    async def catalog_unavailable(request, exc: CatalogUnavailableError):
+        return JSONResponse(status_code=502, content={"detail": str(exc)})
 
     # Include the API router
     app.include_router(api_router, prefix=settings.API_V1_STR)

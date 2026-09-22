@@ -16,6 +16,8 @@ from app.core.api_tokens import get_current_user_dual_auth
 from app.services.model_downloader import ModelDownloaderService
 from app.db.session import get_db
 from app.models.model_mirrors import ModelMirrorJob
+from app.core.config import settings
+from app.services.metadata_fetcher import CatalogUnavailableError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["models"])
@@ -148,6 +150,8 @@ async def get_model_catalog(
 
         return ModelCatalogResponse(models=model_infos)
 
+    except CatalogUnavailableError:
+        raise
     except Exception as e:
         logger.error(f"Failed to get model catalog: {e}")
         raise HTTPException(
@@ -219,6 +223,8 @@ async def submit_model_mirror(
         logger.warning(f"Invalid model requested: {request.model_id}")
         raise HTTPException(status_code=400, detail=str(e))
 
+    except CatalogUnavailableError:
+        raise
     except Exception as e:
         logger.error(f"Failed to submit mirror for {request.model_id}: {e}")
         # Mark job as failed if it was created
@@ -389,7 +395,7 @@ async def check_mlflow_status(
 
     # Get MLflow configuration
     mlflow_uri = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000")
-    mlflow_public_url = f"https://experiments.{os.getenv('DOMAIN_NAME', 'thinkube.com')}"
+    mlflow_public_url = f"https://experiments.{settings.DOMAIN_NAME}"
 
     try:
         # Get credentials from secret

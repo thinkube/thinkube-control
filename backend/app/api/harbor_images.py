@@ -23,6 +23,7 @@ from app.db.session import get_db
 from app.models.container_images import ContainerImage, ImageMirrorJob
 from app.services.image_discovery import ImageDiscovery
 from app.services.harbor_client import HarborClient
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +162,7 @@ def add_image_to_mirror(
         raise HTTPException(status_code=400, detail=f"Invalid source_url format: {e}")
 
     # Check if image already exists
-    harbor_registry = os.getenv("HARBOR_REGISTRY", "registry.thinkube.com")
+    harbor_registry = f"registry.{settings.DOMAIN_NAME}"
     existing = db.query(ContainerImage).filter(
         ContainerImage.name == name,
         ContainerImage.tag == tag,
@@ -378,7 +379,7 @@ def edit_image_template_in_code_server(
     # Create template file if it doesn't exist or if template is empty
     if not template_file.exists() or not image.template:
         # Generate minimal template
-        # Use harbor_project/name:tag format WITHOUT registry domain (podman defaults to registry.thinkube.com)
+        # Use harbor_project/name:tag format WITHOUT registry domain (podman defaults to the platform's Harbor registry)
         # More reliable than repository field which had a parsing bug
         image_ref = f"{image.harbor_project or 'library'}/{image.name}:{image.tag}"
         template_content = image.template or f"""FROM {image_ref}
@@ -396,7 +397,7 @@ def edit_image_template_in_code_server(
 
     # Generate code-server URL with payload parameter to open file
     # Code-server sees the path as /home/thinkube/dockerfiles/
-    domain = os.environ.get("DOMAIN_NAME", "thinkube.com")
+    domain = settings.DOMAIN_NAME
     coder_folder_path = "/home/thinkube/dockerfiles/templates/mirrored"
     coder_file_path = f"/home/thinkube/dockerfiles/templates/mirrored/{safe_name}.Dockerfile"
     payload = f'[["openFile","vscode-remote://{coder_file_path}"]]'

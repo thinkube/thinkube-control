@@ -19,6 +19,7 @@ from app.core.security import get_current_active_user
 from app.core.api_tokens import get_current_user_dual_auth
 from app.db.session import get_db
 from app.models.custom_images import CustomImageBuild
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -369,7 +370,7 @@ def get_base_registry(
                     "id": key,
                     "name": image["name"],
                     "display_name": image.get("description", image["name"]),
-                    "registry_url": f"registry.thinkube.com/library/{image['name']}",
+                    "registry_url": f"registry.{settings.DOMAIN_NAME}/library/{image['name']}",
                     "is_base": True,
                     "type": image_type,
                     "source": "predefined",
@@ -392,7 +393,7 @@ def get_base_registry(
                     "id": str(custom.id),
                     "name": custom.name,
                     "display_name": f"Custom: {custom.name}",
-                    "registry_url": custom.registry_url or f"registry.thinkube.com/library/{custom.name}",
+                    "registry_url": custom.registry_url or f"registry.{settings.DOMAIN_NAME}/library/{custom.name}",
                     "is_base": True,
                     "type": image_type,
                     "source": "built",
@@ -666,7 +667,7 @@ async def get_editor_url(
     # Generate code-server URL to open folder and file
     # Using VS Code's payload parameter to open the Dockerfile directly
     # Reference: https://github.com/coder/code-server/issues/1964#issuecomment-916590294
-    domain = os.environ.get("DOMAIN_NAME", "thinkube.com")
+    domain = settings.DOMAIN_NAME
     folder_path = f"/home/thinkube/dockerfiles/custom/{build.name}"
     file_path = f"{folder_path}/Dockerfile"
 

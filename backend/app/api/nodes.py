@@ -19,6 +19,7 @@ import yaml
 from app.services.ansible_environment import ansible_env
 from app.services.network_discovery import network_discovery
 from app.services.node_manager import node_manager
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/nodes", tags=["nodes"])
@@ -413,7 +414,7 @@ async def _rebuild_venvs_for_arch(
                 "packages": _json.dumps(v.packages),
                 "target_architecture": new_arch,
                 "kubeconfig": os.environ.get("KUBECONFIG", "/home/thinkube/.kube/config"),
-                "harbor_registry": f"registry.{os.environ.get('DOMAIN_NAME', 'cmxela.com')}",
+                "harbor_registry": f"registry.{settings.DOMAIN_NAME}",
             }
 
             ok = await _stream_playbook(
@@ -1010,29 +1011,35 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             setup_playbook = NETWORKING_DIR / f"{'11' if overlay_provider == 'tailscale' else '10'}_setup_{overlay_provider}.yaml"
 
             for pb, desc in [(install_playbook, f"Install {overlay_provider}"), (setup_playbook, f"Configure {overlay_provider}")]:
-                if pb.exists():
+                if not pb.exists():
                     await websocket.send_json({
-                        "type": "task",
-                        "task_name": f"{desc} on new nodes",
-                        "task_number": step,
+                        "type": "error",
+                        "message": f"{desc}: playbook not found at {pb}",
                     })
-                    overlay_ok = await _stream_playbook(
-                        websocket=websocket,
-                        playbook_path=pb,
-                        extra_vars=extra_vars,
-                        step_name=f"{desc} on new nodes",
-                        step_number=step,
-                        limit=",".join(added_hostnames),
-                    )
-                    if not overlay_ok:
-                        await websocket.send_json({
-                            "type": "complete",
-                            "status": "failed",
-                            "message": f"{desc} failed on new nodes",
-                        })
-                        await websocket.close()
-                        return
-                    step += 1
+                    await websocket.close()
+                    return
+                await websocket.send_json({
+                    "type": "task",
+                    "task_name": f"{desc} on new nodes",
+                    "task_number": step,
+                })
+                overlay_ok = await _stream_playbook(
+                    websocket=websocket,
+                    playbook_path=pb,
+                    extra_vars=extra_vars,
+                    step_name=f"{desc} on new nodes",
+                    step_number=step,
+                    limit=",".join(added_hostnames),
+                )
+                if not overlay_ok:
+                    await websocket.send_json({
+                        "type": "complete",
+                        "status": "failed",
+                        "message": f"{desc} failed on new nodes",
+                    })
+                    await websocket.close()
+                    return
+                step += 1
 
         # Step: Run join workers playbook
         playbook_path = Path(
@@ -1040,7 +1047,12 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             "40_thinkube/core/infrastructure/k8s/20_join_workers.yaml"
         )
         if not playbook_path.exists():
-            playbook_path = ansible_env.get_playbook_path("add_node.yaml")
+            await websocket.send_json({
+                "type": "error",
+                "message": f"Join workers playbook not found at {playbook_path}",
+            })
+            await websocket.close()
+            return
 
         # Include control plane + localhost so post-join plays run too
         cp_hosts = _find_inventory_group_hosts(inventory, "k8s_control_plane")

@@ -4,33 +4,35 @@
 """Docs-as-MCP — search the *deployed* Thinkube documentation.
 
 Folds the Context7-style docs lookup into thinkube-control's existing MCP surface,
-gated on the docs being deployed. It reads the deployed docs site's Antora Lunr
-search index (``search-index.js``) over the in-cluster URL — no standalone MCP
-server, no new ``.mcp.json`` registration. If the docs aren't deployed/reachable,
-the tools say so instead of failing.
+gated on the docs being deployed. The docs app is the app deployed from the
+thinkube.org template, found in thinkube-control's own deployment records. Its
+Antora Lunr search index (``search-index.js``) is read over the in-cluster URL
+of that app's service — no standalone MCP server, no new ``.mcp.json``
+registration.
+
+When no app has been deployed from the docs template, the tools answer
+``docs_not_deployed``. When the docs app is deployed but its index cannot be
+fetched or read, they answer HTTP 502 naming the URL and the failure.
 
 Exposed as MCP tools via ``operation_id`` (see ``app/__init__.py`` include list):
 ``search_thinkube_docs`` and ``get_thinkube_doc``.
 """
 import json
-import os
 import re
+from typing import Optional
 
 import httpx
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+
+from app.db.session import get_db
+from app.models.deployments import TemplateDeployment
 
 router = APIRouter()
 
-# Where the deployed docs serve their Lunr index. Candidates cover the single-pod
-# (service == app name) and separate-pods (service == container "docs") service
-# naming; an env override wins. First that responds is used; none -> not deployed.
-_APP = os.getenv("THINKUBE_DOCS_APP", "docs")
-_PORT = os.getenv("THINKUBE_DOCS_PORT", "8080")
-_INDEX_CANDIDATES = [
-    os.getenv("THINKUBE_DOCS_INDEX_URL", ""),
-    f"http://{_APP}.{_APP}.svc.cluster.local:{_PORT}/search-index.js",
-    f"http://docs.{_APP}.svc.cluster.local:{_PORT}/search-index.js",
-]
+DOCS_TEMPLATE_URL = "https://github.com/thinkube/thinkube.org"
+# The docs container's port, from the template's thinkube.yaml.
+DOCS_PORT = 8080
 
 _NOT_DEPLOYED = {
     "status": "docs_not_deployed",
@@ -41,23 +43,54 @@ _NOT_DEPLOYED = {
 }
 
 
-async def _load_documents():
-    """Fetch + parse the deployed docs' Lunr index -> the documents dict, or None
-    if the docs are not deployed / not reachable."""
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        for url in _INDEX_CANDIDATES:
-            if not url:
-                continue
-            try:
-                resp = await client.get(url)
-                if resp.status_code != 200:
-                    continue
-                txt = resp.text
-                data = json.loads(txt[txt.index("{"): txt.rindex("}") + 1])
-                return (data.get("store") or {}).get("documents") or {}
-            except Exception:
-                continue
-    return None
+def docs_app_name(db: Session) -> Optional[str]:
+    """Name of the app most recently deployed from the docs template, or None."""
+    deployment = (
+        db.query(TemplateDeployment)
+        .filter(
+            TemplateDeployment.template_url.in_([DOCS_TEMPLATE_URL, DOCS_TEMPLATE_URL + "/"]),
+            TemplateDeployment.status == "success",
+        )
+        .order_by(TemplateDeployment.created_at.desc())
+        .first()
+    )
+    return deployment.name if deployment else None
+
+
+def docs_index_url(app_name: str) -> str:
+    """In-cluster URL of the docs app's Lunr index; the app's service and namespace carry its name."""
+    return f"http://{app_name}.{app_name}.svc.cluster.local:{DOCS_PORT}/search-index.js"
+
+
+async def _load_documents(db: Session) -> Optional[dict]:
+    """The documents of the deployed docs' Lunr index, or None when no docs app is deployed.
+
+    Raises HTTPException 502 naming the URL when the index cannot be fetched or read.
+    """
+    app_name = docs_app_name(db)
+    if app_name is None:
+        return None
+    url = docs_index_url(app_name)
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Cannot fetch the docs index {url}: {e!r}") from e
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=502, detail=f"Cannot fetch the docs index {url}: HTTP {resp.status_code}"
+        )
+    txt = resp.text
+    try:
+        data = json.loads(txt[txt.index("{"): txt.rindex("}") + 1])
+    except ValueError as e:
+        raise HTTPException(status_code=502, detail=f"Cannot parse the docs index {url}: {e}") from e
+    documents = (data.get("store") or {}).get("documents") if isinstance(data, dict) else None
+    if not isinstance(documents, dict):
+        raise HTTPException(
+            status_code=502, detail=f"The docs index {url} has no store.documents mapping"
+        )
+    return documents
 
 
 def _snippet(text, n=260):
@@ -94,10 +127,11 @@ def _search(documents, query, limit=8):
             summary="Search the Thinkube documentation")
 async def search_thinkube_docs(
     query: str = Query(..., description="What to look for in the Thinkube docs"),
+    db: Session = Depends(get_db),
 ):
     """Search the deployed Thinkube docs; returns the best-matching pages
     (title, url, snippet). Use this to find where something is documented."""
-    docs = await _load_documents()
+    docs = await _load_documents(db)
     if docs is None:
         return _NOT_DEPLOYED
     return {
@@ -117,10 +151,11 @@ async def search_thinkube_docs(
             summary="Get the full text of a Thinkube documentation page")
 async def get_thinkube_doc(
     page: str = Query(..., description="Page name or url, as returned by search"),
+    db: Session = Depends(get_db),
 ):
     """Return the full text of a Thinkube docs page by name or url, to ground an
     answer in the actual documentation."""
-    docs = await _load_documents()
+    docs = await _load_documents(db)
     if docs is None:
         return _NOT_DEPLOYED
     key = page.lstrip("/").replace(".html", "")

@@ -31,6 +31,7 @@ from app.models.jupyter_venvs import JupyterVenv
 from app.services import detached
 from app.services.scrub import Scrubber
 from app.services.ansible_environment import ansible_env
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -597,7 +598,7 @@ async def _run_venv_playbook(venv, playbook: str, extra_vars: Dict[str, Any]) ->
 
     extra_vars = ansible_env.prepare_auth_vars(dict(extra_vars))
     extra_vars["kubeconfig"] = os.environ.get("KUBECONFIG", "/home/thinkube/.kube/config")
-    domain_name = os.environ.get("DOMAIN_NAME", "cmxela.com")
+    domain_name = settings.DOMAIN_NAME
     extra_vars["harbor_registry"] = f"registry.{domain_name}"
 
     temp_vars_fd, temp_vars_path = tempfile.mkstemp(suffix=".yml", prefix="venv-vars-")

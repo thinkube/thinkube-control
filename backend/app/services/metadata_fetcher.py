@@ -8,16 +8,21 @@ Fetches catalog JSON files from two sources:
 1. thinkube/thinkube-metadata (platform catalog, public)
 2. {GITHUB_USERNAME}/{GITHUB_USERNAME}-metadata (user catalog, private, authenticated)
 
-Merges results and caches with the standard fallback chain:
-memory cache (5min TTL) → fetch → stale memory → persistent cache.
+Merges the results and keeps them in memory for five minutes. When a fetch
+fails and no fresh copy is in memory, CatalogUnavailableError is raised with
+the URL and the failure.
+
+The user metadata repository is created on the first template publish and
+holds only the files that have entries, so HTTP 404 for a user catalog file
+means the user has no entries in that catalog.
 """
 
 import json
 import logging
 import os
 import time
+import urllib.error
 import urllib.request
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 logger = logging.getLogger(__name__)
@@ -26,52 +31,52 @@ _PLATFORM_ORG = "thinkube"
 _PLATFORM_METADATA_REPO = "thinkube-metadata"
 _CACHE_TTL: float = 300  # 5 minutes
 
-_PERSISTENT_CACHE_DIR = Path(
-    os.getenv("THINKUBE_CACHE_DIR", "/home/thinkube/.cache/thinkube-control")
-)
-
 # Per-catalog memory cache: {catalog_name: {"data": ..., "time": float}}
 _memory_cache: Dict[str, Dict[str, Any]] = {}
+
+
+class CatalogUnavailableError(Exception):
+    """A metadata catalog could not be fetched or read."""
 
 
 def _github_raw_url(org: str, repo: str, filename: str) -> str:
     return f"https://raw.githubusercontent.com/{org}/{repo}/main/{filename}"
 
 
-def _fetch_json(url: str, token: Optional[str] = None, timeout: int = 10) -> Optional[dict]:
-    """Fetch a JSON file from a URL, optionally with GitHub token auth."""
+def _fetch_json(url: str, token: Optional[str] = None, timeout: int = 10) -> dict:
+    """Fetch a JSON file from a URL, optionally with GitHub token auth.
+
+    Raises urllib.error.HTTPError for an HTTP error status and
+    CatalogUnavailableError for any other failure.
+    """
     headers = {"User-Agent": "thinkube-control"}
     if token:
         headers["Authorization"] = f"token {token}"
+    req = urllib.request.Request(url, headers=headers)
     try:
-        req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode())
+            body = resp.read().decode()
+    except urllib.error.HTTPError:
+        raise
     except Exception as e:
-        logger.debug(f"Failed to fetch {url}: {e}")
-        return None
-
-
-def _save_persistent_cache(filename: str, data: Any) -> None:
+        raise CatalogUnavailableError(f"Cannot fetch catalog {url}: {e}") from e
     try:
-        _PERSISTENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        cache_path = _PERSISTENT_CACHE_DIR / filename
-        with open(cache_path, "w") as f:
-            json.dump(data, f)
-    except Exception as e:
-        logger.warning(f"Failed to save persistent cache {filename}: {e}")
+        return json.loads(body)
+    except ValueError as e:
+        raise CatalogUnavailableError(f"Catalog {url} is not valid JSON: {e}") from e
 
 
-def _load_persistent_cache(filename: str) -> Optional[dict]:
-    cache_path = _PERSISTENT_CACHE_DIR / filename
-    if cache_path.exists():
-        try:
-            with open(cache_path) as f:
-                return json.load(f)
-        except Exception as e:
-            logger.warning(f"Failed to load persistent cache {filename}: {e}")
-    return None
-
+def _extract(data: dict, key: str, url: str, merge_strategy: str) -> Union[List, Dict]:
+    """The catalog entries under key, checked against the merge strategy's type."""
+    if not isinstance(data, dict) or key not in data:
+        raise CatalogUnavailableError(f"Catalog {url} has no '{key}' key")
+    items = data[key]
+    expected = list if merge_strategy == "list" else dict
+    if not isinstance(items, expected):
+        raise CatalogUnavailableError(
+            f"Catalog {url}: '{key}' is {type(items).__name__}, expected {expected.__name__}"
+        )
+    return items
 
 
 def _merge_list(platform: List[Dict], user: List[Dict], dedup_key: str) -> List[Dict]:
@@ -134,9 +139,11 @@ def fetch_merged_catalog(
 
     Returns:
         Merged catalog data (list or dict depending on merge_strategy)
-    """
-    global _memory_cache
 
+    Raises:
+        CatalogUnavailableError: a catalog could not be fetched or read and no
+            fresh copy is in memory.
+    """
     now = time.time()
     cache_entry = _memory_cache.get(catalog_name)
     if cache_entry and (now - cache_entry["time"]) < _CACHE_TTL:
@@ -144,25 +151,35 @@ def fetch_merged_catalog(
 
     github_username, github_token = _get_github_config()
 
-    # Fetch platform catalog (public, no auth)
+    # Platform catalog (public, no auth)
     platform_url = _github_raw_url(_PLATFORM_ORG, _PLATFORM_METADATA_REPO, file_name)
-    platform_data = _fetch_json(platform_url)
-    platform_items = platform_data.get(extract_key, [] if merge_strategy == "list" else {}) if platform_data else None
-
-    # Tag platform items with source
-    if platform_items is not None and merge_strategy == "list":
+    try:
+        platform_data = _fetch_json(platform_url)
+    except urllib.error.HTTPError as e:
+        raise CatalogUnavailableError(
+            f"Cannot fetch catalog {platform_url}: HTTP {e.code} {e.reason}"
+        ) from e
+    platform_items = _extract(platform_data, extract_key, platform_url, merge_strategy)
+    if merge_strategy == "list":
         for item in platform_items:
             item.setdefault("_source", "platform")
 
-    # Fetch user catalog (private, with auth)
-    user_items = None
+    merged = platform_items
+    # User catalog (private, with auth)
     if github_username and github_token:
         user_repo = f"{github_username}-metadata"
         user_url = _github_raw_url(github_username, user_repo, file_name)
-        user_data = _fetch_json(user_url, token=github_token)
-        if user_data:
-            user_items = user_data.get(extract_key, [] if merge_strategy == "list" else {})
-            # Tag user items with source
+        user_items = None
+        try:
+            user_data = _fetch_json(user_url, token=github_token)
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise CatalogUnavailableError(
+                    f"Cannot fetch catalog {user_url}: HTTP {e.code} {e.reason}"
+                ) from e
+            logger.info(f"No {catalog_name} entries in user metadata ({user_url}: HTTP 404)")
+        else:
+            user_items = _extract(user_data, extract_key, user_url, merge_strategy)
             if merge_strategy == "list":
                 for item in user_items:
                     item.setdefault("_source", "user")
@@ -170,48 +187,12 @@ def fetch_merged_catalog(
                 f"Fetched {catalog_name} from user metadata ({github_username}/{user_repo}): "
                 f"{len(user_items)} entries"
             )
-
-    # Merge if we got fresh data from at least the platform
-    if platform_items is not None:
         if user_items is not None:
             if merge_strategy == "list":
                 merged = _merge_list(platform_items, user_items, dedup_key)
             else:
                 merged = _merge_dict(platform_items, user_items)
-        else:
-            merged = platform_items
 
-        _memory_cache[catalog_name] = {"data": merged, "time": now}
-        # Save combined data to persistent cache
-        cache_data = {extract_key: merged}
-        if platform_data:
-            cache_data["version"] = platform_data.get("version", "1.0.0")
-        _save_persistent_cache(file_name, cache_data)
-        logger.info(f"Fetched {catalog_name} catalog: {len(merged)} total entries")
-        return merged
-
-    # If platform fetch failed but user succeeded, use user data alone
-    if user_items is not None:
-        _memory_cache[catalog_name] = {"data": user_items, "time": now}
-        _save_persistent_cache(file_name, {extract_key: user_items})
-        logger.info(f"Using user-only {catalog_name} catalog: {len(user_items)} entries")
-        return user_items
-
-    # Fallback to stale memory cache
-    if cache_entry:
-        logger.info(f"Using stale cached {catalog_name} catalog")
-        return cache_entry["data"]
-
-    # Fallback to persistent cache
-    persistent = _load_persistent_cache(file_name)
-    if persistent:
-        items = persistent.get(extract_key, [] if merge_strategy == "list" else {})
-        if items:
-            _memory_cache[catalog_name] = {"data": items, "time": now}
-            logger.info(f"Using persistent cached {catalog_name} catalog: {len(items)} entries")
-            return items
-
-    empty = [] if merge_strategy == "list" else {}
-    logger.error(f"No {catalog_name} catalog available")
-    _memory_cache[catalog_name] = {"data": empty, "time": now}
-    return empty
+    _memory_cache[catalog_name] = {"data": merged, "time": now}
+    logger.info(f"Fetched {catalog_name} catalog: {len(merged)} total entries")
+    return merged

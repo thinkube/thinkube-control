@@ -37,6 +37,7 @@ from app.services import (
 )
 from app.services.prometheus_client import PrometheusClient
 from app.core.api_tokens import get_current_user_dual_auth
+from app.core.config import settings
 
 
 logger = logging.getLogger(__name__)
@@ -466,10 +467,7 @@ async def sync_services(
     # No special role required since they can already deploy services
 
     try:
-        # Get domain from environment
-        import os
-
-        domain = os.getenv("DOMAIN_NAME", "thinkube.com")
+        domain = settings.DOMAIN_NAME
 
         # Run service discovery
         discovery = ServiceDiscovery(db, domain)

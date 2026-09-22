@@ -23,13 +23,15 @@ from mlflow.tracking import MlflowClient
 from mlflow.exceptions import RestException
 
 from app.services.metadata_fetcher import fetch_merged_catalog
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 def get_model_catalog() -> List[Dict]:
     """
     Get the model catalog from platform + user metadata repos.
-    Fallback chain: memory cache → fetch → stale memory → persistent cache.
+
+    Raises CatalogUnavailableError when the catalog cannot be fetched.
     """
     return fetch_merged_catalog(
         catalog_name="models",
@@ -104,48 +106,43 @@ class ModelDownloaderService:
         Returns:
             List of fine-tuned model dictionaries
         """
+        from app.db.session import SessionLocal
+        from app.models.model_mirrors import ModelMirrorJob
+
+        # Get all successfully registered models from database
+        session_factory = SessionLocal()
+        db = session_factory()
         try:
-            from app.db.session import SessionLocal
-            from app.models.model_mirrors import ModelMirrorJob
+            succeeded_jobs = db.query(ModelMirrorJob).filter(
+                ModelMirrorJob.status == "succeeded"
+            ).all()
 
-            # Get all successfully registered models from database
-            session_factory = SessionLocal()
-            db = session_factory()
-            try:
-                succeeded_jobs = db.query(ModelMirrorJob).filter(
-                    ModelMirrorJob.status == "succeeded"
-                ).all()
+            # Filter to only include fine-tuned models (not in AVAILABLE_MODELS)
+            hf_model_ids = {m["id"] for m in get_model_catalog()}
+            finetuned_models = []
 
-                # Filter to only include fine-tuned models (not in AVAILABLE_MODELS)
-                hf_model_ids = {m["id"] for m in get_model_catalog()}
-                finetuned_models = []
+            for job in succeeded_jobs:
+                # Skip if it's a HuggingFace model (already in catalog)
+                if job.model_id in hf_model_ids:
+                    continue
 
-                for job in succeeded_jobs:
-                    # Skip if it's a HuggingFace model (already in catalog)
-                    if job.model_id in hf_model_ids:
-                        continue
+                # This is a fine-tuned model
+                finetuned_models.append({
+                    "id": job.model_id,
+                    "name": job.model_id,
+                    "size": "Unknown",
+                    "quantization": "FP16",  # Merged models are typically FP16
+                    "description": f"Fine-tuned model registered on {job.created_at.strftime('%Y-%m-%d') if job.created_at else 'unknown'}",
+                    "server_type": ["tensorrt-llm"],
+                    "task": "text-generation",
+                    "is_finetuned": True
+                })
 
-                    # This is a fine-tuned model
-                    finetuned_models.append({
-                        "id": job.model_id,
-                        "name": job.model_id,
-                        "size": "Unknown",
-                        "quantization": "FP16",  # Merged models are typically FP16
-                        "description": f"Fine-tuned model registered on {job.created_at.strftime('%Y-%m-%d') if job.created_at else 'unknown'}",
-                        "server_type": ["tensorrt-llm"],
-                        "task": "text-generation",
-                        "is_finetuned": True
-                    })
+            logger.debug(f"Found {len(finetuned_models)} fine-tuned models in database")
+            return finetuned_models
 
-                logger.debug(f"Found {len(finetuned_models)} fine-tuned models in database")
-                return finetuned_models
-
-            finally:
-                db.close()
-
-        except Exception as e:
-            logger.warning(f"Could not query fine-tuned models: {e}")
-            return []
+        finally:
+            db.close()
 
     def submit_download(self, model_id: str) -> str:
         """
@@ -665,8 +662,7 @@ except Exception as e:
                 )
             ]
 
-            # Get Harbor registry from environment
-            domain_name = os.getenv("DOMAIN_NAME", "thinkube.com")
+            domain_name = settings.DOMAIN_NAME
             harbor_registry = f"registry.{domain_name}"
             model_mirror_image = f"{harbor_registry}/library/model-mirror:latest"
 
@@ -1028,7 +1024,7 @@ print(f'  - Registered in MLflow (metadata-only)', flush=True)
                 ),
             ]
 
-            domain_name = os.getenv("DOMAIN_NAME", "thinkube.com")
+            domain_name = settings.DOMAIN_NAME
             harbor_registry = f"registry.{domain_name}"
             model_mirror_image = f"{harbor_registry}/library/model-mirror:latest"
 
@@ -1149,55 +1145,49 @@ print(f'  - Registered in MLflow (metadata-only)', flush=True)
         Returns:
             Dictionary mapping model_id to existence status
         """
+        from app.db.session import SessionLocal
+        from app.models.model_mirrors import ModelMirrorJob
+
+        session_factory = SessionLocal()
+        db = session_factory()
         try:
-            from app.db.session import SessionLocal
-            from app.models.model_mirrors import ModelMirrorJob
+            # Sync running jobs with Argo workflow status
+            running_jobs = db.query(ModelMirrorJob).filter(
+                ModelMirrorJob.status.in_(["pending", "running"])
+            ).all()
+            for job in running_jobs:
+                if job.workflow_name:
+                    try:
+                        wf_status = self.get_download_status(job.workflow_name)
+                        if wf_status["status"] == "Succeeded":
+                            job.status = "succeeded"
+                            job.error_message = None
+                        elif wf_status["status"] in ("Failed", "Error"):
+                            job.status = "failed"
+                            job.error_message = wf_status.get("message", "Workflow failed")
+                    except Exception:
+                        pass
+            if running_jobs:
+                db.commit()
 
-            session_factory = SessionLocal()
-            db = session_factory()
-            try:
-                # Sync running jobs with Argo workflow status
-                running_jobs = db.query(ModelMirrorJob).filter(
-                    ModelMirrorJob.status.in_(["pending", "running"])
-                ).all()
-                for job in running_jobs:
-                    if job.workflow_name:
-                        try:
-                            wf_status = self.get_download_status(job.workflow_name)
-                            if wf_status["status"] == "Succeeded":
-                                job.status = "succeeded"
-                                job.error_message = None
-                            elif wf_status["status"] in ("Failed", "Error"):
-                                job.status = "failed"
-                                job.error_message = wf_status.get("message", "Workflow failed")
-                        except Exception:
-                            pass
-                if running_jobs:
-                    db.commit()
+            # Query all successfully completed mirror jobs
+            succeeded_jobs = db.query(ModelMirrorJob).filter(
+                ModelMirrorJob.status == "succeeded"
+            ).all()
 
-                # Query all successfully completed mirror jobs
-                succeeded_jobs = db.query(ModelMirrorJob).filter(
-                    ModelMirrorJob.status == "succeeded"
-                ).all()
+            # Build result dict - all models are False by default
+            results = {model["id"]: False for model in get_model_catalog()}
 
-                # Build result dict - all models are False by default
-                results = {model["id"]: False for model in get_model_catalog()}
+            # Mark models as True if they have a succeeded job
+            for job in succeeded_jobs:
+                if job.model_id in results:
+                    results[job.model_id] = True
+                    logger.debug(f"Model {job.model_id} found in database as succeeded")
 
-                # Mark models as True if they have a succeeded job
-                for job in succeeded_jobs:
-                    if job.model_id in results:
-                        results[job.model_id] = True
-                        logger.debug(f"Model {job.model_id} found in database as succeeded")
+            return results
 
-                return results
-
-            finally:
-                db.close()
-
-        except Exception as e:
-            logger.error(f"Failed to check model download status from database: {e}")
-            # Return empty dict on error (all models will show as not downloaded)
-            return {}
+        finally:
+            db.close()
 
     def check_model_exists(self, model_id: str) -> bool:
         """
@@ -1716,8 +1706,7 @@ except Exception as e:
                 )
             ]
 
-            # Get Harbor registry from environment
-            domain_name = os.getenv("DOMAIN_NAME", "thinkube.com")
+            domain_name = settings.DOMAIN_NAME
             harbor_registry = f"registry.{domain_name}"
             model_mirror_image = f"{harbor_registry}/library/model-mirror:latest"
 

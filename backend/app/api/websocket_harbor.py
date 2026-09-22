@@ -22,6 +22,7 @@ from app.db.session import SessionLocal
 from app.models.deployments import TemplateDeployment, DeploymentLog
 from app.models.container_images import ContainerImage, ImageMirrorJob
 from app.services.ansible_environment import ansible_env
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["harbor-websocket"])
@@ -107,8 +108,7 @@ async def stream_image_mirror_deployment(websocket: WebSocket, deployment_id: st
         # Add authentication variables
         extra_vars = ansible_env.prepare_auth_vars(vars_data)
 
-        # Add domain_name from environment or config
-        domain_name = os.environ.get("DOMAIN_NAME", "thinkube.com")
+        domain_name = settings.DOMAIN_NAME
         extra_vars["domain_name"] = domain_name
         extra_vars["harbor_registry"] = f"registry.{domain_name}"
 

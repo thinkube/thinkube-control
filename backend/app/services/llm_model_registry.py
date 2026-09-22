@@ -193,13 +193,7 @@ class LLMModelRegistry:
         from app.services.model_downloader import get_model_catalog, ModelDownloaderService
 
         catalog = get_model_catalog()
-
-        try:
-            downloader = ModelDownloaderService()
-            mirrored = downloader.check_all_models_exist()
-        except Exception as e:
-            logger.warning(f"Could not check MLflow mirror status: {e}")
-            mirrored = {}
+        mirrored = ModelDownloaderService().check_all_models_exist()
 
         catalog_by_id = {entry["id"]: entry for entry in catalog}
         updated = {}
@@ -307,7 +301,10 @@ class LLMModelRegistry:
             f"Starting LLM model registry polling (interval={self._refresh_interval}s)"
         )
 
-        self._poll_catalog()
+        try:
+            self._poll_catalog()
+        except Exception as e:
+            logger.error(f"Model registry poll failed: {e}")
 
         await asyncio.sleep(2)
         await self._refresh_backends()

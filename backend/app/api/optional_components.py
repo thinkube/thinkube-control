@@ -27,6 +27,7 @@ from app.services.optional_components import OptionalComponentService
 from app.services.background_executor import background_executor
 from app.models.deployments import TemplateDeployment
 from pydantic import BaseModel
+from app.services.metadata_fetcher import CatalogUnavailableError
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["optional-components"])
@@ -110,6 +111,8 @@ async def list_optional_components(
         
         return ComponentListResponse(components=component_responses)
         
+    except CatalogUnavailableError:
+        raise
     except Exception as e:
         logger.error(f"Failed to list optional components: {e}")
         raise HTTPException(
@@ -140,6 +143,8 @@ async def get_component_info(
         return component_info
         
     except HTTPException:
+        raise
+    except CatalogUnavailableError:
         raise
     except Exception as e:
         logger.error(f"Failed to get component info: {e}")
@@ -278,6 +283,8 @@ async def install_optional_component(
         
     except HTTPException:
         raise
+    except CatalogUnavailableError:
+        raise
     except Exception as e:
         logger.error(f"Failed to install component {component}: {e}")
         raise HTTPException(
@@ -376,6 +383,8 @@ async def uninstall_optional_component(
         
     except HTTPException:
         raise
+    except CatalogUnavailableError:
+        raise
     except Exception as e:
         logger.error(f"Failed to uninstall component {component}: {e}")
         raise HTTPException(
@@ -407,6 +416,8 @@ async def get_component_status(
         return component_info["status"]
         
     except HTTPException:
+        raise
+    except CatalogUnavailableError:
         raise
     except Exception as e:
         logger.error(f"Failed to get component status: {e}")

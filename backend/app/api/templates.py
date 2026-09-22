@@ -38,7 +38,7 @@ from pathlib import Path
 from app.services.background_executor import background_executor
 from app.services.dependency_manager import DependencyManager
 from app.services.model_downloader import ModelDownloaderService
-from app.services.metadata_fetcher import fetch_merged_catalog
+from app.services.metadata_fetcher import CatalogUnavailableError, fetch_merged_catalog
 from typing import List as TypingList
 import yaml
 import aiohttp
@@ -159,6 +159,8 @@ async def list_available_templates(
         logger.info(f"Discovered {len(templates)} application templates")
         return {"templates": templates}
 
+    except CatalogUnavailableError:
+        raise
     except Exception as e:
         logger.error(f"Error listing templates: {e}")
         raise HTTPException(
@@ -487,6 +489,8 @@ async def _queue_template_deploy(
         )
 
     except HTTPException:
+        raise
+    except CatalogUnavailableError:
         raise
     except Exception as e:
         logger.error(f"Failed to create deployment: {e}")

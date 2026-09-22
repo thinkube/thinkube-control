@@ -7,7 +7,7 @@ itself.
 
 ```
 ansible/
-├── playbooks/   # Build, sync and delete Jupyter venvs; add_node.yaml
+├── playbooks/   # Build, sync and delete Jupyter venvs
 └── roles/       # Roles on ANSIBLE_ROLES_PATH for these runs
 ```
 

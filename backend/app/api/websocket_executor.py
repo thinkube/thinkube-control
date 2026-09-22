@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.models.deployments import TemplateDeployment, DeploymentLog
 from app.services.ansible_environment import ansible_env
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ansible-stream"])
@@ -616,8 +617,7 @@ async def _execute_custom_image_build(
     import os
     from datetime import datetime
 
-    # Get domain from environment
-    domain = os.environ.get("DOMAIN_NAME", "thinkube.com")
+    domain = settings.DOMAIN_NAME
     # Use 'library' project which exists by default in Harbor
     registry_url = f"registry.{domain}/library/{build.name}:latest"
 
@@ -964,7 +964,7 @@ async def _execute_jupyter_venv_build(
     }
     extra_vars = ansible_env.prepare_auth_vars(extra_vars)
     extra_vars["kubeconfig"] = os.environ.get("KUBECONFIG", "/home/thinkube/.kube/config")
-    domain_name = os.environ.get("DOMAIN_NAME", "cmxela.com")
+    domain_name = settings.DOMAIN_NAME
     extra_vars["harbor_registry"] = f"registry.{domain_name}"
 
     temp_vars_fd, temp_vars_path = tempfile.mkstemp(suffix=".yml", prefix="venv-vars-")

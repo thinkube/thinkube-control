@@ -11,6 +11,7 @@ from datetime import datetime
 
 import httpx
 from httpx import HTTPStatusError, RequestError
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ class HarborClient:
             password: Harbor password or robot token
         """
         # Get from environment if not provided
-        self.base_url = base_url or os.getenv("HARBOR_URL", "https://registry.thinkube.com")
+        self.base_url = base_url or settings.HARBOR_URL
         self.username = username or os.getenv("HARBOR_USERNAME", "admin")
         self.password = password or os.getenv("HARBOR_PASSWORD", os.getenv("ADMIN_PASSWORD"))
 

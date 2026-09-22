@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.services.discovery import ServiceDiscovery
 from app.models.services import Service
+from app.core.config import settings
 
 
 logger = logging.getLogger(__name__)
@@ -28,8 +29,7 @@ def init_services(db: Session = None):
         close_db = True
 
     try:
-        # Get domain from environment or use default
-        domain = os.getenv("DOMAIN_NAME", "thinkube.com")
+        domain = settings.DOMAIN_NAME
 
         # Check if services already exist
         existing_count = db.query(Service).count()
