@@ -154,8 +154,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-Apache-2.0, as the rest of thinkube-control. See the `LICENSE` file at the
-root of the thinkube-control repository.
+MIT, as fastapi-mcp, which it is based on. See [LICENSE](LICENSE).
 
 ## Credits
 
