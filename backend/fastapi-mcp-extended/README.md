@@ -154,7 +154,8 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-MIT License - see LICENSE file for details.
+Apache-2.0, as the rest of thinkube-control. See the `LICENSE` file at the
+root of the thinkube-control repository.
 
 ## Credits
 
