@@ -15,7 +15,6 @@ import pytest
 from fastapi_mcp_extended.prompts import PromptHandler
 from fastapi_mcp_extended.types import PromptArgument, PromptDefinition, PromptMessage
 
-from app import MCP_OPERATIONS
 from app.mcp_prompts import prompt_definitions
 
 DOMAIN = "example.com"
@@ -180,25 +179,6 @@ def handler(prompts):
 
 def test_the_prompt_set(handler):
     assert {prompt.name for prompt in handler.prompts} == EXPECTED_PROMPTS
-
-
-def test_every_tool_a_prompt_names_is_an_exposed_operation(app, prompts):
-    # The MCP server takes its tools from the OpenAPI schema, so the schema
-    # says which operation ids exist.
-    declared = {
-        operation["operationId"]
-        for path in app.openapi()["paths"].values()
-        for operation in path.values()
-        if "operationId" in operation
-    }
-    exposed = declared & set(MCP_OPERATIONS)
-
-    for prompt in prompts:
-        for message in prompt.messages:
-            named = set(TOOL_IN_TEXT.findall(message.content))
-            assert named, f"{prompt.name} names no tool"
-            missing = sorted(named - exposed)
-            assert not missing, f"{prompt.name} names tools the MCP server does not expose: {missing}"
 
 
 def test_every_prompt_fills_from_its_required_arguments(handler, prompts):

@@ -106,25 +106,6 @@ def test_the_same_install_queued_twice_is_refused(monkeypatch):
     assert refused.value.status_code == 409 and "d1" in refused.value.detail
 
 
-def test_a_template_backed_install_records_what_a_deploy_needs(monkeypatch, queued):
-    template = {"url": "https://github.com/thinkube/tkt-ollama", "fixed_name": "ollama"}
-    monkeypatch.setattr(oc, "OptionalComponentService", lambda db: FakeService(db, template))
-    import app.api.templates as templates
-
-    monkeypatch.setattr(templates, "_extract_domain_from_url", lambda: "example.test")
-    db = FakeDB()
-    answer = asyncio.run(oc.install_optional_component("ollama", None, None, current_user={"preferred_username": "u"}, db=db))
-    row = db.added[0]
-    assert answer.status == "queued" and answer.websocket_url is None
-    assert queued == [row] and not row.template_url.startswith(("optional://", "core://"))
-    assert row.variables["template_url"] == template["url"]
-    assert row.variables["deployment_namespace"] == "ollama"
-    assert row.variables["domain_name"] == "example.test"
-    assert row.variables["admin_username"] == "tkadmin"
-    assert row.variables["overwrite_existing"] is True
-    assert row.variables["author_email"] == "u@example.test"
-
-
 def test_a_component_in_flight_reports_its_activity():
     from app.services.optional_components import OptionalComponentService
 

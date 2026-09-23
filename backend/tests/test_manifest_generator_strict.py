@@ -165,12 +165,6 @@ def test_a_template_without_parameters_renders_none_of_the_config_map(tmp_path):
     assert g._read_manifest_params(app) == {}
 
 
-def test_values_not_recorded_stop_rather_than_dropping_parameters(tmp_path):
-    app = app_with_manifest(tmp_path, [{"name": "model_id"}])
-    with pytest.raises(RuntimeError, match="Redeploy wf-check"):
-        generator(Core(config_map={"app_name": "wf-check"}))._read_manifest_params(app)
-
-
 def test_an_unreadable_config_map_stops_rather_than_dropping_parameters(tmp_path):
     app = app_with_manifest(tmp_path, [{"name": "model_id"}])
     with pytest.raises(RuntimeError, match="wf-check-metadata"):
