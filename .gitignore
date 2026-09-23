@@ -49,4 +49,5 @@ ansible/inventory/
 Thumbs.db
 
 # Local Claude Code and Tandem state
+.claude/
 .tandem/
