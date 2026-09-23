@@ -8,7 +8,7 @@ import logging
 import asyncio
 from typing import List, Dict, Any, Optional
 from datetime import datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Body
@@ -21,6 +21,7 @@ from app.core.security import get_current_active_user, User
 from app.core.api_tokens import get_current_user_dual_auth
 from app.db.session import get_db
 from app.models.container_images import ContainerImage, ImageMirrorJob
+from app.models.deployments import TemplateDeployment
 from app.services.image_discovery import ImageDiscovery
 from app.services.harbor_client import HarborClient
 from app.core.config import settings
@@ -179,8 +180,6 @@ def add_image_to_mirror(
             detail="User images must be mirrored to Harbor"
         )
 
-    from app.models.deployments import TemplateDeployment
-    from uuid import uuid4
 
     # Instead of creating the image immediately, create a deployment
     if True:  # Always mirror
@@ -717,7 +716,6 @@ async def execute_mirror_job(job_id: UUID, image_id: UUID, db: Session):
     This runs in the background to mirror images from source to Harbor
     """
     from app.services.background_executor import background_executor
-    from app.models.deployments import TemplateDeployment
 
     job = db.query(ImageMirrorJob).filter(ImageMirrorJob.id == job_id).first()
     image = db.query(ContainerImage).filter(ContainerImage.id == image_id).first()
