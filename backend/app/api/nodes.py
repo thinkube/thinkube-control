@@ -411,12 +411,15 @@ async def verify_ssh(request: VerifySSHRequest):
 async def detect_hardware_batch(request: DetectHardwareRequest):
     """Detect hardware on multiple nodes in parallel."""
     async def detect_one(node_info: Dict[str, str]) -> Dict[str, Any]:
-        ip = node_info.get("ip", "")
+        ip = node_info["ip"]
         result = await node_manager.discover_node(ip)
-        if "error" not in result:
-            lvm_info = await node_manager.detect_lvm_status(ip)
-            result.update(lvm_info)
-            result["validation"] = node_manager.validate_hardware(result)
+        if "error" in result:
+            return result
+        try:
+            result.update(await node_manager.detect_lvm_status(ip))
+        except RuntimeError as e:
+            return {"ip": ip, "error": str(e)}
+        result["validation"] = node_manager.validate_hardware(result)
         return result
 
     results = await asyncio.gather(

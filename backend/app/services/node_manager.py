@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import tempfile
 import time
@@ -124,11 +125,13 @@ class NodeManager:
         Uses Ansible to connect and gather facts from the target node.
         """
         if not username:
-            username = os.environ.get("SYSTEM_USERNAME", "tkadmin")
+            username = os.environ["SYSTEM_USERNAME"]
 
         ssh_opts = "-o StrictHostKeyChecking=no -o ConnectTimeout=10"
 
-        detection_script = r"""
+        # Every command must succeed; a failure ends the script with the
+        # command's own error.
+        detection_script = r"""set -euo pipefail
 echo '{'
 
 echo -n '"hostname": "'
@@ -136,24 +139,24 @@ hostname | tr -d '\n'
 echo '",'
 
 echo -n '"architecture": "'
-uname -m 2>/dev/null | tr -d '\n' || echo -n "unknown"
+uname -m | tr -d '\n'
 echo '",'
 
 echo -n '"cpu_cores": '
-nproc 2>/dev/null | tr -d '\n' || echo -n "0"
+nproc | tr -d '\n'
 echo ','
 
 echo -n '"memory_gb": '
-mem_kb=$(grep '^MemTotal:' /proc/meminfo 2>/dev/null | awk '{print $2}')
-if [ -n "$mem_kb" ]; then mem_gb=$(( (mem_kb + 1048575) / 1048576 )); for s in 8 16 32 64 128 256 512 1024 2048; do if [ "$mem_gb" -le "$s" ]; then mem_gb=$s; break; fi; done; printf '%d' "$mem_gb" | tr -d '\n'; else echo -n "0"; fi
+mem_kb=$(grep '^MemTotal:' /proc/meminfo | awk '{print $2}')
+mem_gb=$(( (mem_kb + 1048575) / 1048576 )); for s in 8 16 32 64 128 256 512 1024 2048; do if [ "$mem_gb" -le "$s" ]; then mem_gb=$s; break; fi; done; printf '%d' "$mem_gb"
 echo ','
 
 echo -n '"disk_gb": '
-df -BG / 2>/dev/null | tail -1 | awk '{print $2}' | tr -d 'G\n' || echo -n "0"
+df -BG --output=size / | tail -1 | tr -d ' G\n'
 echo ','
 
 echo -n '"os_release": "'
-grep '^PRETTY_NAME=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"\n' || echo -n "unknown"
+. /etc/os-release; printf '%s' "$PRETTY_NAME" | sed 's/"/\\"/g'
 echo '",'
 
 echo -n '"k8s_installed": '
@@ -165,119 +168,121 @@ lspci -nn | sed 's/\\/\\\\/g; s/"/\\"/g; s/.*/"&"/' | paste -sd, - | tr -d '\n'
 echo '],'
 
 echo -n '"nvidia_driver_version": "'
-nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | tr -d '\n' || echo -n ""
+if command -v nvidia-smi >/dev/null; then nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1 | tr -d '\n'; fi
 echo '",'
 
 echo -n '"nouveau_loaded": '
-if lsmod 2>/dev/null | grep -q '^nouveau '; then echo -n 'true'; else echo -n 'false'; fi
+if lsmod | grep -q '^nouveau '; then echo -n 'true'; else echo -n 'false'; fi
 echo ','
 
 echo -n '"nouveau_in_use": '
-refcnt=$(lsmod 2>/dev/null | awk '/^nouveau / {print $3}')
-if [ -n "$refcnt" ] && [ "$refcnt" -gt 0 ] 2>/dev/null; then echo -n 'true'; else echo -n 'false'; fi
-echo ','
-
-echo -n '"lvm_expandable": false, "lvm_free_gb": 0, "lvm_lv_path": ""'
+refcnt=$(lsmod | awk '/^nouveau / {print $3}')
+if [ -n "$refcnt" ] && [ "$refcnt" -gt 0 ]; then echo -n 'true'; else echo -n 'false'; fi
 
 echo '}'
 """
 
-        try:
-            async with self.cluster_key_material() as key:
-                ssh_key_arg = f"-i {key}" if key else ""
-                cmd = f"ssh {ssh_opts} {ssh_key_arg} {username}@{ip} bash -s"
-
-                process = await asyncio.create_subprocess_exec(
-                    *cmd.split(),
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(input=detection_script.encode()), timeout=30
-                )
-
-            if process.returncode != 0:
-                error_msg = stderr.decode("utf-8", errors="replace").strip()
-                return {
-                    "error": f"SSH connection failed: {error_msg}",
-                    "ip": ip,
-                }
-
-            output = stdout.decode("utf-8", errors="replace").strip()
-            try:
-                data = json.loads(output)
-                data["ip"] = ip
-                gpu_lines = [line for line in data.pop("lspci_lines") if is_gpu(line)]
-                data["gpu_detected"] = bool(gpu_lines)
-                data["gpu_count"] = len(gpu_lines)
-                data["gpu_model"] = gpu_name(gpu_lines[0]) if gpu_lines else ""
-                arch = data.get("architecture", "unknown").lower()
-                if arch in ("x86_64", "amd64"):
-                    data["normalized_arch"] = "amd64"
-                elif arch in ("aarch64", "arm64"):
-                    data["normalized_arch"] = "arm64"
-                else:
-                    data["normalized_arch"] = arch
-                return data
-            except json.JSONDecodeError as e:
-                return {
-                    "error": f"Failed to parse hardware data: {e}",
-                    "raw_output": output,
-                    "ip": ip,
-                }
-
-        except asyncio.TimeoutError:
-            return {"error": "SSH connection timed out", "ip": ip}
-        except Exception as e:
-            return {"error": f"Discovery failed: {str(e)}", "ip": ip}
-
-    async def detect_lvm_status(self, ip: str, username: Optional[str] = None) -> Dict[str, Any]:
-        """Detect LVM volume expansion opportunity on a node (requires sudo)."""
-        ssh_key_path = ansible_env.get_ssh_key_path()
-        if not username:
-            username = os.environ.get("SYSTEM_USERNAME", "tkadmin")
-        password = os.environ.get("ANSIBLE_BECOME_PASSWORD", "")
-        ssh_opts = "-o StrictHostKeyChecking=no -o ConnectTimeout=10"
-        ssh_key_arg = f"-i {ssh_key_path}" if ssh_key_path.exists() else ""
-
-        lvm_script = f"""
-echo '{password}' | sudo -S bash -c '
-root_dev=$(df / 2>/dev/null | tail -1 | awk "{{print \\$1}}")
-if echo "$root_dev" | grep -q "/dev/mapper/"; then
-  vg_name=$(lvs --noheadings -o vg_name "$root_dev" 2>/dev/null | tr -d " ")
-  if [ -n "$vg_name" ]; then
-    vg_free=$(vgs --noheadings --nosuffix --units g -o vg_free "$vg_name" 2>/dev/null | tr -d " " | cut -d. -f1)
-    lv_path=$(lvs --noheadings -o lv_path "$root_dev" 2>/dev/null | tr -d " ")
-    echo "$vg_free $lv_path"
-  fi
-fi
-' 2>/dev/null
-"""
-        cmd = f"ssh {ssh_opts} {ssh_key_arg} {username}@{ip} bash -s"
-        try:
+        async with self.cluster_key_material() as key:
+            if key is None:
+                return {"error": "Cluster SSH key unusable, see log", "ip": ip}
+            cmd = f"ssh {ssh_opts} -i {key} {username}@{ip} bash -s"
             process = await asyncio.create_subprocess_exec(
                 *cmd.split(),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, _ = await asyncio.wait_for(
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(input=detection_script.encode()), timeout=30
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                return {"error": "Hardware detection timed out after 30 seconds", "ip": ip}
+
+        if process.returncode != 0:
+            return {
+                "error": f"Hardware detection failed (exit {process.returncode}): "
+                         f"{stderr.decode('utf-8', errors='replace').strip()}",
+                "ip": ip,
+            }
+
+        output = stdout.decode("utf-8", errors="replace").strip()
+        try:
+            data = json.loads(output)
+        except json.JSONDecodeError as e:
+            return {"error": f"Failed to parse hardware data: {e}", "raw_output": output, "ip": ip}
+
+        data["ip"] = ip
+        gpu_lines = [line for line in data.pop("lspci_lines") if is_gpu(line)]
+        data["gpu_detected"] = bool(gpu_lines)
+        data["gpu_count"] = len(gpu_lines)
+        data["gpu_model"] = gpu_name(gpu_lines[0]) if gpu_lines else ""
+        arch = data["architecture"].lower()
+        if arch in ("x86_64", "amd64"):
+            data["normalized_arch"] = "amd64"
+        elif arch in ("aarch64", "arm64"):
+            data["normalized_arch"] = "arm64"
+        else:
+            data["normalized_arch"] = arch
+        return data
+
+    async def detect_lvm_status(self, ip: str) -> Dict[str, Any]:
+        """Whether the node's root LV can be grown into free space in its volume group (needs sudo).
+
+        The sudo password is ANSIBLE_BECOME_PASSWORD, or else SYSTEM_PASSWORD,
+        as adding nodes uses. It reaches sudo on its own line, never the
+        command text. Raises with the node's own error when the check fails.
+        """
+        username = os.environ["SYSTEM_USERNAME"]
+        password = os.environ.get("ANSIBLE_BECOME_PASSWORD") or os.environ.get("SYSTEM_PASSWORD")
+        if not password:
+            raise RuntimeError(
+                "Reading the disk layout needs sudo, and neither ANSIBLE_BECOME_PASSWORD "
+                "nor SYSTEM_PASSWORD is set in the thinkube-control backend."
+            )
+        lvm_script = f"""set -euo pipefail
+SUDO_PASSWORD={shlex.quote(password)}
+INNER=$(cat <<'EOF'
+set -euo pipefail
+root_dev=$(findmnt -no SOURCE /)
+case "$root_dev" in
+  /dev/mapper/*)
+    vg=$(lvs --noheadings -o vg_name "$root_dev" | tr -d ' ')
+    free=$(vgs --noheadings --nosuffix --units g -o vg_free "$vg" | tr -d ' ' | cut -d. -f1)
+    lv=$(lvs --noheadings -o lv_path "$root_dev" | tr -d ' ')
+    echo "lvm $free $lv" ;;
+  *) echo "not-lvm" ;;
+esac
+EOF
+)
+printf '%s\\n' "$SUDO_PASSWORD" | sudo -S -p '' bash -c "$INNER"
+"""
+        async with self.cluster_key_material() as key:
+            if key is None:
+                raise RuntimeError("Cluster SSH key unusable, see log")
+            cmd = f"ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i {key} {username}@{ip} bash -s"
+            process = await asyncio.create_subprocess_exec(
+                *cmd.split(),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
                 process.communicate(input=lvm_script.encode()), timeout=15
             )
-            output = stdout.decode().strip()
-            parts = output.split()
-            if len(parts) >= 2:
-                free_gb = int(parts[0])
-                lv_path = parts[1]
-                return {
-                    "lvm_expandable": free_gb > 10,
-                    "lvm_free_gb": free_gb,
-                    "lvm_lv_path": lv_path,
-                }
-        except Exception:
-            pass
-        return {"lvm_expandable": False, "lvm_free_gb": 0, "lvm_lv_path": ""}
+        if process.returncode != 0:
+            raise RuntimeError(
+                f"Disk layout check failed (exit {process.returncode}): "
+                f"{stderr.decode('utf-8', errors='replace').strip()}"
+            )
+        output = stdout.decode().split()
+        if output == ["not-lvm"]:
+            return {"lvm_expandable": False, "lvm_free_gb": 0, "lvm_lv_path": ""}
+        if len(output) == 3 and output[0] == "lvm" and output[1].isdigit():
+            free_gb = int(output[1])
+            return {"lvm_expandable": free_gb > 10, "lvm_free_gb": free_gb, "lvm_lv_path": output[2]}
+        raise RuntimeError(f"Unexpected disk layout output: {' '.join(output)}")
 
     def read_inventory(self) -> Dict[str, Any]:
         """Read and parse the Ansible inventory YAML."""
@@ -1290,21 +1295,21 @@ echo "OK"
         errors = []
         warnings = []
 
-        os_release = hw_info.get("os_release", "")
+        os_release = hw_info["os_release"]
         if "Ubuntu 24.04" not in os_release:
             errors.append(f"Requires Ubuntu 24.04 LTS (found: {os_release})")
 
-        cpu_cores = int(hw_info.get("cpu_cores", 0))
+        cpu_cores = int(hw_info["cpu_cores"])
         if cpu_cores < 16:
             errors.append(f"Requires 16+ CPU cores (found: {cpu_cores})")
 
-        memory_gb = int(hw_info.get("memory_gb", 0))
+        memory_gb = int(hw_info["memory_gb"])
         if memory_gb < 64:
             errors.append(f"Requires 64+ GB RAM (found: {memory_gb} GB)")
 
-        disk_gb = int(hw_info.get("disk_gb", 0))
-        lvm_expandable = hw_info.get("lvm_expandable", False)
-        lvm_free_gb = int(hw_info.get("lvm_free_gb", 0))
+        disk_gb = int(hw_info["disk_gb"])
+        lvm_expandable = hw_info["lvm_expandable"]
+        lvm_free_gb = int(hw_info["lvm_free_gb"])
         if lvm_expandable and lvm_free_gb > 10:
             warnings.append(
                 f"LVM volume uses only {disk_gb} GB — {lvm_free_gb} GB available in volume group. "
@@ -1313,10 +1318,10 @@ echo "OK"
         elif disk_gb < 500:
             warnings.append(f"Recommended 1TB+ disk (found: {disk_gb} GB)")
 
-        if hw_info.get("k8s_installed"):
+        if hw_info["k8s_installed"]:
             warnings.append("k8s snap already installed — may have been in a previous cluster")
 
-        if hw_info.get("gpu_detected") and hw_info.get("gpu_model"):
+        if hw_info["gpu_detected"] and hw_info["gpu_model"]:
             gpu_model = hw_info["gpu_model"]
             if not self._is_gpu_cuda_compatible(gpu_model):
                 warnings.append(
@@ -1324,12 +1329,12 @@ echo "OK"
                 )
                 hw_info["gpu_detected"] = False
                 hw_info["gpu_count"] = 0
-            elif hw_info.get("nouveau_in_use"):
+            elif hw_info["nouveau_in_use"]:
                 errors.append(
                     "nouveau driver is active (display attached). "
                     "Disconnect the display or blacklist nouveau and reboot before adding this node."
                 )
-            elif hw_info.get("nouveau_loaded"):
+            elif hw_info["nouveau_loaded"]:
                 warnings.append(
                     "nouveau driver is loaded but not in use — "
                     "it will be replaced by the NVIDIA driver during GPU setup"
