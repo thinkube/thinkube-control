@@ -23,7 +23,8 @@ from app.services.network_discovery import network_discovery
 from app.services.node_manager import node_manager
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/nodes", tags=["nodes"])
+# Every node endpoint reads or changes the cluster and its machines: all need a login.
+router = APIRouter(prefix="/nodes", tags=["nodes"], dependencies=[Depends(get_current_user_dual_auth)])
 
 GPU_OPERATOR_DIR = Path(
     "/home/thinkube/thinkube-platform/core/thinkube/ansible/"

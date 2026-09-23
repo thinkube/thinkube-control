@@ -177,3 +177,16 @@ def test_without_the_cluster_password_the_system_password_is_used(cluster, monke
 
     asyncio.run(scenario())
     assert received == ["system-secret"]
+
+
+def test_every_node_endpoint_needs_a_login():
+    from app.core.api_tokens import get_current_user_dual_auth
+
+    routes = [r for r in nodes.router.routes if hasattr(r, "dependant")]
+    assert {r.path for r in routes} >= {
+        "/nodes/list", "/nodes/discover", "/nodes/discover-network", "/nodes/verify-ssh",
+        "/nodes/detect-hardware-batch", "/nodes/remove", "/nodes/add-batch", "/nodes/add-batch/{job_id}",
+    }
+    for route in routes:
+        calls = {d.call for d in route.dependant.dependencies}
+        assert get_current_user_dual_auth in calls, route.path
