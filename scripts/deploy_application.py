@@ -722,10 +722,10 @@ git fetch origin main
                 raise
 
     async def create_harbor_secret(self):
-        """Create Harbor secrets for Kaniko (argo) and pod pulls (app namespace).
+        """Create Harbor secrets for image builds (argo) and pod pulls (app namespace).
 
-        Matches Ansible docker_kaniko role:
-        - harbor-docker-config in argo namespace (type Opaque, key config.json) for Kaniko builds
+        Matches the Ansible registry_auth role:
+        - harbor-docker-config in argo namespace (type Opaque, key config.json) for Buildah builds
         - app-pull-secret in app namespace (type kubernetes.io/dockerconfigjson) for pod image pulls
         """
         harbor = self.secrets['harbor']
@@ -744,14 +744,14 @@ git fetch origin main
         docker_config_json = json.dumps(docker_config)
         docker_config_b64 = base64.b64encode(docker_config_json.encode()).decode()
 
-        # 1. Create harbor-docker-config in argo namespace for Kaniko (type Opaque, key config.json)
-        kaniko_secret = client.V1Secret(
+        # 1. Create harbor-docker-config in argo namespace for builds (type Opaque, key config.json)
+        build_secret = client.V1Secret(
             metadata=client.V1ObjectMeta(name='harbor-docker-config', namespace='argo'),
             data={'config.json': docker_config_b64},
             type='Opaque'
         )
         try:
-            await self.k8s_core.create_namespaced_secret('argo', kaniko_secret)
+            await self.k8s_core.create_namespaced_secret('argo', build_secret)
             DeploymentLogger.log("Created harbor-docker-config in argo namespace")
         except ApiException as e:
             if e.status == 409:

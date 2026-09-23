@@ -6,9 +6,10 @@
 # images and pushes them to Harbor. It runs no tests: the backend tests run
 # with backend/run_tests.sh.
 #
-# Build Tool: Kaniko executor from Google (gcr.io/kaniko-project/executor:latest)
-# Security: Runs as non-root user, no special privileges required
-# Cache: Uses local cache directory only (no registry cache push to avoid permission issues)
+# Build tool: Buildah (library/buildah, mirrored from quay.io/buildah/stable).
+# Security: root inside an unprivileged pod, with SYS_ADMIN and AppArmor
+# unconfined so Buildah can unpack layers in its own mount namespace.
+# Cache: the layer cache lives in Harbor, in <image>/cache.
 #
 # Multi-arch support: When build_architectures has multiple entries, builds run on
 # per-arch nodes using git-clone init containers and creates manifest lists.
@@ -28,7 +29,7 @@ metadata:
     thinkube.io/namespace: {{ namespace }}
 spec:
   entrypoint: build-and-push
-  serviceAccountName: kaniko-builder  # ServiceAccount with Harbor registry credentials
+  serviceAccountName: image-builder
   arguments:
     parameters:
     - name: webhook-timestamp
@@ -48,11 +49,10 @@ spec:
     hostPath:
       path: /home/{{ system_username }}/shared-code/{{ project_name }}
       type: Directory
-  - name: build-cache
-    hostPath:
-      path: /home/{{ system_username }}/.cache/thinkube-builds
-      type: DirectoryOrCreate
   - name: workspace
+    emptyDir: {}
+  # Buildah's image store for one build; it goes with the pod.
+  - name: buildah-storage
     emptyDir: {}
 
   templates:
@@ -148,117 +148,69 @@ spec:
             value: "llm-proxy"
 {% else %}
       # Single-arch builds on control plane
-      - name: build-backend
-        template: build-backend
+{% for component, context in [("backend", "backend"), ("frontend", "frontend"), ("llm-proxy", "proxy")] %}
+      - name: build-{{ component }}
+        template: build
         arguments:
           parameters:
           - name: image-tag
             value: "{% raw %}{{workflow.uid}}{% endraw %}"
-
-      - name: build-frontend
-        template: build-frontend
-        arguments:
-          parameters:
-          - name: image-tag
-            value: "{% raw %}{{workflow.uid}}{% endraw %}"
-
-      - name: build-llm-proxy
-        template: build-llm-proxy
-        arguments:
-          parameters:
-          - name: image-tag
-            value: "{% raw %}{{workflow.uid}}{% endraw %}"
+          - name: component
+            value: "{{ component }}"
+          - name: context
+            value: "{{ context }}"
+{% endfor %}
 {% endif %}
 
-  # Build Backend Template — single-arch on control plane
-  - name: build-backend
+  # Single-arch build on the control plane, from the shared checkout
+  - name: build
     nodeSelector:
       kubernetes.io/hostname: {{ master_node_name }}
     inputs:
       parameters:
       - name: image-tag
+      - name: component
+      - name: context
     container:
-      image: {{ container_registry }}/library/kaniko-executor:latest
+      image: {{ container_registry }}/library/buildah:v1.43.4
+      command: ["/bin/bash", "-c"]
+      securityContext:
+        runAsUser: 0
+        capabilities:
+          add: ["SYS_ADMIN"]
+        appArmorProfile:
+          type: Unconfined
+      env:
+        - name: REGISTRY_AUTH_FILE
+          value: /registry-auth/config.json
       args:
-      - --dockerfile=/workspace/backend/Containerfile
-      - --context=/workspace/backend
-      - --destination={{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-backend:{% raw %}{{inputs.parameters.image-tag}}{% endraw %}
-      - --build-arg=REGISTRY={{ container_registry }}
-      - --cache-dir=/workspace/.cache/kaniko
+        - |
+          set -e
+          IMAGE="{{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-{% raw %}{{inputs.parameters.component}}{% endraw %}"
+          TAG="{% raw %}{{inputs.parameters.image-tag}}{% endraw %}"
+          CONTEXT="/workspace/{% raw %}{{inputs.parameters.context}}{% endraw %}"
+          buildah build \
+            --isolation chroot --storage-driver overlay \
+            --ulimit nofile=524288:524288 \
+            --layers --cache-from "${IMAGE}/cache" --cache-to "${IMAGE}/cache" \
+            --retry 3 \
+            --build-arg REGISTRY={{ container_registry }} \
+            -f "${CONTEXT}/Containerfile" -t "${IMAGE}:${TAG}" "${CONTEXT}"
+          buildah push --storage-driver overlay --retry 3 "${IMAGE}:${TAG}"
       volumeMounts:
       - name: docker-config
-        mountPath: /kaniko/.docker
+        mountPath: /registry-auth
       - name: shared-code
         mountPath: /workspace
-      - name: build-cache
-        mountPath: /workspace/.cache
-      resources:
-        requests:
-          memory: "1Gi"
-          cpu: "250m"
-        limits:
-          memory: "2Gi"
-          cpu: "1"
-
-  # Build Frontend Template — single-arch on control plane
-  - name: build-frontend
-    nodeSelector:
-      kubernetes.io/hostname: {{ master_node_name }}
-    inputs:
-      parameters:
-      - name: image-tag
-    container:
-      image: {{ container_registry }}/library/kaniko-executor:latest
-      args:
-      - --dockerfile=/workspace/frontend/Containerfile
-      - --context=/workspace/frontend
-      - --destination={{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-frontend:{% raw %}{{inputs.parameters.image-tag}}{% endraw %}
-      - --build-arg=REGISTRY={{ container_registry }}
-      - --cache-dir=/workspace/.cache/kaniko
-      volumeMounts:
-      - name: docker-config
-        mountPath: /kaniko/.docker
-      - name: shared-code
-        mountPath: /workspace
-      - name: build-cache
-        mountPath: /workspace/.cache
+      - name: buildah-storage
+        mountPath: /var/lib/containers
       resources:
         requests:
           memory: "2Gi"
           cpu: "250m"
         limits:
           memory: "4Gi"
-          cpu: "1"
-
-  # Build LLM Proxy Template — single-arch on control plane
-  - name: build-llm-proxy
-    nodeSelector:
-      kubernetes.io/hostname: {{ master_node_name }}
-    inputs:
-      parameters:
-      - name: image-tag
-    container:
-      image: {{ container_registry }}/library/kaniko-executor:latest
-      args:
-      - --dockerfile=/workspace/proxy/Containerfile
-      - --context=/workspace/proxy
-      - --destination={{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-llm-proxy:{% raw %}{{inputs.parameters.image-tag}}{% endraw %}
-      - --build-arg=REGISTRY={{ container_registry }}
-      - --cache-dir=/workspace/.cache/kaniko
-      volumeMounts:
-      - name: docker-config
-        mountPath: /kaniko/.docker
-      - name: shared-code
-        mountPath: /workspace
-      - name: build-cache
-        mountPath: /workspace/.cache
-      resources:
-        requests:
-          memory: "1Gi"
-          cpu: "250m"
-        limits:
-          memory: "2Gi"
-          cpu: "1"
+          cpu: "2"
 
 {% if build_architectures is defined and build_architectures | length > 1 %}
   # Per-arch build with git-clone init container
@@ -276,33 +228,58 @@ spec:
       - name: git-clone
         image: {{ container_registry }}/library/ci-utils:latest
         command: ["/bin/sh", "-c"]
+        env:
+          - name: GITEA_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: gitea-admin-token
+                key: token
         args:
           - |
-            git clone --depth 1 https://{{ admin_username }}:{{ admin_password }}@git.{{ domain_name }}/{{ gitea_org | default('thinkube-deployments') }}/{{ project_name }}.git /workspace
+            git clone --depth 1 "https://gitea_admin:${GITEA_TOKEN}@git.{{ domain_name }}/{{ gitea_org | default('thinkube-deployments') }}/{{ project_name }}.git" /workspace
         volumeMounts:
           - name: workspace
             mountPath: /workspace
     container:
-      image: {{ container_registry }}/library/kaniko-executor:latest
+      image: {{ container_registry }}/library/buildah:v1.43.4
+      command: ["/bin/bash", "-c"]
+      securityContext:
+        runAsUser: 0
+        capabilities:
+          add: ["SYS_ADMIN"]
+        appArmorProfile:
+          type: Unconfined
+      env:
+        - name: REGISTRY_AUTH_FILE
+          value: /registry-auth/config.json
       args:
-      - --dockerfile=/workspace/{% raw %}{{inputs.parameters.dockerfile}}{% endraw %}
-      - --context=/workspace/{% raw %}{{inputs.parameters.context}}{% endraw %}
-      - --destination={{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-{% raw %}{{inputs.parameters.component}}{% endraw %}:{% raw %}{{inputs.parameters.image-tag}}{% endraw %}-{% raw %}{{inputs.parameters.target-arch}}{% endraw %}
-      - --build-arg=REGISTRY={{ container_registry }}
-      - --cache-dir=/cache/kaniko
-      - --custom-platform=linux/{% raw %}{{inputs.parameters.target-arch}}{% endraw %}
+        - |
+          set -e
+          IMAGE="{{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-{% raw %}{{inputs.parameters.component}}{% endraw %}"
+          TAG="{% raw %}{{inputs.parameters.image-tag}}-{{inputs.parameters.target-arch}}{% endraw %}"
+          buildah build \
+            --isolation chroot --storage-driver overlay \
+            --ulimit nofile=524288:524288 \
+            --layers --cache-from "${IMAGE}/cache" --cache-to "${IMAGE}/cache" \
+            --retry 3 --platform "linux/{% raw %}{{inputs.parameters.target-arch}}{% endraw %}" \
+            --build-arg REGISTRY={{ container_registry }} \
+            -f "/workspace/{% raw %}{{inputs.parameters.dockerfile}}{% endraw %}" -t "${IMAGE}:${TAG}" \
+            "/workspace/{% raw %}{{inputs.parameters.context}}{% endraw %}"
+          buildah push --storage-driver overlay --retry 3 "${IMAGE}:${TAG}"
       volumeMounts:
       - name: docker-config
-        mountPath: /kaniko/.docker
+        mountPath: /registry-auth
       - name: workspace
         mountPath: /workspace
+      - name: buildah-storage
+        mountPath: /var/lib/containers
       resources:
         requests:
           memory: "2Gi"
           cpu: "1"
         limits:
           memory: "4Gi"
-          cpu: "1"
+          cpu: "2"
 
   # Create multi-arch manifest from per-arch images using crane
   - name: create-manifest
@@ -315,7 +292,7 @@ spec:
       command: ["/bin/sh", "-c"]
       env:
         - name: DOCKER_CONFIG
-          value: /kaniko/.docker
+          value: /registry-auth
       args:
         - |
           set -e
@@ -329,5 +306,5 @@ spec:
           echo "Multi-arch manifest pushed"
       volumeMounts:
       - name: docker-config
-        mountPath: /kaniko/.docker
+        mountPath: /registry-auth
 {% endif %}

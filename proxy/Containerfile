@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Pass the cluster registry as a build arg so this Dockerfile is portable:
-#   kaniko/podman/docker build --build-arg REGISTRY=registry.<your-domain> ...
+#   buildah/podman/docker build --build-arg REGISTRY=registry.<your-domain> ...
 # The Argo Workflow template (k8s/build-workflow.yaml.jinja) renders
 # REGISTRY from the cluster inventory's harbor_registry.
 ARG REGISTRY

@@ -114,3 +114,49 @@ def test_the_build_clones_with_the_build_credentials():
     text = render("build-workflow.j2")
     assert "${GIT_USERNAME}:${GIT_PASSWORD}@git.thinkube.com" in text
     assert "wf-check-build-credentials" in text
+
+
+def _build_pods(text):
+    workflow = yaml.safe_load(text)
+    templates = {t["name"]: t for t in workflow["spec"]["templates"]}
+    tasks = [t["name"] for t in templates["ci-cd-pipeline"]["dag"]["tasks"]]
+    return workflow, templates, tasks
+
+
+def _check_buildah_step(step, tag_suffix):
+    container = step["container"]
+    assert container["image"] == "registry.thinkube.com/library/buildah:v1.43.4"
+    assert container["securityContext"] == {
+        "runAsUser": 0,
+        "capabilities": {"add": ["SYS_ADMIN"]},
+        "appArmorProfile": {"type": "Unconfined"},
+    }
+    script = container["args"][0]
+    assert "--isolation chroot" in script and "--ulimit nofile=524288:524288" in script
+    assert 'TAG="{{workflow.parameters.image_tag}}' + tag_suffix + '"' in script
+    assert '--cache-from "${IMAGE}/cache"' in script
+    mounts = {m["name"]: m["mountPath"] for m in container["volumeMounts"]}
+    assert mounts["docker-config"] == "/registry-auth"
+    assert mounts["buildah-storage"] == "/var/lib/containers"
+
+
+def test_every_architecture_builds_with_buildah_under_the_task_names_the_webhook_reads():
+    text = render("build-workflow.j2")
+    workflow, templates, tasks = _build_pods(text)
+
+    assert "kaniko" not in text.lower()
+    assert workflow["spec"]["serviceAccountName"] == "image-builder"
+    assert tasks == ["test-backend", "build-backend-amd64", "build-backend-arm64", "manifest-backend"]
+    _check_buildah_step(templates["buildah-build-on-arch"], "-{{inputs.parameters.target_arch}}")
+    assert "--platform linux/{{inputs.parameters.target_arch}}" in templates["buildah-build-on-arch"]["container"]["args"][0]
+    assert {"name": "DOCKER_CONFIG", "value": "/registry-auth"} in templates["create-manifest"]["container"]["env"]
+
+
+def test_one_architecture_builds_with_buildah_and_pushes_latest():
+    text = render("build-workflow.j2", build_architectures=["amd64"])
+    workflow, templates, tasks = _build_pods(text)
+
+    assert "kaniko" not in text.lower()
+    assert tasks == ["test-backend", "build-backend"]
+    _check_buildah_step(templates["buildah-build"], "")
+    assert '"docker://${IMAGE}:latest"' in templates["buildah-build"]["container"]["args"][0]
