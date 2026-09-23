@@ -250,6 +250,13 @@ spec:
         args:
           - |
             set -e
+            # A node on Wi-Fi can lose DNS for seconds at a time; wait for the name
+            # before the first lookup that would fail the build.
+            for try in $(seq 1 30); do
+              getent hosts {{ container_registry }} >/dev/null && break
+              [ "$try" = 30 ] && { echo "{{ container_registry }} does not resolve after 60s"; exit 1; }
+              sleep 2
+            done
             IMAGE="{{ container_registry }}/thinkube/{{ project_name }}-{{ "{{" }}inputs.parameters.container_name{{ "}}" }}"
             TAG="{{ "{{" }}workflow.parameters.image_tag{{ "}}" }}"
             # --ulimit keeps RUN steps inside the pod's open-file limit; the
@@ -309,6 +316,13 @@ spec:
                   key: password
           args:
             - |
+              # A node on Wi-Fi can lose DNS for seconds at a time; wait for the name
+              # before the first lookup that would fail the build.
+              for try in $(seq 1 30); do
+                getent hosts git.{{ domain_name }} >/dev/null && break
+                [ "$try" = 30 ] && { echo "git.{{ domain_name }} does not resolve after 60s"; exit 1; }
+                sleep 2
+              done
               git clone --depth 1 "https://${GIT_USERNAME}:${GIT_PASSWORD}@git.{{ domain_name }}/{{ gitea_org | default('thinkube-deployments') }}/{{ project_name }}.git" /workspace
           resources:
             requests:
@@ -338,6 +352,13 @@ spec:
         args:
           - |
             set -e
+            # A node on Wi-Fi can lose DNS for seconds at a time; wait for the name
+            # before the first lookup that would fail the build.
+            for try in $(seq 1 30); do
+              getent hosts {{ container_registry }} >/dev/null && break
+              [ "$try" = 30 ] && { echo "{{ container_registry }} does not resolve after 60s"; exit 1; }
+              sleep 2
+            done
             IMAGE="{{ container_registry }}/thinkube/{{ project_name }}-{{ "{{" }}inputs.parameters.container_name{{ "}}" }}"
             TAG="{{ "{{" }}workflow.parameters.image_tag{{ "}}" }}-{{ "{{" }}inputs.parameters.target_arch{{ "}}" }}"
             # --ulimit keeps RUN steps inside the pod's open-file limit; the
@@ -390,6 +411,13 @@ spec:
         args:
           - |
             set -e
+            # A node on Wi-Fi can lose DNS for seconds at a time; wait for the name
+            # before the first lookup that would fail the build.
+            for try in $(seq 1 30); do
+              getent hosts {{ container_registry }} >/dev/null && break
+              [ "$try" = 30 ] && { echo "{{ container_registry }} does not resolve after 60s"; exit 1; }
+              sleep 2
+            done
             IMAGE="{{ container_registry }}/thinkube/{{ project_name }}-{{ "{{" }}inputs.parameters.container_name{{ "}}" }}"
             TAG="{{ "{{" }}workflow.parameters.image_tag{{ "}}" }}"
 

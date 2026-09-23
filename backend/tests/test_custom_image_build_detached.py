@@ -173,6 +173,7 @@ def test_the_workflow_builds_with_buildah_on_the_given_architecture():
     assert container["securityContext"]["capabilities"] == {"add": ["SYS_ADMIN"]}
     assert "privileged" not in container["securityContext"]
     script = container["args"][0]
+    assert script.index("getent hosts registry.thinkube.com") < script.index("buildah build")
     assert "--build-arg 'PY=3.12 slim'" in script
     assert "--cache-from registry.thinkube.com/library/jp-test/cache" in script
     assert "-f /context/Dockerfile -t registry.thinkube.com/library/jp-test:latest /context" in script

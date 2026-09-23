@@ -132,6 +132,8 @@ def _check_buildah_step(step, tag_suffix):
         "appArmorProfile": {"type": "Unconfined"},
     }
     script = container["args"][0]
+    assert "getent hosts registry.thinkube.com" in script
+    assert script.index("getent hosts") < script.index("buildah build")
     assert "--isolation chroot" in script and "--ulimit nofile=524288:524288" in script
     assert 'TAG="{{workflow.parameters.image_tag}}' + tag_suffix + '"' in script
     assert '--cache-from "${IMAGE}/cache"' in script
@@ -150,6 +152,8 @@ def test_every_architecture_builds_with_buildah_under_the_task_names_the_webhook
     _check_buildah_step(templates["buildah-build-on-arch"], "-{{inputs.parameters.target_arch}}")
     assert "--platform linux/{{inputs.parameters.target_arch}}" in templates["buildah-build-on-arch"]["container"]["args"][0]
     assert {"name": "DOCKER_CONFIG", "value": "/registry-auth"} in templates["create-manifest"]["container"]["env"]
+    clone = templates["buildah-build-on-arch"]["initContainers"][0]["args"][0]
+    assert clone.index("getent hosts git.thinkube.com") < clone.index("git clone")
 
 
 def test_one_architecture_builds_with_buildah_and_pushes_latest():

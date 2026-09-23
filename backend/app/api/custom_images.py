@@ -867,6 +867,10 @@ def _build_workflow(build: CustomImageBuild, registry_url: str, architecture: st
     # short names resolve to Harbor only.
     script = (
         "set -e\n"
+        # A node on Wi-Fi can lose DNS for seconds at a time; wait for the
+        # registry's name before the first lookup that would fail the build.
+        f"for try in $(seq 1 30); do getent hosts {shlex.quote(registry_host)} >/dev/null && break;"
+        f" [ \"$try\" = 30 ] && {{ echo {shlex.quote(registry_host + ' does not resolve after 60s')}; exit 1; }}; sleep 2; done\n"
         f"printf 'unqualified-search-registries = [\"%s\"]\\n' {shlex.quote(registry_host)} > /tmp/registries.conf\n"
         "buildah build --isolation chroot --storage-driver overlay"
         " --ulimit nofile=524288:524288"

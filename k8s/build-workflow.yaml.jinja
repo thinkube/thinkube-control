@@ -189,6 +189,13 @@ spec:
       args:
         - |
           set -e
+          # A node on Wi-Fi can lose DNS for seconds at a time; wait for the name
+          # before the first lookup that would fail the build.
+          for try in $(seq 1 30); do
+            getent hosts {{ container_registry }} >/dev/null && break
+            [ "$try" = 30 ] && { echo "{{ container_registry }} does not resolve after 60s"; exit 1; }
+            sleep 2
+          done
           IMAGE="{{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-{% raw %}{{inputs.parameters.component}}{% endraw %}"
           TAG="{% raw %}{{inputs.parameters.image-tag}}{% endraw %}"
           buildah build \
@@ -238,6 +245,13 @@ spec:
                 key: token
         args:
           - |
+            # A node on Wi-Fi can lose DNS for seconds at a time; wait for the name
+            # before the first lookup that would fail the build.
+            for try in $(seq 1 30); do
+              getent hosts git.{{ domain_name }} >/dev/null && break
+              [ "$try" = 30 ] && { echo "git.{{ domain_name }} does not resolve after 60s"; exit 1; }
+              sleep 2
+            done
             git clone --depth 1 "https://gitea_admin:${GITEA_TOKEN}@git.{{ domain_name }}/{{ gitea_org | default('thinkube-deployments') }}/{{ project_name }}.git" /workspace
         volumeMounts:
           - name: workspace
@@ -257,6 +271,13 @@ spec:
       args:
         - |
           set -e
+          # A node on Wi-Fi can lose DNS for seconds at a time; wait for the name
+          # before the first lookup that would fail the build.
+          for try in $(seq 1 30); do
+            getent hosts {{ container_registry }} >/dev/null && break
+            [ "$try" = 30 ] && { echo "{{ container_registry }} does not resolve after 60s"; exit 1; }
+            sleep 2
+          done
           IMAGE="{{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-{% raw %}{{inputs.parameters.component}}{% endraw %}"
           TAG="{% raw %}{{inputs.parameters.image-tag}}-{{inputs.parameters.target-arch}}{% endraw %}"
           buildah build \
@@ -298,6 +319,13 @@ spec:
       args:
         - |
           set -e
+          # A node on Wi-Fi can lose DNS for seconds at a time; wait for the name
+          # before the first lookup that would fail the build.
+          for try in $(seq 1 30); do
+            getent hosts {{ container_registry }} >/dev/null && break
+            [ "$try" = 30 ] && { echo "{{ container_registry }} does not resolve after 60s"; exit 1; }
+            sleep 2
+          done
           IMAGE="{{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-{% raw %}{{inputs.parameters.component}}{% endraw %}"
           TAG="{% raw %}{{inputs.parameters.image-tag}}{% endraw %}"
 
