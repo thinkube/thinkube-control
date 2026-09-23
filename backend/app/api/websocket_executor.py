@@ -19,6 +19,7 @@ from pathlib import Path
 from app.db.session import SessionLocal
 from app.models.deployments import TemplateDeployment, DeploymentLog
 from app.services.ansible_environment import ansible_env
+from app.services.scrub import Scrubber
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["ansible-stream"])
@@ -244,6 +245,7 @@ async def _execute_playbook(
         env = ansible_env.get_environment()
         if environment:
             env.update(environment)
+        scrub = Scrubber.for_run(extra_vars, env)
 
         # Send start message
         await websocket.send_json(
@@ -281,6 +283,7 @@ async def _execute_playbook(
             line_text = line.decode("utf-8", errors="replace").rstrip()
             if not line_text:
                 continue
+            line_text = scrub.clean(line_text)
 
             # Parse Ansible output
             if "TASK [" in line_text:

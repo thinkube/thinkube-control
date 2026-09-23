@@ -22,6 +22,7 @@ from app.db.session import SessionLocal
 from app.models.deployments import TemplateDeployment, DeploymentLog
 from app.models.container_images import ContainerImage, ImageMirrorJob
 from app.services.ansible_environment import ansible_env
+from app.services.scrub import Scrubber
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -127,6 +128,7 @@ async def stream_image_mirror_deployment(websocket: WebSocket, deployment_id: st
 
             # Get environment for optional context (uses thinkube-platform roles)
             env = ansible_env.get_environment(context="optional")
+            scrub = Scrubber.for_run(extra_vars, env)
 
             # Execute playbook and stream output
             process = await asyncio.create_subprocess_exec(
@@ -154,7 +156,7 @@ async def stream_image_mirror_deployment(websocket: WebSocket, deployment_id: st
                 if not line:
                     break
 
-                line_text = line.decode('utf-8', errors='ignore')
+                line_text = scrub.clean(line.decode('utf-8', errors='ignore'))
                 output_lines.append(line_text)
 
                 # Parse task names

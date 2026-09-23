@@ -21,6 +21,7 @@ from app.services import detached
 from app.services.ansible_environment import ansible_env
 from app.services.network_discovery import network_discovery
 from app.services.node_manager import node_manager
+from app.services.scrub import Scrubber
 
 logger = logging.getLogger(__name__)
 # Every node endpoint reads or changes the cluster and its machines: all need a login.
@@ -201,6 +202,7 @@ async def _stream_playbook(
             cmd.extend(["--limit", limit])
 
         env = ansible_env.get_environment(context="optional")
+        scrub = Scrubber.for_run(extra_vars, env)
 
         logger.info(f"Running playbook: {' '.join(cmd)}")
         process = await asyncio.create_subprocess_exec(
@@ -222,6 +224,7 @@ async def _stream_playbook(
             line_text = line.decode("utf-8", errors="replace").rstrip()
             if not line_text:
                 continue
+            line_text = scrub.clean(line_text)
 
             if "TASK [" in line_text:
                 in_failed_block = False
