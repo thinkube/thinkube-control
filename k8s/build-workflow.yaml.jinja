@@ -195,7 +195,6 @@ spec:
             --isolation chroot --storage-driver overlay \
             --ulimit nofile=524288:524288 \
             --layers --cache-from "${IMAGE}/cache" --cache-to "${IMAGE}/cache" \
-            --retry 3 \
             --build-arg REGISTRY={{ container_registry }} \
             -f "/workspace/{% raw %}{{inputs.parameters.dockerfile}}{% endraw %}" -t "${IMAGE}:${TAG}" \
             "/workspace/{% raw %}{{inputs.parameters.context}}{% endraw %}"
@@ -264,7 +263,7 @@ spec:
             --isolation chroot --storage-driver overlay \
             --ulimit nofile=524288:524288 \
             --layers --cache-from "${IMAGE}/cache" --cache-to "${IMAGE}/cache" \
-            --retry 3 --platform "linux/{% raw %}{{inputs.parameters.target-arch}}{% endraw %}" \
+            --platform "linux/{% raw %}{{inputs.parameters.target-arch}}{% endraw %}" \
             --build-arg REGISTRY={{ container_registry }} \
             -f "/workspace/{% raw %}{{inputs.parameters.dockerfile}}{% endraw %}" -t "${IMAGE}:${TAG}" \
             "/workspace/{% raw %}{{inputs.parameters.context}}{% endraw %}"

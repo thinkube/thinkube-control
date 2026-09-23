@@ -253,12 +253,13 @@ spec:
             IMAGE="{{ container_registry }}/thinkube/{{ project_name }}-{{ "{{" }}inputs.parameters.container_name{{ "}}" }}"
             TAG="{{ "{{" }}workflow.parameters.image_tag{{ "}}" }}"
             # --ulimit keeps RUN steps inside the pod's open-file limit; the
-            # layer cache lives in the registry, beside the image.
+            # layer cache lives in the registry, beside the image. Only the push
+            # retries: a cache miss answers "not found", and retrying it would
+            # hold every changed step for seconds.
             buildah build \
               --isolation chroot --storage-driver overlay \
               --ulimit nofile=524288:524288 \
               --layers --cache-from "${IMAGE}/cache" --cache-to "${IMAGE}/cache" \
-              --retry 3 \
               --build-arg CONTAINER_REGISTRY={{ container_registry }} \
               -f "/workspace/{{ "{{" }}inputs.parameters.dockerfile_path{{ "}}" }}" \
               -t "${IMAGE}:${TAG}" \
@@ -340,12 +341,14 @@ spec:
             IMAGE="{{ container_registry }}/thinkube/{{ project_name }}-{{ "{{" }}inputs.parameters.container_name{{ "}}" }}"
             TAG="{{ "{{" }}workflow.parameters.image_tag{{ "}}" }}-{{ "{{" }}inputs.parameters.target_arch{{ "}}" }}"
             # --ulimit keeps RUN steps inside the pod's open-file limit; the
-            # layer cache lives in the registry, beside the image.
+            # layer cache lives in the registry, beside the image. Only the push
+            # retries: a cache miss answers "not found", and retrying it would
+            # hold every changed step for seconds.
             buildah build \
               --isolation chroot --storage-driver overlay \
               --ulimit nofile=524288:524288 \
               --layers --cache-from "${IMAGE}/cache" --cache-to "${IMAGE}/cache" \
-              --retry 3 --platform linux/{{ "{{" }}inputs.parameters.target_arch{{ "}}" }} \
+              --platform linux/{{ "{{" }}inputs.parameters.target_arch{{ "}}" }} \
               --build-arg CONTAINER_REGISTRY={{ container_registry }} \
               -f "/workspace/{{ "{{" }}inputs.parameters.dockerfile_path{{ "}}" }}" \
               -t "${IMAGE}:${TAG}" \

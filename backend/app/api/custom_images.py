@@ -865,7 +865,7 @@ def _build_workflow(build: CustomImageBuild, registry_url: str, architecture: st
         "buildah build --isolation chroot --storage-driver overlay"
         " --ulimit nofile=524288:524288"
         f" --layers --cache-from {shlex.quote(repository + '/cache')} --cache-to {shlex.quote(repository + '/cache')}"
-        f" --retry 3{arg_flags}"
+        f"{arg_flags}"
         f" -f {shlex.quote('/context/' + dockerfile)} -t {shlex.quote(registry_url)} /context\n"
         f"buildah push --storage-driver overlay --retry 3 {shlex.quote(registry_url)}\n"
     )
@@ -938,7 +938,10 @@ def _workflow_state(name: str) -> tuple[str, str, str]:
     pods = core.list_namespaced_pod(BUILD_NAMESPACE, label_selector=f"workflows.argoproj.io/workflow={name}").items
     log = ""
     if pods and pods[0].status.phase not in ("Pending",):
-        log = core.read_namespaced_pod_log(pods[0].metadata.name, BUILD_NAMESPACE, container="main")
+        response = core.read_namespaced_pod_log(
+            pods[0].metadata.name, BUILD_NAMESPACE, container="main", _preload_content=False
+        )
+        log = response.data.decode("utf-8", errors="replace")
     return status.get("phase") or "Pending", status.get("message") or "", log
 
 
