@@ -14,19 +14,19 @@ WORKDIR /app
 # See: thinkube/ansible/.../base-images/python-base.Containerfile.j2
 
 # Install additional dependencies not in the base image
-COPY requirements.txt /app/requirements.txt
+COPY backend/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 # Copy and install fastapi-mcp-extended package
-COPY fastapi-mcp-extended /app/fastapi-mcp-extended
+COPY backend/fastapi-mcp-extended /app/fastapi-mcp-extended
 RUN pip install --no-cache-dir /app/fastapi-mcp-extended
 
 # Copy application code
-COPY app /app/app
-COPY start.sh /app/start.sh
+COPY backend/app /app/app
+COPY backend/start.sh /app/start.sh
 
 # Copy template files and Python manifest generators
-COPY ../templates /app/templates
+COPY templates /app/templates
 
 # Make startup script executable
 RUN chmod +x /app/start.sh

@@ -75,7 +75,7 @@ spec:
           - name: dockerfile
             value: "backend/Containerfile"
           - name: context
-            value: "backend"
+            value: "."
 
       - name: build-frontend-{{ arch }}
         template: build-on-arch
@@ -148,7 +148,7 @@ spec:
             value: "llm-proxy"
 {% else %}
       # Single-arch builds on control plane
-{% for component, context in [("backend", "backend"), ("frontend", "frontend"), ("llm-proxy", "proxy")] %}
+{% for component, dockerfile, context in [("backend", "backend/Containerfile", "."), ("frontend", "frontend/Containerfile", "frontend"), ("llm-proxy", "proxy/Containerfile", "proxy")] %}
       - name: build-{{ component }}
         template: build
         arguments:
@@ -157,6 +157,8 @@ spec:
             value: "{% raw %}{{workflow.uid}}{% endraw %}"
           - name: component
             value: "{{ component }}"
+          - name: dockerfile
+            value: "{{ dockerfile }}"
           - name: context
             value: "{{ context }}"
 {% endfor %}
@@ -170,6 +172,7 @@ spec:
       parameters:
       - name: image-tag
       - name: component
+      - name: dockerfile
       - name: context
     container:
       image: {{ container_registry }}/library/buildah:v1.43.4
@@ -188,14 +191,14 @@ spec:
           set -e
           IMAGE="{{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-{% raw %}{{inputs.parameters.component}}{% endraw %}"
           TAG="{% raw %}{{inputs.parameters.image-tag}}{% endraw %}"
-          CONTEXT="/workspace/{% raw %}{{inputs.parameters.context}}{% endraw %}"
           buildah build \
             --isolation chroot --storage-driver overlay \
             --ulimit nofile=524288:524288 \
             --layers --cache-from "${IMAGE}/cache" --cache-to "${IMAGE}/cache" \
             --retry 3 \
             --build-arg REGISTRY={{ container_registry }} \
-            -f "${CONTEXT}/Containerfile" -t "${IMAGE}:${TAG}" "${CONTEXT}"
+            -f "/workspace/{% raw %}{{inputs.parameters.dockerfile}}{% endraw %}" -t "${IMAGE}:${TAG}" \
+            "/workspace/{% raw %}{{inputs.parameters.context}}{% endraw %}"
           buildah push --storage-driver overlay --retry 3 "${IMAGE}:${TAG}"
       volumeMounts:
       - name: docker-config
