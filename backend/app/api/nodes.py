@@ -21,15 +21,10 @@ from app.services import detached
 from app.services.ansible_environment import ansible_env
 from app.services.network_discovery import network_discovery
 from app.services.node_manager import node_manager
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/nodes", tags=["nodes"])
 
-HARBOR_IMAGES_DIR = Path(
-    "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
-    "40_thinkube/core/harbor-images"
-)
 GPU_OPERATOR_DIR = Path(
     "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
     "40_thinkube/core/infrastructure/gpu_operator"
@@ -283,55 +278,6 @@ async def _stream_playbook(
             pass
 
 
-async def _run_image_rebuild(
-    progress: "AddNodesJob",
-    extra_vars: Dict[str, Any],
-    start_step: int,
-    new_arch: Optional[str] = None,
-) -> bool:
-    """Mirror and build images for all cluster architectures.
-
-    Always runs the mirror/build playbooks (idempotent). Only rebuilds
-    Jupyter venvs when new_arch is set (genuinely new architecture).
-    Caller handles cordon/uncordon.
-    """
-    rebuild_playbooks = [
-        (HARBOR_IMAGES_DIR / "13_mirror_public_images.yaml", "Mirror public images (multi-arch)"),
-        (HARBOR_IMAGES_DIR / "14_build_base_images.yaml", "Rebuild base images (multi-arch)"),
-        (HARBOR_IMAGES_DIR / "15_build_jupyter_images.yaml", "Rebuild Jupyter image (multi-arch)"),
-    ]
-
-    step = start_step
-    for playbook_path, description in rebuild_playbooks:
-        progress.send(
-            {"type": "ok", "message": f"Starting: {description}"}
-        )
-        ok = await _stream_playbook(
-            progress=progress,
-            playbook_path=playbook_path,
-            extra_vars=extra_vars,
-            step_name=description,
-            step_number=step,
-        )
-        if not ok:
-            progress.send(
-                {"type": "error", "message": f"Failed: {description}"}
-            )
-            return False
-        progress.send(
-            {"type": "ok", "message": f"Completed: {description}"}
-        )
-        step += 1
-
-    if new_arch:
-        progress.send(
-            {"type": "task", "task_name": f"Rebuild Jupyter venvs for {new_arch}", "task_number": step}
-        )
-        await _rebuild_venvs_for_arch(progress, new_arch, extra_vars, step)
-
-    return True
-
-
 async def _run_gpu_setup(
     progress: "AddNodesJob",
     extra_vars: Dict[str, Any],
@@ -385,95 +331,6 @@ async def _run_gpu_setup(
     )
 
     return True
-
-
-async def _rebuild_venvs_for_arch(
-    progress: "AddNodesJob",
-    new_arch: str,
-    extra_vars: Dict[str, Any],
-    step: int,
-) -> bool:
-    """Rebuild all successful venvs for a newly added architecture."""
-    from app.db.session import SessionLocal
-    from app.models.jupyter_venvs import JupyterVenv
-
-    db = SessionLocal()()
-    try:
-        venvs = db.query(JupyterVenv).filter(
-            JupyterVenv.status == "success",
-            JupyterVenv.is_template == False,
-        ).all()
-
-        if not venvs:
-            progress.send(
-                {"type": "ok", "message": "No existing venvs to rebuild"}
-            )
-            return True
-
-        needs_rebuild = []
-        for v in venvs:
-            built = v.architectures_built or []
-            if new_arch not in built:
-                needs_rebuild.append(v)
-
-        if not needs_rebuild:
-            progress.send(
-                {"type": "ok", "message": f"All venvs already built for {new_arch}"}
-            )
-            return True
-
-        progress.send(
-            {"type": "ok", "message": f"Rebuilding {len(needs_rebuild)} venv(s) for {new_arch}: {', '.join(v.name for v in needs_rebuild)}"}
-        )
-
-        import json as _json
-        playbook_path = Path("/home/thinkube/thinkube-control/ansible/playbooks/build_venv.yaml")
-        all_ok = True
-
-        for v in needs_rebuild:
-            venv_vars = {
-                **extra_vars,
-                "venv_name": v.name,
-                "packages": _json.dumps(v.packages),
-                "target_architecture": new_arch,
-                "kubeconfig": os.environ.get("KUBECONFIG", "/home/thinkube/.kube/config"),
-                "harbor_registry": f"registry.{settings.DOMAIN_NAME}",
-            }
-
-            ok = await _stream_playbook(
-                progress=progress,
-                playbook_path=playbook_path,
-                extra_vars=venv_vars,
-                step_name=f"Build venv '{v.name}' for {new_arch}",
-                step_number=step,
-            )
-
-            if ok:
-                built = list(v.architectures_built or [])
-                if new_arch not in built:
-                    built.append(new_arch)
-                    built.sort()
-                v.architectures_built = built
-                db.commit()
-                progress.send(
-                    {"type": "ok", "message": f"Venv '{v.name}' built for {new_arch}"}
-                )
-            else:
-                progress.send(
-                    {"type": "error", "message": f"Venv '{v.name}' failed to build for {new_arch} — continuing with others"}
-                )
-                all_ok = False
-
-        return all_ok
-
-    except Exception as e:
-        logger.error(f"Venv rebuild error: {e}", exc_info=True)
-        progress.send(
-            {"type": "error", "message": f"Venv rebuild error: {e}"}
-        )
-        return False
-    finally:
-        db.close()
 
 
 @router.get("/list")

@@ -136,6 +136,11 @@ class BuildVenvRequest(BaseModel):
     force: bool = False  # Force rebuild even if exists
 
 
+class ArchitectureBuildRequest(BaseModel):
+    """Request to build the custom venvs for one architecture"""
+    architecture: str
+
+
 class BuildResponse(BaseModel):
     """Response for build initiation"""
     build_id: str
@@ -362,6 +367,56 @@ async def build_jupyter_venv(
         poll_url=f"/jupyter-venvs/{venv.id}",
         warning="The build takes minutes and shows no output while packages install. Poll the status until it is success or failed."
     )
+
+
+@router.post("/build-for-architecture", operation_id="build_venvs_for_architecture")
+async def build_venvs_for_architecture(
+    request: ArchitectureBuildRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_dual_auth)
+):
+    """Build every custom venv that is not yet built for one architecture; answers at once.
+
+    A custom venv is built for the architectures the cluster has when it is
+    built. A node of a new architecture that joins later has none of them
+    until this runs; tk_images rebuild calls it for each architecture once
+    the images exist and the new nodes are schedulable. A venv that is
+    already built for the architecture is left alone, and built-in venvs,
+    which come from the venvs release, are never built here. Each venv
+    building says building until it succeeds or fails; poll get_jupyter_venv.
+    """
+    from app.services.node_manager import node_manager
+
+    architecture = request.architecture
+    cluster = node_manager.get_cluster_architectures()
+    if architecture not in cluster:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No node of architecture {architecture!r} in the cluster; it has {', '.join(cluster)}",
+        )
+
+    venvs = db.query(JupyterVenv).filter(
+        JupyterVenv.status == "success",
+        JupyterVenv.is_template == False,  # noqa: E712  SQL comparison
+    ).all()
+    building = [v for v in venvs if architecture not in (v.architectures_built or [])]
+    for venv in building:
+        venv.status = "building"
+        venv.output = None
+        venv.started_at = datetime.now(timezone.utc)
+        venv.completed_at = None
+    db.commit()
+
+    # The task name is the one a full build uses, so the reconciliation that
+    # marks orphaned builds failed covers these too.
+    for venv in building:
+        detached.start(f"venv-build:{venv.id}", _execute_venv_architecture_build(str(venv.id), architecture))
+
+    return {
+        "architecture": architecture,
+        "building": [v.name for v in building],
+        "already_built": sorted(v.name for v in venvs if v not in building),
+    }
 
 
 @router.get("/{venv_id}/logs", operation_id="get_venv_build_logs")
@@ -680,6 +735,50 @@ async def _run_ansible_build(venv) -> Dict[str, Any]:
         "success": False,
         "error": f"Build failed with return code {return_code}. Log: {log_file}",
     }
+
+
+async def _execute_venv_architecture_build(venv_id: str, architecture: str) -> None:
+    """Build one custom venv for one more architecture and record it.
+
+    The venv's builds for its other architectures stay in place and usable;
+    only the record's status follows this build.
+    """
+    db = SessionLocal()()
+    try:
+        venv = db.query(JupyterVenv).filter_by(id=venv_id).first()
+        if not venv:
+            logger.error(f"Venv {venv_id} not found")
+            return
+
+        extra_vars = {
+            "venv_name": venv.name,
+            "packages": json.dumps(venv.packages),
+            "is_template": False,
+            "target_architecture": architecture,
+        }
+        try:
+            return_code, output_lines, log_file = await _run_venv_playbook(venv, "build_venv.yaml", extra_vars)
+            if return_code == 0 and architecture in built_architectures(output_lines):
+                venv.architectures_built = sorted(set(venv.architectures_built or []) | {architecture})
+                venv.status = "success"
+                venv.output = f"Built for {architecture}. Log: {log_file}"
+                logger.info(f"Venv {venv.name} built for {architecture}")
+            else:
+                venv.status = "failed"
+                venv.output = (
+                    f"Build for {architecture} failed with return code {return_code}; "
+                    f"its builds for {', '.join(venv.architectures_built or [])} are unchanged. Log: {log_file}"
+                )
+                logger.error(f"Venv {venv.name} build for {architecture} failed: {log_file}")
+        except Exception as e:
+            logger.error(f"Venv {venv.name} build for {architecture} error: {e}")
+            venv.status = "failed"
+            venv.output = f"Build for {architecture} error: {e}"
+        finally:
+            venv.completed_at = datetime.now(timezone.utc)
+            db.commit()
+    finally:
+        db.close()
 
 
 async def _execute_venv_delete(venv_id: str) -> None:

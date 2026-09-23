@@ -252,3 +252,114 @@ def test_a_removal_orphaned_by_a_restart_is_marked_delete_failed():
 
     assert mark_orphaned_builds(DB(), still_running=lambda vid, status: False) == 1
     assert removing.status == "delete_failed" and "delete it again" in removing.output
+
+
+class FakeVenvQuery:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def filter(self, *args):
+        return self
+
+    def filter_by(self, **kwargs):
+        return self
+
+    def all(self):
+        return self.rows
+
+    def first(self):
+        return self.rows[0]
+
+
+class FakeVenvDB:
+    def __init__(self, *rows):
+        self.rows = list(rows)
+        self.commits = 0
+
+    def query(self, model):
+        return FakeVenvQuery(self.rows)
+
+    def commit(self):
+        self.commits += 1
+
+    def close(self):
+        pass
+
+
+def custom_venv(name, archs):
+    return SimpleNamespace(id=uuid.uuid4(), name=name, packages=["numpy"], status="success", is_template=False,
+                           architectures_built=list(archs), output=None, started_at=None, completed_at=None)
+
+
+def test_only_custom_venvs_missing_the_architecture_are_built(monkeypatch):
+    import app.services.node_manager as nm
+    monkeypatch.setattr(nm.node_manager, "get_cluster_architectures", lambda: ["amd64", "arm64", "riscv64"])
+    old = custom_venv("data-tools", ["amd64", "arm64"])
+    new = custom_venv("vision", ["amd64"])
+    started = []
+
+    async def fake_build(venv_id, architecture):
+        started.append((venv_id, architecture))
+
+    monkeypatch.setattr(jv, "_execute_venv_architecture_build", fake_build)
+
+    async def scenario():
+        answer = await jv.build_venvs_for_architecture(jv.ArchitectureBuildRequest(architecture="arm64"),
+                                                       db=FakeVenvDB(old, new), current_user={})
+        assert detached.running(f"venv-build:{new.id}")
+        await asyncio.sleep(0)
+        return answer
+
+    answer = asyncio.run(scenario())
+    assert answer == {"architecture": "arm64", "building": ["vision"], "already_built": ["data-tools"]}
+    assert started == [(str(new.id), "arm64")]
+    assert new.status == "building" and old.status == "success"
+
+
+def test_an_architecture_the_cluster_lacks_is_refused(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+    import app.services.node_manager as nm
+    monkeypatch.setattr(nm.node_manager, "get_cluster_architectures", lambda: ["amd64", "arm64"])
+
+    async def scenario():
+        with pytest.raises(HTTPException) as refused:
+            await jv.build_venvs_for_architecture(jv.ArchitectureBuildRequest(architecture="riscv64"),
+                                                  db=FakeVenvDB(), current_user={})
+        assert refused.value.status_code == 400
+        assert "riscv64" in refused.value.detail
+
+    asyncio.run(scenario())
+
+
+def _run_arch_build(monkeypatch, venv, return_code, lines):
+    received = {}
+
+    async def fake_playbook(v, playbook, extra_vars):
+        received.update(extra_vars, playbook=playbook)
+        return return_code, lines, "/tmp/thinkube-venvs/x/build-1.log"
+
+    monkeypatch.setattr(jv, "_run_venv_playbook", fake_playbook)
+    monkeypatch.setattr(jv, "SessionLocal", lambda: (lambda: FakeVenvDB(venv)))
+    asyncio.run(jv._execute_venv_architecture_build(str(venv.id), "arm64"))
+    return received
+
+
+def test_a_build_for_one_architecture_adds_it(monkeypatch):
+    venv = custom_venv("vision", ["amd64"])
+    venv.status = "building"
+    received = _run_arch_build(monkeypatch, venv, 0, ["ok: Architecture marker written: arm64"])
+
+    assert received["target_architecture"] == "arm64" and received["is_template"] is False
+    assert venv.status == "success"
+    assert venv.architectures_built == ["amd64", "arm64"]
+
+
+def test_a_failed_build_for_one_architecture_says_which_and_keeps_the_others(monkeypatch):
+    venv = custom_venv("vision", ["amd64"])
+    venv.status = "building"
+    _run_arch_build(monkeypatch, venv, 2, ["fatal: no node"])
+
+    assert venv.status == "failed"
+    assert venv.architectures_built == ["amd64"]
+    assert "Build for arm64 failed" in venv.output and "amd64 are unchanged" in venv.output
