@@ -1,9 +1,10 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
 # SPDX-License-Identifier: Apache-2.0
 
-# CI/CD Workflow for thinkube-control with Test-Driven Development
-# This workflow is triggered by Gitea webhooks and builds container images
-# Tests must pass before builds proceed
+# Build workflow for thinkube-control
+# Triggered by Gitea webhooks. It builds the backend, frontend and LLM proxy
+# images and pushes them to Harbor. It runs no tests: the backend tests run
+# with backend/run_tests.sh.
 #
 # Build Tool: Kaniko executor from Google (gcr.io/kaniko-project/executor:latest)
 # Security: Runs as non-root user, no special privileges required
