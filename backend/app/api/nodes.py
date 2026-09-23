@@ -71,13 +71,6 @@ def _read_build_token() -> set:
     return archs
 
 
-def _write_build_token(architectures: set) -> None:
-    """Write completed architectures to the build token file."""
-    platforms = ",".join(f"linux/{a}" for a in sorted(architectures))
-    IMAGE_BUILD_TOKEN.parent.mkdir(parents=True, exist_ok=True)
-    IMAGE_BUILD_TOKEN.write_text(platforms + "\n")
-
-
 def _find_inventory_group_hosts(inventory: dict, group_name: str) -> List[str]:
     """Find hosts for a named group anywhere in the inventory tree."""
     results = []
