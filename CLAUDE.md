@@ -122,7 +122,8 @@ This repo is a Copier template (`copier.yaml`). Variables like `domain_name`, `n
 ## Key Patterns
 
 - **Single database**: Main app DB (`thinkube_control`) with SQLAlchemy ORM. CI/CD data is queried directly from Kubernetes (Argo Workflows).
-- **WebSocket execution**: Template deployments and image mirroring stream output via WebSocket to the frontend (`websocket_executor.py`). Frontend components `PlaybookExecutor` and `BuildExecutor` consume these streams.
+- **WebSocket execution**: Template deployments and image mirroring stream output via WebSocket to the frontend (`websocket_executor.py`, `websocket_harbor.py`); `PlaybookExecutor` consumes these streams.
+- **Detached runs**: Custom image builds, venv builds and adding nodes run on the server as tasks started with `app/services/detached.py`; the request answers at once with an id, and a closed tab does not end the run. The panels poll: `BuildExecutor` reads the image record and its build log, the kernels page reads the venv status, and `PlaybookExecutor.followRun` reads the events of an add-nodes job (`GET /nodes/add-batch/{job_id}`).
 - **Background tasks**: Lifespan-managed background tasks for health checks (every service, periodic) and service discovery (every 5 minutes).
 - **MLflow injection**: All deployed applications automatically receive MLflow auth credentials as environment variables.
 - **Base images**: Backend uses `python-base:3.12-slim` and frontend uses `node-base:22-alpine` from Harbor registry. Dependencies are pre-installed in base images, not in the app Dockerfiles.

@@ -4,26 +4,31 @@
 """API endpoints for custom Docker image management"""
 
 import os
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from uuid import UUID, uuid4
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from fastapi.responses import JSONResponse, FileResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.core.security import get_current_active_user
 from app.core.api_tokens import get_current_user_dual_auth
-from app.db.session import get_db
+from app.db.session import get_db, SessionLocal
 from app.models.custom_images import CustomImageBuild
+from app.services import detached
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/custom-images", tags=["custom-images"])
+
+# Each build writes one log here, under the image's name.
+BUILD_LOG_DIR = Path("/tmp/thinkube-builds")
 
 
 # Base Image Registry with Templates - Updated for Ubuntu 24.04 / Python 3.12
@@ -141,7 +146,7 @@ class BuildResponse(BaseModel):
     build_id: str
     status: str
     message: str
-    websocket_url: str
+    poll_url: str
 
 
 # API Endpoints
@@ -503,11 +508,16 @@ def get_custom_image(
 async def build_custom_image(
     image_id: UUID,
     request: BuildImageRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user_dual_auth)
 ):
-    """Start building a custom Docker image"""
+    """Start building a custom image and return at once with the id to poll.
+
+    The build runs on the server, detached from this call: podman builds the
+    image, then pushes it to Harbor. Poll get_custom_image until status is
+    success or failed. Its output field names the build log, which
+    download_build_log returns while the build runs and after it ends.
+    """
     build = db.query(CustomImageBuild).filter_by(id=image_id).first()
 
     if not build:
@@ -524,21 +534,22 @@ async def build_custom_image(
             build.build_config = {}
         build.build_config["build_args"] = request.build_args
 
-    # Reset status for new build
-    build.status = "pending"
+    build.status = "building"
     build.output = None
-    build.started_at = None
+    build.started_at = datetime.utcnow()
     build.completed_at = None
     db.commit()
 
-    # Don't start build here - WebSocket will handle execution (like templates)
-    # background_tasks.add_task(dockerfile_executor.start_build, str(build.id))
+    # Detached from this request: an in-process caller (the MCP bridge) would
+    # otherwise wait for the whole build before it got the answer, and the
+    # panel's tab can close without ending the build.
+    detached.start(f"image-build:{build.id}", _execute_custom_image_build(str(build.id)))
 
     return BuildResponse(
         build_id=str(build.id),
-        status="pending",
-        message="Build queued for execution",
-        websocket_url=f"/ws/custom-images/build/{build.id}"
+        status="building",
+        message="Build started; poll get_custom_image until status is success or failed",
+        poll_url=f"/custom-images/{build.id}",
     )
 
 
@@ -608,7 +619,7 @@ async def get_build_logs(
 
 
     # Find log files
-    log_dir = Path(f"/tmp/thinkube-dockerfiles/{build.name}")
+    log_dir = BUILD_LOG_DIR / build.name
     logs = []
 
     if log_dir.exists():
@@ -643,8 +654,7 @@ async def download_build_log(
     if ".." in filename or "/" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    # Updated to use the correct log directory - EXACTLY like templates
-    log_file = Path(f"/tmp/thinkube-builds/{build.name}/{filename}")
+    log_file = BUILD_LOG_DIR / build.name / filename
     if not log_file.exists():
         raise HTTPException(status_code=404, detail="Log file not found")
 
@@ -760,7 +770,7 @@ async def delete_custom_image(
         shutil.rmtree(image_dir)
 
     # Delete log directory
-    log_dir = Path(f"/tmp/thinkube-dockerfiles/{build.name}")
+    log_dir = BUILD_LOG_DIR / build.name
     if log_dir.exists():
         import shutil
         shutil.rmtree(log_dir)
@@ -770,3 +780,176 @@ async def delete_custom_image(
     db.commit()
 
     return {"message": f"Image '{build.name}' deleted successfully"}
+
+
+async def _execute_custom_image_build(build_id: str) -> None:
+    """Build, push and record one custom image, detached from the request that started it."""
+    db = SessionLocal()()
+    try:
+        build = db.query(CustomImageBuild).filter_by(id=build_id).first()
+        if not build:
+            logger.error(f"Custom image build {build_id} not found")
+            return
+
+        try:
+            result = await _run_image_build(build, db)
+            if result["return_code"] == 0:
+                build.status = "success"
+                build.registry_url = result["registry_url"]
+
+                # A base image gets a minimal template for images that extend it.
+                # registry.<domain>/library/jp-cmxela:latest -> library/jp-cmxela:latest
+                if build.is_base:
+                    image_ref = build.registry_url.split('/', 1)[1]
+                    build.template = f"""FROM {image_ref}
+
+# Extended from {build.name}
+# Add your customizations here
+
+"""
+                logger.info(f"Custom image {build.name} built and pushed: {build.registry_url}")
+            else:
+                build.status = "failed"
+                logger.error(f"Custom image {build.name} failed with return code {result['return_code']}")
+        except Exception as e:
+            logger.error(f"Custom image build error for {build.name}: {e}", exc_info=True)
+            build.status = "failed"
+            build.output = f"Build error: {e}"
+        finally:
+            build.completed_at = datetime.utcnow()
+            db.commit()
+    finally:
+        db.close()
+
+
+async def _run_image_build(build: CustomImageBuild, db: Session) -> Dict[str, Any]:
+    """Run podman build, login and push for ``build``, writing every line to its log.
+
+    The log's path goes into ``build.output`` before the build starts, so a
+    caller polling the record can read the log while the build runs.
+    """
+    domain = settings.DOMAIN_NAME
+    # Use 'library' project which exists by default in Harbor
+    registry_url = f"registry.{domain}/library/{build.name}:latest"
+
+    app_log_dir = BUILD_LOG_DIR / build.name
+    app_log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = app_log_dir / f"build-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+
+    build.output = str(log_path)
+    db.commit()
+
+    dockerfile_path = Path(build.dockerfile_path)
+    cmd = [
+        "podman", "build",
+        "-t", registry_url,
+        "-f", str(dockerfile_path),
+        str(dockerfile_path.parent),
+    ]
+    if build.build_config and "build_args" in build.build_config:
+        for key, value in build.build_config["build_args"].items():
+            cmd.extend(["--build-arg", f"{key}={value}"])
+
+    with open(log_path, "w") as log:
+        log.write("=== THINKUBE BUILD LOG ===\n")
+        log.write(f"Build ID: {build.id}\n")
+        log.write(f"Image: {build.name}\n")
+        log.write(f"Started at: {datetime.now()}\n")
+        log.write(f"Command: {' '.join(cmd)}\n")
+        log.write("\n=== BUILD OUTPUT ===\n")
+        log.flush()
+
+        if not dockerfile_path.exists():
+            log.write(f"\n=== BUILD FAILED ===\nDockerfile not found: {dockerfile_path}\n")
+            return {"return_code": 1}
+
+        logger.info(f"Executing podman build: {' '.join(cmd)}")
+        return_code = await _run_logged(cmd, log, env={**os.environ, "BUILDAH_FORMAT": "docker"})
+        if return_code != 0:
+            log.write(f"\n\n=== BUILD FAILED ===\nReturn code: {return_code}\nFailed at: {datetime.now()}\n")
+            return {"return_code": return_code}
+
+        registry_host = f"registry.{domain}"
+        username = os.environ.get("HARBOR_USERNAME", "admin")
+        password = os.environ.get("HARBOR_PASSWORD", os.environ.get("ADMIN_PASSWORD", ""))
+
+        log.write(f"\n\nLogging into registry: {registry_host}\n")
+        log.flush()
+        login_return = await _run_logged(
+            ["podman", "login", registry_host, "-u", username, "-p", password],
+            log,
+            # A line that could carry the password is not written.
+            keep=lambda line: "password" not in line.lower(),
+        )
+        if login_return != 0:
+            log.write(f"\n\n=== LOGIN FAILED ===\nReturn code: {login_return}\n")
+            return {"return_code": login_return}
+        log.write("Registry login successful\n")
+
+        logger.info(f"Pushing image: {registry_url}")
+        log.write(f"\nPushing image to registry: {registry_url}\n")
+        log.flush()
+        push_return = await _run_logged(["podman", "push", registry_url], log)
+        if push_return != 0:
+            log.write(f"\nPush failed with return code: {push_return}\n")
+            return {"return_code": push_return}
+
+        log.write("\n\n=== BUILD COMPLETED SUCCESSFULLY ===\n")
+        log.write(f"Image available at: {registry_url}\n")
+        log.write(f"Finished at: {datetime.now()}\n")
+        return {"return_code": 0, "registry_url": registry_url}
+
+
+async def _run_logged(cmd: List[str], log, env: Optional[Dict[str, str]] = None, keep=None) -> int:
+    """Run ``cmd``, copy its output to ``log`` line by line, and return its exit code."""
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        env=env,
+        limit=1024 * 1024,
+    )
+    try:
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+            text = line.decode("utf-8", errors="ignore").rstrip()
+            if keep is None or keep(text):
+                log.write(f"{text}\n")
+                log.flush()
+        return await process.wait()
+    finally:
+        if process.returncode is None:
+            process.terminate()
+            await process.wait()
+
+
+def mark_orphaned_image_builds(db: Session = None, still_running=None) -> int:
+    """A custom image marked building with no build task behind it is marked failed.
+
+    The build runs as a task inside the backend process and dies with it,
+    while the record keeps saying building. At startup no task exists, so
+    every such record is orphaned. Later, ``still_running(build_id)`` says
+    whether this process holds the build; a build that began on a pod that
+    was replaced mid-way is caught that way.
+    """
+    close_db = False
+    if db is None:
+        db = SessionLocal()()
+        close_db = True
+    try:
+        stuck = db.query(CustomImageBuild).filter(CustomImageBuild.status == "building").all()
+        if still_running is not None:
+            stuck = [b for b in stuck if not still_running(str(b.id))]
+        for build in stuck:
+            build.status = "failed"
+            build.output = "thinkube-control restarted while this image was building; start the build again"
+            build.completed_at = datetime.utcnow()
+            logger.warning(f"custom image {build.name} was building when thinkube-control stopped; marked failed")
+        if stuck:
+            db.commit()
+        return len(stuck)
+    finally:
+        if close_db:
+            db.close()

@@ -11,11 +11,13 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, WebSocket
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 import yaml
 
+from app.core.api_tokens import get_current_user_dual_auth
+from app.services import detached
 from app.services.ansible_environment import ansible_env
 from app.services.network_discovery import network_discovery
 from app.services.node_manager import node_manager
@@ -47,6 +49,14 @@ SSH_SETUP_DIR = Path(
 NETWORKING_DIR = Path(
     "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
     "30_networking"
+)
+JOIN_WORKERS = Path(
+    "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
+    "40_thinkube/core/infrastructure/k8s/20_join_workers.yaml"
+)
+JUICEFS_DEPLOY = Path(
+    "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
+    "40_thinkube/core/juicefs/10_deploy.yaml"
 )
 IMAGE_BUILD_TOKEN = Path("/home/thinkube/.image_build_completed_platforms")
 
@@ -116,27 +126,64 @@ class DiscoverNetworkRequest(BaseModel):
 
 class AddNodesBatchRequest(BaseModel):
     nodes: List[Dict[str, Any]]
+    # The nodes' SSH password, used only where the cluster key is not yet
+    # authorized. Without it, ANSIBLE_BECOME_PASSWORD is used.
     password: Optional[str] = None
 
 
+class AddNodesJob:
+    """One run of adding nodes: its progress events and its outcome.
+
+    The run is a task in this backend process and outlives the request that
+    started it. The events have the shapes the panel's run view reads:
+    task, ok, changed, failed, output, warning, error, and a last complete
+    event with status success or failed. The job lives in memory only, so
+    a restart of thinkube-control forgets it.
+    """
+
+    def __init__(self, job_id: str, node_count: int):
+        self.id = job_id
+        self.node_count = node_count
+        self.status = "running"
+        self.events: List[Dict[str, Any]] = []
+        self._last_error: Optional[str] = None
+
+    def send(self, event: Dict[str, Any]) -> None:
+        self.events.append(event)
+        if event.get("type") == "error":
+            self._last_error = event.get("message")
+        if event.get("type") == "complete":
+            self.status = event["status"]
+
+    def end(self) -> None:
+        """Close a run that stopped without a complete event, as failed."""
+        if self.status != "running":
+            return
+        reason = self._last_error or "the run stopped without a result"
+        self.send({"type": "complete", "status": "failed", "message": f"Adding nodes failed: {reason}"})
+
+
+_add_node_jobs: Dict[str, AddNodesJob] = {}
+
+
 async def _stream_playbook(
-    websocket: WebSocket,
+    progress: "AddNodesJob",
     playbook_path: Path,
     extra_vars: Dict[str, Any],
     step_name: str,
     step_number: int,
     limit: Optional[str] = None,
 ) -> bool:
-    """Stream an Ansible playbook execution over WebSocket. Returns True on success."""
-    await websocket.send_json(
+    """Run an Ansible playbook, recording its output in the job. Returns True on success."""
+    progress.send(
         {"type": "playbook_start", "task_name": step_name, "task_number": step_number}
     )
-    await websocket.send_json(
+    progress.send(
         {"type": "task", "task_name": step_name, "task_number": step_number}
     )
 
     if not playbook_path.exists():
-        await websocket.send_json(
+        progress.send(
             {"type": "error", "message": f"Playbook not found: {playbook_path}"}
         )
         return False
@@ -178,21 +225,8 @@ async def _stream_playbook(
 
         current_task = "Initializing"
         in_failed_block = False
-        HEARTBEAT_INTERVAL = 30
         while True:
-            try:
-                line = await asyncio.wait_for(
-                    process.stdout.readline(), timeout=HEARTBEAT_INTERVAL
-                )
-            except asyncio.TimeoutError:
-                try:
-                    await websocket.send_json({"type": "heartbeat"})
-                except Exception:
-                    logger.warning("WebSocket closed during heartbeat — abandoning stream")
-                    process.kill()
-                    await process.wait()
-                    return False
-                continue
+            line = await process.stdout.readline()
             if not line:
                 break
 
@@ -206,36 +240,36 @@ async def _stream_playbook(
                 task_end = line_text.find("]", task_start)
                 if task_end > task_start:
                     current_task = line_text[task_start:task_end]
-                    await websocket.send_json(
+                    progress.send(
                         {"type": "task", "task_name": current_task}
                     )
             elif line_text.startswith("ok:") or line_text.startswith("changed:"):
                 msg_type = "ok" if line_text.startswith("ok:") else "changed"
-                await websocket.send_json(
+                progress.send(
                     {"type": msg_type, "message": line_text, "task": current_task}
                 )
             elif line_text.startswith("fatal:") or line_text.startswith("failed:"):
                 in_failed_block = True
-                await websocket.send_json(
+                progress.send(
                     {"type": "failed", "message": line_text, "task": current_task}
                 )
             elif line_text.startswith("skipping:"):
-                await websocket.send_json(
+                progress.send(
                     {"type": "output", "message": line_text}
                 )
             elif "PLAY RECAP" in line_text or "PLAY [" in line_text:
                 in_failed_block = False
-                await websocket.send_json(
+                progress.send(
                     {"type": "output", "message": line_text}
                 )
             elif in_failed_block:
-                await websocket.send_json(
+                progress.send(
                     {"type": "output", "message": line_text}
                 )
             elif line_text.startswith("[WARNING]") or line_text.startswith("[DEPRECATION"):
                 pass
             else:
-                await websocket.send_json(
+                progress.send(
                     {"type": "output", "message": line_text}
                 )
 
@@ -250,7 +284,7 @@ async def _stream_playbook(
 
 
 async def _run_image_rebuild(
-    websocket: WebSocket,
+    progress: "AddNodesJob",
     extra_vars: Dict[str, Any],
     start_step: int,
     new_arch: Optional[str] = None,
@@ -269,69 +303,59 @@ async def _run_image_rebuild(
 
     step = start_step
     for playbook_path, description in rebuild_playbooks:
-        await websocket.send_json(
+        progress.send(
             {"type": "ok", "message": f"Starting: {description}"}
         )
         ok = await _stream_playbook(
-            websocket=websocket,
+            progress=progress,
             playbook_path=playbook_path,
             extra_vars=extra_vars,
             step_name=description,
             step_number=step,
         )
         if not ok:
-            await websocket.send_json(
+            progress.send(
                 {"type": "error", "message": f"Failed: {description}"}
             )
             return False
-        await websocket.send_json(
+        progress.send(
             {"type": "ok", "message": f"Completed: {description}"}
         )
         step += 1
 
     if new_arch:
-        await websocket.send_json(
+        progress.send(
             {"type": "task", "task_name": f"Rebuild Jupyter venvs for {new_arch}", "task_number": step}
         )
-        await _rebuild_venvs_for_arch(websocket, new_arch, extra_vars, step)
+        await _rebuild_venvs_for_arch(progress, new_arch, extra_vars, step)
 
     return True
 
 
 async def _run_gpu_setup(
-    websocket: WebSocket,
+    progress: "AddNodesJob",
     extra_vars: Dict[str, Any],
     step: int,
 ) -> bool:
     """Deploy GPU operator and configure time-slicing profiles."""
-    # Use the lightweight per-node playbook for add-node (GPU operator
-    # is already installed cluster-wide). Falls back to the full deploy
-    # if the node playbook doesn't exist.
-    gpu_deploy = GPU_OPERATOR_DIR / "10_deploy_node.yaml"
-    if not gpu_deploy.exists():
-        gpu_deploy = GPU_OPERATOR_DIR / "10_deploy.yaml"
-    if not gpu_deploy.exists():
-        await websocket.send_json(
-            {"type": "error", "message": f"GPU operator playbook not found: {gpu_deploy}"}
-        )
-        return False
+    gpu_deploy = GPU_OPERATOR_DIR / "10_deploy.yaml"
 
-    await websocket.send_json(
+    progress.send(
         {"type": "task", "task_name": "Configure GPU on new nodes", "task_number": step}
     )
     ok = await _stream_playbook(
-        websocket=websocket,
+        progress=progress,
         playbook_path=gpu_deploy,
         extra_vars=extra_vars,
         step_name="Configure GPU on new nodes",
         step_number=step,
     )
     if not ok:
-        await websocket.send_json(
+        progress.send(
             {"type": "error", "message": "GPU Operator deployment failed"}
         )
         return False
-    await websocket.send_json(
+    progress.send(
         {"type": "ok", "message": "GPU Operator deployed"}
     )
 
@@ -341,31 +365,30 @@ async def _run_gpu_setup(
     # standard GPUs do not).
     step += 1
     time_slicing = GPU_OPERATOR_DIR / "15_configure_time_slicing.yaml"
-    if time_slicing.exists():
-        await websocket.send_json(
-            {"type": "task", "task_name": "Configure GPU time-slicing profiles", "task_number": step}
+    progress.send(
+        {"type": "task", "task_name": "Configure GPU time-slicing profiles", "task_number": step}
+    )
+    ts_ok = await _stream_playbook(
+        progress=progress,
+        playbook_path=time_slicing,
+        extra_vars=extra_vars,
+        step_name="Configure GPU time-slicing profiles",
+        step_number=step,
+    )
+    if not ts_ok:
+        progress.send(
+            {"type": "error", "message": "GPU time-slicing configuration failed"}
         )
-        ts_ok = await _stream_playbook(
-            websocket=websocket,
-            playbook_path=time_slicing,
-            extra_vars=extra_vars,
-            step_name="Configure GPU time-slicing profiles",
-            step_number=step,
-        )
-        if not ts_ok:
-            await websocket.send_json(
-                {"type": "error", "message": "GPU time-slicing configuration failed"}
-            )
-            return False
-        await websocket.send_json(
-            {"type": "ok", "message": "GPU time-slicing profiles configured"}
-        )
+        return False
+    progress.send(
+        {"type": "ok", "message": "GPU time-slicing profiles configured"}
+    )
 
     return True
 
 
 async def _rebuild_venvs_for_arch(
-    websocket: WebSocket,
+    progress: "AddNodesJob",
     new_arch: str,
     extra_vars: Dict[str, Any],
     step: int,
@@ -382,7 +405,7 @@ async def _rebuild_venvs_for_arch(
         ).all()
 
         if not venvs:
-            await websocket.send_json(
+            progress.send(
                 {"type": "ok", "message": "No existing venvs to rebuild"}
             )
             return True
@@ -394,12 +417,12 @@ async def _rebuild_venvs_for_arch(
                 needs_rebuild.append(v)
 
         if not needs_rebuild:
-            await websocket.send_json(
+            progress.send(
                 {"type": "ok", "message": f"All venvs already built for {new_arch}"}
             )
             return True
 
-        await websocket.send_json(
+        progress.send(
             {"type": "ok", "message": f"Rebuilding {len(needs_rebuild)} venv(s) for {new_arch}: {', '.join(v.name for v in needs_rebuild)}"}
         )
 
@@ -418,7 +441,7 @@ async def _rebuild_venvs_for_arch(
             }
 
             ok = await _stream_playbook(
-                websocket=websocket,
+                progress=progress,
                 playbook_path=playbook_path,
                 extra_vars=venv_vars,
                 step_name=f"Build venv '{v.name}' for {new_arch}",
@@ -432,11 +455,11 @@ async def _rebuild_venvs_for_arch(
                     built.sort()
                 v.architectures_built = built
                 db.commit()
-                await websocket.send_json(
+                progress.send(
                     {"type": "ok", "message": f"Venv '{v.name}' built for {new_arch}"}
                 )
             else:
-                await websocket.send_json(
+                progress.send(
                     {"type": "error", "message": f"Venv '{v.name}' failed to build for {new_arch} — continuing with others"}
                 )
                 all_ok = False
@@ -445,7 +468,7 @@ async def _rebuild_venvs_for_arch(
 
     except Exception as e:
         logger.error(f"Venv rebuild error: {e}", exc_info=True)
-        await websocket.send_json(
+        progress.send(
             {"type": "error", "message": f"Venv rebuild error: {e}"}
         )
         return False
@@ -550,9 +573,52 @@ async def detect_hardware_batch(request: DetectHardwareRequest):
     return {"results": list(results)}
 
 
+def _add_node_playbooks(overlay_provider: str) -> List[Path]:
+    """Every playbook adding nodes runs, so a missing one stops the run before it touches a node."""
+    playbooks = [
+        GPU_OPERATOR_DIR / "10_deploy.yaml",
+        GPU_OPERATOR_DIR / "15_configure_time_slicing.yaml",
+        SSH_SETUP_DIR / "11_update_ssh_for_workers.yaml",
+        COREDNS_DIR / "15_configure_node_dns.yaml",
+        CODE_SERVER_DIR / "15_configure_environment.yaml",
+        SSH_SETUP_DIR / "14_harden_node_logging.yaml",
+        SSH_SETUP_DIR / "16_tune_dgx_spark.yaml",
+        JUICEFS_DEPLOY,
+        JOIN_WORKERS,
+    ]
+    playbooks.extend(_overlay_playbooks(overlay_provider))
+    return playbooks
+
+
+def _overlay_playbooks(overlay_provider: str) -> List[Path]:
+    """The install and setup playbooks of the overlay network on new nodes."""
+    if overlay_provider == "tailscale":
+        return [NETWORKING_DIR / "06_install_tailscale.yaml", NETWORKING_DIR / "11_setup_tailscale.yaml"]
+    return [NETWORKING_DIR / "05_install_zerotier.yaml", NETWORKING_DIR / "10_setup_zerotier.yaml"]
+
+
 @router.post("/add-batch")
-async def add_nodes_batch(request: AddNodesBatchRequest):
-    """Initiate batch node addition. Returns a job_id for WebSocket streaming."""
+async def add_nodes_batch(
+    request: AddNodesBatchRequest,
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """Start adding nodes and return at once with the job id to poll.
+
+    The run happens on the server, detached from this call: a closed tab or
+    a proxy timeout does not end it. Poll GET /nodes/add-batch/{job_id} for
+    its progress and outcome. The SSH password, when given, travels in this
+    body only.
+    """
+    if not request.nodes:
+        raise HTTPException(status_code=400, detail="No nodes provided")
+
+    running = [j for j in _add_node_jobs.values() if j.status == "running"]
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Nodes are already being added (job {running[0].id}); wait for it to end",
+        )
+
     validation = node_manager.validate_inventory()
     if not validation["valid"]:
         raise HTTPException(
@@ -560,11 +626,13 @@ async def add_nodes_batch(request: AddNodesBatchRequest):
             detail=f"Inventory validation failed: {validation.get('error')}",
         )
 
-    # The overlay provider determines which install path the WebSocket
-    # handler will run, and which credentials it needs. Fail early with a
-    # clear message instead of letting the per-node loop discover this.
+    # The overlay provider determines which install path the run takes, and
+    # which credentials it needs. Fail early with a clear message instead of
+    # letting the per-node loop discover this.
     inventory = node_manager.read_inventory()
     inv_vars = inventory.get("all", {}).get("vars", {})
+    if not inv_vars.get("network_mode"):
+        raise HTTPException(status_code=500, detail="network_mode missing from inventory")
     overlay_provider = inv_vars.get("overlay_provider")
     if not overlay_provider:
         raise HTTPException(
@@ -591,6 +659,13 @@ async def add_nodes_batch(request: AddNodesBatchRequest):
             detail=f"Unsupported overlay_provider: {overlay_provider!r}",
         )
 
+    missing = [str(p) for p in _add_node_playbooks(overlay_provider) if not p.exists()]
+    if missing:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Playbooks missing from the thinkube checkout: {', '.join(missing)}",
+        )
+
     existing_nodes = node_manager.get_cluster_nodes()
     existing_names = {n["name"] for n in existing_nodes}
     for node_info in request.nodes:
@@ -601,63 +676,61 @@ async def add_nodes_batch(request: AddNodesBatchRequest):
                 detail=f"Node '{hostname}' already exists in the cluster",
             )
 
-    job_id = str(uuid.uuid4())
+    password = request.password or os.environ.get("ANSIBLE_BECOME_PASSWORD")
+
+    job = AddNodesJob(str(uuid.uuid4()), len(request.nodes))
+    _add_node_jobs[job.id] = job
+    detached.start(f"add-nodes:{job.id}", _add_nodes(job, request.nodes, password))
+
     return {
-        "job_id": job_id,
-        "message": "Batch node addition job created. Connect to WebSocket to start.",
-        "node_count": len(request.nodes),
+        "job_id": job.id,
+        "status": job.status,
+        "message": f"Adding {job.node_count} node(s); poll /nodes/add-batch/{job.id} for progress",
+        "node_count": job.node_count,
     }
 
 
-@router.websocket("/ws/add-batch/{job_id}")
-async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
-    """Stream batch node addition progress via WebSocket.
+@router.get("/add-batch/{job_id}")
+async def get_add_nodes_job(
+    job_id: str,
+    after: int = 0,
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """The progress of an add-nodes run: its status and the events after the first ``after``."""
+    job = _add_node_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No add-nodes job {job_id} in this thinkube-control process. "
+                "Jobs live in memory: a restart forgets them. The node list shows what joined."
+            ),
+        )
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "events": job.events[after:],
+        "next": len(job.events),
+    }
+
+
+async def _add_nodes(progress: AddNodesJob, nodes: List[Dict[str, Any]], password: Optional[str]) -> None:
+    """Add ``nodes`` to the cluster, recording each step in ``progress``.
 
     Handles the full pipeline: SSH key distribution, overlay network setup
     (ZeroTier or Tailscale), hardware detection, inventory update, and k8s join.
-
-    Expected query params: nodes (JSON array of node objects), password (optional)
     """
-    await websocket.accept()
-
     try:
-        import json as _json
-
-        params = websocket.query_params
-        nodes_json = params.get("nodes", "[]")
-        password = (
-            params.get("password", "")
-            or os.environ.get("ANSIBLE_BECOME_PASSWORD")
-            or os.environ.get("SYSTEM_PASSWORD")
-            or ""
-        )
-        nodes = _json.loads(nodes_json)
-
-        if not nodes:
-            await websocket.send_json(
-                {"type": "error", "message": "No nodes provided"}
-            )
-            await websocket.close()
-            return
-
         inventory = node_manager.read_inventory()
         inv_vars = inventory.get("all", {}).get("vars", {})
-        network_mode = inv_vars.get("network_mode")
-        if not network_mode:
-            await websocket.send_json({"type": "error", "message": "network_mode not set in inventory"})
-            await websocket.close()
-            return
-        overlay_provider = inv_vars.get("overlay_provider")
-        if not overlay_provider:
-            await websocket.send_json({"type": "error", "message": "overlay_provider not set in inventory"})
-            await websocket.close()
-            return
+        network_mode = inv_vars["network_mode"]
+        overlay_provider = inv_vars["overlay_provider"]
         step = 1
 
-        await websocket.send_json({
+        progress.send({
             "type": "start",
             "message": f"Starting addition of {len(nodes)} node(s)",
-            "job_id": job_id,
+            "job_id": progress.id,
         })
 
         # Cilium load-balancer VIPs need static routes published into the
@@ -684,7 +757,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             hostname = node_info.get("hostname", "")
             lan_ip = node_info.get("lan_ip", ip)
 
-            await websocket.send_json({
+            progress.send({
                 "type": "task",
                 "task_name": f"[{hostname or ip}] Distribute SSH key",
                 "task_number": step,
@@ -693,28 +766,28 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             # Step: Distribute SSH key if needed
             key_ok = await node_manager.test_ssh_key_auth(ip)
             if key_ok:
-                await websocket.send_json({
+                progress.send({
                     "type": "ok",
                     "message": f"[{hostname or ip}] SSH key already authorized",
                 })
             elif password:
                 dist_result = await node_manager.distribute_ssh_key(ip, password)
                 if not dist_result["success"]:
-                    await websocket.send_json({
+                    progress.send({
                         "type": "error",
                         "message": f"[{hostname or ip}] SSH key distribution failed: {dist_result.get('error')}. Aborting batch.",
                     })
                     batch_failed = True
                     failed_hostname = hostname or ip
                     break
-                await websocket.send_json({
+                progress.send({
                     "type": "ok",
                     "message": f"[{hostname or ip}] SSH key distributed successfully",
                 })
             else:
-                await websocket.send_json({
+                progress.send({
                     "type": "error",
-                    "message": f"[{hostname or ip}] SSH key auth failed and no password provided. Aborting batch.",
+                    "message": f"[{hostname or ip}] SSH key auth failed, no password was given and ANSIBLE_BECOME_PASSWORD is not set. Aborting batch.",
                 })
                 batch_failed = True
                 failed_hostname = hostname or ip
@@ -726,7 +799,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             lvm_expandable = node_info.get("lvm_expandable", False)
             lvm_lv_path = node_info.get("lvm_lv_path", "")
             if lvm_expandable and lvm_lv_path:
-                await websocket.send_json({
+                progress.send({
                     "type": "task",
                     "task_name": f"[{hostname or ip}] Expand LVM volume",
                     "task_number": step,
@@ -734,12 +807,12 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                 try:
                     result = await node_manager.expand_lvm(ip, lvm_lv_path)
                     if result["success"]:
-                        await websocket.send_json({
+                        progress.send({
                             "type": "ok",
                             "message": f"[{hostname or ip}] LVM expanded to {result.get('new_size', 'full disk')}",
                         })
                     else:
-                        await websocket.send_json({
+                        progress.send({
                             "type": "error",
                             "message": f"[{hostname or ip}] LVM expansion failed: {result.get('error')}. Aborting batch.",
                         })
@@ -747,7 +820,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                         failed_hostname = hostname or ip
                         break
                 except Exception as e:
-                    await websocket.send_json({
+                    progress.send({
                         "type": "error",
                         "message": f"[{hostname or ip}] LVM expansion failed: {e}. Aborting batch.",
                     })
@@ -771,14 +844,14 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     )
                 if already_configured:
                     overlay_ip = existing_overlay_ip
-                    await websocket.send_json({
+                    progress.send({
                         "type": "ok",
                         "message": f"[{hostname or ip}] Overlay network already configured ({overlay_ip})",
                     })
                     step += 1
                 else:
                     provider_name = overlay_provider.capitalize()
-                    await websocket.send_json({
+                    progress.send({
                         "type": "task",
                         "task_name": f"[{hostname or ip}] Setup {provider_name}",
                         "task_number": step,
@@ -787,7 +860,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     if overlay_provider == "tailscale":
                         ts_result = await node_manager.setup_tailscale_on_node(ip, hostname or ip)
                         if not ts_result["success"]:
-                            await websocket.send_json({
+                            progress.send({
                                 "type": "error",
                                 "message": f"[{hostname or ip}] Tailscale setup failed: {ts_result.get('error')}. Aborting batch.",
                             })
@@ -796,7 +869,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                             break
 
                         overlay_ip = ts_result["overlay_ip"]
-                        await websocket.send_json({
+                        progress.send({
                             "type": "ok",
                             "message": f"[{hostname or ip}] Tailscale configured with IP {overlay_ip}, waiting for tunnel...",
                         })
@@ -804,7 +877,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                         # ZeroTier (default)
                         assigned_ip = await network_discovery.get_next_available_overlay_ip()
                         if not assigned_ip:
-                            await websocket.send_json({
+                            progress.send({
                                 "type": "error",
                                 "message": f"[{hostname or ip}] No available overlay IPs. Aborting batch.",
                             })
@@ -814,7 +887,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
 
                         zt_result = await node_manager.setup_zerotier_on_node(ip, assigned_ip)
                         if not zt_result["success"]:
-                            await websocket.send_json({
+                            progress.send({
                                 "type": "error",
                                 "message": f"[{hostname or ip}] ZeroTier setup failed: {zt_result.get('error')}. Aborting batch.",
                             })
@@ -823,7 +896,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                             break
 
                         overlay_ip = zt_result["overlay_ip"]
-                        await websocket.send_json({
+                        progress.send({
                             "type": "ok",
                             "message": f"[{hostname or ip}] ZeroTier configured with IP {overlay_ip}, waiting for tunnel...",
                         })
@@ -839,14 +912,14 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                             overlay_ip, retries=12, interval=5
                         )
                         if not overlay_reachable:
-                            await websocket.send_json({
+                            progress.send({
                                 "type": "error",
                                 "message": f"[{hostname or ip}] Overlay tunnel to {overlay_ip} not reachable after 60s. Aborting batch.",
                             })
                             batch_failed = True
                             failed_hostname = hostname or ip
                             break
-                        await websocket.send_json({
+                        progress.send({
                             "type": "ok",
                             "message": f"[{hostname or ip}] Overlay tunnel established",
                         })
@@ -868,14 +941,14 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             gpu_model = node_info.get("gpu_model", "")
 
             if not architecture:
-                await websocket.send_json({
+                progress.send({
                     "type": "task",
                     "task_name": f"[{hostname or ip}] Detect hardware",
                     "task_number": step,
                 })
                 hw = await node_manager.discover_node(connect_ip)
                 if "error" in hw:
-                    await websocket.send_json({
+                    progress.send({
                         "type": "error",
                         "message": f"[{hostname or ip}] Hardware detection failed: {hw['error']}. Aborting batch.",
                     })
@@ -888,7 +961,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                 gpu_detected = hw.get("gpu_detected", False)
                 gpu_count = hw.get("gpu_count", 0)
                 gpu_model = hw.get("gpu_model", "")
-                await websocket.send_json({
+                progress.send({
                     "type": "ok",
                     "message": f"[{hostname}] Detected: {architecture}, {hw.get('cpu_cores', '?')} cores, {hw.get('memory_gb', '?')} GB RAM",
                 })
@@ -896,19 +969,19 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
 
             # Step: Prepare Ansible Python environment (reuses connect_ip
             # picked above — same provider-aware rule).
-            await websocket.send_json({
+            progress.send({
                 "type": "task",
                 "task_name": f"[{hostname}] Prepare Python environment",
                 "task_number": step,
             })
             py_result = await node_manager.prepare_ansible_python(connect_ip)
             if py_result["success"]:
-                await websocket.send_json({
+                progress.send({
                     "type": "ok",
                     "message": f"[{hostname}] Python venv ready",
                 })
             else:
-                await websocket.send_json({
+                progress.send({
                     "type": "error",
                     "message": f"[{hostname}] Python setup failed: {py_result.get('error')}. Aborting batch.",
                 })
@@ -918,7 +991,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             step += 1
 
             # Step: Update inventory
-            await websocket.send_json({
+            progress.send({
                 "type": "task",
                 "task_name": f"[{hostname}] Update inventory",
                 "task_number": step,
@@ -934,7 +1007,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                     gpu_count=gpu_count,
                     gpu_model=gpu_model,
                 )
-                await websocket.send_json({
+                progress.send({
                     "type": "ok",
                     "message": f"[{hostname}] Added to inventory",
                 })
@@ -944,7 +1017,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                 else:
                     non_gpu_hostnames.append(hostname)
             except Exception as e:
-                await websocket.send_json({
+                progress.send({
                     "type": "error",
                     "message": f"[{hostname}] Inventory update failed: {e}. Aborting batch.",
                 })
@@ -955,38 +1028,35 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             step += 1
 
         if batch_failed:
-            await websocket.send_json({
+            progress.send({
                 "type": "complete",
                 "status": "failed",
                 "message": f"Batch aborted: {failed_hostname} failed. No nodes were joined.",
             })
-            await websocket.close()
             return
 
         if not added_hostnames:
-            await websocket.send_json({
+            progress.send({
                 "type": "complete",
                 "status": "failed",
                 "message": "No nodes were successfully prepared for joining",
             })
-            await websocket.close()
             return
 
         # Step: Validate inventory
-        await websocket.send_json({
+        progress.send({
             "type": "task",
             "task_name": "Validate inventory",
             "task_number": step,
         })
         validation = node_manager.validate_inventory()
         if not validation["valid"]:
-            await websocket.send_json({
+            progress.send({
                 "type": "error",
                 "message": f"Inventory validation failed: {validation.get('error')}",
             })
-            await websocket.close()
             return
-        await websocket.send_json({"type": "ok", "message": "Inventory is valid"})
+        progress.send({"type": "ok", "message": "Inventory is valid"})
         step += 1
 
         inventory = node_manager.read_inventory()
@@ -1000,65 +1070,42 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
         try:
             extra_vars = ansible_env.prepare_auth_vars(extra_vars)
         except RuntimeError as e:
-            await websocket.send_json({"type": "error", "message": str(e)})
-            await websocket.close()
+            progress.send({"type": "error", "message": str(e)})
             return
 
         # Step: Set up overlay network on new nodes (before k8s join)
-        overlay_provider = inventory.get("all", {}).get("vars", {}).get("overlay_provider", "")
-        if overlay_provider in ("tailscale", "zerotier"):
-            install_playbook = NETWORKING_DIR / f"{'06' if overlay_provider == 'tailscale' else '05'}_install_{overlay_provider}.yaml"
-            setup_playbook = NETWORKING_DIR / f"{'11' if overlay_provider == 'tailscale' else '10'}_setup_{overlay_provider}.yaml"
-
-            for pb, desc in [(install_playbook, f"Install {overlay_provider}"), (setup_playbook, f"Configure {overlay_provider}")]:
-                if not pb.exists():
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": f"{desc}: playbook not found at {pb}",
-                    })
-                    await websocket.close()
-                    return
-                await websocket.send_json({
-                    "type": "task",
-                    "task_name": f"{desc} on new nodes",
-                    "task_number": step,
+        install_playbook, setup_playbook = _overlay_playbooks(overlay_provider)
+        for pb, desc in [(install_playbook, f"Install {overlay_provider}"), (setup_playbook, f"Configure {overlay_provider}")]:
+            progress.send({
+                "type": "task",
+                "task_name": f"{desc} on new nodes",
+                "task_number": step,
+            })
+            overlay_ok = await _stream_playbook(
+                progress=progress,
+                playbook_path=pb,
+                extra_vars=extra_vars,
+                step_name=f"{desc} on new nodes",
+                step_number=step,
+                limit=",".join(added_hostnames),
+            )
+            if not overlay_ok:
+                progress.send({
+                    "type": "complete",
+                    "status": "failed",
+                    "message": f"{desc} failed on new nodes",
                 })
-                overlay_ok = await _stream_playbook(
-                    websocket=websocket,
-                    playbook_path=pb,
-                    extra_vars=extra_vars,
-                    step_name=f"{desc} on new nodes",
-                    step_number=step,
-                    limit=",".join(added_hostnames),
-                )
-                if not overlay_ok:
-                    await websocket.send_json({
-                        "type": "complete",
-                        "status": "failed",
-                        "message": f"{desc} failed on new nodes",
-                    })
-                    await websocket.close()
-                    return
-                step += 1
+                return
+            step += 1
 
         # Step: Run join workers playbook
-        playbook_path = Path(
-            "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
-            "40_thinkube/core/infrastructure/k8s/20_join_workers.yaml"
-        )
-        if not playbook_path.exists():
-            await websocket.send_json({
-                "type": "error",
-                "message": f"Join workers playbook not found at {playbook_path}",
-            })
-            await websocket.close()
-            return
+        playbook_path = JOIN_WORKERS
 
         # Include control plane + localhost so post-join plays run too
         cp_hosts = _find_inventory_group_hosts(inventory, "k8s_control_plane")
         limit_hosts = ",".join(added_hostnames + cp_hosts + ["localhost"])
         join_ok = await _stream_playbook(
-            websocket=websocket,
+            progress=progress,
             playbook_path=playbook_path,
             extra_vars=extra_vars,
             step_name=f"Join node(s) to cluster: {','.join(added_hostnames)}",
@@ -1067,12 +1114,11 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
         )
 
         if not join_ok:
-            await websocket.send_json({
+            progress.send({
                 "type": "complete",
                 "status": "failed",
                 "message": "Node join failed",
             })
-            await websocket.close()
             return
 
         step += 1
@@ -1082,7 +1128,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
         for h in added_hostnames:
             ok, msg = await node_manager.cordon_node(h)
             if ok:
-                await websocket.send_json({
+                progress.send({
                     "type": "ok",
                     "message": f"[{h}] Cordoned — preventing scheduling until setup completes",
                 })
@@ -1098,7 +1144,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             # to prevent operator DaemonSets from scheduling there.
             for nh in non_gpu_hostnames:
                 if node_manager.disable_gpu_operator_on_node(nh):
-                    await websocket.send_json({
+                    progress.send({
                         "type": "ok",
                         "message": f"[{nh}] GPU operator disabled (no compatible GPU)",
                     })
@@ -1108,146 +1154,136 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             # Set up SSH from control plane to new workers so that
             # build playbooks can delegate tasks (synchronize/rsync).
             ssh_playbook = SSH_SETUP_DIR / "11_update_ssh_for_workers.yaml"
-            if ssh_playbook.exists():
-                await websocket.send_json({
-                    "type": "task",
-                    "task_name": "Configure inter-node SSH",
-                    "task_number": step,
-                })
-                ssh_ok = await _stream_playbook(
-                    websocket=websocket,
-                    playbook_path=ssh_playbook,
-                    extra_vars=extra_vars,
-                    step_name="Configure inter-node SSH",
-                    step_number=step,
-                )
-                if not ssh_ok:
-                    logger.warning("Inter-node SSH setup failed — build delegation may fail")
-                step += 1
+            progress.send({
+                "type": "task",
+                "task_name": "Configure inter-node SSH",
+                "task_number": step,
+            })
+            ssh_ok = await _stream_playbook(
+                progress=progress,
+                playbook_path=ssh_playbook,
+                extra_vars=extra_vars,
+                step_name="Configure inter-node SSH",
+                step_number=step,
+            )
+            if not ssh_ok:
+                logger.warning("Inter-node SSH setup failed — build delegation may fail")
+            step += 1
 
             # Configure DNS on new nodes so they can resolve internal
             # domains (the cluster registry, etc.) before image pulls.
             dns_playbook = COREDNS_DIR / "15_configure_node_dns.yaml"
-            if dns_playbook.exists():
-                await websocket.send_json({
-                    "type": "task",
-                    "task_name": "Configure DNS on new nodes",
-                    "task_number": step,
+            progress.send({
+                "type": "task",
+                "task_name": "Configure DNS on new nodes",
+                "task_number": step,
+            })
+            dns_ok = await _stream_playbook(
+                progress=progress,
+                playbook_path=dns_playbook,
+                extra_vars=extra_vars,
+                step_name="Configure DNS on new nodes",
+                step_number=step,
+                limit=",".join(added_hostnames),
+            )
+            if not dns_ok:
+                logger.warning("DNS configuration failed on new nodes — continuing")
+                progress.send({
+                    "type": "warning",
+                    "message": "DNS configuration failed on new nodes — continuing",
                 })
-                dns_ok = await _stream_playbook(
-                    websocket=websocket,
-                    playbook_path=dns_playbook,
-                    extra_vars=extra_vars,
-                    step_name="Configure DNS on new nodes",
-                    step_number=step,
-                    limit=",".join(added_hostnames),
-                )
-                if not dns_ok:
-                    logger.warning("DNS configuration failed on new nodes — continuing")
-                    await websocket.send_json({
-                        "type": "warning",
-                        "message": "DNS configuration failed on new nodes — continuing",
-                    })
-                step += 1
+            step += 1
 
             # Update code-server hostAliases so the new node hostname
             # resolves inside the code-server pod. The playbook only
             # restarts code-server when the host list actually changed.
-            # Use the lightweight hostAliases-only playbook for add-node.
-            # Falls back to the full playbook if it doesn't exist.
-            cs_playbook = CODE_SERVER_DIR / "15a_update_host_aliases.yaml"
-            if not cs_playbook.exists():
-                cs_playbook = CODE_SERVER_DIR / "15_configure_environment.yaml"
-            if cs_playbook.exists():
-                await websocket.send_json({
-                    "type": "task",
-                    "task_name": "Update code-server environment for new nodes",
-                    "task_number": step,
+            cs_playbook = CODE_SERVER_DIR / "15_configure_environment.yaml"
+            progress.send({
+                "type": "task",
+                "task_name": "Update code-server environment for new nodes",
+                "task_number": step,
+            })
+            cs_ok = await _stream_playbook(
+                progress=progress,
+                playbook_path=cs_playbook,
+                extra_vars=extra_vars,
+                step_name="Update code-server environment for new nodes",
+                step_number=step,
+            )
+            if not cs_ok:
+                logger.warning("Code-server environment update failed — continuing")
+                progress.send({
+                    "type": "warning",
+                    "message": "Code-server environment update failed — continuing",
                 })
-                cs_ok = await _stream_playbook(
-                    websocket=websocket,
-                    playbook_path=cs_playbook,
-                    extra_vars=extra_vars,
-                    step_name="Update code-server environment for new nodes",
-                    step_number=step,
-                )
-                if not cs_ok:
-                    logger.warning("Code-server environment update failed — continuing")
-                    await websocket.send_json({
-                        "type": "warning",
-                        "message": "Code-server environment update failed — continuing",
-                    })
-                step += 1
+            step += 1
 
             # Bound node log growth so a message flood can't fill the disk
             # (rsyslog dedup + journald rate-limit + logrotate cap). Defense-in
             # -depth after the JuiceFS OOM-flood (TEP-tgmtd3 / SP-tgqg1j_SL-2);
             # unconditional — every newly added node gets it.
             logging_playbook = SSH_SETUP_DIR / "14_harden_node_logging.yaml"
-            if logging_playbook.exists():
-                await websocket.send_json({
-                    "type": "task",
-                    "task_name": "Harden node logging against floods",
-                    "task_number": step,
+            progress.send({
+                "type": "task",
+                "task_name": "Harden node logging against floods",
+                "task_number": step,
+            })
+            logging_ok = await _stream_playbook(
+                progress=progress,
+                playbook_path=logging_playbook,
+                extra_vars=extra_vars,
+                step_name="Harden node logging against floods",
+                step_number=step,
+                limit=",".join(added_hostnames),
+            )
+            if not logging_ok:
+                logger.warning("Node logging hardening failed on new nodes — continuing")
+                progress.send({
+                    "type": "warning",
+                    "message": "Node logging hardening failed on new nodes — continuing",
                 })
-                logging_ok = await _stream_playbook(
-                    websocket=websocket,
-                    playbook_path=logging_playbook,
-                    extra_vars=extra_vars,
-                    step_name="Harden node logging against floods",
-                    step_number=step,
-                    limit=",".join(added_hostnames),
-                )
-                if not logging_ok:
-                    logger.warning("Node logging hardening failed on new nodes — continuing")
-                    await websocket.send_json({
-                        "type": "warning",
-                        "message": "Node logging hardening failed on new nodes — continuing",
-                    })
-                step += 1
+            step += 1
 
             # DGX Spark unified-memory host tuning. The playbook self-detects
             # GB10 hardware (DMI + nvidia-smi) and end_hosts on non-Spark
             # nodes, so it's safe to run on every newly added node.
             spark_playbook = SSH_SETUP_DIR / "16_tune_dgx_spark.yaml"
-            if spark_playbook.exists():
-                await websocket.send_json({
-                    "type": "task",
-                    "task_name": "Apply DGX Spark unified-memory tuning",
-                    "task_number": step,
+            progress.send({
+                "type": "task",
+                "task_name": "Apply DGX Spark unified-memory tuning",
+                "task_number": step,
+            })
+            spark_ok = await _stream_playbook(
+                progress=progress,
+                playbook_path=spark_playbook,
+                extra_vars=extra_vars,
+                step_name="Apply DGX Spark unified-memory tuning",
+                step_number=step,
+                limit=",".join(added_hostnames),
+            )
+            if not spark_ok:
+                logger.warning("DGX Spark tuning failed on new nodes — continuing")
+                progress.send({
+                    "type": "warning",
+                    "message": "DGX Spark tuning failed on new nodes — continuing",
                 })
-                spark_ok = await _stream_playbook(
-                    websocket=websocket,
-                    playbook_path=spark_playbook,
-                    extra_vars=extra_vars,
-                    step_name="Apply DGX Spark unified-memory tuning",
-                    step_number=step,
-                    limit=",".join(added_hostnames),
-                )
-                if not spark_ok:
-                    logger.warning("DGX Spark tuning failed on new nodes — continuing")
-                    await websocket.send_json({
-                        "type": "warning",
-                        "message": "DGX Spark tuning failed on new nodes — continuing",
-                    })
-                step += 1
+            step += 1
 
             # GPU Operator setup — if any node has GPUs and setup fails,
             # there is no point rebuilding images for a broken cluster state.
             if any_gpu_detected:
                 gpu_ok = await _run_gpu_setup(
-                    websocket=websocket,
+                    progress=progress,
                     extra_vars=extra_vars,
                     step=step,
                 )
                 if not gpu_ok:
-                    await websocket.send_json({
+                    progress.send({
                         "type": "complete",
                         "status": "failed",
                         "message": f"Node(s) {', '.join(added_hostnames)} joined but GPU operator setup failed. "
                                    "Fix the issue and re-run add-node to resume.",
                     })
-                    await websocket.close()
                     return
                 step += 1
 
@@ -1255,31 +1291,27 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
             # CSI DaemonSet can schedule. Only runs Play 1 (k8s_cluster)
             # by limiting to new nodes — Play 2 (k8s_control_plane) is
             # skipped since JuiceFS is already installed.
-            juicefs_playbook = Path(
-                "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
-                "40_thinkube/core/juicefs/10_deploy.yaml"
+            juicefs_playbook = JUICEFS_DEPLOY
+            progress.send({
+                "type": "task",
+                "task_name": "Prepare JuiceFS kubelet directory on new nodes",
+                "task_number": step,
+            })
+            juicefs_ok = await _stream_playbook(
+                progress=progress,
+                playbook_path=juicefs_playbook,
+                extra_vars=extra_vars,
+                step_name="Prepare JuiceFS kubelet directory on new nodes",
+                step_number=step,
+                limit=",".join(added_hostnames),
             )
-            if juicefs_playbook.exists():
-                await websocket.send_json({
-                    "type": "task",
-                    "task_name": "Prepare JuiceFS kubelet directory on new nodes",
-                    "task_number": step,
+            if not juicefs_ok:
+                logger.warning("JuiceFS CSI setup failed on new nodes — continuing")
+                progress.send({
+                    "type": "warning",
+                    "message": "JuiceFS CSI setup failed on new nodes — continuing",
                 })
-                juicefs_ok = await _stream_playbook(
-                    websocket=websocket,
-                    playbook_path=juicefs_playbook,
-                    extra_vars=extra_vars,
-                    step_name="Prepare JuiceFS kubelet directory on new nodes",
-                    step_number=step,
-                    limit=",".join(added_hostnames),
-                )
-                if not juicefs_ok:
-                    logger.warning("JuiceFS CSI setup failed on new nodes — continuing")
-                    await websocket.send_json({
-                        "type": "warning",
-                        "message": "JuiceFS CSI setup failed on new nodes — continuing",
-                    })
-                step += 1
+            step += 1
 
             # Check if images need to be rebuilt for new architectures.
             # Update inventory build platforms so the playbooks will
@@ -1301,7 +1333,7 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
         if needs_rebuild:
             platforms_str = ",".join(f"linux/{a}" for a in architectures)
             tk_images_cmd = f"tk_images rebuild --uncordon {hostnames_csv}"
-            await websocket.send_json({
+            progress.send({
                 "type": "complete",
                 "status": "success",
                 "message": (
@@ -1321,21 +1353,21 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
                 # Restart any pods that cached wrong-arch images before cordon took effect
                 restarted = await node_manager.restart_crashlooping_pods(h)
                 if restarted:
-                    await websocket.send_json({
+                    progress.send({
                         "type": "ok",
                         "message": f"[{h}] Restarted {len(restarted)} crash-looping pod(s): {', '.join(restarted)}",
                     })
 
                 ok, msg = await node_manager.uncordon_node(h)
                 if ok:
-                    await websocket.send_json({
+                    progress.send({
                         "type": "ok",
                         "message": f"[{h}] Uncordoned — node ready for scheduling",
                     })
                 else:
                     logger.warning(f"Could not uncordon {h}: {msg}")
 
-            await websocket.send_json({
+            progress.send({
                 "type": "complete",
                 "status": "success",
                 "message": (
@@ -1350,15 +1382,9 @@ async def stream_batch_node_addition(websocket: WebSocket, job_id: str):
 
     except Exception as e:
         logger.error(f"Batch node addition error: {e}", exc_info=True)
-        try:
-            await websocket.send_json({"type": "error", "message": str(e)})
-        except Exception:
-            pass
+        progress.send({"type": "error", "message": str(e)})
     finally:
-        try:
-            await websocket.close()
-        except Exception:
-            pass
+        progress.end()
 
 
 @router.post("/remove")

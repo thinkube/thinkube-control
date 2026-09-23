@@ -256,14 +256,17 @@ export const useNodesStore = create<NodesState>((set, get) => ({
         gpu_detected: n.hardware?.gpu_detected || false,
         gpu_count: n.hardware?.gpu_count || 0,
         gpu_model: n.hardware?.gpu_model || '',
+        lvm_expandable: n.hardware?.lvm_expandable || false,
+        lvm_lv_path: n.hardware?.lvm_lv_path || '',
       }));
 
+      // The run starts on the server from this body; the answer is the job to poll.
       const response = await api.post('/nodes/add-batch', {
         nodes: nodesPayload,
       });
       return response.data;
     } catch (err: any) {
-      console.error('Failed to initiate batch node addition:', err);
+      console.error('Failed to start adding nodes:', err);
       set({ error: err.response?.data?.detail || err.message });
       return null;
     }

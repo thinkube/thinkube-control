@@ -14,7 +14,6 @@ import { TkErrorAlert, TkSuccessAlert, TkInfoAlert } from 'thinkube-style/compon
 import { TkBadge } from 'thinkube-style/components/buttons-badges'
 import api from '../lib/axios'
 import { EditPackagesModal } from '../components/EditPackagesModal'
-import { PlaybookExecutor, PlaybookExecutorHandle } from '../components/PlaybookExecutor'
 
 interface VenvTemplate {
   id: string
@@ -35,7 +34,11 @@ interface JupyterVenv {
   architectures_built?: string[]
   started_at?: string
   completed_at?: string
+  output?: string
 }
+
+// While a kernel builds on the server, the list is read again at this interval.
+const BUILD_POLL_INTERVAL_MS = 5000
 
 export default function JupyterKernelsPage() {
   const [loading, setLoading] = useState(true)
@@ -51,8 +54,8 @@ export default function JupyterKernelsPage() {
   const [editPackagesOpen, setEditPackagesOpen] = useState(false)
   const [editingVenv, setEditingVenv] = useState<JupyterVenv | null>(null)
 
-  const [buildTitle, setBuildTitle] = useState('Building Kernel')
-  const playbookExecutorRef = useRef<PlaybookExecutorHandle>(null)
+  const venvsRef = useRef<JupyterVenv[]>([])
+  venvsRef.current = venvs
 
   async function loadVenvs() {
     setLoading(true)
@@ -108,20 +111,49 @@ export default function JupyterKernelsPage() {
     }
   }
 
-  function buildVenv(venvId: string) {
+  // The build runs on the server as Kubernetes Jobs; closing the page does not stop it.
+  async function buildVenv(venvId: string) {
     const venv = venvs.find(v => v.id === venvId)
     if (!venv) return
 
+    setError(null)
+    setSuccess(null)
+    try {
+      await api.post(`/jupyter-venvs/${venvId}/build`, { force: true })
+    } catch (err: any) {
+      setError(err.response?.data?.detail || 'Failed to start the kernel build')
+      return
+    }
     setVenvs(prev => prev.map(v => v.id === venvId ? { ...v, status: 'building' } : v))
-
-    setBuildTitle(`Building Kernel: ${venv.name}`)
-    const wsPath = `/api/v1/ws/jupyter-venvs/build/${venvId}`
-    playbookExecutorRef.current?.startExecution(wsPath)
+    setSuccess(`Building kernel ${venv.name} for every architecture. It takes minutes; its status updates here.`)
   }
 
-  function handleBuildComplete(result: { status: string; message?: string }) {
-    loadVenvs()
-  }
+  const anyBuilding = venvs.some(v => v.status === 'building')
+
+  useEffect(() => {
+    if (!anyBuilding) return
+    const timer = window.setInterval(async () => {
+      let latest: JupyterVenv[]
+      try {
+        const response = await api.get<{ venvs: JupyterVenv[], total: number }>('/jupyter-venvs')
+        latest = response.data.venvs
+      } catch (err: any) {
+        setError(err?.response?.data?.detail || 'Failed to read the kernels')
+        return
+      }
+      for (const before of venvsRef.current.filter(v => v.status === 'building')) {
+        const after = latest.find(v => v.id === before.id)
+        if (after?.status === 'success') {
+          setSuccess(`Kernel ${after.name} built for ${(after.architectures_built || []).join(', ')}`)
+        } else if (after?.status === 'failed') {
+          setSuccess(null)
+          setError(`Kernel ${after.name} failed to build: ${after.output}`)
+        }
+      }
+      setVenvs(latest)
+    }, BUILD_POLL_INTERVAL_MS)
+    return () => window.clearInterval(timer)
+  }, [anyBuilding])
 
   function openEditPackages(venv: JupyterVenv) {
     setEditingVenv(venv)
@@ -316,14 +348,6 @@ export default function JupyterKernelsPage() {
           </TkCard>
         </div>
       )}
-
-      {/* Playbook Executor for streaming build output */}
-      <PlaybookExecutor
-        ref={playbookExecutorRef}
-        title={buildTitle}
-        successMessage="Kernel built successfully for all architectures!"
-        onComplete={handleBuildComplete}
-      />
 
       {/* Edit Packages Modal */}
       <EditPackagesModal

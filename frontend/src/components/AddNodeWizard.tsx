@@ -34,7 +34,7 @@ import {
 } from 'lucide-react';
 import { PlaybookExecutor, type PlaybookExecutorHandle } from '@/components/PlaybookExecutor';
 import { useNodesStore, type NetworkDiscoveredNode } from '@/stores/useNodesStore';
-import { getToken } from '@/lib/tokenManager';
+import api from '@/lib/axios';
 
 type WizardStep = 'scan' | 'select' | 'hardware' | 'adding';
 
@@ -98,27 +98,11 @@ export function AddNodeWizard({ open, onOpenChange, onComplete }: AddNodeWizardP
 
     setStep('adding');
 
-    const nodesPayload = selectedNodes.map((n) => ({
-      ip: n.ip,
-      hostname: n.hardware?.hostname || n.hostname || '',
-      lan_ip: n.ip,
-      overlay_ip: n.overlay_ip || undefined,
-      architecture: n.hardware?.architecture || '',
-      gpu_detected: n.hardware?.gpu_detected || false,
-      gpu_count: n.hardware?.gpu_count || 0,
-      gpu_model: n.hardware?.gpu_model || '',
-      lvm_expandable: n.hardware?.lvm_expandable || false,
-      lvm_lv_path: n.hardware?.lvm_lv_path || '',
-    }));
-
-    const params = new URLSearchParams({
-      nodes: JSON.stringify(nodesPayload),
+    // The run happens on the server; this view reads its progress.
+    playbookRef.current?.followRun(async (after) => {
+      const response = await api.get(`/nodes/add-batch/${result.job_id}`, { params: { after } });
+      return response.data;
     });
-
-    const token = getToken();
-    const wsPath = `/api/v1/nodes/ws/add-batch/${result.job_id}?${params.toString()}${token ? `&token=${token}` : ''}`;
-
-    playbookRef.current?.startExecution(wsPath);
   };
 
   const handlePlaybookComplete = useCallback((result: any) => {

@@ -15,194 +15,128 @@ interface BuildExecutorProps {
   title?: string
   successMessage?: string
   errorMessage?: string
+  onFinished?: () => void
 }
 
 interface LogEntry {
   message: string
   class?: string
-  status?: 'error' | 'success'
+}
+
+// One reading of a build that runs on the server: its record's status and its log so far.
+export interface BuildSnapshot {
+  status: string
+  log: string
+  message?: string
 }
 
 export interface BuildExecutorRef {
-  startExecution: (wsUrl: string) => void
+  follow: (poll: () => Promise<BuildSnapshot>) => void
+}
+
+const POLL_INTERVAL_MS = 3000
+
+function logClass(line: string): string {
+  if (
+    line.includes('ERROR') ||
+    line.includes('error:') ||
+    line.includes('Failed') ||
+    line.includes('FAILED') ||
+    line.includes('exit code: 1') ||
+    line.includes('exit status 1') ||
+    line.includes('AttributeError') ||
+    line.includes('subprocess-exited-with-error')
+  ) {
+    return 'text-destructive font-bold'
+  }
+  if (line.includes('WARNING') || line.includes('warning:')) return 'text-warning'
+  if (line.includes('STEP') || line.includes('-->')) return 'text-info font-medium'
+  if (line.includes('Successfully') || line.includes('COMPLETED')) return 'text-success'
+  return 'text-foreground'
 }
 
 const BuildExecutor = forwardRef<BuildExecutorRef, BuildExecutorProps>(
-  ({ title = 'Build Progress', successMessage, errorMessage }, ref) => {
-    // State
+  ({ title = 'Build Progress', successMessage, errorMessage, onFinished }, ref) => {
     const [isExecuting, setIsExecuting] = useState(false)
     const [showResult, setShowResult] = useState(false)
-    const [status, setStatus] = useState<'pending' | 'running' | 'success' | 'error' | 'cancelled'>('pending')
+    const [status, setStatus] = useState<'running' | 'success' | 'error'>('running')
     const [message, setMessage] = useState('')
-    const [currentTask, setCurrentTask] = useState('')
-    const [isCancelling, setIsCancelling] = useState(false)
     const [logOutput, setLogOutput] = useState<LogEntry[]>([])
     const [autoScroll, setAutoScroll] = useState(true)
 
     const logContainerRef = useRef<HTMLDivElement>(null)
-    const websocketRef = useRef<WebSocket | null>(null)
+    const timerRef = useRef<number | null>(null)
 
-    // Copy to clipboard hook
     const logText = logOutput.map(entry => entry.message).join('\n')
     const { copy, copied } = useCopyToClipboard(logText)
 
-    // Auto-scroll when new logs are added
     useEffect(() => {
       if (autoScroll && logContainerRef.current) {
         logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight
       }
     }, [logOutput, autoScroll])
 
-    // Start execution with WebSocket URL - EXACTLY like PlaybookExecutor
-    const startExecution = (wsUrl: string) => {
-      console.log('BuildExecutor: Starting build with WebSocket URL:', wsUrl)
+    const stopPolling = () => {
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current)
+        timerRef.current = null
+      }
+    }
 
-      // Reset state
+    // The build runs on the server; this view reads its record and log until it ends.
+    const follow = (poll: () => Promise<BuildSnapshot>) => {
+      stopPolling()
       setIsExecuting(true)
       setShowResult(false)
-      setStatus('pending')
+      setStatus('running')
       setMessage('')
-      setCurrentTask('Connecting to build service...')
       setLogOutput([])
-      setIsCancelling(false)
 
-      // Create WebSocket connection
-      const ws = new WebSocket(wsUrl)
-      websocketRef.current = ws
-
-      ws.onopen = () => {
-        console.log('BuildExecutor: WebSocket connected')
-        setStatus('running')
-        setCurrentTask('Building image...')
-      }
-
-      ws.onmessage = (event) => {
+      const tick = async () => {
+        let snapshot: BuildSnapshot
         try {
-          const data = JSON.parse(event.data)
-
-          if (data.type === 'log') {
-            // Build log output with colorization
-            let cssClass = 'text-foreground'
-
-            // Detect error patterns
-            if (
-              data.message.includes('ERROR') ||
-              data.message.includes('error:') ||
-              data.message.includes('Failed') ||
-              data.message.includes('exit code: 1') ||
-              data.message.includes('exit status 1') ||
-              data.message.includes('AttributeError') ||
-              data.message.includes('subprocess-exited-with-error')
-            ) {
-              cssClass = 'text-destructive font-bold'
-            } else if (data.message.includes('WARNING') || data.message.includes('warning:')) {
-              cssClass = 'text-warning'
-            } else if (data.message.includes('STEP') || data.message.includes('-->')) {
-              cssClass = 'text-info font-medium'
-            } else if (data.message.includes('Successfully') || data.message.includes('Complete')) {
-              cssClass = 'text-success'
-            }
-
-            setLogOutput(prev => [
-              ...prev,
-              {
-                message: data.message,
-                class: cssClass
-              }
-            ])
-          } else if (data.type === 'status') {
-            // Status update
-            setCurrentTask(data.message)
-
-            if (data.status === 'completed') {
-              setStatus('success')
-              setMessage(data.message || 'Build completed successfully')
-              setIsExecuting(false)
-              setShowResult(true)
-            } else if (data.status === 'failed') {
-              setStatus('error')
-              setMessage(data.message || 'Build failed')
-              // Keep the modal open to see the logs
-              setIsExecuting(true) // Keep showing the build output
-              setShowResult(false) // Don't show result modal
-            }
-          } else if (data.type === 'error') {
-            // Error message
-            setLogOutput(prev => [
-              ...prev,
-              {
-                message: `ERROR: ${data.message}`,
-                class: 'text-destructive font-bold',
-                status: 'error'
-              }
-            ])
-            setStatus('error')
-            setMessage(data.message)
-            setCurrentTask(`Build failed: ${data.message}`)
-          }
-        } catch (error) {
-          console.error('Error parsing WebSocket message:', error)
-        }
-      }
-
-      ws.onerror = (error) => {
-        console.error('WebSocket error:', error)
-        setStatus('error')
-        setMessage('Connection error')
-        setIsExecuting(false)
-        setShowResult(true)
-      }
-
-      ws.onclose = () => {
-        console.log('WebSocket connection closed')
-        if (status === 'running') {
+          snapshot = await poll()
+        } catch (error: any) {
           setStatus('error')
-          setMessage('Connection lost')
-          setIsExecuting(false)
-          setShowResult(true)
+          setMessage(`Could not read the build: ${error.response?.data?.detail || error.message}`)
+          return
         }
-      }
-    }
-
-    // Cancel execution
-    const cancelExecution = () => {
-      if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
-        setIsCancelling(true)
-        websocketRef.current.send(JSON.stringify({ type: 'cancel' }))
-        setTimeout(() => {
-          if (websocketRef.current) {
-            websocketRef.current.close()
-          }
-          setStatus('cancelled')
-          setMessage('Build cancelled by user')
+        setLogOutput(
+          snapshot.log
+            .split('\n')
+            .filter(line => line.length > 0)
+            .map(line => ({ message: line, class: logClass(line) }))
+        )
+        if (snapshot.status === 'success') {
+          setStatus('success')
+          setMessage(snapshot.message || '')
           setIsExecuting(false)
           setShowResult(true)
-        }, 1000)
+          onFinished?.()
+          return
+        }
+        if (snapshot.status === 'failed') {
+          // The progress view stays open so the log can be read.
+          setStatus('error')
+          setMessage(snapshot.message || errorMessage || 'Build failed. The log above says why.')
+          onFinished?.()
+          return
+        }
+        timerRef.current = window.setTimeout(tick, POLL_INTERVAL_MS)
       }
+      tick()
     }
 
-    // Handle close
     const handleClose = () => {
+      stopPolling()
       setIsExecuting(false)
       setShowResult(false)
-      if (websocketRef.current) {
-        websocketRef.current.close()
-        websocketRef.current = null
-      }
     }
 
-    // Cleanup on unmount
-    useEffect(() => {
-      return () => {
-        if (websocketRef.current) {
-          websocketRef.current.close()
-        }
-      }
-    }, [])
+    useEffect(() => stopPolling, [])
 
-    // Expose methods to parent - EXACTLY like PlaybookExecutor
     useImperativeHandle(ref, () => ({
-      startExecution
+      follow
     }))
 
     return (
@@ -214,16 +148,16 @@ const BuildExecutor = forwardRef<BuildExecutorRef, BuildExecutorProps>(
               <TkDialogTitle>{title}</TkDialogTitle>
             </TkDialogHeader>
 
-            {/* Build Status */}
-            {currentTask && (
-              <div className="mb-4">
-                <div className="flex justify-between text-sm mb-1">
-                  <span className="font-semibold">{currentTask}</span>
-                </div>
+            <div className="mb-4">
+              <div className="flex justify-between text-sm mb-1">
+                <span className="font-semibold">
+                  {status === 'running' && 'Building on the server. Closing this view does not stop the build.'}
+                  {status === 'error' && message}
+                </span>
               </div>
-            )}
+            </div>
 
-            {/* Live Output Log */}
+            {/* Build log */}
             <div className="mb-4">
               <div className="flex justify-between items-center mb-2">
                 <span className="text-sm text-muted-foreground">Build Output:</span>
@@ -270,7 +204,6 @@ const BuildExecutor = forwardRef<BuildExecutorRef, BuildExecutorProps>(
                 ) : (
                   logOutput.map((entry, index) => (
                     <div key={index} className={entry.class}>
-                      {entry.status === 'error' && '✗ '}
                       {entry.message}
                     </div>
                   ))
@@ -278,20 +211,8 @@ const BuildExecutor = forwardRef<BuildExecutorRef, BuildExecutorProps>(
               </div>
             </div>
 
-            {/* Footer Buttons */}
             <TkDialogFooter>
-              {status === 'running' && (
-                <TkButton
-                  intent="danger"
-                  onClick={cancelExecution}
-                  disabled={isCancelling}
-                >
-                  {isCancelling ? 'Cancelling...' : 'Cancel'}
-                </TkButton>
-              )}
-              {status !== 'running' && status !== 'pending' && (
-                <TkButton onClick={handleClose}>Close</TkButton>
-              )}
+              <TkButton onClick={handleClose}>Close</TkButton>
             </TkDialogFooter>
           </TkDialogContent>
         </TkDialogRoot>
@@ -306,7 +227,7 @@ const BuildExecutor = forwardRef<BuildExecutorRef, BuildExecutorProps>(
               </TkDialogTitle>
             </TkDialogHeader>
             <div className="py-4">
-              {successMessage || 'Build completed successfully!'}
+              {message || successMessage || 'Build completed successfully!'}
             </div>
             <TkDialogFooter>
               <TkButton onClick={handleClose}>Close</TkButton>

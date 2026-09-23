@@ -122,6 +122,13 @@ async def app_lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to initialize Jupyter venv templates: {e}")
 
+    try:
+        from app.api.custom_images import mark_orphaned_image_builds
+
+        mark_orphaned_image_builds()
+    except Exception as e:
+        logger.warning(f"Could not mark interrupted custom image builds: {e}")
+
     # Start health check background task
     health_check_task = asyncio.create_task(health_checker.start())
     logger.info("Started health check background task")
@@ -231,11 +238,13 @@ async def app_lifespan(app: FastAPI):
     from app.services.run_queue import run_queue
     run_queue.start()
 
-    # A venv build lives as a task in one backend process. When a rollout
-    # replaces the pod under a build, the new pod never had the task, so the
-    # record would say building for ever; this loop marks such records failed.
+    # A venv build or a custom image build lives as a task in one backend
+    # process. When a rollout replaces the pod under a build, the new pod never
+    # had the task, so the record would say building for ever; this loop marks
+    # such records failed.
     async def reconcile_venv_builds():
         from app.db.init_venvs import mark_orphaned_builds
+        from app.api.custom_images import mark_orphaned_image_builds
         from app.services import detached
 
         while True:
@@ -248,6 +257,12 @@ async def app_lifespan(app: FastAPI):
                 )
             except Exception as e:
                 logger.debug(f"venv build reconciliation: {e}")
+            try:
+                mark_orphaned_image_builds(
+                    still_running=lambda build_id: detached.running(f"image-build:{build_id}")
+                )
+            except Exception as e:
+                logger.warning(f"custom image build reconciliation: {e}")
 
     venv_reconcile_task = asyncio.create_task(reconcile_venv_builds())
 

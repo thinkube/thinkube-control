@@ -34,7 +34,7 @@ import {
 import { AddImageModal } from '../components/AddImageModal'
 import { ViewImageModal } from '../components/harbor/ViewImageModal'
 import { CreateCustomImageModal } from '../components/CreateCustomImageModal'
-import BuildExecutor from '../components/BuildExecutor'
+import BuildExecutor, { type BuildExecutorRef } from '../components/BuildExecutor'
 
 // HarborImage type imported from useHarborStore
 
@@ -74,7 +74,7 @@ export function HarborImages() {
   const [logsFilePath, setLogsFilePath] = useState('')
 
   // Reference to BuildExecutor component
-  const buildExecutorRef = useRef<any>(null)
+  const buildExecutorRef = useRef<BuildExecutorRef>(null)
 
   // Custom images state
   const [customImages, setCustomImages] = useState<CustomImage[]>([])
@@ -244,18 +244,27 @@ export function HarborImages() {
 
   const buildImage = async (image: CustomImage) => {
     try {
-      const response = await axios.post(`/custom-images/${image.id}/build`, {})
-
-      setSelectedImageName(image.name)
-
-      if (response.data.websocket_url) {
-        buildExecutorRef.current?.startExecution(`/api/v1${response.data.websocket_url}`)
-      } else {
-        buildExecutorRef.current?.startExecution(`/api/v1/ws/custom-images/build/${response.data.build_id}`)
-      }
+      await axios.post(`/custom-images/${image.id}/build`, {})
     } catch (error: any) {
       alert(`Failed to start build: ${error.response?.data?.detail || error.message}`)
+      return
     }
+
+    setSelectedImageName(image.name)
+    await fetchCustomImages()
+
+    // The build runs on the server. Its record names the log file once the build has started.
+    buildExecutorRef.current?.follow(async () => {
+      const { data: build } = await axios.get(`/custom-images/${image.id}`)
+      const logPath: string | null = build.output?.startsWith('/') ? build.output : null
+      let log = ''
+      if (logPath) {
+        const filename = logPath.split('/').pop()
+        const response = await axios.get(`/custom-images/${image.id}/logs/${filename}`, { responseType: 'text' })
+        log = response.data
+      }
+      return { status: build.status, log, message: logPath ? undefined : build.output ?? undefined }
+    })
   }
 
   const toggleBaseStatus = async (image: CustomImage) => {
@@ -977,6 +986,7 @@ export function HarborImages() {
         ref={buildExecutorRef}
         title={`Building ${selectedImageName}`}
         successMessage={`Build complete! Your image ${selectedImageName} is now available.`}
+        onFinished={fetchCustomImages}
       />
 
       <TkDialogRoot open={showLogsModal} onOpenChange={setShowLogsModal}>

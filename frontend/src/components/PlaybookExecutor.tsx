@@ -55,11 +55,17 @@ interface ExecutionResult {
 
 type ExecutionStatus = 'pending' | 'running' | 'success' | 'error' | 'cancelled' | 'failed'
 
+// Reads the events of a run that happens on the server, starting after the first `after`.
+export type RunEventsPoll = (after: number) => Promise<{ events: any[]; next: number }>
+
 export interface PlaybookExecutorHandle {
   startExecution: (wsPath?: string) => void
+  followRun: (poll: RunEventsPoll) => void
   completeExecution: (result: ExecutionResult) => void
   cancelExecution: () => void
 }
+
+const RUN_POLL_INTERVAL_MS = 2000
 
 export const PlaybookExecutor = forwardRef<PlaybookExecutorHandle, PlaybookExecutorProps>(function PlaybookExecutor({
   title,
@@ -98,6 +104,18 @@ export const PlaybookExecutor = forwardRef<PlaybookExecutorHandle, PlaybookExecu
   const websocketRef = useRef<WebSocket | null>(null)
   const startTimeRef = useRef<number>(0)
   const seenTasksRef = useRef<Set<string>>(new Set())
+  const pollTimerRef = useRef<number | null>(null)
+  const followingRef = useRef(false)
+
+  const stopFollowing = () => {
+    followingRef.current = false
+    if (pollTimerRef.current !== null) {
+      window.clearTimeout(pollTimerRef.current)
+      pollTimerRef.current = null
+    }
+  }
+
+  useEffect(() => stopFollowing, [])
 
   // WebSocket count tracking (for API service)
   const incrementWebSocketCount = () => {
@@ -289,9 +307,7 @@ export const PlaybookExecutor = forwardRef<PlaybookExecutorHandle, PlaybookExecu
     }
   }, [handleWebSocketMessage, status])
 
-  // Start execution
-  const startExecution = useCallback(
-    (wsPath?: string) => {
+  const resetForRun = useCallback(() => {
       setIsExecuting(true)
       setShowResult(false)
       setStatus('running')
@@ -312,6 +328,12 @@ export const PlaybookExecutor = forwardRef<PlaybookExecutorHandle, PlaybookExecu
       })
       seenTasksRef.current = new Set()
       startTimeRef.current = Date.now()
+  }, [])
+
+  // Start execution
+  const startExecution = useCallback(
+    (wsPath?: string) => {
+      resetForRun()
 
       // Connect WebSocket
       const path = wsPath || websocketPath
@@ -322,7 +344,47 @@ export const PlaybookExecutor = forwardRef<PlaybookExecutorHandle, PlaybookExecu
         connectWebSocket(deploymentPath)
       }
     },
-    [websocketPath, deploymentId, connectWebSocket]
+    [websocketPath, deploymentId, connectWebSocket, resetForRun]
+  )
+
+  // Follow a run that happens on the server: its events are read every few
+  // seconds and handled as the socket's messages were. Closing this view
+  // stops the reading, not the run.
+  const followRun = useCallback(
+    (poll: RunEventsPoll) => {
+      stopFollowing()
+      resetForRun()
+      followingRef.current = true
+      let after = 0
+
+      const tick = async () => {
+        let page: { events: any[]; next: number }
+        try {
+          page = await poll(after)
+        } catch (error: any) {
+          if (!followingRef.current) return
+          stopFollowing()
+          const reason = error.response?.data?.detail || error.message
+          handleWebSocketMessage({ type: 'error', message: `Could not read the run: ${reason}` })
+          completeExecution({ status: 'error', message: `Could not read the run: ${reason}` })
+          return
+        }
+        if (!followingRef.current) return
+        after = page.next
+        let ended = false
+        for (const event of page.events) {
+          handleWebSocketMessage(event)
+          if (event.type === 'complete') ended = true
+        }
+        if (ended) {
+          stopFollowing()
+          return
+        }
+        pollTimerRef.current = window.setTimeout(tick, RUN_POLL_INTERVAL_MS)
+      }
+      tick()
+    },
+    [resetForRun, handleWebSocketMessage]
   )
 
   // Complete execution
@@ -349,9 +411,11 @@ export const PlaybookExecutor = forwardRef<PlaybookExecutorHandle, PlaybookExecu
   // Cancel execution
   const cancelExecution = useCallback(() => {
     setIsCancelling(true)
+    const wasFollowing = followingRef.current
+    stopFollowing()
     websocketRef.current?.close()
     setStatus('cancelled')
-    setMessage('Execution was cancelled')
+    setMessage(wasFollowing ? 'No longer followed here. The run continues on the server.' : 'Execution was cancelled')
     setIsExecuting(false)
     setShowResult(true)
     setIsCancelling(false)
@@ -366,6 +430,7 @@ export const PlaybookExecutor = forwardRef<PlaybookExecutorHandle, PlaybookExecu
 
   // Close executor (on error)
   const closeExecutor = useCallback(() => {
+    stopFollowing()
     setIsExecuting(false)
     setShowResult(false)
     setStatus('pending')
@@ -485,9 +550,10 @@ Timestamp: ${new Date().toISOString()}
   // Expose methods via ref (for parent components)
   useImperativeHandle(ref, () => ({
     startExecution,
+    followRun,
     completeExecution,
     cancelExecution,
-  }), [startExecution, completeExecution, cancelExecution])
+  }), [startExecution, followRun, completeExecution, cancelExecution])
 
   return (
     <>
@@ -662,6 +728,10 @@ Timestamp: ${new Date().toISOString()}
                   </div>
                 )}
               </>
+            )}
+
+            {status === 'cancelled' && message && (
+              <TkInfoAlert>{message}</TkInfoAlert>
             )}
 
             {/* Error Result */}

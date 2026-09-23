@@ -16,8 +16,7 @@ ansible/
 1. **Playbooks** (`ansible/playbooks/`):
    - The backend runs the venv playbooks from
      `/home/thinkube/thinkube-control/ansible/playbooks/`
-     (`backend/app/api/jupyter_venvs.py`, `backend/app/api/nodes.py`,
-     `backend/app/api/websocket_executor.py`)
+     (`backend/app/api/jupyter_venvs.py`, `backend/app/api/nodes.py`)
 
 2. **Roles** (`ansible/roles/`):
    - Set as `ANSIBLE_ROLES_PATH` for these runs
