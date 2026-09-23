@@ -6,6 +6,8 @@
 import os
 import asyncio
 import logging
+import platform
+import shlex
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -513,8 +515,9 @@ async def build_custom_image(
 ):
     """Start building a custom image and return at once with the id to poll.
 
-    The build runs on the server, detached from this call: podman builds the
-    image, then pushes it to Harbor. Poll get_custom_image until status is
+    The build runs detached from this call, as an Argo Workflow with Buildah
+    that pushes the image to Harbor. The image's directory is sent to the
+    build as text, 900 KiB at most. Poll get_custom_image until status is
     success or failed. Its output field names the build log, which
     download_build_log returns while the build runs and after it ends.
     """
@@ -822,107 +825,174 @@ async def _execute_custom_image_build(build_id: str) -> None:
         db.close()
 
 
+# The build runs as an Argo Workflow in argo, with the image builder the app
+# builds use. The image's directory travels in the Workflow as raw artifacts,
+# so it is sent as text and is bounded by the size of one Kubernetes object.
+BUILDAH_IMAGE = "library/buildah:v1.43.4"
+BUILD_NAMESPACE = "argo"
+CONTEXT_LIMIT_BYTES = 900 * 1024
+POLL_SECONDS = 10
+FINAL_PHASES = ("Succeeded", "Failed", "Error")
+ARCHITECTURES = {"x86_64": "amd64", "aarch64": "arm64"}
+
+
+def _context_artifacts(context: Path) -> List[Dict[str, Any]]:
+    """The files of an image's directory, as raw input artifacts of the build pod."""
+    artifacts: List[Dict[str, Any]] = []
+    size = 0
+    for path in sorted(p for p in context.rglob("*") if p.is_file()):
+        relative = path.relative_to(context)
+        try:
+            text = path.read_text()
+        except UnicodeDecodeError:
+            raise ValueError(f"{relative} is not a text file; a custom image directory can hold text files only")
+        size += len(text.encode())
+        artifacts.append({"name": f"file-{len(artifacts)}", "path": f"/context/{relative}", "raw": {"data": text}})
+    if size > CONTEXT_LIMIT_BYTES:
+        raise ValueError(f"{context} holds {size} bytes; a custom image directory can hold {CONTEXT_LIMIT_BYTES} at most")
+    return artifacts
+
+
+def _build_workflow(build: CustomImageBuild, registry_url: str, architecture: str, artifacts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The Argo Workflow that builds ``build`` with Buildah and pushes it to ``registry_url``."""
+    repository = registry_url.rsplit(":", 1)[0]
+    registry_host = registry_url.split("/", 1)[0]
+    build_args = (build.build_config or {}).get("build_args") or {}
+    arg_flags = "".join(f" --build-arg {shlex.quote(f'{k}={v}')}" for k, v in build_args.items())
+    dockerfile = Path(build.dockerfile_path).name
+    script = (
+        "set -e\n"
+        "buildah build --isolation chroot --storage-driver overlay"
+        " --ulimit nofile=524288:524288"
+        f" --layers --cache-from {shlex.quote(repository + '/cache')} --cache-to {shlex.quote(repository + '/cache')}"
+        f" --retry 3{arg_flags}"
+        f" -f {shlex.quote('/context/' + dockerfile)} -t {shlex.quote(registry_url)} /context\n"
+        f"buildah push --storage-driver overlay --retry 3 {shlex.quote(registry_url)}\n"
+    )
+    return {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Workflow",
+        "metadata": {
+            "generateName": f"custom-image-{build.name}-",
+            "namespace": BUILD_NAMESPACE,
+            "labels": {"thinkube.io/custom-image-build": str(build.id)},
+        },
+        "spec": {
+            "entrypoint": "build",
+            "serviceAccountName": "image-builder",
+            "activeDeadlineSeconds": 3 * 3600,
+            "volumes": [
+                {"name": "docker-config", "secret": {"secretName": "docker-config"}},
+                {"name": "buildah-storage", "emptyDir": {}},
+            ],
+            "templates": [{
+                "name": "build",
+                "nodeSelector": {"kubernetes.io/arch": architecture},
+                "inputs": {"artifacts": artifacts},
+                "container": {
+                    "image": f"{registry_host}/{BUILDAH_IMAGE}",
+                    "command": ["/bin/bash", "-c"],
+                    "args": [script],
+                    # Buildah unpacks layers in its own mount namespace: SYS_ADMIN,
+                    # and no AppArmor profile that forbids those mounts.
+                    "securityContext": {
+                        "runAsUser": 0,
+                        "capabilities": {"add": ["SYS_ADMIN"]},
+                        "appArmorProfile": {"type": "Unconfined"},
+                    },
+                    "env": [{"name": "REGISTRY_AUTH_FILE", "value": "/registry-auth/config.json"}],
+                    "volumeMounts": [
+                        {"name": "docker-config", "mountPath": "/registry-auth"},
+                        {"name": "buildah-storage", "mountPath": "/var/lib/containers"},
+                    ],
+                    "resources": {
+                        "requests": {"memory": "1Gi", "cpu": "500m"},
+                        "limits": {"memory": "4Gi", "cpu": "4"},
+                    },
+                },
+            }],
+        },
+    }
+
+
+def _k8s():
+    from kubernetes import client, config
+
+    config.load_incluster_config()
+    return client.CustomObjectsApi(), client.CoreV1Api()
+
+
+def _submit_workflow(workflow: Dict[str, Any]) -> str:
+    custom, _ = _k8s()
+    created = custom.create_namespaced_custom_object(
+        "argoproj.io", "v1alpha1", BUILD_NAMESPACE, "workflows", workflow
+    )
+    return created["metadata"]["name"]
+
+
+def _workflow_state(name: str) -> tuple[str, str, str]:
+    """The Workflow's phase, its message, and the build pod's log so far."""
+    custom, core = _k8s()
+    workflow = custom.get_namespaced_custom_object("argoproj.io", "v1alpha1", BUILD_NAMESPACE, "workflows", name)
+    status = workflow.get("status") or {}
+    pods = core.list_namespaced_pod(BUILD_NAMESPACE, label_selector=f"workflows.argoproj.io/workflow={name}").items
+    log = ""
+    if pods and pods[0].status.phase not in ("Pending",):
+        log = core.read_namespaced_pod_log(pods[0].metadata.name, BUILD_NAMESPACE, container="main")
+    return status.get("phase") or "Pending", status.get("message") or "", log
+
+
 async def _run_image_build(build: CustomImageBuild, db: Session) -> Dict[str, Any]:
-    """Run podman build, login and push for ``build``, writing every line to its log.
+    """Build ``build`` in an Argo Workflow and copy the build pod's log into its log file.
 
     The log's path goes into ``build.output`` before the build starts, so a
     caller polling the record can read the log while the build runs.
     """
-    domain = settings.DOMAIN_NAME
-    # Use 'library' project which exists by default in Harbor
-    registry_url = f"registry.{domain}/library/{build.name}:latest"
+    registry_url = f"registry.{settings.DOMAIN_NAME}/library/{build.name}:latest"
 
     app_log_dir = BUILD_LOG_DIR / build.name
     app_log_dir.mkdir(parents=True, exist_ok=True)
     log_path = app_log_dir / f"build-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
-
     build.output = str(log_path)
     db.commit()
 
-    dockerfile_path = Path(build.dockerfile_path)
-    cmd = [
-        "podman", "build",
-        "-t", registry_url,
-        "-f", str(dockerfile_path),
-        str(dockerfile_path.parent),
-    ]
-    if build.build_config and "build_args" in build.build_config:
-        for key, value in build.build_config["build_args"].items():
-            cmd.extend(["--build-arg", f"{key}={value}"])
-
-    with open(log_path, "w") as log:
-        log.write("=== THINKUBE BUILD LOG ===\n")
-        log.write(f"Build ID: {build.id}\n")
-        log.write(f"Image: {build.name}\n")
-        log.write(f"Started at: {datetime.now()}\n")
-        log.write(f"Command: {' '.join(cmd)}\n")
-        log.write("\n=== BUILD OUTPUT ===\n")
-        log.flush()
-
-        if not dockerfile_path.exists():
-            log.write(f"\n=== BUILD FAILED ===\nDockerfile not found: {dockerfile_path}\n")
-            return {"return_code": 1}
-
-        logger.info(f"Executing podman build: {' '.join(cmd)}")
-        return_code = await _run_logged(cmd, log, env={**os.environ, "BUILDAH_FORMAT": "docker"})
-        if return_code != 0:
-            log.write(f"\n\n=== BUILD FAILED ===\nReturn code: {return_code}\nFailed at: {datetime.now()}\n")
-            return {"return_code": return_code}
-
-        registry_host = f"registry.{domain}"
-        username = os.environ.get("HARBOR_USERNAME", "admin")
-        password = os.environ.get("HARBOR_PASSWORD", os.environ.get("ADMIN_PASSWORD", ""))
-
-        log.write(f"\n\nLogging into registry: {registry_host}\n")
-        log.flush()
-        login_return = await _run_logged(
-            ["podman", "login", registry_host, "-u", username, "-p", password],
-            log,
-            # A line that could carry the password is not written.
-            keep=lambda line: "password" not in line.lower(),
-        )
-        if login_return != 0:
-            log.write(f"\n\n=== LOGIN FAILED ===\nReturn code: {login_return}\n")
-            return {"return_code": login_return}
-        log.write("Registry login successful\n")
-
-        logger.info(f"Pushing image: {registry_url}")
-        log.write(f"\nPushing image to registry: {registry_url}\n")
-        log.flush()
-        push_return = await _run_logged(["podman", "push", registry_url], log)
-        if push_return != 0:
-            log.write(f"\nPush failed with return code: {push_return}\n")
-            return {"return_code": push_return}
-
-        log.write("\n\n=== BUILD COMPLETED SUCCESSFULLY ===\n")
-        log.write(f"Image available at: {registry_url}\n")
-        log.write(f"Finished at: {datetime.now()}\n")
-        return {"return_code": 0, "registry_url": registry_url}
-
-
-async def _run_logged(cmd: List[str], log, env: Optional[Dict[str, str]] = None, keep=None) -> int:
-    """Run ``cmd``, copy its output to ``log`` line by line, and return its exit code."""
-    process = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-        env=env,
-        limit=1024 * 1024,
+    header = (
+        "=== THINKUBE BUILD LOG ===\n"
+        f"Build ID: {build.id}\n"
+        f"Image: {build.name}\n"
+        f"Started at: {datetime.now()}\n"
     )
+
+    def write(body: str) -> None:
+        log_path.write_text(header + body)
+
+    dockerfile_path = Path(build.dockerfile_path)
+    if not dockerfile_path.exists():
+        write(f"\n=== BUILD FAILED ===\nDockerfile not found: {dockerfile_path}\n")
+        return {"return_code": 1}
     try:
-        while True:
-            line = await process.stdout.readline()
-            if not line:
-                break
-            text = line.decode("utf-8", errors="ignore").rstrip()
-            if keep is None or keep(text):
-                log.write(f"{text}\n")
-                log.flush()
-        return await process.wait()
-    finally:
-        if process.returncode is None:
-            process.terminate()
-            await process.wait()
+        artifacts = _context_artifacts(dockerfile_path.parent)
+    except ValueError as e:
+        write(f"\n=== BUILD FAILED ===\n{e}\n")
+        return {"return_code": 1}
+
+    architecture = ARCHITECTURES[platform.machine()]
+    name = await asyncio.to_thread(_submit_workflow, _build_workflow(build, registry_url, architecture, artifacts))
+    started = f"Workflow: {BUILD_NAMESPACE}/{name} on {architecture}\n\n=== BUILD OUTPUT ===\n"
+    write(started)
+    logger.info(f"Custom image {build.name} building in workflow {name}")
+
+    while True:
+        await asyncio.sleep(POLL_SECONDS)
+        phase, message, pod_log = await asyncio.to_thread(_workflow_state, name)
+        if phase not in FINAL_PHASES:
+            write(started + pod_log)
+            continue
+        if phase == "Succeeded":
+            write(started + pod_log + f"\n\n=== BUILD COMPLETED SUCCESSFULLY ===\nImage available at: {registry_url}\nFinished at: {datetime.now()}\n")
+            return {"return_code": 0, "registry_url": registry_url}
+        write(started + pod_log + f"\n\n=== BUILD FAILED ===\nWorkflow {phase}: {message}\nFailed at: {datetime.now()}\n")
+        return {"return_code": 1}
 
 
 def mark_orphaned_image_builds(db: Session = None, still_running=None) -> int:
