@@ -35,6 +35,7 @@ def cluster(monkeypatch):
     monkeypatch.setattr(nodes, "_add_node_playbooks", lambda provider: [])
     monkeypatch.setattr(nodes, "_add_node_jobs", {})
     monkeypatch.delenv("ANSIBLE_BECOME_PASSWORD", raising=False)
+    monkeypatch.delenv("SYSTEM_PASSWORD", raising=False)
 
 
 def request(password=None):
@@ -158,3 +159,21 @@ def test_a_run_that_completed_is_left_as_it_ended():
 
     assert job.status == "success"
     assert len(job.events) == 1
+
+
+def test_without_the_cluster_password_the_system_password_is_used(cluster, monkeypatch):
+    received = []
+
+    async def fake_add_nodes(job, node_list, password):
+        received.append(password)
+        job.end()
+
+    monkeypatch.setattr(nodes, "_add_nodes", fake_add_nodes)
+    monkeypatch.setenv("SYSTEM_PASSWORD", "system-secret")
+
+    async def scenario():
+        await nodes.add_nodes_batch(request(), current_user={})
+        await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+    assert received == ["system-secret"]

@@ -115,7 +115,7 @@ class DiscoverNetworkRequest(BaseModel):
 class AddNodesBatchRequest(BaseModel):
     nodes: List[Dict[str, Any]]
     # The nodes' SSH password, used only where the cluster key is not yet
-    # authorized. Without it, ANSIBLE_BECOME_PASSWORD is used.
+    # authorized. Without it, ANSIBLE_BECOME_PASSWORD, or else SYSTEM_PASSWORD.
     password: Optional[str] = None
 
 
@@ -371,11 +371,15 @@ async def verify_ssh(request: VerifySSHRequest):
     """Test SSH connectivity to selected nodes using the cluster key.
 
     If key auth fails, distributes the key with the password given in the
-    request, or else the cluster's ANSIBLE_BECOME_PASSWORD, as adding nodes
-    does. A node that needs a password when neither is set is reported as
-    needs_password.
+    request, or else the cluster's ANSIBLE_BECOME_PASSWORD, or else
+    SYSTEM_PASSWORD, as adding nodes does. A node that needs a password when
+    none is set is reported as needs_password.
     """
-    password = request.password or os.environ.get("ANSIBLE_BECOME_PASSWORD")
+    password = (
+        request.password
+        or os.environ.get("ANSIBLE_BECOME_PASSWORD")
+        or os.environ.get("SYSTEM_PASSWORD")
+    )
 
     results = []
     for node_info in request.nodes:
@@ -523,7 +527,11 @@ async def add_nodes_batch(
                 detail=f"Node '{hostname}' already exists in the cluster",
             )
 
-    password = request.password or os.environ.get("ANSIBLE_BECOME_PASSWORD")
+    password = (
+        request.password
+        or os.environ.get("ANSIBLE_BECOME_PASSWORD")
+        or os.environ.get("SYSTEM_PASSWORD")
+    )
 
     job = AddNodesJob(str(uuid.uuid4()), len(request.nodes))
     _add_node_jobs[job.id] = job
@@ -634,7 +642,7 @@ async def _add_nodes(progress: AddNodesJob, nodes: List[Dict[str, Any]], passwor
             else:
                 progress.send({
                     "type": "error",
-                    "message": f"[{hostname or ip}] SSH key auth failed, no password was given and ANSIBLE_BECOME_PASSWORD is not set. Aborting batch.",
+                    "message": f"[{hostname or ip}] SSH key auth failed, no password was given and neither ANSIBLE_BECOME_PASSWORD nor SYSTEM_PASSWORD is set. Aborting batch.",
                 })
                 batch_failed = True
                 failed_hostname = hostname or ip
