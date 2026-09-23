@@ -214,68 +214,6 @@ class DependencyManager:
 
         return tree
 
-    def get_enable_order(self, service: ServiceModel) -> List[ServiceModel]:
-        """Get the order in which services should be enabled
-
-        Args:
-            service: Target service to enable
-
-        Returns:
-            List of services in the order they should be enabled
-        """
-        enable_order = []
-        visited = set()
-
-        def add_dependencies(svc: Service):
-            if svc.name in visited:
-                return
-
-            visited.add(svc.name)
-
-            # Add dependencies first
-            for dep_name in svc.dependencies:
-                dep_service = (
-                    self.db.query(ServiceModel)
-                    .filter(ServiceModel.name == dep_name)
-                    .first()
-                )
-                if dep_service and not dep_service.is_enabled:
-                    add_dependencies(dep_service)
-
-            # Then add the service itself
-            if not svc.is_enabled and svc not in enable_order:
-                enable_order.append(svc)
-
-        add_dependencies(service)
-        return enable_order
-
-    def get_disable_order(self, service: ServiceModel) -> List[ServiceModel]:
-        """Get the order in which services should be disabled
-
-        Args:
-            service: Target service to disable
-
-        Returns:
-            List of services in the order they should be disabled
-        """
-        disable_order = []
-
-        # First add all dependents
-        def add_dependents(svc: Service):
-            dependents = self.get_dependents(svc)
-            for dep in dependents:
-                if dep.is_enabled and dep not in disable_order:
-                    add_dependents(dep)  # Recursively add their dependents
-                    disable_order.append(dep)
-
-        add_dependents(service)
-
-        # Finally add the service itself
-        if service not in disable_order:
-            disable_order.append(service)
-
-        return disable_order
-
     def validate_service_name(
         self, name: str, service_type: ServiceType
     ) -> Tuple[bool, Optional[str]]:
