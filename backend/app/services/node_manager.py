@@ -344,7 +344,6 @@ fi
             "ansible_host": ansible_host,
             "lan_ip": lan_ip or ip,
             "arch": inv_arch_group,
-            "configure_gpu_passthrough": False,
         }
 
         if network_mode == "overlay" and overlay_ip:
