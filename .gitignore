@@ -47,3 +47,6 @@ ansible/inventory/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local Claude Code and Tandem state
+.tandem/
