@@ -216,3 +216,20 @@ def test_a_workflow_that_fails_says_why_in_the_log(monkeypatch, tmp_path):
     assert result == {"return_code": 1}
     log = open(build.output).read()
     assert "Error: no such image" in log and "Workflow Failed: child failed" in log
+
+
+def test_deleting_an_image_removes_its_build_workflows(monkeypatch, tmp_path):
+    monkeypatch.setattr(ci, "BUILD_LOG_DIR", tmp_path)
+    deleted = []
+    monkeypatch.setattr(ci, "_delete_workflows", lambda build_id: deleted.append(build_id))
+    build = image(status="success", dockerfile_path=str(tmp_path / "gone" / "Dockerfile"))
+
+    class DeletingDB(FakeDB):
+        def delete(self, row):
+            self.rows.remove(row)
+
+    db = DeletingDB(build)
+    asyncio.run(ci.delete_custom_image(build.id, db=db, current_user={}))
+
+    assert deleted == [str(build.id)]
+    assert db.rows == []

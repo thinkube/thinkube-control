@@ -379,7 +379,7 @@ def edit_image_template_in_code_server(
     # Create template file if it doesn't exist or if template is empty
     if not template_file.exists() or not image.template:
         # Generate minimal template
-        # Use harbor_project/name:tag format WITHOUT registry domain (podman defaults to the platform's Harbor registry)
+        # Use harbor_project/name:tag format WITHOUT registry domain (custom image builds resolve short names to Harbor)
         # More reliable than repository field which had a parsing bug
         image_ref = f"{image.harbor_project or 'library'}/{image.name}:{image.tag}"
         template_content = image.template or f"""FROM {image_ref}

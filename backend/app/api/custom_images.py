@@ -778,6 +778,9 @@ async def delete_custom_image(
         import shutil
         shutil.rmtree(log_dir)
 
+    # Delete the image's build Workflows
+    await asyncio.to_thread(_delete_workflows, str(build.id))
+
     # Delete database record
     db.delete(build)
     db.commit()
@@ -860,8 +863,11 @@ def _build_workflow(build: CustomImageBuild, registry_url: str, architecture: st
     build_args = (build.build_config or {}).get("build_args") or {}
     arg_flags = "".join(f" --build-arg {shlex.quote(f'{k}={v}')}" for k, v in build_args.items())
     dockerfile = Path(build.dockerfile_path).name
+    # Custom Dockerfiles name base images without a registry (FROM library/x);
+    # short names resolve to Harbor only.
     script = (
         "set -e\n"
+        f"printf 'unqualified-search-registries = [\"%s\"]\\n' {shlex.quote(registry_host)} > /tmp/registries.conf\n"
         "buildah build --isolation chroot --storage-driver overlay"
         " --ulimit nofile=524288:524288"
         f" --layers --cache-from {shlex.quote(repository + '/cache')} --cache-to {shlex.quote(repository + '/cache')}"
@@ -900,7 +906,10 @@ def _build_workflow(build: CustomImageBuild, registry_url: str, architecture: st
                         "capabilities": {"add": ["SYS_ADMIN"]},
                         "appArmorProfile": {"type": "Unconfined"},
                     },
-                    "env": [{"name": "REGISTRY_AUTH_FILE", "value": "/registry-auth/config.json"}],
+                    "env": [
+                        {"name": "REGISTRY_AUTH_FILE", "value": "/registry-auth/config.json"},
+                        {"name": "CONTAINERS_REGISTRIES_CONF", "value": "/tmp/registries.conf"},
+                    ],
                     "volumeMounts": [
                         {"name": "docker-config", "mountPath": "/registry-auth"},
                         {"name": "buildah-storage", "mountPath": "/var/lib/containers"},
@@ -920,6 +929,18 @@ def _k8s():
 
     config.load_incluster_config()
     return client.CustomObjectsApi(), client.CoreV1Api()
+
+
+def _delete_workflows(build_id: str) -> None:
+    custom, _ = _k8s()
+    workflows = custom.list_namespaced_custom_object(
+        "argoproj.io", "v1alpha1", BUILD_NAMESPACE, "workflows",
+        label_selector=f"thinkube.io/custom-image-build={build_id}",
+    )
+    for workflow in workflows["items"]:
+        custom.delete_namespaced_custom_object(
+            "argoproj.io", "v1alpha1", BUILD_NAMESPACE, "workflows", workflow["metadata"]["name"]
+        )
 
 
 def _submit_workflow(workflow: Dict[str, Any]) -> str:
