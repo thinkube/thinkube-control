@@ -872,6 +872,9 @@ def _build_workflow(build: CustomImageBuild, registry_url: str, architecture: st
         f"for try in $(seq 1 30); do getent hosts {shlex.quote(registry_host)} >/dev/null && break;"
         f" [ \"$try\" = 30 ] && {{ echo {shlex.quote(registry_host + ' does not resolve after 60s')}; exit 1; }}; sleep 2; done\n"
         f"printf 'unqualified-search-registries = [\"%s\"]\\n' {shlex.quote(registry_host)} > /tmp/registries.conf\n"
+        # chroot: RUN steps run without a nested OCI runtime, which this pod
+        # cannot provide. nofile: Buildah raises RLIMIT_NOFILE for RUN steps,
+        # and a RUN step fails when that is above the pod's hard limit.
         "buildah build --isolation chroot --storage-driver overlay"
         " --ulimit nofile=524288:524288"
         f" --layers --cache-from {shlex.quote(repository + '/cache')} --cache-to {shlex.quote(repository + '/cache')}"
@@ -903,8 +906,10 @@ def _build_workflow(build: CustomImageBuild, registry_url: str, architecture: st
                     "image": f"{registry_host}/{BUILDAH_IMAGE}",
                     "command": ["/bin/bash", "-c"],
                     "args": [script],
-                    # Buildah unpacks layers in its own mount namespace: SYS_ADMIN,
-                    # and no AppArmor profile that forbids those mounts.
+                    # Buildah unpacks each layer in its own mount namespace, which
+                    # needs root, SYS_ADMIN and no AppArmor profile that forbids
+                    # those mounts; without them unpacking fails with "remount /,
+                    # flags: 0x44000: permission denied".
                     "securityContext": {
                         "runAsUser": 0,
                         "capabilities": {"add": ["SYS_ADMIN"]},

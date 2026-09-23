@@ -1,5 +1,16 @@
 # Generated Argo Workflow template for building and testing containers
 # Supports multi-architecture builds when cluster has nodes of different architectures
+#
+# Build tool: Buildah (library/buildah, mirrored from quay.io/buildah/stable),
+# in a pod that is not privileged. Beyond a default pod it needs:
+#   - runAsUser 0, capability SYS_ADMIN and AppArmor Unconfined: Buildah
+#     unpacks each layer in its own mount namespace. Without them unpacking
+#     fails with "remount /, flags: 0x44000: permission denied".
+#   - --isolation chroot: RUN steps run without a nested OCI runtime, which
+#     this pod cannot provide.
+#   - --ulimit nofile=524288:524288: Buildah raises RLIMIT_NOFILE for RUN
+#     steps, and a RUN step fails when that is above the pod's hard limit.
+# Cache: the layer cache lives in Harbor, in <image>/cache.
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowTemplate
