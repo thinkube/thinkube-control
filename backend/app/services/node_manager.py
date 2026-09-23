@@ -22,6 +22,7 @@ from kubernetes import client, config
 from ruamel.yaml import YAML
 
 from app.services.ansible_environment import ansible_env
+from app.services.gpu_names import gpu_name, is_gpu
 
 logger = logging.getLogger(__name__)
 
@@ -159,17 +160,9 @@ echo -n '"k8s_installed": '
 if command -v k8s &>/dev/null; then echo -n 'true'; else echo -n 'false'; fi
 echo ','
 
-echo -n '"gpu_detected": '
-if lspci 2>/dev/null | grep -qi nvidia; then echo -n 'true'; else echo -n 'false'; fi
-echo ','
-
-echo -n '"gpu_model": "'
-lspci 2>/dev/null | grep -i 'vga.*nvidia\|3d.*nvidia' | head -1 | sed 's/.*NVIDIA Corporation //' | sed 's/ \[.*//; s/"/\\"/g' | tr -d '\n' || echo -n ""
-echo '",'
-
-echo -n '"gpu_count": '
-lspci 2>/dev/null | grep -ci 'vga.*nvidia\|3d.*nvidia' || echo -n "0"
-echo ','
+echo -n '"lspci_lines": ['
+lspci -nn | sed 's/\\/\\\\/g; s/"/\\"/g; s/.*/"&"/' | paste -sd, - | tr -d '\n'
+echo '],'
 
 echo -n '"nvidia_driver_version": "'
 nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | tr -d '\n' || echo -n ""
@@ -215,6 +208,10 @@ echo '}'
             try:
                 data = json.loads(output)
                 data["ip"] = ip
+                gpu_lines = [line for line in data.pop("lspci_lines") if is_gpu(line)]
+                data["gpu_detected"] = bool(gpu_lines)
+                data["gpu_count"] = len(gpu_lines)
+                data["gpu_model"] = gpu_name(gpu_lines[0]) if gpu_lines else ""
                 arch = data.get("architecture", "unknown").lower()
                 if arch in ("x86_64", "amd64"):
                     data["normalized_arch"] = "amd64"
@@ -1358,7 +1355,7 @@ echo "OK"
         for family in unsupported_families:
             if family in gpu_model:
                 return False
-        model_upper = gpu_model.upper()
+        model_upper = gpu_model.removeprefix("NVIDIA ").upper()
         for chip in unsupported_chips:
             if model_upper.startswith(chip) and len(model_upper) > len(chip) and model_upper[len(chip):len(chip)+2].isdigit():
                 return False
