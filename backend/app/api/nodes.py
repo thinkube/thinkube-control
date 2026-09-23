@@ -370,15 +370,12 @@ async def discover_network(request: DiscoverNetworkRequest = DiscoverNetworkRequ
 async def verify_ssh(request: VerifySSHRequest):
     """Test SSH connectivity to selected nodes using the cluster key.
 
-    If key auth fails, automatically distributes the key using the
-    system password from the environment (ANSIBLE_BECOME_PASSWORD).
-    Falls back to a user-supplied password if the env var is not set.
+    If key auth fails, distributes the key with the password given in the
+    request, or else the cluster's ANSIBLE_BECOME_PASSWORD, as adding nodes
+    does. A node that needs a password when neither is set is reported as
+    needs_password.
     """
-    password = (
-        request.password
-        or os.environ.get("ANSIBLE_BECOME_PASSWORD")
-        or os.environ.get("SYSTEM_PASSWORD")
-    )
+    password = request.password or os.environ.get("ANSIBLE_BECOME_PASSWORD")
 
     results = []
     for node_info in request.nodes:
