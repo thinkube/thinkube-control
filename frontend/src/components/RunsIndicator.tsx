@@ -26,10 +26,12 @@ const LOG_LIMIT = 1000;
 function useRunLog(runId: string | null, follow: boolean) {
   const [lines, setLines] = useState<string[]>([]);
   const [progress, setProgress] = useState<RunProgress | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setLines([]);
     setProgress(null);
+    setError(null);
     if (!runId) return;
     let stopped = false;
     const read = async () => {
@@ -45,8 +47,10 @@ function useRunLog(runId: string | null, follow: boolean) {
           reason: status.data.reason ?? null,
         });
         setLines(logs.data.logs.map((l: any) => l.message));
-      } catch (err) {
-        console.error('Failed to read the run log:', err);
+        setError(null);
+      } catch (err: any) {
+        if (stopped) return;
+        setError(`Could not read the run log: ${err.response?.data?.detail ?? err.message}`);
       }
     };
     read();
@@ -58,14 +62,15 @@ function useRunLog(runId: string | null, follow: boolean) {
     };
   }, [runId, follow]);
 
-  return { lines, progress };
+  return { lines, progress, error };
 }
 
-function LogView({ lines }: { lines: string[] }) {
+function LogView({ lines, error }: { lines: string[]; error: string | null }) {
   const ref = useRef<HTMLPreElement>(null);
   useEffect(() => {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
   }, [lines.length]);
+  if (error) return <p className="text-sm text-destructive">{error}</p>;
   return (
     <pre ref={ref} className="text-xs bg-muted rounded p-3 max-h-72 overflow-auto whitespace-pre-wrap">
       {lines.length ? lines.join('\n') : 'No output yet'}
@@ -82,7 +87,7 @@ function StatusIcon({ status }: { status: string }) {
 }
 
 function ActiveRun({ run }: { run: RunEntry }) {
-  const { lines, progress } = useRunLog(run.id, true);
+  const { lines, progress, error } = useRunLog(run.id, true);
   return (
     <section className="space-y-2">
       <h4 className="text-sm font-semibold">In progress</h4>
@@ -94,14 +99,14 @@ function ActiveRun({ run }: { run: RunEntry }) {
       <p className="text-sm text-muted-foreground">
         {progress?.current_step ? `Step ${progress.steps_done}: ${progress.current_step}` : 'Starting...'}
       </p>
-      <LogView lines={lines} />
+      <LogView lines={lines} error={error} />
     </section>
   );
 }
 
 function FinishedRun({ run }: { run: RunEntry }) {
   const [open, setOpen] = useState(false);
-  const { lines, progress } = useRunLog(open ? run.id : null, false);
+  const { lines, progress, error } = useRunLog(open ? run.id : null, false);
   return (
     <li className="space-y-2">
       <div className="flex items-center gap-2">
@@ -120,7 +125,7 @@ function FinishedRun({ run }: { run: RunEntry }) {
           {run.status !== 'success' && (progress?.reason || run.output) && (
             <p className="text-sm text-destructive">{progress?.reason || run.output}</p>
           )}
-          <LogView lines={lines} />
+          <LogView lines={lines} error={error} />
         </>
       )}
     </li>
