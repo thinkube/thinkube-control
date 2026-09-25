@@ -152,6 +152,16 @@ class BackgroundExecutor:
             else:
                 verb = "install"
 
+            # A component that ships for only some architectures must land on
+            # a node that can run it; its playbooks read the selector.
+            if deployment.template_url.startswith("optional://"):
+                from app.services.optional_components import OptionalComponentService
+
+                extra_vars = {
+                    **extra_vars,
+                    "component_node_selector": OptionalComponentService(db).node_selector(component_name),
+                }
+
             # Execute the playbook directly
             try:
                 # Build ansible command for component playbook
