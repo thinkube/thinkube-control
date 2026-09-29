@@ -446,7 +446,6 @@ MCP_OPERATIONS = [
     "cancel_model_mirror",         # Tool
     "reset_mirror_job",            # Tool
     "delete_model",                # Tool
-    "register_finetuned_model",    # Tool
 
     # === Jupyter Venvs ===
     "list_jupyter_venvs",          # Resource

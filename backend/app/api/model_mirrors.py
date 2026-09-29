@@ -55,17 +55,6 @@ class MirrorRequest(BaseModel):
     model_id: str
 
 
-class RegisterModelRequest(BaseModel):
-    """Request to register a fine-tuned model from JupyterHub storage"""
-    name: str  # Model name for catalog (e.g., "qwen35-4b-tool-use")
-    source_path: str  # Relative path in user's models directory (e.g., "qwen35-4b-tool-use")
-    base_model: str  # Original model (e.g., "unsloth/Qwen3.5-4B")
-    task: str = "text-generation"
-    server_type: str = "tensorrt-llm"
-    description: Optional[str] = None
-    quantization: str = "FP8"  # Quantization format: "FP8", "NVFP4", or "BF16"
-
-
 class MirrorResponse(BaseModel):
     """Response after submitting a mirror job"""
     job_id: str
@@ -124,9 +113,8 @@ async def get_model_catalog(
     current_user: dict = Depends(get_current_user_dual_auth)
 ):
     """
-    Get catalog of available models for download
-
-    Returns list of 20 models optimized for TensorRT-LLM, including whether each is already downloaded
+    The model catalogue: the platform's models.json merged with the user's,
+    each with whether it is already mirrored
     """
     try:
         service = ModelDownloaderService()
@@ -601,93 +589,4 @@ async def delete_model(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete model: {str(e)}"
-        )
-
-
-@router.post("/register", response_model=MirrorResponse, operation_id="register_finetuned_model")
-async def register_finetuned_model(
-    request: RegisterModelRequest,
-    current_user: dict = Depends(get_current_user_dual_auth),
-    db: Session = Depends(get_db)
-):
-    """
-    Register a fine-tuned model from JupyterHub storage
-
-    Creates a database record and submits an Argo Workflow to upload the model
-    from the user's JuiceFS storage to MLflow. Returns immediately with job_id.
-
-    The model should be saved in HuggingFace format (merged weights) at:
-    /home/thinkube/thinkube/models/{source_path}/
-    """
-    try:
-        # Check for existing job for this model name
-        existing_job = db.query(ModelMirrorJob).filter(
-            ModelMirrorJob.model_id == request.name
-        ).first()
-
-        if existing_job and existing_job.status in ['pending', 'running']:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Registration job already in progress for model {request.name}"
-            )
-
-        # Create or update job record
-        if existing_job:
-            job = existing_job
-            job.status = "pending"
-            job.error_message = None
-        else:
-            job = ModelMirrorJob(model_id=request.name, status="pending")
-            db.add(job)
-
-        db.commit()
-        db.refresh(job)
-
-        # Get username from authenticated user
-        username = current_user.get("preferred_username") or current_user.get("sub", "unknown")
-
-        # Submit registration workflow
-        service = ModelDownloaderService()
-        workflow_id = service.submit_register(
-            name=request.name,
-            source_path=request.source_path,
-            base_model=request.base_model,
-            task=request.task,
-            server_type=request.server_type,
-            description=request.description or f"Fine-tuned from {request.base_model}",
-            username=username
-        )
-
-        # Update job with workflow info
-        job.workflow_name = workflow_id
-        job.status = "running"
-        db.commit()
-
-        logger.info(f"Model registration submitted: {request.name} -> job {job.id}, workflow {workflow_id}")
-
-        return MirrorResponse(
-            job_id=str(job.id),
-            workflow_id=workflow_id,
-            model_id=request.name,
-            status="running",
-            message=f"Registration job submitted successfully"
-        )
-
-    except HTTPException:
-        raise
-
-    except ValueError as e:
-        logger.warning(f"Invalid registration request: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-
-    except Exception as e:
-        logger.error(f"Failed to submit registration for {request.name}: {e}")
-        # Mark job as failed if it was created
-        if 'job' in locals():
-            job.status = "failed"
-            job.error_message = str(e)
-            db.commit()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to submit registration: {str(e)}"
         )
