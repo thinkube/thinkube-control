@@ -241,7 +241,11 @@ class LLMGPUTracker:
                         f"http://{pod_ip}:{NODE_METRICS_PORT}/metrics"
                     )
                     resp.raise_for_status()
-                    return resp.json()
+                    metrics = resp.json()
+                if metrics.get("gpu_error"):
+                    logger.warning(f"GPU metrics unavailable on {node_name}: {metrics['gpu_error']}")
+                    return None
+                return metrics
             except Exception as e:
                 if attempt == 1:
                     logger.info(

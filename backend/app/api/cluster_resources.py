@@ -7,10 +7,11 @@ import asyncio
 import json
 import logging
 import time
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+
+import httpx
 from fastapi import APIRouter, HTTPException
 from kubernetes import client, config
-from kubernetes.stream import stream
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/cluster", tags=["cluster-resources"])
@@ -41,9 +42,16 @@ _cache: Dict[str, Any] = {"data": None, "updated_at": 0.0}
 _cache_lock = asyncio.Lock()
 _refreshing = False
 
-# Hard bound on the nvidia-smi exec so a busy/unresponsive GPU node can never
-# make this endpoint hang (the rest of the data is still returned without it).
-_GPU_EXEC_TIMEOUT_SECONDS = 8
+# GPU details come from the node-metrics DaemonSet, which runs nvidia-smi on
+# each host. Each node's own pod is asked by IP: the Service would answer from
+# a random node. The timeout keeps a busy GPU node from stalling the refresh.
+NODE_METRICS_NAMESPACE = "thinkube-control"
+NODE_METRICS_PORT = 9100
+_NODE_METRICS_TIMEOUT_SECONDS = 8
+
+
+class GPUDetailsError(Exception):
+    """A GPU node's details could not be read."""
 
 
 async def _refresh_once() -> List[Dict[str, Any]]:
@@ -169,9 +177,19 @@ def _compute_cluster_resources() -> List[Dict[str, Any]]:
     )
     pods_payload = json.loads(raw_pods.data)
     pods_by_node: Dict[str, List[dict]] = {}
+    node_metrics_ips: Dict[str, str] = {}
     for pod in pods_payload.get("items", []):
         node_of_pod = (pod.get("spec") or {}).get("nodeName")
         pods_by_node.setdefault(node_of_pod, []).append(pod)
+        metadata = pod.get("metadata") or {}
+        status = pod.get("status") or {}
+        if (
+            metadata.get("namespace") == NODE_METRICS_NAMESPACE
+            and (metadata.get("labels") or {}).get("app") == "node-metrics"
+            and status.get("phase") == "Running"
+            and status.get("podIP")
+        ):
+            node_metrics_ips[node_of_pod] = status["podIP"]
 
     result = []
     for node in nodes.items:
@@ -232,23 +250,16 @@ def _compute_cluster_resources() -> List[Dict[str, Any]]:
                 if gpu_limit != "0":
                     allocated_gpu += int(gpu_limit)
 
-        # Get GPU details if node has GPUs
-        gpu_details = []
+        # One entry per physical GPU. When they cannot be read, the list is
+        # empty and gpu_error says why.
+        gpu_details: List[Dict[str, Any]] = []
+        gpu_error: Optional[str] = None
         if capacity["gpu"] > 0:
             try:
-                gpu_details = _get_gpu_details(node_name, v1)
-            except Exception as e:
+                gpu_details = _get_gpu_details(node_name, node_metrics_ips.get(node_name))
+            except GPUDetailsError as e:
+                gpu_error = str(e)
                 logger.warning(f"Could not get GPU details for {node_name}: {e}")
-                # Create basic GPU info without nvidia-smi details
-                for i in range(capacity["gpu"]):
-                    gpu_details.append({
-                        "index": i,
-                        "model": "Unknown GPU",
-                        "memory_total": "Unknown",
-                        "memory_used": "Unknown",
-                        "memory_free": "Unknown",
-                        "available": i >= allocated_gpu
-                    })
 
         # Calculate available resources
         available = {
@@ -257,13 +268,13 @@ def _compute_cluster_resources() -> List[Dict[str, Any]]:
             "gpu": max(0, capacity["gpu"] - allocated_gpu)
         }
 
-        # Effective GPU: for time-sliced nodes (virtual > physical),
-        # cap to 1 since multiple partitions share the same memory
-        # pool with no benefit (especially on unified-memory like DGX Spark)
-        physical_gpus = len(gpu_details)
-        effective_gpu = capacity["gpu"]
-        if physical_gpus > 0 and capacity["gpu"] > physical_gpus:
-            effective_gpu = 1
+        # Effective GPU: a time-sliced node advertises several slices per
+        # physical GPU (nvidia.com/gpu.replicas, set by GPU feature discovery).
+        # A pod asking for more than one slice may get slices of the same GPU,
+        # so a server on such a node is given at most one.
+        labels = node.metadata.labels or {}
+        replicas = int(labels.get("nvidia.com/gpu.replicas", "1"))
+        effective_gpu = 1 if capacity["gpu"] > 0 and replicas > 1 else capacity["gpu"]
 
         result.append({
             "name": node_name,
@@ -283,80 +294,49 @@ def _compute_cluster_resources() -> List[Dict[str, Any]]:
                 "memory": format_memory(available["memory"]),
                 "gpu": available["gpu"]
             },
-            "gpu_details": gpu_details
+            "gpu_details": gpu_details,
+            "gpu_error": gpu_error,
         })
 
     return result
 
 
-def _get_gpu_details(node_name: str, v1: client.CoreV1Api) -> List[Dict[str, Any]]:
-    """Get detailed GPU information from nvidia-smi via gpu-operator pod"""
+def _get_gpu_details(node_name: str, pod_ip: Optional[str]) -> List[Dict[str, Any]]:
+    """The node's physical GPUs, as its node-metrics pod reads them with nvidia-smi.
 
-    # Find nvidia driver pod on this node
-    pods = v1.list_namespaced_pod(
-        namespace="gpu-operator",
-        field_selector=f"spec.nodeName={node_name}"
-    )
-
-    driver_pod = None
-    for pod in pods.items:
-        if "nvidia-driver" in pod.metadata.name and pod.status.phase == "Running":
-            driver_pod = pod
-            break
-
-    if not driver_pod:
-        raise Exception(f"No running nvidia-driver pod found on node {node_name}")
-
-    # Execute nvidia-smi to get GPU details
-    exec_command = [
-        "nvidia-smi",
-        "--query-gpu=index,name,memory.total,memory.used,memory.free,utilization.gpu",
-        "--format=csv,noheader"
-    ]
-
+    Memory is in MiB. A unified-memory GPU (DGX Spark GB10) has no memory of
+    its own, so its memory fields read "unified".
+    """
+    if not pod_ip:
+        raise GPUDetailsError(f"no running node-metrics pod on {node_name}")
     try:
-        response = stream(
-            v1.connect_get_namespaced_pod_exec,
-            driver_pod.metadata.name,
-            "gpu-operator",
-            command=exec_command,
-            stderr=False,
-            stdin=False,
-            stdout=True,
-            tty=False,
-            _request_timeout=_GPU_EXEC_TIMEOUT_SECONDS
+        response = httpx.get(
+            f"http://{pod_ip}:{NODE_METRICS_PORT}/metrics",
+            timeout=_NODE_METRICS_TIMEOUT_SECONDS,
         )
+        response.raise_for_status()
+        metrics = response.json()
+    except (httpx.HTTPError, ValueError) as e:
+        raise GPUDetailsError(f"node-metrics on {node_name} ({pod_ip}) did not answer: {e}") from e
 
-        gpus = []
-        for line in response.strip().split('\n'):
-            if line:
-                parts = [p.strip() for p in line.split(',')]
+    if metrics.get("gpu_error"):
+        raise GPUDetailsError(f"nvidia-smi failed on {node_name}: {metrics['gpu_error']}")
+    if not metrics.get("gpus"):
+        raise GPUDetailsError(f"nvidia-smi found no GPU on {node_name}")
 
-                # Parse memory values
-                memory_used = parts[3]
-                memory_used_val = 0
-                if ' MiB' in memory_used:
-                    memory_used_val = int(memory_used.split(' MiB')[0])
+    def mib(value: float) -> str:
+        return "unified" if metrics.get("is_uma") else f"{int(value)} MiB"
 
-                # Parse utilization
-                utilization = 0
-                if len(parts) > 5:
-                    util_str = parts[5]
-                    if ' %' in util_str:
-                        utilization = int(util_str.split(' %')[0])
-
-                gpus.append({
-                    "index": int(parts[0]),
-                    "model": parts[1],
-                    "memory_total": parts[2],
-                    "memory_used": parts[3],
-                    "memory_free": parts[4],
-                    "utilization": utilization,
-                    "available": memory_used_val < 100 and utilization < 5
-                })
-
-        return gpus
-
-    except Exception as e:
-        logger.error(f"Failed to execute nvidia-smi on {node_name}: {e}")
-        raise
+    gpus = []
+    for gpu in metrics["gpus"]:
+        utilization = int(gpu["utilization"])
+        gpus.append({
+            "index": gpu["index"],
+            "model": gpu["name"],
+            "memory_total": mib(gpu["memory_total_mb"]),
+            "memory_used": mib(gpu["memory_used_mb"]),
+            "memory_free": mib(gpu["memory_free_mb"]),
+            "utilization": utilization,
+            "available": gpu["memory_used_mb"] < 100 and utilization < 5,
+        })
+    return gpus
