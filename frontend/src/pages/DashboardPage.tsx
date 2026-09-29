@@ -273,7 +273,7 @@ export default function DashboardPage() {
                 items={favoriteServices.map((s) => s.id)}
                 strategy={rectSortingStrategy}
               >
-                <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,18rem))] gap-4">
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] *:max-w-[18rem] gap-4">
                   {favoriteServices.map((service) => (
                     <SortableServiceCard
                       key={service.id}
@@ -300,7 +300,7 @@ export default function DashboardPage() {
               </TkCardContent>
             </TkCard>
           ) : (
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,22rem))] gap-4">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] *:max-w-[22rem] gap-4">
               {filteredServices.map((service) => (
                 <ServiceCard
                   key={service.id}
