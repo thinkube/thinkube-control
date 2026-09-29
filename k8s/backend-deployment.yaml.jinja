@@ -141,6 +141,9 @@ spec:
         # JupyterHub's deploy playbook copies into this namespace.
         - name: JUPYTERHUB_API_URL
           value: "http://hub.jupyterhub.svc.cluster.local:8081/hub/api"
+        # The platform's one user, who owns the notebook servers.
+        - name: JUPYTERHUB_USERNAME
+          value: "{{ auth_realm_username }}"
         - name: JUPYTERHUB_SERVICE_TOKEN
           valueFrom:
             secretKeyRef:

@@ -63,41 +63,25 @@ async def request(method: str, path: str, json: Any = None, timeout: float = 30.
     return response.status_code, body
 
 
-_username: Optional[str] = None
-
-
 async def username() -> str:
-    """The notebook user's name.
-
-    From the environment when set. Otherwise the Hub's users are asked: the
-    one with a server wins, then the one that signed in most recently. The
-    Hub also lists the admin user from its configuration, who may never have
-    signed in, so "the first user" is not enough.
-    """
-    global _username
-    if _username:
-        return _username
-    configured = os.environ.get("JUPYTERHUB_USERNAME")
-    if configured:
-        _username = configured
-        return configured
-    _, users = await request("GET", "/users")
-    real = [u for u in users if u.get("kind", "user") == "user"]
-    if not real:
-        raise HubError("JupyterHub has no user yet; sign in to Thinkube Notebooks once")
-    with_server = [u for u in real if u.get("servers")]
-    if with_server:
-        _username = with_server[0]["name"]
-        return _username
-    signed_in = [u for u in real if u.get("last_activity")]
-    if not signed_in:
-        raise HubError("nobody has signed in to Thinkube Notebooks yet; sign in once so the Hub knows the user")
-    # A guess from activity is not cached; a live server settles it later.
-    return max(signed_in, key=lambda u: u["last_activity"])["name"]
+    """The notebook user's name: the platform's realm user, set by the deploy."""
+    name = os.environ.get("JUPYTERHUB_USERNAME", "").strip()
+    if not name:
+        raise HubError("JUPYTERHUB_USERNAME is not set; the thinkube-control deploy sets it to the realm user")
+    return name
 
 
 async def user() -> Dict[str, Any]:
-    _, model = await request("GET", f"/users/{await username()}")
+    """The notebook user's Hub model. The Hub creates a user at its first
+    sign-in; when the realm user has not signed in yet, it is created here so
+    servers can start without a Hub login first."""
+    name = await username()
+    try:
+        _, model = await request("GET", f"/users/{name}")
+    except HubError as e:
+        if e.status != 404:
+            raise
+        _, model = await request("POST", f"/users/{name}")
     return model
 
 
@@ -115,7 +99,8 @@ async def server(name: str) -> Optional[Dict[str, Any]]:
 
 async def start_server(name: str, user_options: Dict[str, Any]) -> int:
     """Ask the Hub to start a server. 201 means started, 202 means still starting."""
-    status, _ = await request("POST", f"/users/{await username()}/{server_path(name)}", json=user_options, timeout=60)
+    owner = (await user())["name"]
+    status, _ = await request("POST", f"/users/{owner}/{server_path(name)}", json=user_options, timeout=60)
     return status
 
 
