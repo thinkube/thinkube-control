@@ -253,14 +253,16 @@ export function ServiceCard({
                   </AlertTriangle>
                 )}
               </div>
-              <div className="flex items-center gap-2 min-w-0 min-h-5">
+              <div className="flex items-center gap-2 min-w-0 h-5">
                 <p className="text-sm text-muted-foreground truncate flex-1 min-w-0">
                   {service.powered_by ? (
                     <>Powered by <span className="font-medium text-foreground">{service.powered_by}</span></>
                   ) : '\u00a0'}
                 </p>
                 {service.gpu_count && service.gpu_count > 0 && (
-                  <span className="shrink-0"><TkGpuBadge gpuCount={service.gpu_count} size="sm" /></span>
+                  <span className="shrink-0 border border-warning bg-warning/25 px-1 text-[10px] font-semibold leading-4">
+                    {service.gpu_count} GPU{service.gpu_count > 1 ? 's' : ''}
+                  </span>
                 )}
               </div>
             </div>
