@@ -29,15 +29,15 @@
     headers:
       Authorization: "Bearer {{ keycloak_token.json.access_token }}"
     validate_certs: "{{ keycloak_validate_certs | default(true) }}"
-    status_code: [200, 401, 403]
+    status_code: 200
   register: existing_client
 
+# The client record holds the client secret; only these fields are shown.
 - name: Debug GET client response
   debug:
     msg:
       - "Status code: {{ existing_client.status }}"
-      - "Response body length: {{ existing_client.json | length }}"
-      - "Response JSON: {{ existing_client.json }}"
+      - "Existing clients: {{ existing_client.json | map('dict2items') | map('selectattr', 'key', 'in', ['id', 'clientId', 'enabled', 'publicClient', 'redirectUris', 'webOrigins', 'baseUrl']) | map('items2dict') | list }}"
 
 - name: Create client "{{ keycloak_client_id }}" if missing
   uri:
@@ -49,17 +49,13 @@
     body_format: json
     body: "{{ keycloak_client_body }}"
     validate_certs: "{{ keycloak_validate_certs | default(true) }}"
-    status_code: [201, 409, 400, 401, 403]
+    status_code: 201
   when: existing_client.json | length == 0
   register: create_client_result
 
 - name: Debug client creation result
   debug:
-    msg:
-      - "Client creation status code: {{ create_client_result.status | default('Task skipped') }}"
-      - "Was task skipped? {{ create_client_result is skipped }}"
-      - "Response body: {{ create_client_result.json | default({}) }}"
-  when: create_client_result is defined
+    msg: "Client creation status code: {{ create_client_result.status | default('Task skipped') }}"
 
 - name: Debug GET final client query
   debug:
@@ -72,24 +68,23 @@
     headers:
       Authorization: "Bearer {{ keycloak_token.json.access_token }}"
     validate_certs: "{{ keycloak_validate_certs | default(true) }}"
-    status_code: [200, 401, 403]
+    status_code: 200
   register: final_client
 
 - name: Debug final client response
   debug:
     msg:
       - "Final client query status: {{ final_client.status }}"
-      - "Final client count: {{ final_client.json | length }}"
-      - "Final client JSON: {{ final_client.json }}"
+      - "Final client: {{ final_client.json | map('dict2items') | map('selectattr', 'key', 'in', ['id', 'clientId', 'enabled', 'publicClient', 'redirectUris', 'webOrigins', 'baseUrl']) | map('items2dict') | list }}"
+
+- name: Fail if the client does not exist after create or update
+  ansible.builtin.fail:
+    msg: "Keycloak has no client '{{ keycloak_client_id }}' in realm '{{ keycloak_realm }}' after create or update."
+  when: final_client.json | length == 0
 
 - name: Set fact for client UUID
   set_fact:
     keycloak_client_uuid: "{{ final_client.json[0].id }}"
-  when: final_client.json | length > 0
-
-- name: Debug client UUID
-  debug:
-    msg: "Client UUID set to: {{ keycloak_client_uuid | default('UUID NOT SET!') }}"
 
 # Get client secret (for confidential clients)
 - name: Check if client is confidential
@@ -107,28 +102,23 @@
     headers:
       Authorization: "Bearer {{ keycloak_token.json.access_token }}"
     validate_certs: "{{ keycloak_validate_certs | default(true) }}"
-    status_code: [200, 404, 401, 403]
+    status_code: 200
   register: keycloak_client_secret_response
-  when: is_confidential_client and keycloak_client_uuid is defined
+  when: is_confidential_client
 
 - name: Debug client secret response
   debug:
-    msg:
-      - "Client secret status: {{ keycloak_client_secret_response.status | default('Not queried') }}"
-      - "Client secret response: {{ keycloak_client_secret_response.json | default({}) }}"
-  when: keycloak_client_secret_response is defined
+    msg: "Client secret status: {{ keycloak_client_secret_response.status }}, secret length: {{ keycloak_client_secret_response.json.value | length }}"
+  when: is_confidential_client
 
 - name: Set fact for client secret
   set_fact:
     keycloak_client_secret: "{{ keycloak_client_secret_response.json.value }}"
-  when: 
-    - is_confidential_client
-    - keycloak_client_secret_response is defined 
-    - keycloak_client_secret_response.status == 200
+  when: is_confidential_client
 
 - name: Debug final results
   debug:
     msg:
       - "Client ID: {{ keycloak_client_id }}"
-      - "Client UUID: {{ keycloak_client_uuid | default('NOT SET!') }}"
-      - "Client secret: {{ keycloak_client_secret | default('NOT SET!') if is_confidential_client else 'N/A (public client)' }}"
+      - "Client UUID: {{ keycloak_client_uuid }}"
+      - "Client secret: {{ ('retrieved (' ~ (keycloak_client_secret | length) ~ ' chars)') if is_confidential_client else 'N/A (public client)' }}"

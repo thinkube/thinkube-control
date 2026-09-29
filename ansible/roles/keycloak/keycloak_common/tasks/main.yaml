@@ -30,7 +30,6 @@
     validate_certs: "{{ keycloak_validate_certs | default(true) }}"
     status_code: [200, 401, 403]
   register: keycloak_token
-  no_log: "{{ keycloak_no_log | default(false) }}"  # Temporarily disabled for debugging
 
 - name: Debug token response (masked)
   ansible.builtin.debug:

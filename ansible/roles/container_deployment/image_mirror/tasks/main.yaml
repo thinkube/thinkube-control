@@ -55,7 +55,6 @@
     status_code: [200, 404]
   register: image_check
   ignore_errors: true
-  no_log: "{{ harbor_api_password is defined }}"
 
 - name: Check existing artifact architectures
   ansible.builtin.set_fact:
@@ -84,7 +83,6 @@
         --password {{ harbor_push_password }}
         --tls-verify=false
       changed_when: false
-      no_log: true
 
     - name: Pull and push per architecture
       include_tasks: mirror_arch.yaml
@@ -103,7 +101,6 @@
             -p {{ harbor_push_password }}
             {{ harbor_host }}
           changed_when: false
-          no_log: true
 
         - name: Build manifest from per-arch tags
           ansible.builtin.command: >
@@ -133,7 +130,6 @@
             -p {{ harbor_push_password }}
             {{ harbor_host }}
           changed_when: false
-          no_log: true
           when: required_architectures | default([]) | length <= 1
 
         - name: Tag destination as version tag
