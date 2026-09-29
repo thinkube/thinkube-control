@@ -208,13 +208,19 @@ export function ServiceCard({
   const canToggle = service.can_be_disabled && !!onToggleService;
   const typeLabel = service.type === 'core' ? 'Core component' : service.type === 'optional' ? 'Optional component' : 'Your app';
   const typeColor = `var(--service-type-${service.type === 'core' ? 'core' : service.type === 'optional' ? 'optional' : 'user'})`;
-  // The left bar carries the state; a state that needs attention also gets
-  // an icon, so it does not rest on colour alone.
+  // The left bar carries the state: healthy green, idle blue (running with
+  // no work, such as a model server with no model), unknown yellow,
+  // unhealthy red, disabled grey. The two states that need attention also
+  // get an icon, so they do not rest on colour alone; a disabled service is
+  // faded. The hover text names the state.
   const stateBar = {
     healthy: 'border-l-success',
-    unhealthy: 'border-l-destructive',
+    idle: 'border-l-info',
     unknown: 'border-l-warning',
+    unhealthy: 'border-l-destructive',
   }[healthStatus] || 'border-l-muted-foreground';
+  const needsAttention = healthStatus === 'unhealthy' || healthStatus === 'unknown';
+  const isDisabled = healthStatus === 'disabled';
 
   // Full variant: identity (the logo's colour is the type), the corner
   // (GPUs, favourite, occasional actions) and two buttons. The description
@@ -224,8 +230,15 @@ export function ServiceCard({
       <span className="sr-only">Status: {statusLabel}. {typeLabel}.</span>
       <TkCardHeader className="px-5 pb-3">
         {/* Identity: the name has the full width; GPUs end the second line */}
-        <TkTooltip content={service.description || name}>
-          <div className="flex items-center gap-2.5 min-w-0">
+        <TkTooltip
+          content={
+            <div className="space-y-1">
+              <p className="font-medium">{statusLabel}</p>
+              {service.description && <p>{service.description}</p>}
+            </div>
+          }
+        >
+          <div className={`flex items-center gap-2.5 min-w-0 ${isDisabled ? 'opacity-50' : ''}`}>
             <div className="shrink-0 flex" title={typeLabel}>
               {hasCustomIcon ? (
                 <TkBrandIcon
@@ -247,7 +260,7 @@ export function ServiceCard({
                 >
                   {name}
                 </button>
-                {healthStatus !== 'healthy' && (
+                {needsAttention && (
                   <AlertTriangle className="h-4 w-4 shrink-0 text-muted-foreground" aria-label={statusLabel}>
                     <title>{statusLabel}</title>
                   </AlertTriangle>
