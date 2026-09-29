@@ -223,96 +223,99 @@ export function ServiceCard({
     <TkCard className={`h-full flex flex-col border-l-4 ${stateBar}`}>
       <span className="sr-only">Status: {statusLabel}. {typeLabel}.</span>
       <TkCardHeader className="pb-3">
-        <div className="flex items-start gap-3">
-          <TkTooltip content={service.description || name}>
-            <div className="flex items-center gap-3 min-w-0 flex-1">
-              <div className="shrink-0" title={typeLabel}>
-                {hasCustomIcon ? (
-                  <TkBrandIcon
-                    icon={service.icon!.replace('/icons/', '').replace('.svg', '')}
-                    alt={typeLabel}
-                    size={40}
-                    color={typeColor}
-                  />
-                ) : IconComponent ? (
-                  <IconComponent className="h-10 w-10" style={{ color: typeColor }} aria-label={typeLabel} />
-                ) : null}
+        {/* Identity: the name has the full width; GPUs end the second line */}
+        <TkTooltip content={service.description || name}>
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="shrink-0" title={typeLabel}>
+              {hasCustomIcon ? (
+                <TkBrandIcon
+                  icon={service.icon!.replace('/icons/', '').replace('.svg', '')}
+                  alt={typeLabel}
+                  size={40}
+                  color={typeColor}
+                />
+              ) : IconComponent ? (
+                <IconComponent className="h-10 w-10" style={{ color: typeColor }} aria-label={typeLabel} />
+              ) : null}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <button
+                  type="button"
+                  className="text-lg font-semibold leading-tight truncate text-left text-[color:var(--heading)] hover:underline"
+                  onClick={() => onShowDetails?.(service)}
+                >
+                  {name}
+                </button>
+                {healthStatus !== 'healthy' && (
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-muted-foreground" aria-label={statusLabel}>
+                    <title>{statusLabel}</title>
+                  </AlertTriangle>
+                )}
               </div>
-              <div className="min-w-0">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <button
-                    type="button"
-                    className="text-lg font-semibold leading-tight truncate text-left text-[color:var(--heading)] hover:underline"
-                    onClick={() => onShowDetails?.(service)}
-                  >
-                    {name}
-                  </button>
-                  {healthStatus !== 'healthy' && (
-                    <AlertTriangle className="h-4 w-4 shrink-0 text-muted-foreground" aria-label={statusLabel}>
-                      <title>{statusLabel}</title>
-                    </AlertTriangle>
-                  )}
-                </div>
-                <p className="text-sm text-muted-foreground truncate min-h-5">
+              <div className="flex items-center gap-2 min-w-0 min-h-5">
+                <p className="text-sm text-muted-foreground truncate flex-1 min-w-0">
                   {service.powered_by ? (
                     <>Powered by <span className="font-medium text-foreground">{service.powered_by}</span></>
                   ) : '\u00a0'}
                 </p>
+                {service.gpu_count && service.gpu_count > 0 && (
+                  <span className="shrink-0"><TkGpuBadge gpuCount={service.gpu_count} size="sm" /></span>
+                )}
               </div>
             </div>
-          </TkTooltip>
-
-          <div className="flex items-center gap-1 shrink-0 -mr-2 -mt-1">
-            {service.gpu_count && service.gpu_count > 0 && <TkGpuBadge gpuCount={service.gpu_count} size="sm" />}
-            {onToggleFavorite && (
-              <TkTooltip content={service.is_favorite ? 'Remove from favorites' : 'Add to favorites'}>
-                <TkButton intent="ghost" size="icon" onClick={() => onToggleFavorite(service)} aria-label="Favorite">
-                  <Star className={`h-4 w-4 ${service.is_favorite ? 'fill-warning text-warning' : ''}`} />
-                </TkButton>
-              </TkTooltip>
-            )}
-            <TkDropdownMenuRoot>
-              <TkDropdownMenuTrigger asChild>
-                <TkButton intent="ghost" size="icon" aria-label="More actions">
-                  <MoreHorizontal className="h-4 w-4" />
-                </TkButton>
-              </TkDropdownMenuTrigger>
-              <TkDropdownMenuContent align="end" className="w-48">
-                <TkDropdownMenuItem disabled={!canRestart || restarting} onSelect={handleRestart}>
-                  <RotateCw className={`mr-2 h-4 w-4 ${restarting ? 'animate-spin' : ''}`} />
-                  Restart
-                </TkDropdownMenuItem>
-                <TkDropdownMenuItem disabled={!canCheckHealth || checkingHealth} onSelect={handleHealthCheck}>
-                  <Heart className={`mr-2 h-4 w-4 ${checkingHealth ? 'animate-pulse' : ''}`} />
-                  Check health
-                </TkDropdownMenuItem>
-                {canToggle && (
-                  <TkDropdownMenuItem disabled={toggling} onSelect={() => handleToggle(!service.is_enabled)}>
-                    <Power className="mr-2 h-4 w-4" />
-                    {service.is_enabled ? 'Disable' : 'Enable'}
-                  </TkDropdownMenuItem>
-                )}
-              </TkDropdownMenuContent>
-            </TkDropdownMenuRoot>
           </div>
-        </div>
+        </TkTooltip>
       </TkCardHeader>
 
-      <TkCardFooter className="mt-auto grid grid-cols-2 gap-2">
+      {/* Actions: the two everyday ones labelled, the rest in the corner */}
+      <TkCardFooter className="mt-auto flex items-center gap-2">
         {canOpen ? (
-          <TkButton size="sm" asChild>
+          <TkButton size="sm" className="h-7 px-2.5 text-xs" asChild>
             <a href={service.url} target="_blank" rel="noopener noreferrer">
-              Open <ExternalLink className="h-4 w-4" />
+              Open <ExternalLink className="h-3.5 w-3.5" />
             </a>
           </TkButton>
         ) : (
-          <TkButton size="sm" disabled>
-            Open <ExternalLink className="h-4 w-4" />
+          <TkButton size="sm" className="h-7 px-2.5 text-xs" disabled>
+            Open <ExternalLink className="h-3.5 w-3.5" />
           </TkButton>
         )}
-        <TkButton size="sm" intent="secondary" disabled={!onShowDetails} onClick={() => onShowDetails?.(service)}>
+        <TkButton size="sm" intent="secondary" className="h-7 px-2.5 text-xs" disabled={!onShowDetails} onClick={() => onShowDetails?.(service)}>
           Details
         </TkButton>
+        <div className="ml-auto flex items-center -mr-2">
+          {onToggleFavorite && (
+            <TkTooltip content={service.is_favorite ? 'Remove from favorites' : 'Add to favorites'}>
+              <TkButton intent="ghost" size="icon" className="h-8 w-8" onClick={() => onToggleFavorite(service)} aria-label="Favorite">
+                <Star className={`h-4 w-4 ${service.is_favorite ? 'fill-warning text-warning' : ''}`} />
+              </TkButton>
+            </TkTooltip>
+          )}
+          <TkDropdownMenuRoot>
+            <TkDropdownMenuTrigger asChild>
+              <TkButton intent="ghost" size="icon" className="h-8 w-8" aria-label="More actions">
+                <MoreHorizontal className="h-4 w-4" />
+              </TkButton>
+            </TkDropdownMenuTrigger>
+            <TkDropdownMenuContent align="end" className="w-48">
+              <TkDropdownMenuItem disabled={!canRestart || restarting} onSelect={handleRestart}>
+                <RotateCw className={`mr-2 h-4 w-4 ${restarting ? 'animate-spin' : ''}`} />
+                Restart
+              </TkDropdownMenuItem>
+              <TkDropdownMenuItem disabled={!canCheckHealth || checkingHealth} onSelect={handleHealthCheck}>
+                <Heart className={`mr-2 h-4 w-4 ${checkingHealth ? 'animate-pulse' : ''}`} />
+                Check health
+              </TkDropdownMenuItem>
+              {canToggle && (
+                <TkDropdownMenuItem disabled={toggling} onSelect={() => handleToggle(!service.is_enabled)}>
+                  <Power className="mr-2 h-4 w-4" />
+                  {service.is_enabled ? 'Disable' : 'Enable'}
+                </TkDropdownMenuItem>
+              )}
+            </TkDropdownMenuContent>
+          </TkDropdownMenuRoot>
+        </div>
       </TkCardFooter>
     </TkCard>
   );
