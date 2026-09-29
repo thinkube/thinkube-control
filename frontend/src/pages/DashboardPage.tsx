@@ -9,7 +9,6 @@ import { useServicesStore } from '@/stores/useServicesStore';
 import { AlertCircle, Loader2, RefreshCw, Star } from 'lucide-react';
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent } from 'thinkube-style/components/cards-data';
 import { TkButton } from 'thinkube-style/components/buttons-badges';
-import { TkSwitch } from 'thinkube-style/components/forms-inputs';
 import { TkPageWrapper } from 'thinkube-style/components/utilities';
 import { TkControlledConfirmDialog } from 'thinkube-style/components/modals-overlays';
 import { ServiceCard } from '@/components/ServiceCard';
@@ -32,6 +31,7 @@ import {
 } from '@dnd-kit/sortable';
 import { SortableServiceCard } from '@/components/SortableServiceCard';
 import { GPUMetricsCard } from '@/components/GPUMetricsCard';
+import { useMediaQuery } from '@/lib/useMediaQuery';
 
 export default function DashboardPage() {
   const location = useLocation();
@@ -53,7 +53,8 @@ export default function DashboardPage() {
     triggerHealthCheck,
     reorderFavorites,
   } = useServicesStore();
-  const [compactMode, setCompactMode] = useState(false);
+  // Cards are compact on narrow windows (phones, small tablets).
+  const compactMode = useMediaQuery('(max-width: 767px)');
   const [syncing, setSyncing] = useState(false);
   const [serviceToRestart, setServiceToRestart] = useState<Service | null>(null);
 
@@ -153,20 +154,6 @@ export default function DashboardPage() {
     }
   };
 
-  // Load compact mode from localStorage on mount
-  useEffect(() => {
-    const savedCompactMode = localStorage.getItem('dashboardCompactMode');
-    if (savedCompactMode !== null) {
-      setCompactMode(savedCompactMode === 'true');
-    }
-  }, []);
-
-  // Save compact mode to localStorage when it changes
-  const handleCompactModeChange = (checked: boolean) => {
-    setCompactMode(checked);
-    localStorage.setItem('dashboardCompactMode', checked.toString());
-  };
-
   // Handle sync services
   const handleSync = async () => {
     setSyncing(true);
@@ -246,16 +233,7 @@ export default function DashboardPage() {
   return (
     <TkPageWrapper>
       {/* Header row */}
-      <div className="flex justify-between items-center mb-4">
-        <div className="flex items-center gap-2">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <span className="text-sm text-muted-foreground">Compact Mode</span>
-            <TkSwitch
-              checked={compactMode}
-              onCheckedChange={handleCompactModeChange}
-            />
-          </label>
-        </div>
+      <div className="flex justify-end items-center mb-4">
         <div>
           <TkButton
             intent="ghost"
@@ -295,7 +273,7 @@ export default function DashboardPage() {
                 items={favoriteServices.map((s) => s.id)}
                 strategy={rectSortingStrategy}
               >
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,18rem))] gap-4">
                   {favoriteServices.map((service) => (
                     <SortableServiceCard
                       key={service.id}
@@ -322,7 +300,7 @@ export default function DashboardPage() {
               </TkCardContent>
             </TkCard>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,22rem))] gap-4">
               {filteredServices.map((service) => (
                 <ServiceCard
                   key={service.id}

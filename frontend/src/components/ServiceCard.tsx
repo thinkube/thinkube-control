@@ -42,15 +42,6 @@ export function ServiceCard({
     ? 'disabled'
     : service.latest_health?.status || 'unknown';
 
-  // Health status for display
-  const statusColor = {
-    healthy: 'var(--color-success)',
-    unhealthy: 'var(--color-error)',
-    unknown: 'var(--color-warning)',
-    disabled: 'var(--muted-foreground)',
-    idle: 'var(--muted-foreground)',
-  }[healthStatus] || 'var(--muted-foreground)';
-
   const statusBadgeStatus = {
     healthy: 'healthy' as const,
     unhealthy: 'unhealthy' as const,
@@ -207,185 +198,135 @@ export function ServiceCard({
     );
   }
 
-  // Full variant - elegant design with footer
+  const name = service.display_name || service.name;
+  const canOpen = service.is_enabled && isWebUrl(service.url);
+  const canRestart = service.is_enabled && !!onRestart;
+  const canCheckHealth = service.is_enabled && !!onHealthCheck;
+  const lastChecked = service.latest_health?.last_checked
+    ? new Date(service.latest_health.last_checked).toLocaleString()
+    : null;
+  const podStatus = service.latest_health?.pod_status || null;
+
+  // Full variant. Every card stacks the same zones with the same heights, so
+  // the name, status, description, facts and actions line up across a row:
+  // identity, status line, description (two lines), facts (four rows) and
+  // actions (four buttons and the enable switch, always in the same places).
+  // Compact cards drop the description and facts.
   return (
-    <TkCard className={`h-full ${borderClass} flex flex-col`}>
+    <TkCard className={`h-full flex flex-col ${healthStatus === 'unhealthy' ? 'border-destructive/40 border-l-4 border-l-destructive' : ''}`}>
       <TkCardHeader className="pb-3">
-        <div className="flex items-start justify-between">
-          <div className="flex-1">
-            <div className="flex items-center gap-2 mb-1">
-              {hasCustomIcon ? (
-                <TkBrandIcon
-                  icon={service.icon!.replace('/icons/', '').replace('.svg', '')}
-                  alt={service.display_name || service.name}
-                  size={20}
-                />
-              ) : IconComponent ? (
-                <IconComponent className={`w-5 h-5 ${healthStatus === 'unhealthy' ? 'opacity-50' : ''}`} />
-              ) : null}
-              <h3 className="text-xl font-semibold">{service.display_name || service.name}</h3>
-              <TkTooltip
-                content={
-                  healthStatus === 'healthy'
-                    ? 'All health checks passing'
-                    : healthStatus === 'unhealthy'
-                    ? 'Service is not responding'
-                    : healthStatus === 'disabled'
-                    ? 'Service is disabled'
-                    : 'Health status unknown'
-                }
-              >
-                <div className={`h-2 w-2 rounded-full ${
-                  healthStatus === 'healthy'
-                    ? 'bg-[var(--color-success)]'
-                    : healthStatus === 'unhealthy'
-                    ? 'bg-[var(--color-error)]'
-                    : healthStatus === 'unknown'
-                    ? 'bg-[var(--color-warning)]'
-                    : 'bg-muted-foreground'
-                }`} />
-              </TkTooltip>
-            </div>
-            {!compact && service.description && (
-              <p className="text-sm text-muted-foreground">{service.description}</p>
-            )}
-            {!compact && service.powered_by && (
-              <p className="text-xs text-muted-foreground/70 mt-0.5">Powered by {service.powered_by}</p>
-            )}
+        {/* Identity */}
+        <div className="flex items-start gap-3">
+          <div className="shrink-0">
+            {hasCustomIcon ? (
+              <TkBrandIcon icon={service.icon!.replace('/icons/', '').replace('.svg', '')} alt={name} size={40} />
+            ) : IconComponent ? (
+              <IconComponent className="h-10 w-10 text-primary" />
+            ) : null}
           </div>
-          <div className="flex items-start gap-2">
-            <TkBadge status={statusBadgeStatus}>{statusLabel}</TkBadge>
-            {onToggleFavorite && (
-              <TkTooltip content={service.is_favorite ? 'Remove from favorites' : 'Add to favorites'}>
-                <TkButton
-                  intent="ghost"
-                  size="icon"
-                  onClick={() => onToggleFavorite(service)}
-                >
-                  <Star
-                    className={`h-4 w-4 ${service.is_favorite ? 'fill-warning text-warning' : ''}`}
-                  />
-                </TkButton>
-              </TkTooltip>
-            )}
+          <div className="min-w-0 flex-1">
+            <h3 className="text-lg font-semibold leading-tight truncate" title={name}>{name}</h3>
+            <p className="text-sm text-muted-foreground truncate min-h-5">
+              {service.powered_by ? (
+                <>Powered by <span className="font-medium text-foreground">{service.powered_by}</span></>
+              ) : '\u00a0'}
+            </p>
           </div>
+          {onToggleFavorite && (
+            <TkTooltip content={service.is_favorite ? 'Remove from favorites' : 'Add to favorites'}>
+              <TkButton intent="ghost" size="icon" className="shrink-0 -mr-2 -mt-1" onClick={() => onToggleFavorite(service)}>
+                <Star className={`h-4 w-4 ${service.is_favorite ? 'fill-warning text-warning' : ''}`} />
+              </TkButton>
+            </TkTooltip>
+          )}
+        </div>
+
+        {/* Status line: state first, then type and GPUs */}
+        <div className="flex items-center gap-2 mt-3 h-6 overflow-hidden">
+          <TkBadge status={statusBadgeStatus}>{statusLabel}</TkBadge>
+          <TkBadge category={typeBadgeCategory}>
+            {service.type === 'core' ? 'Core' : service.type === 'optional' ? 'Optional' : 'User App'}
+          </TkBadge>
+          {service.gpu_count && service.gpu_count > 0 && <TkGpuBadge gpuCount={service.gpu_count} size="sm" />}
         </div>
       </TkCardHeader>
 
       <TkCardContent className="pb-3 flex-grow">
-        {/* Badges */}
-        <div className="flex flex-wrap gap-2 mb-4">
-          <TkBadge category={typeBadgeCategory}>
-            {service.type === 'core' ? 'Core' : service.type === 'optional' ? 'Optional' : 'User App'}
-          </TkBadge>
-          {service.category && (
-            <TkBadge appearance="outlined">{service.category}</TkBadge>
-          )}
-          {service.component_version && (
-            <TkBadge appearance="outlined">v{service.component_version}</TkBadge>
-          )}
-          {service.gpu_count && service.gpu_count > 0 && (
-            <TkGpuBadge gpuCount={service.gpu_count} />
-          )}
-        </div>
+        {!compact && (
+          <>
+            {/* Description: always two lines */}
+            <p className="text-sm text-muted-foreground line-clamp-2 min-h-10" title={service.description || undefined}>
+              {service.description || '\u00a0'}
+            </p>
 
-        {/* Metrics */}
-        {!compact && service.latest_health && (
-          <div className="space-y-2 text-sm text-muted-foreground">
-            {service.latest_health.pod_status && (
-              <div className="flex justify-between">
-                <span>Pods:</span>
-                <span className={
-                  service.latest_health.pod_status.includes('Running')
-                    ? 'text-[var(--color-success)]'
-                    : 'text-[var(--color-error)]'
-                }>
-                  {service.latest_health.pod_status}
-                </span>
-              </div>
-            )}
-            {service.latest_health.last_checked && (
-              <div className="flex justify-between">
-                <span>Last Checked:</span>
-                <span className="text-foreground">
-                  {new Date(service.latest_health.last_checked).toLocaleString()}
-                </span>
-              </div>
-            )}
-          </div>
+            {/* Facts: always four rows */}
+            <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+              <dt className="text-muted-foreground">Category</dt>
+              <dd className="truncate">{service.category || '—'}</dd>
+              <dt className="text-muted-foreground">Version</dt>
+              <dd className="truncate">{service.component_version ? `v${service.component_version}` : '—'}</dd>
+              <dt className="text-muted-foreground">Pods</dt>
+              <dd className="truncate flex items-center gap-1.5">
+                {podStatus && (
+                  <span className={`h-2 w-2 rounded-full shrink-0 ${podStatus.includes('Running') ? 'bg-success' : 'bg-destructive'}`} />
+                )}
+                {podStatus || '—'}
+              </dd>
+              <dt className="text-muted-foreground">Last check</dt>
+              <dd className="truncate">{lastChecked || '—'}</dd>
+            </dl>
+          </>
         )}
       </TkCardContent>
 
-      <TkCardFooter className="flex-col gap-3 pt-3">
-        {/* Actions */}
-        <div className="flex gap-2 w-full">
-          {service.is_enabled && isWebUrl(service.url) && (
-            <TkTooltip content="Open service">
-              <TkButton
-                size="sm"
-                className="flex-1"
-                asChild
-              >
-                <a href={service.url} target="_blank" rel="noopener noreferrer">
+      <TkCardFooter className="flex-col gap-3 pt-3 border-t border-border">
+        {/* Actions: always four, in the same order; unavailable ones are disabled */}
+        <div className="grid grid-cols-4 gap-2 w-full">
+          <TkTooltip content={canOpen ? 'Open service' : 'No web page to open'}>
+            {canOpen ? (
+              <TkButton size="sm" asChild>
+                <a href={service.url} target="_blank" rel="noopener noreferrer" aria-label="Open service">
                   <ExternalLink className="h-4 w-4" />
                 </a>
               </TkButton>
-            </TkTooltip>
-          )}
+            ) : (
+              <span className="inline-flex">
+                <TkButton size="sm" className="w-full" disabled aria-label="Open service">
+                  <ExternalLink className="h-4 w-4" />
+                </TkButton>
+              </span>
+            )}
+          </TkTooltip>
+          <TkTooltip content="View details">
+            <TkButton size="sm" intent="secondary" disabled={!onShowDetails} onClick={() => onShowDetails?.(service)} aria-label="View details">
+              <Info className="h-4 w-4" />
+            </TkButton>
+          </TkTooltip>
+          <TkTooltip content="Restart service">
+            <TkButton size="sm" intent="secondary" onClick={handleRestart} disabled={!canRestart || restarting} aria-label="Restart service">
+              <RotateCw className={`h-4 w-4 ${restarting ? 'animate-spin' : ''}`} />
+            </TkButton>
+          </TkTooltip>
+          <TkTooltip content="Check health">
+            <TkButton size="sm" intent="secondary" onClick={handleHealthCheck} disabled={!canCheckHealth || checkingHealth} aria-label="Check health">
+              <Heart className={`h-4 w-4 ${checkingHealth ? 'animate-pulse' : ''}`} />
+            </TkButton>
+          </TkTooltip>
+        </div>
 
-          {onShowDetails && (
-            <TkTooltip content="View details">
-              <TkButton
-                size="sm"
-                intent="secondary"
-                className="flex-1"
-                onClick={() => onShowDetails(service)}
-              >
-                <Info className="h-4 w-4" />
-              </TkButton>
-            </TkTooltip>
-          )}
-
-          {service.is_enabled && onRestart && (
-            <TkTooltip content="Restart service">
-              <TkButton
-                size="sm"
-                intent="secondary"
-                className="flex-1"
-                onClick={handleRestart}
-                disabled={restarting}
-              >
-                <RotateCw className={`h-4 w-4 ${restarting ? 'animate-spin' : ''}`} />
-              </TkButton>
-            </TkTooltip>
-          )}
-
-          {service.is_enabled && onHealthCheck && (
-            <TkTooltip content="Check health">
-              <TkButton
-                size="sm"
-                intent="secondary"
-                className="flex-1"
-                onClick={handleHealthCheck}
-                disabled={checkingHealth}
-              >
-                <Heart className={`h-4 w-4 ${checkingHealth ? 'animate-pulse text-destructive' : ''}`} />
-              </TkButton>
+        {/* Enable switch: on every card; fixed for services that cannot be turned off */}
+        <div className="flex items-center justify-between w-full">
+          <span className="text-sm font-medium">Enabled</span>
+          {service.can_be_disabled && onToggleService ? (
+            <TkSwitch checked={service.is_enabled} onCheckedChange={handleToggle} disabled={toggling} />
+          ) : (
+            <TkTooltip content="This service cannot be turned off">
+              <span className="inline-flex">
+                <TkSwitch checked={service.is_enabled} disabled />
+              </span>
             </TkTooltip>
           )}
         </div>
-
-        {/* Toggle */}
-        {service.can_be_disabled && onToggleService && (
-          <div className="flex items-center justify-between w-full">
-            <span className="text-sm font-medium">Service Enabled</span>
-            <TkSwitch
-              checked={service.is_enabled}
-              onCheckedChange={handleToggle}
-              disabled={toggling}
-            />
-          </div>
-        )}
       </TkCardFooter>
     </TkCard>
   );

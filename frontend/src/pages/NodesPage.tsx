@@ -74,7 +74,7 @@ export default function NodesPage() {
   return (
     <TkPageWrapper>
       {/* Cluster Overview */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-4">
         <TkStatCard
           title="Total Nodes"
           value={nodes.length}

@@ -49,7 +49,7 @@ function logClass(line: string): string {
   ) {
     return 'text-destructive font-bold'
   }
-  if (line.includes('WARNING') || line.includes('warning:')) return 'text-warning'
+  if (line.includes('WARNING') || line.includes('warning:')) return 'text-foreground border-l-4 border-warning pl-2'
   if (line.includes('STEP') || line.includes('-->')) return 'text-info font-medium'
   if (line.includes('Successfully') || line.includes('COMPLETED')) return 'text-success'
   return 'text-foreground'

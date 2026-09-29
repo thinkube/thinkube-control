@@ -152,7 +152,7 @@ export default function KnativeServicesPage() {
     <TkPageWrapper description="Serverless workloads with automatic scale-to-zero">
 
       {/* Summary cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-4 mb-8">
         <TkCard>
           <TkCardContent className="p-4">
             <div className="flex items-center gap-3">

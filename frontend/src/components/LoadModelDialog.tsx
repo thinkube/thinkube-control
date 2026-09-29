@@ -343,7 +343,7 @@ export default function LoadModelDialog({
                   </TkSelectContent>
                 </TkSelect>
                 {selectedContext && parseInt(selectedContext, 10) >= LARGE_CONTEXT_THRESHOLD && (
-                  <p className="text-xs text-warning font-medium">
+                  <p className="text-xs font-medium border-l-4 border-warning pl-2">
                     Large context lengths require significantly more GPU memory for KV cache. 8K-16K recommended for most use cases.
                   </p>
                 )}
@@ -406,7 +406,7 @@ export default function LoadModelDialog({
                   ))
                 )}
                 {!selectedNodeData.shared_memory && gpusNeeded > 1 && (
-                  <div className="text-sm text-warning">
+                  <div className="text-sm border-l-4 border-warning pl-2">
                     Requires {gpusNeeded} GPUs (tensor parallelism)
                   </div>
                 )}

@@ -258,7 +258,7 @@ export default function LLMGatewayPage() {
       </TkCard>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-4 mb-6">
         <TkStatCard
           title="Available Models"
           value={availableModels.length}

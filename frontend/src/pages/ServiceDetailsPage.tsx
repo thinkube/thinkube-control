@@ -577,7 +577,7 @@ export default function ServiceDetailsPage() {
                     {healthData.actual_checks} checks performed
                   </div>
                   {healthData.monitoring_coverage < 100 && (
-                    <div className="text-warning">
+                    <div className="border-l-4 border-warning pl-2">
                       Coverage: {healthData.monitoring_coverage}%
                     </div>
                   )}
@@ -849,7 +849,7 @@ export default function ServiceDetailsPage() {
                                     </div>
                                   )}
                                   {container.restart_count > 0 && (
-                                    <div className="text-warning">Restarts: {container.restart_count}</div>
+                                    <div className="border-l-4 border-warning pl-2">Restarts: {container.restart_count}</div>
                                   )}
                                 </div>
                               </TkCardContent>

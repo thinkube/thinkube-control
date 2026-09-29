@@ -647,23 +647,23 @@ Timestamp: ${new Date().toISOString()}
                     <div className="text-lg font-bold">{taskSummary.totalTasks}</div>
                   </TkCardContent>
                 </TkCard>
-                <TkCard>
+                <TkCard className="border-l-4 border-l-success">
                   <TkCardContent className="text-center py-2"> {/* @allowed-inline */}
                     <div className="text-xs text-muted-foreground">OK</div>
-                    <div className="text-lg font-bold text-success">{taskSummary.ok}</div>
+                    <div className="text-lg font-bold">{taskSummary.ok}</div>
                   </TkCardContent>
                 </TkCard>
-                <TkCard>
+                <TkCard className="border-l-4 border-l-warning">
                   <TkCardContent className="text-center py-2"> {/* @allowed-inline */}
                     <div className="text-xs text-muted-foreground">Changed</div>
-                    <div className="text-lg font-bold text-warning">{taskSummary.changed}</div>
+                    <div className="text-lg font-bold">{taskSummary.changed}</div>
                   </TkCardContent>
                 </TkCard>
                 {taskSummary.failed > 0 && (
-                  <TkCard>
+                  <TkCard className="border-l-4 border-l-destructive">
                     <TkCardContent className="text-center py-2"> {/* @allowed-inline */}
                       <div className="text-xs text-muted-foreground">Failed</div>
-                      <div className="text-lg font-bold text-destructive">{taskSummary.failed}</div>
+                      <div className="text-lg font-bold">{taskSummary.failed}</div>
                     </TkCardContent>
                   </TkCard>
                 )}

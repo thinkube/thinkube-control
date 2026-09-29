@@ -198,7 +198,7 @@ export function TemplateParameterForm({
           valid: false,
           message: data.reason || 'Name is not available',
           class: 'border-warning',
-          messageClass: 'text-warning',
+          messageClass: 'text-foreground border-l-4 border-warning pl-2',
         })
 
         // If it's a user app, offer to overwrite
@@ -264,7 +264,7 @@ export function TemplateParameterForm({
       valid: true,
       message: '⚠️ Will replace existing application',
       class: 'border-warning',
-      messageClass: 'text-warning',
+      messageClass: 'text-foreground border-l-4 border-warning pl-2',
     })
     setShowOverwriteConfirm(false)
 

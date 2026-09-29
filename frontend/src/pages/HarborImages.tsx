@@ -423,7 +423,7 @@ export function HarborImages() {
         </TkTabsList>
 
         <TkTabsContent value="mirrored">
-          <div className="grid md:grid-cols-4 gap-4 mb-6" /* @allowed-inline */>
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(12rem,1fr))] gap-4 mb-6" /* @allowed-inline */>
             <TkStatCard
               title="Total Images"
               value={store.stats?.total?.toString() || '0'}
@@ -513,8 +513,8 @@ export function HarborImages() {
                       <TkTableHead>Image Name</TkTableHead>
                       <TkTableHead>Tag</TkTableHead>
                       <TkTableHead>Category</TkTableHead>
-                      <TkTableHead>Description</TkTableHead>
-                      <TkTableHead>Mirror Date</TkTableHead>
+                      <TkTableHead className="hidden xl:table-cell">Description</TkTableHead>
+                      <TkTableHead className="hidden xl:table-cell">Mirror Date</TkTableHead>
                       <TkTableHead>Status</TkTableHead>
                       <TkTableHead>Actions</TkTableHead>
                     </TkTableRow>
@@ -551,12 +551,12 @@ export function HarborImages() {
                             )}
                           </div>
                         </TkTableCell>
-                        <TkTableCell>
+                        <TkTableCell className="hidden xl:table-cell">
                           <div className="max-w-xs truncate" title={image.description}>
                             {image.description || '-'}
                           </div>
                         </TkTableCell>
-                        <TkTableCell>
+                        <TkTableCell className="hidden xl:table-cell">
                           <div className="text-sm">
                             {formatDate(image.mirror_date)}
                           </div>
@@ -851,8 +851,8 @@ export function HarborImages() {
                       <TkTableHead>Scope</TkTableHead>
                       <TkTableHead>Type</TkTableHead>
                       <TkTableHead>Status</TkTableHead>
-                      <TkTableHead>Registry URL</TkTableHead>
-                      <TkTableHead>Created</TkTableHead>
+                      <TkTableHead className="hidden xl:table-cell">Registry URL</TkTableHead>
+                      <TkTableHead className="hidden xl:table-cell">Created</TkTableHead>
                       <TkTableHead>Actions</TkTableHead>
                     </TkTableRow>
                   </TkTableHeader>
@@ -884,7 +884,7 @@ export function HarborImages() {
                             {image.status}
                           </TkBadge>
                         </TkTableCell>
-                        <TkTableCell>
+                        <TkTableCell className="hidden xl:table-cell">
                           {image.registry_url ? (
                             <div className="text-sm font-mono truncate max-w-xs" title={image.registry_url}>
                               {image.registry_url}
@@ -893,7 +893,7 @@ export function HarborImages() {
                             <div className="text-muted-foreground">-</div>
                           )}
                         </TkTableCell>
-                        <TkTableCell>
+                        <TkTableCell className="hidden xl:table-cell">
                           <div className="text-sm">{formatDate(image.created_at)}</div>
                         </TkTableCell>
                         <TkTableCell>

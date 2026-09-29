@@ -260,8 +260,8 @@ export default function ModelsPage() {
               <TkTableRow>
                 <TkTableHead>Model</TkTableHead>
                 <TkTableHead>Params</TkTableHead>
-                <TkTableHead>Quantization</TkTableHead>
-                <TkTableHead>Server Type</TkTableHead>
+                <TkTableHead className="hidden xl:table-cell">Quantization</TkTableHead>
+                <TkTableHead className="hidden xl:table-cell">Server Type</TkTableHead>
                 <TkTableHead>Status</TkTableHead>
                 <TkTableHead className="text-right">Actions</TkTableHead>
               </TkTableRow>
@@ -319,10 +319,10 @@ export default function ModelsPage() {
                         )}
                       </div>
                     </TkTableCell>
-                    <TkTableCell>
+                    <TkTableCell className="hidden xl:table-cell">
                       <TkBadge appearance="outlined">{model.quantization}</TkBadge>
                     </TkTableCell>
-                    <TkTableCell>
+                    <TkTableCell className="hidden xl:table-cell">
                       <div className="flex gap-1 flex-wrap">
                         {model.server_type.map((type) => (
                           <TkBadge key={type} appearance="muted">

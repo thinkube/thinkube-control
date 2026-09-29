@@ -4,6 +4,7 @@
  */
 
 @import "tailwindcss";
+@import "thinkube-style/tailwind-palette.css";
 
 @import "@fontsource/poppins/300.css";
 @import "@fontsource/poppins/400.css";
