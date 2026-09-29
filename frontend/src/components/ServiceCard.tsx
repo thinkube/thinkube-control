@@ -222,11 +222,11 @@ export function ServiceCard({
   return (
     <TkCard className={`h-full flex flex-col border-l-4 ${stateBar}`}>
       <span className="sr-only">Status: {statusLabel}. {typeLabel}.</span>
-      <TkCardHeader className="pb-3">
+      <TkCardHeader className="px-5 pb-3">
         {/* Identity: the name has the full width; GPUs end the second line */}
         <TkTooltip content={service.description || name}>
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="shrink-0" title={typeLabel}>
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="shrink-0 flex" title={typeLabel}>
               {hasCustomIcon ? (
                 <TkBrandIcon
                   icon={service.icon!.replace('/icons/', '').replace('.svg', '')}
@@ -253,7 +253,7 @@ export function ServiceCard({
                   </AlertTriangle>
                 )}
               </div>
-              <div className="flex items-center gap-2 min-w-0 h-5">
+              <div className="flex items-center gap-1.5 min-w-0 h-5">
                 <p className="text-sm text-muted-foreground truncate flex-1 min-w-0">
                   {service.powered_by ? (
                     <>Powered by <span className="font-medium text-foreground">{service.powered_by}</span></>
@@ -271,7 +271,7 @@ export function ServiceCard({
       </TkCardHeader>
 
       {/* Actions: the two everyday ones labelled, the rest in the corner */}
-      <TkCardFooter className="mt-auto flex items-center gap-2">
+      <TkCardFooter className="mt-auto px-5 flex items-center gap-2">
         {canOpen ? (
           <TkButton size="sm" className="h-7 px-2.5 text-xs" asChild>
             <a href={service.url} target="_blank" rel="noopener noreferrer">
