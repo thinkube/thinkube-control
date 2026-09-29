@@ -70,22 +70,7 @@ export default function DashboardPage() {
   const isFavoritesView = !isAllServicesView && !isCategoryView;
 
   // Get filtered services
-  const filteredServices = getFilteredServices();
-
-  // All Services groups the cards under their category; a category page
-  // already names its category in the title and shows one group.
-  const serviceGroups: { category: string | null; services: Service[] }[] = isCategoryView
-    ? [{ category: null, services: filteredServices }]
-    : Object.entries(
-        filteredServices.reduce<Record<string, Service[]>>((groups, service) => {
-          const key = service.category || 'uncategorized';
-          (groups[key] ||= []).push(service);
-          return groups;
-        }, {})
-      )
-        .sort(([a], [b]) => a.localeCompare(b))
-        .map(([category, services]) => ({ category, services }));
-  const favoriteServices = getFavoriteServicesComputed();
+  const filteredServices = getFilteredServices();  const favoriteServices = getFavoriteServicesComputed();
 
   // Set category filter based on route
   useEffect(() => {
@@ -320,29 +305,18 @@ export default function DashboardPage() {
               </TkCardContent>
             </TkCard>
           ) : (
-            <div className="space-y-8">
-              {serviceGroups.map((group) => (
-                <section key={group.category ?? 'all'}>
-                  {group.category && (
-                    <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground border-b border-border pb-1 mb-3">
-                      {group.category}
-                    </h2>
-                  )}
-                  <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] *:max-w-[22rem] gap-4">
-                    {group.services.map((service) => (
-                      <ServiceCard
-                        key={service.id}
-                        service={service}
-                        variant="full"
-                        onToggleFavorite={handleToggleFavorite}
-                        onShowDetails={handleShowDetails}
-                        onRestart={handleRestart}
-                        onToggleService={handleToggleService}
-                        onHealthCheck={handleHealthCheck}
-                      />
-                    ))}
-                  </div>
-                </section>
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] *:max-w-[22rem] gap-x-4 gap-y-6 pt-2">
+              {filteredServices.map((service) => (
+                <ServiceCard
+                  key={service.id}
+                  service={service}
+                  variant="full"
+                  onToggleFavorite={handleToggleFavorite}
+                  onShowDetails={handleShowDetails}
+                  onRestart={handleRestart}
+                  onToggleService={handleToggleService}
+                  onHealthCheck={handleHealthCheck}
+                />
               ))}
             </div>
           )}

@@ -226,8 +226,18 @@ export function ServiceCard({
   // (GPUs, favourite, occasional actions) and two buttons. The description
   // shows on hover over the identity; the state is the left bar.
   return (
-    <TkCard className={`h-full flex flex-col border-l-4 ${stateBar}`}>
+    <TkCard className={`relative h-full flex flex-col border-l-4 ${stateBar}`}>
       <span className="sr-only">Status: {statusLabel}. {typeLabel}.</span>
+      {/* The category is written into the top border line; its background is
+          the page above the line and the card below it. */}
+      {service.category && (
+        <span
+          className="absolute -top-2 left-4 px-1.5 text-[11px] leading-4 font-medium uppercase tracking-wide text-muted-foreground"
+          style={{ background: 'linear-gradient(to bottom, var(--background) 50%, var(--card) 50%)' }}
+        >
+          {service.category}
+        </span>
+      )}
       <TkCardHeader className="px-5 pb-3">
         {/* Identity: the name has the full width; GPUs end the second line */}
         <TkTooltip
