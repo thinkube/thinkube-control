@@ -57,9 +57,9 @@ class MirrorRequest(BaseModel):
 
 class RegisterModelRequest(BaseModel):
     """Request to register a fine-tuned model from JupyterHub storage"""
-    name: str  # Model name for catalog (e.g., "gpt-oss-tool-use")
-    source_path: str  # Relative path in user's models directory (e.g., "gpt-oss-20b-tool-use")
-    base_model: str  # Original model (e.g., "unsloth/gpt-oss-20b")
+    name: str  # Model name for catalog (e.g., "qwen35-4b-tool-use")
+    source_path: str  # Relative path in user's models directory (e.g., "qwen35-4b-tool-use")
+    base_model: str  # Original model (e.g., "unsloth/Qwen3.5-4B")
     task: str = "text-generation"
     server_type: str = "tensorrt-llm"
     description: Optional[str] = None

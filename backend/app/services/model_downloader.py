@@ -699,7 +699,7 @@ except Exception as e:
         3. Registers metadata-only in MLflow (no artifact upload)
 
         Args:
-            model_id: Catalog model ID (e.g., "ollama/qwen3.5:4b")
+            model_id: Catalog model ID (e.g., "ollama/qwen3.5:27b")
             model_info: Full catalog entry dict
 
         Returns:
@@ -1255,9 +1255,9 @@ print(f'  - Registered in MLflow (metadata-only)', flush=True)
         Submit a fine-tuned model registration workflow to Argo
 
         Args:
-            name: Model name for catalog (e.g., "gpt-oss-tool-use")
+            name: Model name for catalog (e.g., "qwen35-4b-tool-use")
             source_path: Relative path in user's models directory
-            base_model: Original model (e.g., "unsloth/gpt-oss-20b")
+            base_model: Original model (e.g., "unsloth/Qwen3.5-4B")
             task: Model task (e.g., "text-generation")
             server_type: Target server type (e.g., "tensorrt-llm")
             description: Model description
