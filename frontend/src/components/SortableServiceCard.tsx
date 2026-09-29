@@ -12,7 +12,6 @@ import type { Service } from '@/stores/useServicesStore';
 interface SortableServiceCardProps {
   service: Service;
   variant: 'full' | 'favorite';
-  compact?: boolean;
   onToggleFavorite: (service: Service) => void;
   onShowDetails: (service: Service) => void;
   onRestart?: (service: Service) => void;

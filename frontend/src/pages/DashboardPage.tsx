@@ -31,7 +31,7 @@ import {
 } from '@dnd-kit/sortable';
 import { SortableServiceCard } from '@/components/SortableServiceCard';
 import { GPUMetricsCard } from '@/components/GPUMetricsCard';
-import { useMediaQuery } from '@/lib/useMediaQuery';
+import { TkBrandIcon } from 'thinkube-style/components/brand-icons';
 
 export default function DashboardPage() {
   const location = useLocation();
@@ -53,8 +53,6 @@ export default function DashboardPage() {
     triggerHealthCheck,
     reorderFavorites,
   } = useServicesStore();
-  // Cards are compact on narrow windows (phones, small tablets).
-  const compactMode = useMediaQuery('(max-width: 767px)');
   const [syncing, setSyncing] = useState(false);
   const [serviceToRestart, setServiceToRestart] = useState<Service | null>(null);
 
@@ -73,6 +71,20 @@ export default function DashboardPage() {
 
   // Get filtered services
   const filteredServices = getFilteredServices();
+
+  // All Services groups the cards under their category; a category page
+  // already names its category in the title and shows one group.
+  const serviceGroups: { category: string | null; services: Service[] }[] = isCategoryView
+    ? [{ category: null, services: filteredServices }]
+    : Object.entries(
+        filteredServices.reduce<Record<string, Service[]>>((groups, service) => {
+          const key = service.category || 'uncategorized';
+          (groups[key] ||= []).push(service);
+          return groups;
+        }, {})
+      )
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([category, services]) => ({ category, services }));
   const favoriteServices = getFavoriteServicesComputed();
 
   // Set category filter based on route
@@ -233,7 +245,16 @@ export default function DashboardPage() {
   return (
     <TkPageWrapper>
       {/* Header row */}
-      <div className="flex justify-end items-center mb-4">
+      <div className="flex flex-wrap justify-between items-center gap-2 mb-4">
+        {/* The logo colour of a card is its type */}
+        <div className="flex items-center gap-4 text-sm text-muted-foreground">
+          {([['core', 'Core'], ['optional', 'Optional'], ['user', 'Your apps']] as const).map(([type, label]) => (
+            <span key={type} className="inline-flex items-center gap-1.5">
+              <TkBrandIcon icon="tk_logo" alt="" size={14} color={`var(--service-type-${type})`} />
+              {label}
+            </span>
+          ))}
+        </div>
         <div>
           <TkButton
             intent="ghost"
@@ -279,7 +300,6 @@ export default function DashboardPage() {
                       key={service.id}
                       service={service}
                       variant="favorite"
-                      compact={compactMode}
                       onToggleFavorite={handleToggleFavorite}
                       onShowDetails={handleShowDetails}
                     />
@@ -300,19 +320,29 @@ export default function DashboardPage() {
               </TkCardContent>
             </TkCard>
           ) : (
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] *:max-w-[22rem] gap-4">
-              {filteredServices.map((service) => (
-                <ServiceCard
-                  key={service.id}
-                  service={service}
-                  variant="full"
-                  compact={compactMode}
-                  onToggleFavorite={handleToggleFavorite}
-                  onShowDetails={handleShowDetails}
-                  onRestart={handleRestart}
-                  onToggleService={handleToggleService}
-                  onHealthCheck={handleHealthCheck}
-                />
+            <div className="space-y-8">
+              {serviceGroups.map((group) => (
+                <section key={group.category ?? 'all'}>
+                  {group.category && (
+                    <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground border-b border-border pb-1 mb-3">
+                      {group.category}
+                    </h2>
+                  )}
+                  <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] *:max-w-[22rem] gap-4">
+                    {group.services.map((service) => (
+                      <ServiceCard
+                        key={service.id}
+                        service={service}
+                        variant="full"
+                        onToggleFavorite={handleToggleFavorite}
+                        onShowDetails={handleShowDetails}
+                        onRestart={handleRestart}
+                        onToggleService={handleToggleService}
+                        onHealthCheck={handleHealthCheck}
+                      />
+                    ))}
+                  </div>
+                </section>
               ))}
             </div>
           )}
