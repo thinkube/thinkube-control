@@ -129,8 +129,11 @@ export function ServiceCard({
   const canRestart = service.is_enabled && !!onRestart;
   const canCheckHealth = service.is_enabled && !!onHealthCheck;
   const canToggle = service.can_be_disabled && !!onToggleService;
-  const typeLabel = service.type === 'core' ? 'Core component' : service.type === 'optional' ? 'Optional component' : 'Your app';
-  const typeColor = `var(--service-type-${service.type === 'core' ? 'core' : service.type === 'optional' ? 'optional' : 'user'})`;
+  // A component deployed from a template is installed from the Optional
+  // Components page, so it has the optional type's label and colour.
+  const isOptional = service.type === 'optional' || service.type === 'component';
+  const typeLabel = service.type === 'core' ? 'Core component' : isOptional ? 'Optional component' : 'Your app';
+  const typeColor = `var(--service-type-${service.type === 'core' ? 'core' : isOptional ? 'optional' : 'user'})`;
 
   // Identity (the logo's colour is the type), the corner (GPUs, favourite,
   // occasional actions) and two buttons. The description shows on hover over

@@ -12,7 +12,7 @@ export interface Service {
   display_name?: string;
   powered_by?: string;
   description?: string;
-  type: 'core' | 'optional' | 'user_app';
+  type: 'core' | 'optional' | 'user_app' | 'component';
   category?: string;
   is_enabled: boolean;
   is_favorite: boolean;

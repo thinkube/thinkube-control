@@ -62,16 +62,16 @@
 
 /*
  * The logo colour of a service card is the service type: core components in
- * the brand mark colour, optional components in the sand family, the user's
- * own apps in violet. Each reaches 4.5:1 on its card.
+ * the brand mark colour, optional components in green from the tide family,
+ * the user's own apps in violet. Each reaches 4.5:1 on its card.
  */
 :root {
   --service-type-core: var(--primary);
-  --service-type-optional: var(--tk-sand-600);
+  --service-type-optional: oklch(50% 0.1 165);
   --service-type-user: oklch(52% 0.11 289);
 }
 
 .dark {
-  --service-type-optional: var(--tk-sand-400);
+  --service-type-optional: var(--tk-tide-4);
   --service-type-user: var(--tk-dusk-4);
 }

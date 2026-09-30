@@ -310,6 +310,8 @@ export default function ServiceDetailsPage() {
     const typeLabels: Record<string, string> = {
       'core': 'Core',
       'optional': 'Optional',
+      // Installed from the Optional Components page, like 'optional'.
+      'component': 'Optional',
       'user_app': 'User App'
     };
     return typeLabels[type] || type;
