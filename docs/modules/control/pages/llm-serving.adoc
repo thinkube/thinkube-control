@@ -4,21 +4,15 @@
 _How thinkube-control turns the model catalogue and your GPU nodes into served models behind one endpoint: states, loading, sizing, routing and authentication._
 
 .TL;DR
-"load Qwen/Qwen3-8B on the spark" is the whole of it for most days. This page is what happens underneath: the states a model passes through, how the platform sizes it to a node, how a request is routed to the right backend, and how a client authenticates at `llm.<your domain>`.
+"load Qwen/Qwen3-8B on tkspark" is the whole of it for most days. This page is what each step means: the states a model passes through, how the platform sizes it to a node, how a request is routed to the right backend, and how a client authenticates at `llm.<your domain>`.
 
 Every operation here is a click on the *LLM Gateway* and *AI Models* pages and a sentence to Claude Code.
 
 image::control-llm-gateway.png[The LLM Gateway page with two backends discovered and two models loaded: Qwen3.5-4B on the DGX Spark through vLLM, Qwen3-Embedding-0.6B on the RTX 3090 node through text-embeddings]
 
-== Two parts
-
-*The control plane* is the thinkube-control backend. It holds the catalogue and each model's state, mirrors weights, chooses a node, sizes the model to that node's memory, creates and removes the serving pods, and resolves a model name to a backend.
-
-*The gateway* is `thinkube-control-llm-proxy`, a reverse proxy at `https://llm.<your domain>`. It authenticates the caller, resolves the model to a backend, forwards the request and records metrics. Clients only ever talk to the gateway.
-
 == The endpoint
 
-The gateway serves:
+Clients call one address, the gateway at `https://llm.<your domain>`: it checks the caller's token and sends each request to the backend serving the model. thinkube-control decides where each model runs and sizes it to its node. The gateway serves:
 
 [cols="1,2",options="header"]
 |===
@@ -52,7 +46,7 @@ From a notebook or Thinkube IDE, `get_openai_client()` from the `tk_llm` package
 
 == Backends
 
-The inference engines are optional components you install; the control plane discovers the ones present and offers only those. Each is a `type: component` template whose pods the control plane creates at load time.
+The inference engines are optional components you install; thinkube-control offers only the ones present. Their pods start when a model is loaded.
 
 [horizontal]
 vLLM:: Full-precision text generation, one pod per model.
@@ -62,7 +56,7 @@ text-embeddings:: Text Embeddings Inference, for embedding models.
 
 == Mirroring
 
-A model must be in the catalogue (`models.json` in `thinkube-metadata`) before it can be mirrored. Mirroring downloads the weights from Hugging Face once, as an Argo workflow, into Thinkube Storage, and registers the model in Thinkube Experiments. Submit it from *AI Models* or with `submit_model_mirror`; follow it with `get_mirror_status`. A gated model needs its licence accepted on Hugging Face by the account whose token the installer stored.
+A model must be in the catalogue shown on *AI Models* before it can be mirrored. Mirroring downloads the weights from Hugging Face once into Thinkube Storage, and registers the model in Thinkube Experiments. Submit it from *AI Models* or with `submit_model_mirror`; follow it with `get_mirror_status`. A gated model needs its licence accepted on Hugging Face by the account whose token the installer stored.
 
 == Loading
 
@@ -82,25 +76,19 @@ A vLLM, TensorRT-LLM or embeddings deployment serves one model per node. A load 
 
 === Sizing
 
-You do not set `gpu_memory_utilization` or the pod's memory. The control plane measures the checkpoint's real size, adds the KV cache and a framework overhead, adds the drafter's weights when speculative decoding is configured, and derives a utilisation fraction and a memory request that fit the node's AI budget. A model that would not fit is refused with the reason, rather than crash-looping. On a unified-memory node such as a DGX Spark the budget is a fixed ceiling below the physical memory, so the operating system and the platform keep room.
+You do not set `gpu_memory_utilization` or the pod's memory. thinkube-control measures the checkpoint's real size, adds the KV cache and a framework overhead, adds the drafter's weights when speculative decoding is configured, and derives a utilisation fraction and a memory request that fit the node's AI budget. A model that would not fit is refused with the reason, rather than crash-looping. On a unified-memory node such as a DGX Spark the budget is a fixed ceiling below the physical memory, so the operating system and the platform keep room.
 
 === Speculative decoding
 
 Two methods, chosen per model in the catalogue's `speculative_config`:
 
 * *MTP*, a multi-token-prediction head inside the model;
-* *DFlash*, a separate small drafter model. The catalogue names the drafter; at load time the control plane resolves it to its mirrored weights and loads it beside the target. A drafter is mirrored and sized like any model but is never offered for loading on its own.
+* *DFlash*, a separate small drafter model. The catalogue names the drafter; at load time thinkube-control resolves it to its mirrored weights and loads it beside the target. A drafter is mirrored and sized like any model but is never offered for loading on its own.
 
 `num_speculative_tokens` is the draft depth. A larger value can be faster when drafts are accepted and costs memory that would otherwise be KV cache.
 
-== Routing
-
-The gateway keeps a copy of the control plane's model-to-backend table and refreshes it every 5 seconds in the background, so a request is resolved in memory and does not call the control plane. A model missing from the copy, for example one just loaded, is resolved with one live call, and a successful answer is cached for 10 seconds with the last good answer kept per model. A live call that fails or reports the model as still loading is retried once, and then the last good answer is used, because a model's backend does not change from one second to the next.
-
-So the status codes mean one thing each:
+== Errors from the endpoint
 
 [horizontal]
 `404`:: The model is not in the catalogue.
-`503`:: The model exists and cannot be resolved right now; retry.
-
-Two Prometheus metrics on the gateway's `/metrics` show this: `llm_gateway_resolve_source_total` counts resolutions by `snapshot` and `live`, and `llm_gateway_resolve_resilience_total` counts the `retry` and `stale_serve` cases.
+`503`:: The model exists and cannot be reached right now, for example while it is still loading; retry.

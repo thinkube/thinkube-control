@@ -4,7 +4,7 @@
 _The operations that let Claude Code start a notebook server where the work needs to be, run a notebook in it with no JupyterLab tab open, and stop it when the GPU should go back to serving models._
 
 .TL;DR
-"start a notebook server on the spark with one GPU, then run the zebra notebook with the fine-tuning kernel" starts the server with `start_notebook_server`, opens the notebook with `jupyter_use_notebook` and runs every cell with `jupyter_execute_all_cells`, polling until the run ends. No tab needs to be open; open one at any time and the outputs are there as they arrive. "run the zebra notebook unattended on the spark with one GPU" does the same on a server of its own that stops when the run ends, with `run_notebook_job`. This page lists every operation, what it answers, and the limits.
+"start a notebook server on tkspark with one GPU, then run the zebra notebook with the fine-tuning kernel" starts the server with `start_notebook_server`, opens the notebook with `jupyter_use_notebook` and runs every cell with `jupyter_execute_all_cells`, polling until the run ends. No tab needs to be open; open one at any time and the outputs are there as they arrive. "run the zebra notebook unattended on the spark with one GPU" does the same on a server of its own that stops when the run ends, with `run_notebook_job`. This page lists every operation, what it answers, and the limits.
 
 == How it works
 
