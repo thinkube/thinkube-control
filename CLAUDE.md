@@ -8,45 +8,16 @@ Thinkube Control is the management interface for the Thinkube platform -- a Kube
 
 ## Development Commands
 
-### Backend (FastAPI + Python)
+The pipeline is the build: the deploy below builds the backend and frontend images and rolls them out. Nothing is built, installed or served in the IDE — no `npm ci`, no Vite or uvicorn server, no local frontend build (see the CI/CD policy).
+
+### Tests
+
+The tests need the backend's dependencies, which the IDE does not have, and the image does not carry `tests/`. They run in the deployed backend pod:
 
 ```bash
-# Run backend locally (requires env vars from .env or cluster context)
-cd backend && uvicorn app:app --host 0.0.0.0 --port 8000 --reload
-
-# Run tests (requires PostgreSQL in cluster)
-cd backend && ./run_tests.sh
-
-# Run tests directly with pytest
-cd backend && pytest tests/ -v --cov=app --cov-report=term-missing
-
-# Run a single test file
-cd backend && pytest tests/test_api_endpoints.py -v
-
-# Lint (non-blocking)
-cd backend && flake8 app/ --max-line-length=120 --exclude=__pycache__
-
-# Format check
-cd backend && black --check app/
-```
-
-### Frontend (React + Vite + TypeScript)
-
-```bash
-# Install dependencies
-cd frontend && npm ci
-
-# Dev server (port 3000)
-cd frontend && npm run dev
-
-# Build for production
-cd frontend && npm run build
-
-# Lint
-cd frontend && npm run lint
-
-# Preview production build
-cd frontend && npm run preview
+POD=$(kubectl get pods -n thinkube-control -o name | grep backend | head -1 | cut -d/ -f2)
+kubectl cp backend/tests/test_service_discovery_health_path.py thinkube-control/$POD:/tmp/test_file.py
+kubectl exec -n thinkube-control $POD -- sh -c "cd /app && python -m pytest -q -p no:cacheprovider /tmp/test_file.py; rm -f /tmp/test_file.py"
 ```
 
 ### Deployment Workflow
