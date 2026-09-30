@@ -167,6 +167,7 @@ export function ServiceCard({
       tooltip={
         <>
           {service.description && <p>{service.description}</p>}
+          {service.version_error && <p>Version unavailable: {service.version_error}</p>}
           {service.template_url && service.template_version && (
             <p>Generated from {service.template_url.split('/').pop()} {service.template_version}</p>
           )}

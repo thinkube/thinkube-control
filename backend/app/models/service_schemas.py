@@ -149,6 +149,7 @@ class Service(ServiceBase):
     is_favorite: bool = False  # Whether the current user has favorited this service
     favorite_order: Optional[int] = None  # Position among the user's favorites
     component_version: Optional[str] = None  # VERSION of the component, from discovery
+    version_error: Optional[str] = None  # Why an app's version could not be read
     template_url: Optional[str] = None  # Template the service was generated from
     template_version: Optional[str] = None  # Release tag of that template
     gpu_count: Optional[int] = None  # Number of GPUs used

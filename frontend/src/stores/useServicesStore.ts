@@ -23,6 +23,7 @@ export interface Service {
   gpu_count?: number;
   gpu_nodes?: string[];
   component_version: string | null;
+  version_error: string | null;
   template_url: string | null;
   template_version: string | null;
   namespace?: string;

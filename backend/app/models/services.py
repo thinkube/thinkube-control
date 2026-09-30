@@ -115,6 +115,11 @@ class Service(Base):
         return (self.service_metadata or {}).get("component_version")
 
     @property
+    def version_error(self) -> Optional[str]:
+        """Why an app's version could not be read"""
+        return (self.service_metadata or {}).get("version_error")
+
+    @property
     def template_url(self) -> Optional[str]:
         """The template a service deployed from a template was generated from"""
         return (self.service_metadata or {}).get("template_url")

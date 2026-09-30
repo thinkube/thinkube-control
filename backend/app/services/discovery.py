@@ -3,9 +3,10 @@
 
 """ConfigMap-based service discovery"""
 
+import base64
 import logging
 import yaml
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
 from sqlalchemy.orm import Session
@@ -19,11 +20,50 @@ from sqlalchemy.dialects.postgresql import insert
 logger = logging.getLogger(__name__)
 
 
+# The Gitea organization that holds the repositories of deployed templates.
+GITEA_ORG = "thinkube-deployments"
+
+
 class ServiceDiscovery:
     """Discover services from Kubernetes ConfigMaps"""
 
     # Label to identify Thinkube-managed services
     SERVICE_LABEL = "thinkube.io/managed"
+    _gitea_token: Optional[str] = None
+
+    def _app_version(self, app_name: str) -> Tuple[Optional[str], Optional[str]]:
+        """An app's version and the reason it could not be read.
+
+        An app's version changes with each push, while its service config is
+        written only at deploy, so the version is read from metadata.version of
+        thinkube.yaml on the app's Gitea main: the code the build deploys. The
+        version is None when thinkube.yaml declares none. A failure is returned
+        as the reason instead of raised, so the app still shows on the
+        dashboard, with the reason in place of its version.
+        """
+        import urllib3
+        from app.core.config import settings
+
+        path = f"/repos/{GITEA_ORG}/{app_name}/raw/thinkube.yaml"
+        try:
+            if self._gitea_token is None:
+                secret = self.core_v1.read_namespaced_secret("gitea-admin-token", "gitea")
+                self._gitea_token = base64.b64decode(secret.data["token"]).decode()
+            http = urllib3.PoolManager(cert_reqs="CERT_NONE")
+            urllib3.disable_warnings()
+            response = http.request(
+                "GET",
+                f"{settings.GITEA_URL}/api/v1{path}",
+                fields={"ref": "main"},
+                headers={"Authorization": f"token {self._gitea_token}"},
+                timeout=10.0,
+            )
+            if response.status != 200:
+                return None, f"Gitea answered {response.status} for {path}"
+            config = yaml.safe_load(response.data) or {}
+            return (config.get("metadata") or {}).get("version"), None
+        except Exception as e:
+            return None, f"Cannot read {path} from Gitea: {e}"
 
     def __init__(self, db: Session, domain: str):
         """Initialize service discovery
@@ -169,6 +209,15 @@ class ServiceDiscovery:
             # Gateway-managed services are always "enabled" even with 0 base replicas
             is_enabled = replicas > 0 or is_gateway_managed
 
+            # A component's version is fixed at deploy; an app's follows its pushes.
+            version_error = None
+            if svc.get("type") == "user_app":
+                component_version, version_error = self._app_version(svc["name"])
+                if version_error:
+                    logger.error(f"Version of {svc['name']}: {version_error}")
+            else:
+                component_version = svc.get("component_version")
+
             # Create service model
             service = ServiceModel(
                 name=svc["name"],
@@ -204,7 +253,8 @@ class ServiceDiscovery:
                     "resources": resources,
                     "gateway_managed": is_gateway_managed,
                     # The component's VERSION, or an app's own version.
-                    "component_version": svc.get("component_version"),
+                    "component_version": component_version,
+                    "version_error": version_error,
                     # For services deployed from a template: the template and
                     # the release tag the service was generated from.
                     "template_url": svc.get("metadata", {}).get("template_url"),
