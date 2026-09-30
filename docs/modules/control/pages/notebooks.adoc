@@ -8,9 +8,9 @@ _The operations that let Claude Code start a notebook server where the work need
 
 == How it works
 
-thinkube-control forwards the notebook operations to `tk-notebook-mcp`, a server extension inside the notebook server. The extension works on the notebook's shared document, the same one a JupyterLab tab edits, and creates it itself when no tab has: an edit or an output written by Claude appears in a tab that has the notebook open, and the document's own autosave writes it to the file. A kernel is held by one call at a time. A second call for the same kernel waits five seconds and then answers with what holds it.
+Thinkube Control forwards the notebook operations to `tk-notebook-mcp`, a server extension inside the notebook server. The extension works on the notebook's shared document, the same one a JupyterLab tab edits, and creates it itself when no tab has: an edit or an output written by Claude appears in a tab that has the notebook open, and the document's own autosave writes it to the file. A kernel is held by one call at a time. A second call for the same kernel waits five seconds and then answers with what holds it.
 
-The server operations go to JupyterHub itself, with the service token thinkube-control is registered with.
+The server operations go to JupyterHub itself, with the service token Thinkube Control is registered with.
 
 == The server
 
@@ -105,7 +105,7 @@ Over MCP a call that waits for a cell is held open by Claude Code for a limited 
 | The runs, newest first; stop one and its server.
 |===
 
-thinkube-control polls a run every fifteen seconds and records it in its database. If thinkube-control restarts during a run, it picks the polling up again; a run whose server was still starting is marked `lost` and its server stopped.
+Thinkube Control polls a run every fifteen seconds and records it in its database. If Thinkube Control restarts during a run, it picks the polling up again; a run whose server was still starting is marked `lost` and its server stopped.
 
 == See it in the IDE
 

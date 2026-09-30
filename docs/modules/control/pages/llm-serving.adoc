@@ -1,7 +1,7 @@
 = LLM serving and models
 :page-type: reference
 
-_How thinkube-control turns the model catalogue and your GPU nodes into served models behind one endpoint: states, loading, sizing, routing and authentication._
+_How Thinkube Control turns the model catalogue and your GPU nodes into served models behind one endpoint: states, loading, sizing, routing and authentication._
 
 .TL;DR
 "load Qwen/Qwen3-8B on tkspark" is the whole of it for most days. This page is what each step means: the states a model passes through, how the platform sizes it to a node, how a request is routed to the right backend, and how a client authenticates at `llm.<your domain>`.
@@ -12,7 +12,7 @@ image::control-llm-gateway.png[The LLM Gateway page with two backends discovered
 
 == The endpoint
 
-Clients call one address, the gateway at `https://llm.<your domain>`: it checks the caller's token and sends each request to the backend serving the model. thinkube-control decides where each model runs and sizes it to its node. The gateway serves:
+Clients call one address, the gateway at `https://llm.<your domain>`: it checks the caller's token and sends each request to the backend serving the model. Thinkube Control decides where each model runs and sizes it to its node. The gateway serves:
 
 [cols="1,2",options="header"]
 |===
@@ -31,7 +31,7 @@ A client written for either API works unchanged with the base URL changed to the
 Every route takes a token, either as `Authorization: Bearer <token>` or as an `x-api-key` header. Two kinds are accepted:
 
 * a Thinkube Identity access token, verified against the realm's signing keys;
-* a thinkube-control API token, which starts with `tk_`, created under *API Tokens* and verified against thinkube-control.
+* a Thinkube Control API token, which starts with `tk_`, created under *API Tokens* and verified against thinkube-control.
 
 From a notebook or Thinkube IDE, `get_openai_client()` from the `tk_llm` package returns an OpenAI client already pointed at the gateway with a token.
 
@@ -46,7 +46,7 @@ From a notebook or Thinkube IDE, `get_openai_client()` from the `tk_llm` package
 
 == Backends
 
-The inference engines are optional components you install; thinkube-control offers only the ones present. Their pods start when a model is loaded.
+The inference engines are optional components you install; Thinkube Control offers only the ones present. Their pods start when a model is loaded.
 
 [horizontal]
 vLLM:: Full-precision text generation, one pod per model.
@@ -76,14 +76,14 @@ A vLLM, TensorRT-LLM or embeddings deployment serves one model per node. A load 
 
 === Sizing
 
-You do not set `gpu_memory_utilization` or the pod's memory. thinkube-control measures the checkpoint's real size, adds the KV cache and a framework overhead, adds the drafter's weights when speculative decoding is configured, and derives a utilisation fraction and a memory request that fit the node's AI budget. A model that would not fit is refused with the reason, rather than crash-looping. On a unified-memory node such as a DGX Spark the budget is a fixed ceiling below the physical memory, so the operating system and the platform keep room.
+You do not set `gpu_memory_utilization` or the pod's memory. Thinkube Control measures the checkpoint's real size, adds the KV cache and a framework overhead, adds the drafter's weights when speculative decoding is configured, and derives a utilisation fraction and a memory request that fit the node's AI budget. A model that would not fit is refused with the reason, rather than crash-looping. On a unified-memory node such as a DGX Spark the budget is a fixed ceiling below the physical memory, so the operating system and the platform keep room.
 
 === Speculative decoding
 
 Two methods, chosen per model in the catalogue's `speculative_config`:
 
 * *MTP*, a multi-token-prediction head inside the model;
-* *DFlash*, a separate small drafter model. The catalogue names the drafter; at load time thinkube-control resolves it to its mirrored weights and loads it beside the target. A drafter is mirrored and sized like any model but is never offered for loading on its own.
+* *DFlash*, a separate small drafter model. The catalogue names the drafter; at load time Thinkube Control resolves it to its mirrored weights and loads it beside the target. A drafter is mirrored and sized like any model but is never offered for loading on its own.
 
 `num_speculative_tokens` is the draft depth. A larger value can be faster when drafts are accepted and costs memory that would otherwise be KV cache.
 
