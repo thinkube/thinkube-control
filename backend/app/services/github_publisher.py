@@ -18,6 +18,7 @@ from typing import Dict, List, Optional
 from urllib.parse import quote
 
 import aiohttp
+import yaml
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,13 @@ PUBLISH_EXCLUDE_PATTERNS = {
     ".venv",
     "venv",
 }
+
+
+# Copier renders this into the generated application's .copier-answers.yml,
+# which records the template release the application came from.
+ANSWERS_FILE_TEMPLATE = """# Written by Copier: the template release this application was generated from.
+{{ _copier_answers|to_nice_yaml -}}
+"""
 
 
 class GitHubPublisher:
@@ -108,9 +116,16 @@ class GitHubPublisher:
         self,
         repo_name: str,
         source_path: Path,
+        release_tag: str,
         exclude_patterns: Optional[set] = None,
     ) -> None:
-        """Copy app source to a temp directory, init git, and push to GitHub."""
+        """Copy app source to a temp directory, init git, push to GitHub, and tag the release.
+
+        The template gets the Copier answers file template, so applications
+        generated from it record the release they came from. A release tag that
+        already exists on GitHub is refused: the app's metadata.version must be
+        bumped to publish again.
+        """
         if exclude_patterns is None:
             exclude_patterns = PUBLISH_EXCLUDE_PATTERNS
 
@@ -127,6 +142,7 @@ class GitHubPublisher:
                     shutil.copytree(item, dest, ignore=shutil.ignore_patterns(*exclude_patterns))
                 else:
                     shutil.copy2(item, dest)
+            (staging_dir / ".copier-answers.yml.jinja").write_text(ANSWERS_FILE_TEMPLATE)
 
             # Init git and push
             remote_url = f"https://x-access-token:{self.github_token}@github.com/{self.github_username}/{repo_name}.git"
@@ -140,6 +156,8 @@ class GitHubPublisher:
                 ["git", "commit", "-m", "Publish as template from Thinkube"],
                 ["git", "remote", "add", "origin", remote_url],
                 ["git", "push", "-u", "origin", "main", "--force"],
+                ["git", "tag", release_tag],
+                ["git", "push", "origin", release_tag],
             ]
 
             for cmd in cmds:
@@ -152,12 +170,16 @@ class GitHubPublisher:
                 )
                 if result.returncode != 0 and cmd[1] != "remote":
                     # git remote add fails if already exists, that's ok
+                    hint = (
+                        f"\nRelease {release_tag} is already published; bump metadata.version in thinkube.yaml."
+                        if cmd[1:3] == ["push", "origin"] and cmd[3] == release_tag else ""
+                    )
                     raise RuntimeError(
                         f"Git command failed: {' '.join(cmd)}\n"
-                        f"stderr: {result.stderr}"
+                        f"stderr: {result.stderr}{hint}"
                     )
 
-            logger.info(f"Pushed template code to {self.github_username}/{repo_name}")
+            logger.info(f"Pushed template code to {self.github_username}/{repo_name} and tagged {release_tag}")
 
         finally:
             shutil.rmtree(staging_dir, ignore_errors=True)
@@ -277,14 +299,21 @@ class GitHubPublisher:
         if not app_path.exists():
             raise FileNotFoundError(f"App '{app_name}' not found at {app_path}")
 
-        # Validate thinkube.yaml and manifest.yaml exist
-        has_thinkube_yaml = (app_path / "thinkube.yaml").exists()
-        has_manifest_yaml = (app_path / "manifest.yaml").exists()
-        if not has_thinkube_yaml and not has_manifest_yaml:
+        # A deploy reads thinkube.yaml, and its metadata.version becomes the
+        # template's release tag.
+        thinkube_path = app_path / "thinkube.yaml"
+        if not thinkube_path.exists():
+            raise ValueError(f"App '{app_name}' has no thinkube.yaml — cannot publish as template")
+        with open(thinkube_path) as f:
+            thinkube_config = yaml.safe_load(f)
+        version = (thinkube_config.get("metadata") or {}).get("version")
+        if not version:
             raise ValueError(
-                f"App '{app_name}' has neither thinkube.yaml nor manifest.yaml — "
-                "cannot publish as template"
+                f"thinkube.yaml of '{app_name}' has no metadata.version. Add one, for example "
+                'version: "0.1.0"; it becomes the template\'s release tag.'
             )
+        # "app" is the schema's default for spec.deployment.type.
+        deployment_type = (thinkube_config.get("spec", {}).get("deployment") or {}).get("type", "app")
 
         # Step 1: Create or update GitHub repo
         repo_data = await self.create_or_update_repo(
@@ -298,6 +327,7 @@ class GitHubPublisher:
         self.push_template_code(
             repo_name=template_name,
             source_path=app_path,
+            release_tag=f"v{version}",
         )
 
         # Step 3: Update metadata repo
@@ -310,18 +340,8 @@ class GitHubPublisher:
             "github_url": repo_url,
             "ssh_url": f"git@github.com:{self.github_username}/{template_name}.git",
             "clone_for_development": False,
+            "deployment_type": deployment_type,
         }
-
-        # Determine deployment type from thinkube.yaml
-        if has_thinkube_yaml:
-            try:
-                import yaml
-                with open(app_path / "thinkube.yaml") as f:
-                    thinkube_config = yaml.safe_load(f)
-                deployment_type = thinkube_config.get("spec", {}).get("type", "app")
-                template_entry["deployment_type"] = deployment_type
-            except Exception:
-                template_entry["deployment_type"] = "app"
 
         if tags:
             template_entry["tags"] = tags

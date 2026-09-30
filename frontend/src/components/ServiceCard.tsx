@@ -164,7 +164,14 @@ export function ServiceCard({
       tag={service.gpu_count && service.gpu_count > 0
         ? `${service.gpu_count} GPU${service.gpu_count > 1 ? 's' : ''}`
         : undefined}
-      tooltip={service.description && <p>{service.description}</p>}
+      tooltip={
+        <>
+          {service.description && <p>{service.description}</p>}
+          {service.template_url && service.template_version && (
+            <p>Generated from {service.template_url.split('/').pop()} {service.template_version}</p>
+          )}
+        </>
+      }
       actions={
         <>
           {canOpen ? (

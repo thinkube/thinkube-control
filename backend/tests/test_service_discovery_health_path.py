@@ -11,6 +11,8 @@ to use the health path of whichever container is routed at "/". Hardcoding
 Antora static site declaring `health: /` has no /health route and returns 404.
 """
 
+import asyncio
+
 import pytest
 
 from app.api.service_discovery_config import (
@@ -19,6 +21,7 @@ from app.api.service_discovery_config import (
     Deployment,
     Route,
     ServiceDiscoveryConfigRequest,
+    generate_service_discovery_yaml,
     resolve_health_path,
 )
 
@@ -66,9 +69,32 @@ MINIMAL_REQUEST = {
     "app_host": "app.example.com",
     "k8s_namespace": "app",
     "template_url": "https://example.com/t",
+    "template_version": "v1.2.0",
     "deployment_date": "2026-01-01T00:00:00",
     "containers": [{"name": "app"}],
 }
+
+
+def _generated_service(**overrides):
+    request = ServiceDiscoveryConfigRequest(**{**MINIMAL_REQUEST, **overrides})
+    result = asyncio.run(generate_service_discovery_yaml(request, current_user={}))
+    return result["service_data"]["service"]
+
+
+def test_component_version_is_the_template_release():
+    """A component is not developed after deploy: its version is the template's."""
+    service = _generated_service(deployment={"type": "component"}, app_version="0.1.0")
+
+    assert service["component_version"] == "1.2.0"
+    assert service["metadata"]["template_version"] == "v1.2.0"
+
+
+def test_app_version_is_the_apps_own():
+    """An app carries its own version; the template release stays in metadata."""
+    service = _generated_service(app_version="0.3.1")
+
+    assert service["component_version"] == "0.3.1"
+    assert service["metadata"]["template_version"] == "v1.2.0"
 
 
 def test_routes_are_optional_for_callers():

@@ -8,8 +8,9 @@ Handles downloading and executing templates from GitHub
 
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Query, Request
 from pydantic import BaseModel, HttpUrl
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from uuid import UUID, uuid4
+import time
 import tempfile
 import shutil
 from pathlib import Path
@@ -115,6 +116,27 @@ def deployment_type(template_url: str) -> str:
     return "component" if entry and entry.get("deployment_type") == "component" else "user_app"
 
 
+# Template release tags, keyed by template URL, with the time they were read.
+_template_versions: Dict[str, Tuple[float, Optional[str]]] = {}
+_TEMPLATE_VERSION_TTL = 300
+
+
+async def _template_version(template_url: str) -> Optional[str]:
+    """The template's newest release tag, or None while it has none."""
+    sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
+    from template_version import TemplateNotReleased, latest_release_tag
+
+    cached = _template_versions.get(template_url)
+    if cached and time.monotonic() - cached[0] < _TEMPLATE_VERSION_TTL:
+        return cached[1]
+    try:
+        version = await asyncio.to_thread(latest_release_tag, template_url)
+    except TemplateNotReleased:
+        version = None
+    _template_versions[template_url] = (time.monotonic(), version)
+    return version
+
+
 @router.get("/list", operation_id="list_templates")
 async def list_available_templates(
     current_user: dict = Depends(get_current_user_dual_auth),
@@ -156,6 +178,10 @@ async def list_available_templates(
                     entry["fixed_name"] = repo["fixed_name"]
                 templates.append(entry)
 
+        versions = await asyncio.gather(*(_template_version(t["url"]) for t in templates))
+        for template, version in zip(templates, versions):
+            template["version"] = version
+
         logger.info(f"Discovered {len(templates)} application templates")
         return {"templates": templates}
 
@@ -190,8 +216,19 @@ async def get_template_metadata(
         org = url_parts[-2]
         repo = url_parts[-1]
 
-        # Every template carries manifest.yaml at the root of its main branch.
-        manifest_url = f"https://raw.githubusercontent.com/{org}/{repo}/main/manifest.yaml"
+        # Every template carries manifest.yaml at its root. It is read at the
+        # release a deploy generates from, so the form matches what is deployed.
+        release = await _template_version(template_url)
+        if release is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{template_url} has no release tag (vMAJOR.MINOR.PATCH), so it cannot be deployed. "
+                    "Tag the template's current state to release it, for example: "
+                    "git tag v0.1.0 && git push origin v0.1.0"
+                ),
+            )
+        manifest_url = f"https://raw.githubusercontent.com/{org}/{repo}/{release}/manifest.yaml"
 
         # The GitHub token grants access to every repository the user can
         # reach, in any organization, and public repositories accept it too.
@@ -205,7 +242,7 @@ async def get_template_metadata(
                 if response.status != 200:
                     raise HTTPException(
                         status_code=404,
-                        detail=f"Template has no manifest.yaml on its main branch ({manifest_url}: HTTP {response.status}).",
+                        detail=f"Template has no manifest.yaml at release {release} ({manifest_url}: HTTP {response.status}).",
                     )
                 content = await response.text()
 

@@ -52,6 +52,10 @@ class ServiceDiscoveryConfigRequest(BaseModel):
     app_host: str
     k8s_namespace: str
     template_url: str
+    # The template release tag the application was generated from.
+    template_version: str
+    # metadata.version of the application's thinkube.yaml, when it declares one.
+    app_version: Optional[str] = None
     project_description: Optional[str] = ""
     deployment_date: str
     containers: List[Container]
@@ -114,6 +118,11 @@ async def generate_service_discovery_yaml(
 
     service_type = COMPONENT_SERVICE_TYPE if is_component else APP_SERVICE_TYPE
     category = COMPONENT_CATEGORY if is_component else APP_CATEGORY
+    # A component is not developed after it is deployed, so its version is the
+    # template release; an app has its own version in thinkube.yaml.
+    component_version = (
+        request.template_version.removeprefix("v") if is_component else request.app_version
+    )
 
     # Build service data
     service_data = {
@@ -125,6 +134,7 @@ async def generate_service_discovery_yaml(
             "type": service_type,
             "category": category,
             "icon": "/icons/tk_dashboard.svg",
+            "component_version": component_version,
             "endpoints": [
                 {
                     "name": "web",
@@ -147,6 +157,7 @@ async def generate_service_discovery_yaml(
             },
             "metadata": {
                 "template_url": request.template_url,
+                "template_version": request.template_version,
                 "deployment_date": request.deployment_date,
                 "deployed_by": "thinkube-control",
             },

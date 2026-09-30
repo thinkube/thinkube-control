@@ -114,6 +114,16 @@ class Service(Base):
         """The component's VERSION as discovery read it from its service config"""
         return (self.service_metadata or {}).get("component_version")
 
+    @property
+    def template_url(self) -> Optional[str]:
+        """The template a service deployed from a template was generated from"""
+        return (self.service_metadata or {}).get("template_url")
+
+    @property
+    def template_version(self) -> Optional[str]:
+        """The template release tag a service deployed from a template was generated from"""
+        return (self.service_metadata or {}).get("template_version")
+
 
 class ServiceHealth(Base):
     """Model for tracking service health check results"""

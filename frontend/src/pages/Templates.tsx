@@ -67,6 +67,8 @@ interface AvailableTemplate {
   deployment_type: 'app' | 'knative' | 'component'
   fixed_name?: string
   source: 'platform' | 'user'
+  // The newest release tag (vMAJOR.MINOR.PATCH); null while the template has none.
+  version: string | null
 }
 
 interface DeployedApp {
@@ -732,6 +734,7 @@ export default function Templates() {
                   statusLabel="Available"
                   srDescription={`${label}.`}
                   label={label}
+                  version={template.version?.replace(/^v/, '')}
                   icon={TEMPLATE_ICON}
                   name={template.name.replace('tkt-', '').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
                   subtitle={template.description}

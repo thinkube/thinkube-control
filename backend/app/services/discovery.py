@@ -203,8 +203,12 @@ class ServiceDiscovery:
                     "ready_replicas": ready_replicas,
                     "resources": resources,
                     "gateway_managed": is_gateway_managed,
-                    # The VERSION of the component's playbooks; templates have none.
+                    # The component's VERSION, or an app's own version.
                     "component_version": svc.get("component_version"),
+                    # For services deployed from a template: the template and
+                    # the release tag the service was generated from.
+                    "template_url": svc.get("metadata", {}).get("template_url"),
+                    "template_version": svc.get("metadata", {}).get("template_version"),
                 },
             )
 

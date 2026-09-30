@@ -22,7 +22,9 @@ export interface Service {
   icon?: string;
   gpu_count?: number;
   gpu_nodes?: string[];
-  component_version?: string;
+  component_version: string | null;
+  template_url: string | null;
+  template_version: string | null;
   namespace?: string;
   latest_health?: {
     status: string;

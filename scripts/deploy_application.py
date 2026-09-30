@@ -31,6 +31,7 @@ from app_databases import create_statement, database_names, exists, exists_query
 from checkout_state import STATUS_COMMAND, UNPUSHED_COMMAND, changed_files
 from checkout_state import refusal as checkout_refusal
 from component_checkout import check_declared_type, checkout_path, developer_commits, parse_log, refusal
+from template_version import github_git_env, latest_release_tag
 from deploy_log import format_line
 
 
@@ -95,6 +96,7 @@ class ApplicationDeployer:
         # Will be populated during deployment
         self.secrets = {}
         self.thinkube_config = {}
+        self.template_version = None  # Set by run_copier: the template release tag used
         self.k8s_core = None
         self.k8s_custom = None
 
@@ -269,33 +271,29 @@ git fetch origin main
     def _run_copier_sync(self, copier_cmd: list, cwd: str) -> tuple:
         """Synchronous Copier execution (runs in thread pool to avoid blocking event loop).
 
-        Templates published from an app are private GitHub repositories, so the
-        clone Copier makes authenticates with the platform's GitHub token. The
-        token is handed to git for this process only, as a URL rewrite in the
-        environment: nothing is written to a git config file, and the template
-        address Copier records in .copier-answers.yml stays without it.
+        The clone Copier makes authenticates with the platform's GitHub token
+        (github_git_env), so private templates published from an app work.
         """
-        github_token = os.environ.get("GITHUB_TOKEN")
-        if not github_token:
-            raise RuntimeError("GITHUB_TOKEN is not set; thinkube-control receives it from the github-token secret")
-        env = dict(os.environ)
-        env["GIT_CONFIG_COUNT"] = "1"
-        env["GIT_CONFIG_KEY_0"] = f"url.https://x-access-token:{github_token}@github.com/.insteadOf"
-        env["GIT_CONFIG_VALUE_0"] = "https://github.com/"
         result = subprocess.run(
             copier_cmd,
             capture_output=True,
             text=True,
             cwd=cwd,
-            env=env,
+            env=github_git_env(),
             timeout=300  # 5 minute timeout for Copier
         )
         return result.returncode, result.stdout, result.stderr
 
     async def run_copier(self):
-        """Run Copier to process the template (in thread pool to keep event loop responsive)."""
+        """Run Copier to process the template (in thread pool to keep event loop responsive).
+
+        The application is generated from the template's newest release tag,
+        which Copier records in the application's .copier-answers.yml.
+        """
+        self.template_version = await asyncio.to_thread(latest_release_tag, self.template_url)
         DeploymentLogger.log(
-            f"Copying template {self.template_url} (ref HEAD) over {self.local_repo_path} with copier copy --force"
+            f"Copying template {self.template_url} (release {self.template_version}) over "
+            f"{self.local_repo_path} with copier copy --force"
         )
 
         # Ensure apps/ directory exists
@@ -307,7 +305,7 @@ git fetch origin main
         copier_cmd = [
             "copier", "copy",
             "--force",
-            "--vcs-ref=HEAD",
+            f"--vcs-ref={self.template_version}",
             self.template_url,
             self.local_repo_path,
             "--data", f"project_name={self.app_name}",
@@ -2118,6 +2116,8 @@ printf 'PUSHED\\t%s\\n' "$(git log -1 --format='%H %s')"
                 'app_host': app_host,
                 'k8s_namespace': self.namespace,
                 'template_url': self.template_url,
+                'template_version': self.template_version,
+                'app_version': self.thinkube_config.get('metadata', {}).get('version'),
                 'project_description': self.params.get('project_description', ''),
                 'deployment_date': datetime.now().isoformat(),
                 'containers': self.thinkube_config.get('spec', {}).get('containers', []),
