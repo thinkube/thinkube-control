@@ -141,6 +141,7 @@ export function ServiceCard({
       statusLabel={statusLabel}
       srDescription={`${typeLabel}.`}
       label={service.category}
+      version={service.component_version}
       icon={
         <span className="flex" title={typeLabel}>
           {hasCustomIcon ? (

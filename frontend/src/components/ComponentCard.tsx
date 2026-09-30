@@ -58,7 +58,7 @@ export function ComponentCard({
   } else if (isInstalled) {
     state = 'healthy'
     statusLabel = 'Installed'
-    subtitle = component.component_version ? `Installed · v${component.component_version}` : 'Installed'
+    subtitle = 'Installed'
   } else if (missing) {
     state = 'unknown'
     statusLabel = 'Requirements missing'
@@ -74,6 +74,7 @@ export function ComponentCard({
       state={state}
       statusLabel={statusLabel}
       srDescription="Optional component."
+      version={component.component_version}
       icon={
         <TkBrandIcon
           icon={(component.icon ?? '').replace('/icons/', '').replace('.svg', '')}

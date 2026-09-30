@@ -109,6 +109,11 @@ class Service(Base):
         """Check if this service can be disabled"""
         return self.type in ["optional", "user_app", "component"]
 
+    @property
+    def component_version(self) -> Optional[str]:
+        """The component's VERSION as discovery read it from its service config"""
+        return (self.service_metadata or {}).get("component_version")
+
 
 class ServiceHealth(Base):
     """Model for tracking service health check results"""

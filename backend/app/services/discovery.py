@@ -203,6 +203,8 @@ class ServiceDiscovery:
                     "ready_replicas": ready_replicas,
                     "resources": resources,
                     "gateway_managed": is_gateway_managed,
+                    # The VERSION of the component's playbooks; templates have none.
+                    "component_version": svc.get("component_version"),
                 },
             )
 

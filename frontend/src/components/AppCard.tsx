@@ -25,13 +25,17 @@ const STATE_BAR: Record<AppCardState, string> = {
   available: 'border-l-border',
 };
 
+const BORDER_TEXT_BACKGROUND = { background: 'linear-gradient(to bottom, var(--background) 50%, var(--card) 50%)' };
+
 interface AppCardProps {
   state: AppCardState;
   statusLabel: string;
   /** Read by screen readers after the status. */
   srDescription?: string;
-  /** Written into the top border line. */
+  /** Written into the top border line, at the left. */
   label?: string;
+  /** Written into the top border line, at the right. */
+  version?: string | null;
   icon: ReactNode;
   name: string;
   onNameClick?: () => void;
@@ -52,6 +56,7 @@ export function AppCard({
   statusLabel,
   srDescription,
   label,
+  version,
   icon,
   name,
   onNameClick,
@@ -66,14 +71,22 @@ export function AppCard({
   return (
     <TkCard className={`relative h-full flex flex-col border-l-4 ${STATE_BAR[state]}`}>
       <span className="sr-only">Status: {statusLabel}.{srDescription ? ` ${srDescription}` : ''}</span>
-      {/* The label is written into the top border line; its background is
-          the page above the line and the card below it. */}
+      {/* The label and the version are written into the top border line; their
+          background is the page above the line and the card below it. */}
       {label && (
         <span
           className="absolute -top-2 left-4 px-1.5 text-[11px] leading-4 font-medium uppercase tracking-wide text-muted-foreground"
-          style={{ background: 'linear-gradient(to bottom, var(--background) 50%, var(--card) 50%)' }}
+          style={BORDER_TEXT_BACKGROUND}
         >
           {label}
+        </span>
+      )}
+      {version && (
+        <span
+          className="absolute -top-2 right-4 px-1.5 text-[11px] leading-4 font-medium tracking-wide text-muted-foreground"
+          style={BORDER_TEXT_BACKGROUND}
+        >
+          v{version}
         </span>
       )}
       <TkCardHeader className="px-5 pb-3">
