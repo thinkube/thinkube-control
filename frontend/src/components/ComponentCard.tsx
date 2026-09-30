@@ -3,161 +3,112 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Check, Clock, Download, Loader2, Trash2 } from "lucide-react"
-import {
-  TkCard,
-  TkCardHeader,
-  TkCardContent,
-} from "thinkube-style/components/cards-data"
-import {
-  TkBadge,
-  TkButton,
-} from "thinkube-style/components/buttons-badges"
-import { TkWarningAlert } from "thinkube-style/components/feedback"
+import { Download, Trash2 } from "lucide-react"
+import { TkButton } from "thinkube-style/components/buttons-badges"
 import { TkBrandIcon } from "thinkube-style/components/brand-icons"
+import { AppCard, type AppCardState } from "./AppCard"
 
-interface Component {
+/** An optional component as GET /optional-components returns it. */
+export interface OptionalComponent {
+  name: string
   display_name: string
   description: string
-  icon?: string
-  is_installed?: boolean
-  installed?: boolean  // Legacy support
-  component_version?: string
-  requirements?: string[]
-  requirements_met?: boolean
-  missing_requirements?: string[]
-  activity?: 'queued' | 'installing' | 'uninstalling' | null
+  category: string
+  icon: string
+  installed: boolean
+  activity: 'queued' | 'installing' | 'uninstalling' | null
+  component_version: string | null
+  requirements_met: boolean
+  missing_requirements: string[]
 }
 
 interface ComponentCardProps {
-  component: Component
-  allowForceInstall?: boolean
-  onInstall: (component: Component) => void
-  onUninstall: (component: Component) => void
+  component: OptionalComponent
+  onInstall: (component: OptionalComponent) => void
+  onUninstall: (component: OptionalComponent) => void
+}
+
+const ACTIVITY_LABEL = {
+  queued: 'Queued',
+  installing: 'Installing',
+  uninstalling: 'Uninstalling',
 }
 
 export function ComponentCard({
   component,
-  allowForceInstall = false,
   onInstall,
   onUninstall,
 }: ComponentCardProps) {
-  // Support both installed and is_installed field names
-  const isInstalled = component.is_installed ?? component.installed ?? false
-  const requirementsMet = component.requirements_met ?? true  // Default to true if not specified
-  const missingRequirements = component.missing_requirements ?? []
+  const isInstalled = component.installed
+  const missingRequirements = component.missing_requirements
 
   // A queued run for the component counts as busy: it will run, so the card offers no second action.
   const busy = !!component.activity
+  const missing = !isInstalled && !component.requirements_met
 
-  const isMissingRequirement = (req: string) => {
-    return missingRequirements?.includes(req)
+  // The bar and the line under the name carry the state; the description
+  // takes the line when there is no state to report.
+  let state: AppCardState
+  let statusLabel: string
+  let subtitle: string
+  if (component.activity) {
+    state = 'idle'
+    statusLabel = ACTIVITY_LABEL[component.activity]
+    subtitle = statusLabel
+  } else if (isInstalled) {
+    state = 'healthy'
+    statusLabel = 'Installed'
+    subtitle = component.component_version ? `Installed · v${component.component_version}` : 'Installed'
+  } else if (missing) {
+    state = 'unknown'
+    statusLabel = 'Requirements missing'
+    subtitle = `Needs ${missingRequirements.join(', ')}`
+  } else {
+    state = 'available'
+    statusLabel = 'Not installed'
+    subtitle = component.description
   }
 
   return (
-    <TkCard className="h-full flex flex-col">
-      <TkCardHeader className="pb-3">
-        <div className="flex items-start gap-3">
-          <div className="flex-shrink-0">
-            <TkBrandIcon
-              icon={(component.icon ?? '').replace('/icons/', '').replace('.svg', '')}
-              alt={component.display_name}
-              size={20}
-            />
-          </div>
-          <div className="flex-1 min-w-0">
-            <h3 className="text-lg font-semibold mb-2">{component.display_name}</h3>
-            <div className="flex items-center gap-2">
-              {/* Installation status badge */}
-              {busy ? (
-                <TkBadge status="pending" className="gap-1">
-                  {component.activity === 'queued' ? <Clock className="w-3 h-3" /> : <Loader2 className="w-3 h-3 animate-spin" />}
-                  {component.activity === 'queued' ? 'Queued' : component.activity === 'installing' ? 'Installing' : 'Uninstalling'}
-                </TkBadge>
-              ) : isInstalled ? (
-                <TkBadge status="healthy" className="gap-1">
-                  <Check className="w-3 h-3" />
-                  Installed
-                </TkBadge>
-              ) : (
-                <TkBadge appearance="outlined">Not Installed</TkBadge>
-              )}
-              {component.component_version && (
-                <TkBadge appearance="outlined" className="text-xs">
-                  v{component.component_version}
-                </TkBadge>
-              )}
-            </div>
-          </div>
-        </div>
-      </TkCardHeader>
-
-      <TkCardContent className="flex flex-col flex-1">
-        {/* Description */}
-        <p className="text-sm text-muted-foreground mb-3">
-          {component.description}
-        </p>
-
-        {/* Requirements */}
-        {component.requirements && component.requirements.length > 0 && (
-          <div className="mt-3">
-            <div className="text-xs font-semibold text-muted-foreground mb-1">
-              Requirements:
-            </div>
-            <div className="flex flex-wrap gap-1">
-              {component.requirements.map((req) => (
-                <TkBadge
-                  key={req}
-                  status={isMissingRequirement(req) ? "unhealthy" : undefined}
-                  appearance={isMissingRequirement(req) ? undefined : "outlined"}
-                  className="text-xs"
-                >
-                  {req}
-                </TkBadge>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Missing requirements alert */}
-        {!requirementsMet &&
-          missingRequirements.length > 0 && (
-            <div className="mt-3">
-              <TkWarningAlert>
-                <span className="text-xs">
-                  Missing: {missingRequirements.join(", ")}
-                </span>
-              </TkWarningAlert>
-            </div>
-          )}
-
-        {/* Actions */}
-        <div className="flex justify-end mt-auto pt-4">
-          {!isInstalled ? (
-            <TkButton
-              onClick={() => onInstall(component)}
-              disabled={busy || (!requirementsMet && !allowForceInstall)}
-              intent="secondary"
-              size="sm"
-              className="gap-2"
-            >
-              <Download className="w-4 h-4" />
-              Install
-            </TkButton>
-          ) : (
-            <TkButton
-              onClick={() => onUninstall(component)}
-              disabled={busy}
-              intent="secondary"
-              size="sm"
-              className="gap-2 text-destructive hover:bg-destructive hover:text-destructive-foreground"
-            >
-              <Trash2 className="w-4 h-4" />
-              Uninstall
-            </TkButton>
-          )}
-        </div>
-      </TkCardContent>
-    </TkCard>
+    <AppCard
+      state={state}
+      statusLabel={statusLabel}
+      srDescription="Optional component."
+      icon={
+        <TkBrandIcon
+          icon={(component.icon ?? '').replace('/icons/', '').replace('.svg', '')}
+          alt={component.display_name}
+          size={40}
+          color="var(--service-type-optional)"
+        />
+      }
+      name={component.display_name}
+      subtitle={subtitle}
+      tooltip={<p>{component.description}</p>}
+      actions={
+        !isInstalled ? (
+          <TkButton
+            size="sm"
+            className="h-7 px-2.5 text-xs"
+            onClick={() => onInstall(component)}
+            disabled={busy || !component.requirements_met}
+          >
+            <Download className="h-3.5 w-3.5" />
+            Install
+          </TkButton>
+        ) : (
+          <TkButton
+            size="sm"
+            intent="secondary"
+            className="h-7 px-2.5 text-xs text-destructive hover:bg-destructive hover:text-destructive-foreground"
+            onClick={() => onUninstall(component)}
+            disabled={busy}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Uninstall
+          </TkButton>
+        )
+      }
+    />
   )
 }

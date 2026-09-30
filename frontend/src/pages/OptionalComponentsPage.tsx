@@ -8,21 +8,9 @@ import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { TkErrorAlert } from 'thinkube-style/components/feedback'
 import { TkPageWrapper } from 'thinkube-style/components/utilities'
-import { ComponentCard } from '../components/ComponentCard'
+import { ComponentCard, type OptionalComponent } from '../components/ComponentCard'
 import { useComponentsStore } from '../stores/useComponentsStore'
 import { useRunsStore } from '../stores/useRunsStore'
-
-interface OptionalComponent {
-  name: string
-  display_name: string
-  category: 'ai' | 'data' | 'monitoring' | 'infrastructure'
-  description: string
-  icon?: string
-  is_installed: boolean
-  activity?: 'queued' | 'installing' | 'uninstalling' | null
-  requirements: string[]
-  [key: string]: any
-}
 
 export default function OptionalComponentsPage() {
   const store = useComponentsStore()
@@ -133,7 +121,7 @@ export default function OptionalComponentsPage() {
           {aiComponents.length > 0 && (
             <div>
               <h2 className="text-2xl font-bold mb-4">AI & Machine Learning</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"> {/* @allowed-inline */}
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] *:max-w-[22rem] gap-x-4 gap-y-6 pt-2">
                 {aiComponents.map((component) => (
                   <ComponentCard
                     key={component.name}
@@ -150,7 +138,7 @@ export default function OptionalComponentsPage() {
           {dataComponents.length > 0 && (
             <div>
               <h2 className="text-2xl font-bold mb-4">Data & Storage</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"> {/* @allowed-inline */}
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] *:max-w-[22rem] gap-x-4 gap-y-6 pt-2">
                 {dataComponents.map((component) => (
                   <ComponentCard
                     key={component.name}
@@ -167,7 +155,7 @@ export default function OptionalComponentsPage() {
           {monitoringComponents.length > 0 && (
             <div>
               <h2 className="text-2xl font-bold mb-4">Monitoring & Observability</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"> {/* @allowed-inline */}
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] *:max-w-[22rem] gap-x-4 gap-y-6 pt-2">
                 {monitoringComponents.map((component) => (
                   <ComponentCard
                     key={component.name}
@@ -184,7 +172,7 @@ export default function OptionalComponentsPage() {
           {infrastructureComponents.length > 0 && (
             <div>
               <h2 className="text-2xl font-bold mb-4">Infrastructure & Platform</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"> {/* @allowed-inline */}
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] *:max-w-[22rem] gap-x-4 gap-y-6 pt-2">
                 {infrastructureComponents.map((component) => (
                   <ComponentCard
                     key={component.name}

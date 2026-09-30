@@ -8,19 +8,21 @@ import { AlertTriangle } from 'lucide-react';
 import { TkCard, TkCardHeader, TkCardFooter } from 'thinkube-style/components/cards-data';
 import { TkTooltip } from 'thinkube-style/components/modals-overlays';
 
-export type AppCardState = 'healthy' | 'idle' | 'unknown' | 'unhealthy' | 'disabled';
+export type AppCardState = 'healthy' | 'idle' | 'unknown' | 'unhealthy' | 'disabled' | 'available';
 
 // The left bar carries the state: healthy green, idle blue (running with no
-// work, such as a model server with no model or a service scaled to zero),
-// unknown yellow, unhealthy red, disabled grey. The two states that need
-// attention also get an icon, so they do not rest on colour alone; a disabled
-// card is faded.
+// work, such as a model server with no model or a service scaled to zero, or
+// work in progress), unknown yellow, unhealthy red, disabled grey, and
+// available (something that can be installed or deployed) the plain border
+// colour. The two states that need attention also get an icon, so they do not
+// rest on colour alone; a disabled card is faded.
 const STATE_BAR: Record<AppCardState, string> = {
   healthy: 'border-l-success',
   idle: 'border-l-info',
   unknown: 'border-l-warning',
   unhealthy: 'border-l-destructive',
   disabled: 'border-l-muted-foreground',
+  available: 'border-l-border',
 };
 
 interface AppCardProps {

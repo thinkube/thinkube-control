@@ -7,15 +7,27 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Loader2, Upload, ExternalLink, Check } from 'lucide-react'
 import { TkButton } from 'thinkube-style/components/buttons-badges'
-import { TkBadge } from 'thinkube-style/components/buttons-badges'
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent, TkCardFooter } from 'thinkube-style/components/cards-data'
 import { TkInput } from 'thinkube-style/components/forms-inputs'
 import { TkInfoAlert, TkErrorAlert, TkSuccessAlert } from 'thinkube-style/components/feedback'
 import { TkPageWrapper } from 'thinkube-style/components/utilities'
 import { TkDialogRoot, TkDialogContent, TkDialogHeader, TkDialogTitle, TkDialogFooter } from 'thinkube-style/components/modals-overlays'
+import { TkBrandIcon } from 'thinkube-style/components/brand-icons'
 import { TemplateParameterForm } from '../components/TemplateParameterForm'
 import { PlaybookExecutor, type PlaybookExecutorHandle } from '../components/PlaybookExecutor'
+import { AppCard } from '../components/AppCard'
 import api from '../lib/axios'
+
+const CARD_GRID = 'grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] *:max-w-[22rem] gap-x-4 gap-y-6 pt-2'
+
+// A deployed template is one of the user's apps, so its logo has that type's colour.
+const TEMPLATE_ICON = <TkBrandIcon icon="tk_logo" alt="" size={40} color="var(--service-type-user)" />
+
+function deploymentTypeLabel(type?: string) {
+  if (type === 'knative') return 'Knative'
+  if (type === 'component') return 'Component'
+  return 'App'
+}
 
 interface TemplateInfo {
   name: string
@@ -556,31 +568,30 @@ export default function Templates() {
             Publish a deployed app as a reusable template to your GitHub organization.
           </p>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className={CARD_GRID}>
             {deployedApps.map((app) => (
-              <TkCard key={app.name} className="flex flex-col h-full">
-                <TkCardHeader>
-                  <div className="flex items-center justify-between gap-2">
-                    <TkCardTitle>{app.name}</TkCardTitle>
-                    <TkBadge appearance={app.deployment_type === 'knative' ? 'muted' : app.deployment_type === 'component' ? 'prominent' : 'outlined'}>
-                      {app.deployment_type === 'knative' ? 'Knative' : app.deployment_type === 'component' ? 'Component' : 'App'}
-                    </TkBadge>
-                  </div>
-                </TkCardHeader>
-                <TkCardContent className="flex-1">
-                  <p className="text-sm opacity-80">{app.description || 'No description'}</p>
-                </TkCardContent>
-                <TkCardFooter className="flex justify-end">
+              <AppCard
+                key={app.name}
+                state="available"
+                statusLabel="Deployed"
+                srDescription={`${deploymentTypeLabel(app.deployment_type)}.`}
+                label={deploymentTypeLabel(app.deployment_type)}
+                icon={TEMPLATE_ICON}
+                name={app.name}
+                subtitle={app.description}
+                tooltip={app.description && <p>{app.description}</p>}
+                actions={
                   <TkButton
-                    intent="secondary"
                     size="sm"
+                    intent="secondary"
+                    className="h-7 px-2.5 text-xs"
                     onClick={() => openPublishDialog(app)}
                   >
-                    <Upload className="h-4 w-4 mr-1" />
-                    Publish as Template
+                    <Upload className="h-3.5 w-3.5" />
+                    Publish as template
                   </TkButton>
-                </TkCardFooter>
-              </TkCard>
+                }
+              />
             ))}
           </div>
         </div>
@@ -709,36 +720,39 @@ export default function Templates() {
         )}
 
         {!loadingTemplates && availableTemplates.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {availableTemplates.map((template) => (
-              <TkCard key={template.name} className="flex flex-col h-full">
-                <TkCardHeader>
-                  <div className="flex items-center justify-between gap-2">
-                    <TkCardTitle>{template.name.replace('tkt-', '').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</TkCardTitle>
-                    <div className="flex gap-1 shrink-0">
-                      <TkBadge appearance={template.deployment_type === 'knative' ? 'muted' : template.deployment_type === 'component' ? 'prominent' : 'outlined'}>
-                        {template.deployment_type === 'knative' ? 'Knative' : template.deployment_type === 'component' ? 'Component' : 'App'}
-                      </TkBadge>
-                      {template.source === 'user' && (
-                        <TkBadge category="user">User</TkBadge>
-                      )}
-                    </div>
-                  </div>
-                </TkCardHeader>
-                <TkCardContent className="flex-1">
-                  <p className="text-sm opacity-80">{template.description}</p>
-                  <p className="text-xs opacity-50 mt-2">{template.org}</p>
-                </TkCardContent>
-                <TkCardFooter className="flex justify-end">
-                  <TkButton
-                    size="sm"
-                    onClick={() => selectTemplate(template.url)}
-                  >
-                    Deploy
-                  </TkButton>
-                </TkCardFooter>
-              </TkCard>
-            ))}
+          <div className={CARD_GRID}>
+            {availableTemplates.map((template) => {
+              const typeLabel = deploymentTypeLabel(template.deployment_type)
+              // The label names the type, and marks templates from the user's own metadata.
+              const label = template.source === 'user' ? `${typeLabel} · yours` : typeLabel
+              return (
+                <AppCard
+                  key={template.name}
+                  state="available"
+                  statusLabel="Available"
+                  srDescription={`${label}.`}
+                  label={label}
+                  icon={TEMPLATE_ICON}
+                  name={template.name.replace('tkt-', '').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                  subtitle={template.description}
+                  tooltip={
+                    <>
+                      <p>{template.description}</p>
+                      <p>From {template.org}</p>
+                    </>
+                  }
+                  actions={
+                    <TkButton
+                      size="sm"
+                      className="h-7 px-2.5 text-xs"
+                      onClick={() => selectTemplate(template.url)}
+                    >
+                      Deploy
+                    </TkButton>
+                  }
+                />
+              )
+            })}
           </div>
         )}
       </div>
