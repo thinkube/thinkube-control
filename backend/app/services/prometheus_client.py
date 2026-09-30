@@ -8,6 +8,7 @@ This client probes availability on first use and caches the result.
 All methods return None or empty results when Prometheus is unavailable.
 """
 
+import asyncio
 import logging
 import time
 from typing import Any, Dict, List, Optional
@@ -20,6 +21,10 @@ logger = logging.getLogger(__name__)
 PROMETHEUS_URL = "http://prometheus-k8s.monitoring.svc:9090"
 PROBE_CACHE_TTL = 300  # Re-check availability every 5 minutes
 QUERY_TIMEOUT = 5.0
+
+
+class PrometheusQueryError(Exception):
+    """A Prometheus query that must answer did not."""
 
 
 class PrometheusClient:
@@ -78,55 +83,53 @@ class PrometheusClient:
             return None
 
     @classmethod
-    async def get_gpu_utilization(cls) -> Optional[Dict[str, Any]]:
-        """Get GPU utilization, temperature, power from DCGM metrics.
+    async def get_node_stats(cls) -> List[Dict[str, Any]]:
+        """Get memory, CPU and GPU power for every node.
 
-        Returns dict with gpu_utilization, gpu_temp, memory_temp, power_usage,
-        sm_clock, memory_bandwidth — or None if unavailable.
+        Memory and CPU come from node-exporter, whose `instance` label is the
+        node name. GPU power is the sum over the node's GPUs from DCGM, whose
+        `Hostname` label is the node name. A value a node does not report is
+        None: nodes without a GPU have no DCGM series, and the CPU rate needs
+        two scrapes of a freshly started exporter.
+
+        Raises PrometheusQueryError when any query fails.
         """
-        results = await cls.query(
-            '{__name__=~"DCGM_FI_DEV_GPU_UTIL|DCGM_FI_DEV_GPU_TEMP|DCGM_FI_DEV_MEMORY_TEMP'
-            '|DCGM_FI_DEV_POWER_USAGE|DCGM_FI_DEV_SM_CLOCK|DCGM_FI_DEV_MEM_COPY_UTIL"}'
-        )
-        if results is None:
-            return None
-
-        metrics: Dict[str, float] = {}
-        for r in results:
-            name = r["metric"]["__name__"]
-            # Take first GPU instance (gpu="0") for single-GPU display
-            if name not in metrics:
-                metrics[name] = float(r["value"][1])
-
-        if not metrics:
-            return None
-
-        return {
-            "gpu_utilization": metrics.get("DCGM_FI_DEV_GPU_UTIL", 0),
-            "gpu_temp": metrics.get("DCGM_FI_DEV_GPU_TEMP", 0),
-            "memory_temp": metrics.get("DCGM_FI_DEV_MEMORY_TEMP", 0),
-            "power_usage": metrics.get("DCGM_FI_DEV_POWER_USAGE", 0),
-            "sm_clock": metrics.get("DCGM_FI_DEV_SM_CLOCK", 0),
-            "memory_bandwidth": metrics.get("DCGM_FI_DEV_MEM_COPY_UTIL", 0),
+        queries = {
+            "memory_total": 'node_memory_MemTotal_bytes{job="node-exporter"}',
+            "memory_available": 'node_memory_MemAvailable_bytes{job="node-exporter"}',
+            "cpu_percent": (
+                '100 * (1 - avg by (instance) '
+                '(rate(node_cpu_seconds_total{job="node-exporter",mode="idle"}[1m])))'
+            ),
+            "cpu_cores": 'count by (instance) (node_cpu_seconds_total{job="node-exporter",mode="idle"})',
+            "gpu_power": "sum by (Hostname) (DCGM_FI_DEV_POWER_USAGE)",
         }
+        results = await asyncio.gather(*(cls.query(q) for q in queries.values()))
 
-    @classmethod
-    async def get_gpu_capacity(cls) -> Optional[Dict[str, Any]]:
-        """Get total and allocatable GPU count from kube-state-metrics."""
-        results = await cls.query(
-            'kube_node_status_capacity{resource="nvidia_com_gpu"}'
-        )
-        if results is None:
-            return None
+        by_node: Dict[str, Dict[str, float]] = {}
+        for (key, promql), result in zip(queries.items(), results):
+            if result is None:
+                raise PrometheusQueryError(f"Prometheus query failed: {promql}")
+            label = "Hostname" if key == "gpu_power" else "instance"
+            by_node[key] = {r["metric"][label]: float(r["value"][1]) for r in result}
 
-        total = sum(int(float(r["value"][1])) for r in results)
-
-        alloc_results = await cls.query(
-            'kube_node_status_allocatable{resource="nvidia_com_gpu"}'
-        )
-        allocatable = sum(int(float(r["value"][1])) for r in (alloc_results or []))
-
-        return {"total_gpus": total, "allocatable_gpus": allocatable}
+        gib = 1024 ** 3
+        nodes = []
+        for name in sorted(by_node["memory_total"]):
+            total = by_node["memory_total"][name]
+            available = by_node["memory_available"].get(name)
+            cpu = by_node["cpu_percent"].get(name)
+            cores = by_node["cpu_cores"].get(name)
+            power = by_node["gpu_power"].get(name)
+            nodes.append({
+                "name": name,
+                "memory_total_gb": round(total / gib, 1),
+                "memory_used_gb": round((total - available) / gib, 1) if available is not None else None,
+                "cpu_percent": round(cpu, 1) if cpu is not None else None,
+                "cpu_cores": int(cores) if cores is not None else None,
+                "gpu_power_watts": round(power, 1) if power is not None else None,
+            })
+        return nodes
 
     @classmethod
     async def get_gpu_usage_by_namespace(cls) -> Optional[Dict[str, Dict[str, Any]]]:

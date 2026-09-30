@@ -8,17 +8,18 @@ import { TkCard, TkCardHeader, TkCardTitle, TkCardContent } from 'thinkube-style
 import api from '@/lib/axios';
 import { Cpu } from 'lucide-react';
 
-interface GPUMetrics {
+interface NodeStats {
+  name: string;
+  memory_used_gb: number | null;
+  memory_total_gb: number;
+  cpu_percent: number | null;
+  cpu_cores: number | null;
+  gpu_power_watts: number | null;
+}
+
+interface NodeMetrics {
   monitoring_available: boolean;
-  gpu_utilization: number;
-  system_memory_used_gb: number;
-  system_memory_total_gb: number;
-  system_memory_percent: number;
-  gpu_temp: number;
-  power_usage: number;
-  cpu_percent: number;
-  total_gpus: number;
-  allocatable_gpus: number;
+  nodes?: NodeStats[];
   timestamp: string;
 }
 
@@ -35,6 +36,7 @@ interface GPUMetricEntry {
 interface GPUNode {
   name: string;
   gpu_product: string | null;
+  gpu_count: number;
   total_memory_gb: number;
   used_memory_gb: number;
   is_uma: boolean;
@@ -57,31 +59,21 @@ function formatGpuProduct(product: string | null): string {
 }
 
 export function GPUMetricsCard() {
-  const [metrics, setMetrics] = useState<GPUMetrics | null>(null);
+  const [metrics, setMetrics] = useState<NodeMetrics | null>(null);
   const [gpuStatus, setGpuStatus] = useState<GPUStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [unavailable, setUnavailable] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchMetrics = async () => {
     try {
       const [metricsRes, gpuRes] = await Promise.all([
-        api.get('/gpu/metrics'),
-        api.get('/llm/gpu/status/'),
+        api.get<NodeMetrics>('/gpu/metrics'),
+        api.get<GPUStatus>('/llm/gpu/status/'),
       ]);
-
-      if (metricsRes.data.monitoring_available === false) {
-        setUnavailable(true);
-        setLoading(false);
-        return;
-      }
-
       setMetrics(metricsRes.data);
       setGpuStatus(gpuRes.data);
-      setUnavailable(false);
-    } catch {
-      setUnavailable(true);
-    } finally {
-      setLoading(false);
+      setError(null);
+    } catch (err: any) {
+      setError(err.response?.data?.detail ?? err.message);
     }
   };
 
@@ -91,76 +83,104 @@ export function GPUMetricsCard() {
     return () => clearInterval(interval);
   }, []);
 
-  if (unavailable) return null;
-  if (loading) return null;
-  if (!metrics) return null;
+  if (!metrics && !error) return null;
+  if (metrics && !metrics.monitoring_available) return null;
+
+  const gpuNodes = new Map((gpuStatus?.nodes ?? []).map(n => [n.name, n]));
 
   return (
     <TkCard>
       <TkCardHeader>
         <TkCardTitle className="flex items-center gap-2">
           <Cpu className="h-5 w-5" />
-          System Metrics
+          Nodes
         </TkCardTitle>
       </TkCardHeader>
       <TkCardContent>
-        {/* Per-node GPU bars */}
-        {gpuStatus && gpuStatus.nodes.length > 0 && (
-          <div className="space-y-4">
-            {gpuStatus.nodes.map(node => (
-              <div key={node.name} className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">{node.name}</span>
-                  <span className="text-xs text-muted-foreground">{formatGpuProduct(node.gpu_product)}</span>
-                </div>
-                {node.is_uma ? (
-                  <GPUBar
-                    label="Shared Memory"
-                    usedGb={node.used_memory_gb}
-                    totalGb={node.total_memory_gb}
-                  />
-                ) : node.per_gpu_metrics.length > 0 ? (
-                  node.per_gpu_metrics.map(gpu => (
-                    <GPUBar
-                      key={gpu.index}
-                      label={`GPU ${gpu.index}`}
-                      usedGb={gpu.memory_used_mb / 1024}
-                      totalGb={gpu.memory_total_mb / 1024}
-                      utilization={gpu.utilization}
-                      temp={gpu.temp}
-                    />
-                  ))
-                ) : (
-                  <GPUBar
-                    label="GPU Memory"
-                    usedGb={node.used_memory_gb}
-                    totalGb={node.total_memory_gb}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
+        {error && (
+          <p className="text-sm text-destructive mb-4">Metrics could not be read: {error}</p>
         )}
-
-        {/* System stats */}
-        <div className="grid grid-cols-3 gap-2 mt-4 pt-4 border-t">
-          <div className="text-center">
-            <div className="text-xs text-muted-foreground">System RAM</div>
-            <div className="text-sm font-medium">
-              {metrics.system_memory_used_gb.toFixed(0)} / {metrics.system_memory_total_gb.toFixed(0)} GB
-            </div>
-          </div>
-          <div className="text-center">
-            <div className="text-xs text-muted-foreground">Power</div>
-            <div className="text-sm font-medium">{metrics.power_usage.toFixed(0)}W</div>
-          </div>
-          <div className="text-center">
-            <div className="text-xs text-muted-foreground">CPU</div>
-            <div className="text-sm font-medium">{metrics.cpu_percent.toFixed(1)}%</div>
-          </div>
+        <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+          {(metrics?.nodes ?? []).map(stats => (
+            <NodeSection key={stats.name} stats={stats} gpuNode={gpuNodes.get(stats.name)} />
+          ))}
         </div>
       </TkCardContent>
     </TkCard>
+  );
+}
+
+function NodeSection({ stats, gpuNode }: { stats: NodeStats; gpuNode?: GPUNode }) {
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium">{stats.name}</span>
+        {gpuNode && (
+          <span className="text-xs text-muted-foreground">{formatGpuProduct(gpuNode.gpu_product)}</span>
+        )}
+      </div>
+
+      {gpuNode && (gpuNode.is_uma ? (
+        <GPUBar
+          label="Shared memory (GPU and system)"
+          usedGb={gpuNode.used_memory_gb}
+          totalGb={gpuNode.total_memory_gb}
+        />
+      ) : gpuNode.per_gpu_metrics.length > 0 ? (
+        gpuNode.per_gpu_metrics.map(gpu => (
+          <GPUBar
+            key={gpu.index}
+            label={`GPU ${gpu.index} memory`}
+            usedGb={gpu.memory_used_mb / 1024}
+            totalGb={gpu.memory_total_mb / 1024}
+            utilization={gpu.utilization}
+            temp={gpu.temp}
+          />
+        ))
+      ) : (
+        <GPUBar
+          label="GPU memory"
+          usedGb={gpuNode.used_memory_gb}
+          totalGb={gpuNode.total_memory_gb}
+        />
+      ))}
+
+      {!gpuNode?.is_uma && (
+        stats.memory_used_gb != null ? (
+          <GPUBar
+            label="System memory"
+            usedGb={stats.memory_used_gb}
+            totalGb={stats.memory_total_gb}
+          />
+        ) : (
+          <StatLine label="System memory" value="not reported" />
+        )
+      )}
+
+      <StatLine
+        label="CPU"
+        value={
+          stats.cpu_percent != null
+            ? `${stats.cpu_percent.toFixed(0)}%${stats.cpu_cores != null ? ` of ${stats.cpu_cores} cores` : ''}`
+            : 'not reported'
+        }
+      />
+      {gpuNode && (
+        <StatLine
+          label={gpuNode.gpu_count > 1 ? `GPU power (${gpuNode.gpu_count} GPUs)` : 'GPU power'}
+          value={stats.gpu_power_watts != null ? `${stats.gpu_power_watts.toFixed(0)} W` : 'not reported'}
+        />
+      )}
+    </div>
+  );
+}
+
+function StatLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between text-xs text-muted-foreground">
+      <span>{label}</span>
+      <span>{value}</span>
+    </div>
   );
 }
 
