@@ -4,9 +4,9 @@
 _How Thinkube Control turns the model catalogue and your GPU nodes into served models behind one endpoint: states, loading, sizing, routing and authentication._
 
 .TL;DR
-"load Qwen/Qwen3-8B on tkspark" is the whole of it for most days. This page is what each step means: the states a model passes through, how the platform sizes it to a node, how a request is routed to the right backend, and how a client authenticates at `llm.<your domain>`.
+For most work, one sentence is enough: "load Qwen/Qwen3-8B on tkspark". This page says what each step means: the states a model passes through, how the platform sizes it to a node, how a request is routed to the right backend, and how a client authenticates at `llm.<your domain>`.
 
-Every operation here is a click on the *LLM Gateway* and *AI Models* pages and a sentence to Claude Code.
+The *LLM Gateway* and *AI Models* pages of xref:index.adoc[Thinkube Control] offer the same operations.
 
 image::control-llm-gateway.png[The LLM Gateway page with two backends discovered and two models loaded: Qwen3.5-4B on the DGX Spark through vLLM, Qwen3-Embedding-0.6B on the RTX 3090 node through text-embeddings]
 
@@ -31,7 +31,7 @@ A client written for either API works unchanged with the base URL changed to the
 Every route takes a token, either as `Authorization: Bearer <token>` or as an `x-api-key` header. Two kinds are accepted:
 
 * a Thinkube Identity access token, verified against the realm's signing keys;
-* a Thinkube Control API token, which starts with `tk_`, created under *API Tokens* and verified against thinkube-control.
+* a Thinkube Control API token, which starts with `tk_`, created under *API Tokens* and verified against Thinkube Control.
 
 From a notebook or Thinkube IDE, `get_openai_client()` from the `tk_llm` package returns an OpenAI client already pointed at the gateway with a token.
 
@@ -65,18 +65,18 @@ Load from the *Load* dialog on the LLM Gateway page or with `load_llm_model`. Th
 [horizontal]
 node:: The GPU node. Without it, the node with the most AI memory left and a free slot takes the model.
 tier:: `flexible` loads through Ollama when the model has a GGUF entry: quick, quantised, smaller. `performance` loads through vLLM or TensorRT-LLM.
-backend:: A backend type instead of a tier, or a backend by id as `get_llm_load_options` lists them, such as `vllm-tkspark`; an id names its node too. Anything else is refused with the forms accepted.
-max_context_length:: Caps the context window. The KV cache grows with it, so a serving-sized value such as 8k to 32k uses far less memory than the model's full window. Without it the load takes the largest of 32k, 16k and 8k the model allows and the node's budget fits, decided with the same sizing as the load; the answer names the node and the context chosen.
+backend:: A backend type instead of a tier, or a backend by id as `get_llm_load_options` lists them, such as `vllm-tkspark`; an id names its node too. Other values are refused, and the error lists the accepted forms.
+max_context_length:: Caps the context window. The KV cache grows with it, so a serving-sized value such as 8k to 32k uses far less memory than the model's full window. Without it, Thinkube Control picks the largest of 32k, 16k or 8k that the model supports and the node has memory for. The answer names the node and the context chosen.
 keep_alive:: Ollama only: how long the model stays loaded after its last request.
 num_speculative_tokens:: For models with a speculative-decoding configuration, the draft depth for this load.
 
 `get_llm_load_options` answers before anything is loaded: the compatible backends, the GPU nodes with their free slots and remaining budget, and the estimated memory.
 
-A vLLM, TensorRT-LLM or embeddings deployment serves one model per node. A load of a second model onto a node whose deployment already serves one is refused, naming the model: unload it, or choose another node. Ollama's one pod holds several models.
+A vLLM, TensorRT-LLM or embeddings deployment serves one model per node. A load of a second model onto a node whose deployment already serves one is refused, naming the model: unload it, or choose another node.
 
 === Sizing
 
-You do not set `gpu_memory_utilization` or the pod's memory. Thinkube Control measures the checkpoint's real size, adds the KV cache and a framework overhead, adds the drafter's weights when speculative decoding is configured, and derives a utilisation fraction and a memory request that fit the node's AI budget. A model that would not fit is refused with the reason, rather than crash-looping. On a unified-memory node such as a DGX Spark the budget is a fixed ceiling below the physical memory, so the operating system and the platform keep room.
+Thinkube Control sets GPU and pod memory for you. It measures the checkpoint's real size and adds the KV cache and a framework overhead. When speculative decoding is configured, it also adds the drafter's weights. From that it derives a utilisation fraction and a memory request that fit the node's AI budget. A model that would not fit is refused with the reason. On a unified-memory node such as a DGX Spark, the budget is a fixed ceiling below the physical memory, so the operating system and the platform keep room.
 
 === Speculative decoding
 

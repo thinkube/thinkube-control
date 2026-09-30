@@ -4,9 +4,9 @@
 _The control panel: what each of its pages does, and the operations it exposes to Claude Code as MCP resources and tools._
 
 .TL;DR
-Everything on these pages is also a sentence to Claude Code: it reads the same state and calls the same operations. Open Thinkube Control when you want to see the state of things or click instead of asking.
+You can ask Claude Code to do anything these pages do. Open Thinkube Control when you want to see the state of things or click instead of asking.
 
-Every button on these pages is also an operation Claude Code can call, and one implementation serves both: a click and a sentence do the same thing. The installer deploys Thinkube Control as a core component.
+The installer deploys Thinkube Control as a core component.
 
 == The pages
 
@@ -21,8 +21,8 @@ image::control-dashboard-all.png[Thinkube Control with the All Services dashboar
 | Page | What it shows
 
 | Favorites | The services you starred, in the order you drag them into. With no favorites, Thinkube Control opens on All Services.
-| All Services | Every core component, optional component and deployed application, one card each. The logo's colour is the type (core, optional, your apps), the bar on the left is the state, and the top border carries the category and the version. A card opens the service, shows its details, stars it, and its *⋯* menu restarts it, checks its health or switches it off and on. The list comes from the services' own registrations; nothing is added by hand. With Prometheus installed, a *Nodes* panel above the cards shows each node's memory, CPU and GPUs.
-| Knative Services | Applications deployed with `type: knative`, which scale to zero, on the same cards.
+| All Services | Every core component, optional component and deployed application, one card each. The logo's colour is the type (core, optional, your apps), the bar on the left is the state, and the top border carries the category and the version. A card opens the service, shows its details, stars it, and its *⋯* menu restarts it, checks its health or switches it off and on. New services appear here automatically. With Prometheus installed, a *Nodes* panel above the cards shows each node's memory, CPU and GPUs.
+| Knative Services | Applications that scale to zero when idle, deployed with `type: knative`, on the same cards.
 | One page per category | The same cards, one category at a time. The categories are the ones your services declare.
 |===
 
@@ -48,7 +48,7 @@ Every card's *details* page shows the service's health status and the health his
 |===
 | Page | What it does
 
-| Jupyter Kernels | Notebook environments built from definitions. Start from the `fine-tuning` or `agent-dev` template, add packages, and build it for every GPU architecture in the cluster. A built environment appears as a kernel in Thinkube Notebooks. The two templates themselves come from the environments release and are not built here; a custom environment cannot take a template's name. Deleting an environment removes it from every node.
+| Jupyter Kernels | Notebook environments built from definitions. Start from the `fine-tuning` or `agent-dev` template, add packages, and build it for every GPU architecture in the cluster. A built environment appears as a kernel in Thinkube Notebooks. The two templates themselves come ready-built with Thinkube and cannot be rebuilt here; a custom environment cannot take a template's name. Deleting an environment removes it from every node.
 | JupyterHub Config | The defaults a new notebook server starts with: node, CPU cores, memory and GPU count. The form shows what each node has, and the defaults cannot exceed it.
 | Secrets | Secrets your applications read, and which applications use each one. Changing a value restarts those applications.
 | API Tokens | Tokens for calling Thinkube Control and the LLM Gateway from outside the browser. They start with `tk_`.
@@ -56,7 +56,7 @@ Every card's *details* page shows the service's health status and the health his
 
 == The operations
 
-Every page above is also a set of operations, each reachable from Claude Code by name. Claude Code reads the full list from Thinkube Control when it starts, so it never needs to be looked up here: ask Claude what it can do, and it answers from the live list.
+Every page above is also a set of operations, each reachable from Claude Code by name. Claude Code reads the full list from Thinkube Control when it starts. Ask Claude Code what it can do; it answers from the live list.
 
 == Calling it from outside the browser
 

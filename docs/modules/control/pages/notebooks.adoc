@@ -4,17 +4,17 @@
 _The operations that let Claude Code start a notebook server where the work needs to be, run a notebook in it with no JupyterLab tab open, and stop it when the GPU should go back to serving models._
 
 .TL;DR
-"start a notebook server on tkspark with one GPU, then run the zebra notebook with the fine-tuning kernel" starts the server with `start_notebook_server`, opens the notebook with `jupyter_use_notebook` and runs every cell with `jupyter_execute_all_cells`, polling until the run ends. No tab needs to be open; open one at any time and the outputs are there as they arrive. "run the zebra notebook unattended on the spark with one GPU" does the same on a server of its own that stops when the run ends, with `run_notebook_job`. This page lists every operation, what it answers, and the limits.
+Ask Claude Code to start a notebook server and run a notebook. No browser tab is needed. This page lists every operation and its limits.
 
 == How it works
 
-Thinkube Control forwards the notebook operations to `tk-notebook-mcp`, a server extension inside the notebook server. The extension works on the notebook's shared document, the same one a JupyterLab tab edits, and creates it itself when no tab has: an edit or an output written by Claude appears in a tab that has the notebook open, and the document's own autosave writes it to the file. A kernel is held by one call at a time. A second call for the same kernel waits five seconds and then answers with what holds it.
+Thinkube Control forwards the notebook operations to `tk-notebook-mcp`, a server extension inside the notebook server. The extension works on the notebook's shared document, the same one a JupyterLab tab edits. When no tab has created the document, the extension creates it. An edit or an output written by Claude Code appears in any tab that has the notebook open, and the document's autosave writes it to the file. A kernel is held by one call at a time. A second call for the same kernel waits five seconds and then answers with what holds it.
 
 The server operations go to JupyterHub itself, with the service token Thinkube Control is registered with.
 
 == The server
 
-A notebook does not run on "the cluster"; it runs in one server pod that JupyterHub starts on one node with the CPU, memory and GPUs chosen at start. These operations make that choice.
+A notebook runs in one server pod on one node, with the CPU, memory and GPUs chosen when JupyterHub starts it. These operations make that choice.
 
 [cols="1,2",options="header"]
 |===
@@ -24,7 +24,7 @@ A notebook does not run on "the cluster"; it runs in one server pod that Jupyter
 | Whether a server is running, on which node and with how many cores, GB and GPUs, whether its tools answer, and which servers unattended runs hold.
 
 | `start_notebook_server`
-| Starts the server on `node` with `cpu_cores`, `memory_gb` and `gpus`, and waits until its tools answer. What is not said comes from the defaults under *JupyterHub Config*. The ask is checked against the node: its cores and memory, its GPUs, and the GPU slots not held by a served model. On a time-sliced GPU such as the GB10 the most is one. A server already running must be stopped first.
+| Starts the server on `node` with `cpu_cores`, `memory_gb` and `gpus`, and waits until its tools answer. Values you leave out come from *JupyterHub Config*. The ask is checked against the node: its cores and memory, its GPUs, and the GPU slots not held by a served model. On a shared GPU such as the GB10, you can ask for one GPU at most. A server already running must be stopped first.
 
 | `stop_notebook_server`
 | Stops the server and frees its node, memory and GPUs. Kernels are shut down; notebook files keep their outputs.
@@ -81,7 +81,7 @@ Paths are relative to the notebooks folder, for example `examples/research-assis
 | The whole notebook in order, in the background, with an `execution_id` to poll: cells done of total, the one running, and each cell's result. `restart_kernel` starts clean; `stop_on_error` (default true) stops at the first cell that raises.
 
 | `jupyter_restart_kernel`, `jupyter_interrupt_kernel`
-| Restart loses every variable and keeps the cells and outputs; interrupt is Ctrl-C. Either ends a run in flight, which reports it.
+| Restart loses every variable and keeps the cells and outputs; interrupt is Ctrl-C. Either one stops a running notebook, and the run status shows that it was stopped.
 
 | `jupyter_kernel_status`, `jupyter_list_kernels`
 | Whether a kernel is idle or busy; the kernels running with their notebooks, and the kernel types installed.
@@ -111,17 +111,15 @@ Thinkube Control polls a run every fifteen seconds and records it in its databas
 
 Thinkube IDE carries the Thinkube Notebook View extension. In a terminal, `tk-notebook-open <path>` shows the notebook in an editor tab: the notebook server's own single-document page, signed in, on the kernel Claude is using, with copy and paste working. The tab shows one notebook with its toolbar and kernel; the extension's `page` setting switches it to the whole of JupyterLab. Ask Claude to show the notebook and it runs that command after opening it. The tab's title bar has *Reload* and *Open in the browser*.
 
-A tab takes a moment to attach after it opens. Until it has, a running cell's progress is written to the file but the tab shows nothing move; it fills in only when the cell ends. `jupyter_kernel_status` reports `connections`, the number of live frontends on the kernel: `0` means no tab is attached yet, `1` or more means one is. So to watch a run, Claude opens the tab and waits until `connections` is at least one before it runs the cell; then the progress bar and the prints appear as they happen. A silent run with no tab does not wait, because there is nothing to watch.
+A tab takes a moment to attach after it opens. Until it attaches, a running cell's progress is written to the file, but the tab shows no change. The tab fills in only when the cell ends. `jupyter_kernel_status` reports `connections`, the number of open tabs attached to the kernel. `0` means no tab is attached yet; `1` or more means one is. To let you watch a run, Claude Code opens the tab and waits until `connections` is at least one before it runs the cell. Then the progress bar and the printed output appear as they happen. A run with no tab open does not wait, because there is nothing to watch.
 
 == Large outputs
 
-Images and any text output longer than ten thousand characters are written under `.outputs/` beside the notebooks, dated, and the answer carries the path in their place. The notebook file keeps the full output.
+Images and any text output longer than ten thousand characters are written under `.outputs/` beside the notebooks, in files named with the date. The answer carries the path in their place. The notebook file keeps the full output.
 
 == Good to know
 
-* A notebook has one kernel. A cell started from a tab and a cell started by Claude run one after the other.
-* A notebook server runs on one node. A run that needs a GPU on another node is an unattended run there, or a stop and a start.
+* To use a GPU on another node, start an unattended run there, or stop the server and start it on that node.
 * Up to three unattended runs run at a time, each on its own server.
-* The operations answer on a notebook server built with `tk-notebook-mcp`; an older image answers `501` and names the rebuild.
 * JupyterHub stops a server whose kernels have been idle for an hour. A running cell counts as activity; an open tab or an opened notebook with an idle kernel does not. `jupyter_notebook_status` says whether a server is there before a tab is opened on it.
 * A progress bar moves in the tab during a run Claude starts when it is the text form, `from tqdm import tqdm`. The widget form, `tqdm.auto`, keeps its progress outside the cell's outputs and only fills in when the cell ends.
