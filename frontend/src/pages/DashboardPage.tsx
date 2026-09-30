@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { useLocation, useParams, useNavigate } from 'react-router-dom';
+import { Navigate, useLocation, useParams, useNavigate } from 'react-router-dom';
 import { useServicesStore } from '@/stores/useServicesStore';
 import { AlertCircle, Loader2, RefreshCw, Star } from 'lucide-react';
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent } from 'thinkube-style/components/cards-data';
@@ -226,6 +226,12 @@ export default function DashboardPage() {
     );
   }
 
+  // The start page shows All Services while the user has no favorites.
+  // services is empty only before the first fetch, since core services always exist.
+  if (location.pathname === '/' && services.length > 0 && favoriteServices.length === 0) {
+    return <Navigate to="/dashboard/all" replace />;
+  }
+
   // Main dashboard content
   return (
     <TkPageWrapper>
@@ -279,14 +285,16 @@ export default function DashboardPage() {
                 items={favoriteServices.map((s) => s.id)}
                 strategy={rectSortingStrategy}
               >
-                <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] *:max-w-[18rem] gap-4">
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] *:max-w-[22rem] gap-x-4 gap-y-6 pt-2">
                   {favoriteServices.map((service) => (
                     <SortableServiceCard
                       key={service.id}
                       service={service}
-                      variant="favorite"
                       onToggleFavorite={handleToggleFavorite}
                       onShowDetails={handleShowDetails}
+                      onRestart={handleRestart}
+                      onToggleService={handleToggleService}
+                      onHealthCheck={handleHealthCheck}
                     />
                   ))}
                 </div>
@@ -310,7 +318,6 @@ export default function DashboardPage() {
                 <ServiceCard
                   key={service.id}
                   service={service}
-                  variant="full"
                   onToggleFavorite={handleToggleFavorite}
                   onShowDetails={handleShowDetails}
                   onRestart={handleRestart}

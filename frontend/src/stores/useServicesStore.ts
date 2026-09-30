@@ -16,6 +16,7 @@ export interface Service {
   category?: string;
   is_enabled: boolean;
   is_favorite: boolean;
+  favorite_order: number | null;
   can_be_disabled?: boolean;
   url?: string;
   icon?: string;
@@ -157,7 +158,11 @@ export const useServicesStore = create<ServicesState>((set, get) => ({
 
   getFavoriteServicesComputed: () => {
     const { services } = get();
-    return services.filter(s => s.is_favorite);
+    // Favorites without a saved position go last, as in GET /services/favorites.
+    const position = (s: Service) => s.favorite_order ?? Number.POSITIVE_INFINITY;
+    return services
+      .filter(s => s.is_favorite)
+      .sort((a, b) => position(a) - position(b));
   },
 
   // Actions
@@ -334,7 +339,9 @@ export const useServicesStore = create<ServicesState>((set, get) => ({
       // Update the service in the main list
       set(state => ({
         services: state.services.map(s =>
-          s.id === serviceId ? { ...s, is_favorite: true } : s
+          s.id === serviceId
+            ? { ...s, is_favorite: true, favorite_order: response.data.favorite_order }
+            : s
         )
       }));
 
@@ -352,7 +359,7 @@ export const useServicesStore = create<ServicesState>((set, get) => ({
       // Update the service in the main list
       set(state => ({
         services: state.services.map(s =>
-          s.id === serviceId ? { ...s, is_favorite: false } : s
+          s.id === serviceId ? { ...s, is_favorite: false, favorite_order: null } : s
         )
       }));
     } catch (err) {

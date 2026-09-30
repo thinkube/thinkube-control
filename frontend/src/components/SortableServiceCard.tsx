@@ -3,27 +3,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { ComponentProps } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical } from 'lucide-react';
+import { TkButton } from 'thinkube-style/components/buttons-badges';
+import { TkTooltip } from 'thinkube-style/components/modals-overlays';
 import { ServiceCard } from './ServiceCard';
-import type { Service } from '@/stores/useServicesStore';
 
-interface SortableServiceCardProps {
-  service: Service;
-  variant: 'full' | 'favorite';
-  onToggleFavorite: (service: Service) => void;
-  onShowDetails: (service: Service) => void;
-  onRestart?: (service: Service) => void;
-  onToggleService?: (service: Service, enabled: boolean) => void;
-  onHealthCheck?: (service: Service) => void;
-}
+type SortableServiceCardProps = Omit<ComponentProps<typeof ServiceCard>, 'dragHandle'>;
 
 export function SortableServiceCard(props: SortableServiceCardProps) {
   const {
     attributes,
     listeners,
     setNodeRef,
+    setActivatorNodeRef,
     transform,
     transition,
     isDragging,
@@ -34,22 +29,30 @@ export function SortableServiceCard(props: SortableServiceCardProps) {
     transition,
   };
 
+  const dragHandle = (
+    <TkTooltip content="Drag to reorder">
+      <TkButton
+        ref={setActivatorNodeRef}
+        intent="ghost"
+        size="icon"
+        className="h-8 w-8 cursor-grab active:cursor-grabbing"
+        style={{ touchAction: 'none' }} /* @allowed-inline - required by @dnd-kit to prevent scrolling during drag */
+        aria-label="Drag to reorder"
+        {...attributes}
+        {...listeners}
+      >
+        <GripVertical className="h-4 w-4" />
+      </TkButton>
+    </TkTooltip>
+  );
+
   return (
     <div
       ref={setNodeRef}
       style={style} /* @allowed-inline - @dnd-kit requires inline styles for transforms */
-      className={`relative ${isDragging ? 'opacity-50' : ''}`}
+      className={`h-full ${isDragging ? 'relative z-10 opacity-50' : ''}`}
     >
-      {/* Drag Handle */}
-      <div
-        {...attributes}
-        {...listeners}
-        className="absolute top-2 left-2 z-10 cursor-grab active:cursor-grabbing p-1 rounded hover:bg-accent/20 transition-colors" /* @allowed-inline - drag handle styling required for UX */
-        style={{ touchAction: 'none' }} /* @allowed-inline - required by @dnd-kit to prevent scrolling during drag */
-      >
-        <GripVertical className="h-4 w-4 text-muted-foreground" />
-      </div>
-      <ServiceCard {...props} />
+      <ServiceCard {...props} dragHandle={dragHandle} />
     </div>
   );
 }

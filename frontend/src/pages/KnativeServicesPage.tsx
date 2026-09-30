@@ -4,25 +4,12 @@
  */
 
 import { useEffect } from 'react'
-import { TkCard, TkCardHeader, TkCardTitle, TkCardContent, TkCardFooter } from 'thinkube-style/components/cards-data'
-import { TkBadge } from 'thinkube-style/components/buttons-badges'
+import { TkCard, TkCardContent } from 'thinkube-style/components/cards-data'
 import { TkButton } from 'thinkube-style/components/buttons-badges'
 import { TkPageWrapper } from 'thinkube-style/components/utilities'
 import { Loader2, RefreshCw, Zap, ZapOff, ExternalLink } from 'lucide-react'
 import { useKnativeServicesStore, type KnativeService } from '../stores/useKnativeServicesStore'
-
-function StatusBadge({ status, replicas }: { status: string; replicas: number }) {
-  if (status === 'Ready' && replicas > 0) {
-    return <TkBadge status="active">Active ({replicas})</TkBadge>
-  }
-  if (status === 'Ready' && replicas === 0) {
-    return <TkBadge status="pending">Scaled to Zero</TkBadge>
-  }
-  if (status === 'NotReady') {
-    return <TkBadge status="unhealthy">Not Ready</TkBadge>
-  }
-  return <TkBadge appearance="outlined">Unknown</TkBadge>
-}
+import { AppCard, type AppCardState } from '@/components/AppCard'
 
 function formatTime(isoString: string | null) {
   if (!isoString) return '-'
@@ -39,96 +26,57 @@ function formatTime(isoString: string | null) {
   return `${diffDays}d ago`
 }
 
-function KnativeServiceCard({ service }: { service: KnativeService }) {
-  const isActive = service.status === 'Ready' && service.current_replicas > 0
-  const isScaledToZero = service.status === 'Ready' && service.current_replicas === 0
-  const borderClass = service.status === 'NotReady'
-    ? 'border-destructive/50'
-    : isActive
-    ? 'border-[var(--color-success)]/30'
-    : ''
+// A running service is healthy and one scaled to zero is idle, as on the
+// dashboard cards.
+function knativeState(service: KnativeService): { state: AppCardState; label: string; summary: string } {
+  if (service.status === 'Ready' && service.current_replicas > 0) {
+    const pods = `${service.current_replicas} pod${service.current_replicas > 1 ? 's' : ''}`
+    return { state: 'healthy', label: 'Active', summary: `${pods} running` }
+  }
+  if (service.status === 'Ready') {
+    return { state: 'idle', label: 'Scaled to zero', summary: 'Scaled to zero' }
+  }
+  if (service.status === 'NotReady') {
+    return { state: 'unhealthy', label: 'Not ready', summary: service.ready_condition ?? 'Not ready' }
+  }
+  return { state: 'unknown', label: 'Unknown', summary: `Status: ${service.status}` }
+}
 
-  const healthDotClass = isActive
-    ? 'bg-[var(--color-success)]'
-    : isScaledToZero
-    ? 'bg-muted-foreground'
-    : service.status === 'NotReady'
-    ? 'bg-[var(--color-error)]'
-    : 'bg-[var(--color-warning)]'
+function KnativeServiceCard({ service }: { service: KnativeService }) {
+  const { state, label, summary } = knativeState(service)
+  const openButton = (
+    <>Open <ExternalLink className="h-3.5 w-3.5" /></>
+  )
 
   return (
-    <TkCard className={`h-full ${borderClass} flex flex-col`}>
-      <TkCardHeader className="pb-3">
-        <div className="flex items-start justify-between">
-          <div className="flex-1">
-            <div className="flex items-center gap-2 mb-1">
-              {isActive ? (
-                <Zap className="w-5 h-5 text-[var(--color-success)]" />
-              ) : (
-                <ZapOff className="w-5 h-5 text-muted-foreground" />
-              )}
-              <TkCardTitle className="text-xl">{service.name}</TkCardTitle>
-              <div className={`h-2 w-2 rounded-full ${healthDotClass}`} />
-            </div>
-            <p className="text-sm text-muted-foreground">{service.namespace}</p>
-          </div>
-          <StatusBadge status={service.status} replicas={service.current_replicas} />
-        </div>
-      </TkCardHeader>
-
-      <TkCardContent className="pb-3 flex-grow">
-        {/* Badges */}
-        <div className="flex flex-wrap gap-2 mb-4">
-          <TkBadge appearance="muted">Knative</TkBadge>
-          <TkBadge appearance="outlined">{service.min_scale}-{service.max_scale} pods</TkBadge>
-          {service.container_concurrency > 0 && (
-            <TkBadge appearance="outlined">{service.container_concurrency} req/pod</TkBadge>
-          )}
-          {service.timeout_seconds !== 300 && (
-            <TkBadge appearance="outlined">{service.timeout_seconds}s timeout</TkBadge>
-          )}
-        </div>
-
-        {/* Details */}
-        <div className="space-y-2 text-sm text-muted-foreground">
-          {service.latest_revision && (
-            <div className="flex justify-between">
-              <span>Revision:</span>
-              <span className="text-foreground">{service.latest_revision}</span>
-            </div>
-          )}
-          {service.last_transition && (
-            <div className="flex justify-between">
-              <span>Last Activity:</span>
-              <span className="text-foreground">{formatTime(service.last_transition)}</span>
-            </div>
-          )}
-          {service.image && (
-            <div className="flex justify-between">
-              <span>Image:</span>
-              <span className="text-foreground truncate max-w-[200px]" title={service.image}>
-                {service.image.split('/').pop()?.split('@')[0] || service.image}
-              </span>
-            </div>
-          )}
-        </div>
-      </TkCardContent>
-
-      {service.url && (
-        <TkCardFooter className="pt-3">
-          <TkButton
-            size="sm"
-            className="flex-1"
-            asChild
-          >
-            <a href={service.url} target="_blank" rel="noopener noreferrer">
-              <ExternalLink className="h-4 w-4 mr-1" />
-              Open
-            </a>
+    <AppCard
+      state={state}
+      statusLabel={label}
+      srDescription="Knative service."
+      label={service.namespace}
+      icon={<Zap className="h-10 w-10 text-muted-foreground" aria-hidden="true" />}
+      name={service.name}
+      subtitle={summary}
+      tooltip={
+        <>
+          <p>Scales between {service.min_scale} and {service.max_scale} pods</p>
+          {service.container_concurrency > 0 && <p>{service.container_concurrency} requests per pod</p>}
+          <p>Request timeout {service.timeout_seconds}s</p>
+          {service.latest_revision && <p>Revision {service.latest_revision}</p>}
+          {service.last_transition && <p>Last activity {formatTime(service.last_transition)}</p>}
+          {service.image && <p className="break-all">Image {service.image.split('/').pop()?.split('@')[0]}</p>}
+        </>
+      }
+      actions={
+        service.url ? (
+          <TkButton size="sm" className="h-7 px-2.5 text-xs" asChild>
+            <a href={service.url} target="_blank" rel="noopener noreferrer">{openButton}</a>
           </TkButton>
-        </TkCardFooter>
-      )}
-    </TkCard>
+        ) : (
+          <TkButton size="sm" className="h-7 px-2.5 text-xs" disabled>{openButton}</TkButton>
+        )
+      }
+    />
   )
 }
 
@@ -221,7 +169,7 @@ export default function KnativeServicesPage() {
           No Knative services deployed yet.
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] *:max-w-[22rem] gap-x-4 gap-y-6 pt-2">
           {services.map((service) => (
             <KnativeServiceCard
               key={`${service.namespace}/${service.name}`}

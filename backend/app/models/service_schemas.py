@@ -147,6 +147,7 @@ class Service(ServiceBase):
     can_be_disabled: bool = False
     endpoints: List[ServiceEndpoint] = Field(default_factory=list)
     is_favorite: bool = False  # Whether the current user has favorited this service
+    favorite_order: Optional[int] = None  # Position among the user's favorites
     gpu_count: Optional[int] = None  # Number of GPUs used
     gpu_nodes: Optional[List[str]] = None  # Nodes where GPUs are allocated
 

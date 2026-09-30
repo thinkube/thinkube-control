@@ -79,7 +79,7 @@ async def list_services(
         favorites = db.query(UserFavorite).filter(UserFavorite.user_id == user_id).all()
         user_favorites = set(str(fav.service_id) for fav in favorites)
         favorites_order = {
-            str(fav.service_id): fav.order_index or 0 for fav in favorites
+            str(fav.service_id): fav.order_index for fav in favorites
         }
 
     # Get GPU usage per namespace — prefer Prometheus, fall back to K8s API
@@ -107,6 +107,7 @@ async def list_services(
         service_schema.latest_health = latest_health
         service_schema.can_be_disabled = service.type in ["optional", "user_app", "component"]
         service_schema.is_favorite = str(service.id) in user_favorites
+        service_schema.favorite_order = favorites_order.get(str(service.id))
 
         # Apply cached GPU info
         if service.namespace and service.namespace in gpu_by_namespace:
@@ -572,6 +573,7 @@ async def add_to_favorites(
     # Return service with is_favorite=True
     service_schema = ServiceSchema.model_validate(service)
     service_schema.is_favorite = True
+    service_schema.favorite_order = favorite.order_index
     return service_schema
 
 
