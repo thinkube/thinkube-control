@@ -32,6 +32,10 @@ A notebook runs in one server pod on one node, with the CPU, memory and GPUs cho
 
 A refusal says why in one sentence, for example `tkspark has 0 GPU slots free of 4; a served model may be holding the rest (unload_llm_model frees one)`.
 
+To use a GPU on another node, start an unattended run there, or stop the server and start it on that node.
+
+JupyterHub stops a server whose kernels have been idle for an hour. A running cell counts as activity; an open tab or an opened notebook with an idle kernel does not. `jupyter_notebook_status` says whether a server is there before a tab is opened on it.
+
 == Notebooks
 
 Paths are relative to the notebooks folder, for example `examples/research-assistant/00-platform-validation.ipynb`. Every operation answers with the tool's own result: an object with `success` and, on failure, `error` in plain words.
@@ -105,7 +109,7 @@ Over MCP a call that waits for a cell is held open by Claude Code for a limited 
 | The runs, newest first; stop one and its server.
 |===
 
-Thinkube Control polls a run every fifteen seconds and records it in its database. If Thinkube Control restarts during a run, it picks the polling up again; a run whose server was still starting is marked `lost` and its server stopped.
+Up to three unattended runs run at a time, each on its own server. Thinkube Control polls a run every fifteen seconds and records it in its database. If Thinkube Control restarts during a run, it picks the polling up again; a run whose server was still starting is marked `lost` and its server stopped.
 
 == See it in the IDE
 
@@ -113,13 +117,8 @@ Thinkube IDE carries the Thinkube Notebook View extension. In a terminal, `tk-no
 
 A tab takes a moment to attach after it opens. Until it attaches, a running cell's progress is written to the file, but the tab shows no change. The tab fills in only when the cell ends. `jupyter_kernel_status` reports `connections`, the number of open tabs attached to the kernel. `0` means no tab is attached yet; `1` or more means one is. To let you watch a run, Claude Code opens the tab and waits until `connections` is at least one before it runs the cell. Then the progress bar and the printed output appear as they happen. A run with no tab open does not wait, because there is nothing to watch.
 
+A progress bar moves in the tab during a run Claude starts when it is the text form, `from tqdm import tqdm`. The widget form, `tqdm.auto`, keeps its progress outside the cell's outputs and only fills in when the cell ends.
+
 == Large outputs
 
 Images and any text output longer than ten thousand characters are written under `.outputs/` beside the notebooks, in files named with the date. The answer carries the path in their place. The notebook file keeps the full output.
-
-== Good to know
-
-* To use a GPU on another node, start an unattended run there, or stop the server and start it on that node.
-* Up to three unattended runs run at a time, each on its own server.
-* JupyterHub stops a server whose kernels have been idle for an hour. A running cell counts as activity; an open tab or an opened notebook with an idle kernel does not. `jupyter_notebook_status` says whether a server is there before a tab is opened on it.
-* A progress bar moves in the tab during a run Claude starts when it is the text form, `from tqdm import tqdm`. The widget form, `tqdm.auto`, keeps its progress outside the cell's outputs and only fills in when the cell ends.
