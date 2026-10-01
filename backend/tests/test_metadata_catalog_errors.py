@@ -23,8 +23,9 @@ from app.services import model_downloader
 from app.services import optional_components as oc
 from app.services.metadata_fetcher import CatalogUnavailableError
 
-PLATFORM_URL = mf._github_raw_url("thinkube", "thinkube-metadata", "repositories.json")
-USER_URL = mf._github_raw_url("someone", "someone-metadata", "repositories.json")
+PLATFORM_REF = "release-0.1"
+PLATFORM_URL = mf._github_raw_url("thinkube", "thinkube-metadata", PLATFORM_REF, "repositories.json")
+USER_URL = mf._github_raw_url("someone", "someone-metadata", "main", "repositories.json")
 REPOS = {"repositories": [{"name": "tkt-webapp", "type": "application_template"}]}
 
 
@@ -35,6 +36,7 @@ def clean(monkeypatch):
     oc._COMPONENTS_CATALOG_CACHE_TIME = 0
     monkeypatch.delenv("GITHUB_USERNAME", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("THINKUBE_BRANCH", PLATFORM_REF)
     yield
     mf._memory_cache.clear()
     oc._COMPONENTS_CATALOG_CACHE = None
@@ -190,7 +192,7 @@ def test_optional_components_list_answers_502_naming_the_url(monkeypatch, api):
     r = api.get("/api/v1/optional-components/list")
 
     assert r.status_code == 502
-    assert oc._COMPONENTS_CATALOG_URL in r.json()["detail"]
+    assert mf.platform_metadata_url("optional_components.json") in r.json()["detail"]
 
 
 def test_model_catalog_answers_502_naming_the_url(monkeypatch, api):
@@ -206,4 +208,11 @@ def test_model_catalog_answers_502_naming_the_url(monkeypatch, api):
     r = api.get("/api/v1/models/catalog")
 
     assert r.status_code == 502
-    assert mf._github_raw_url("thinkube", "thinkube-metadata", "models.json") in r.json()["detail"]
+    assert mf._github_raw_url("thinkube", "thinkube-metadata", PLATFORM_REF, "models.json") in r.json()["detail"]
+
+
+def test_the_platform_catalog_without_thinkube_branch_is_an_error_naming_it(monkeypatch):
+    monkeypatch.delenv("THINKUBE_BRANCH")
+
+    with pytest.raises(RuntimeError, match="THINKUBE_BRANCH"):
+        mf.fetch_merged_catalog("repositories", "repositories.json", "repositories", "list", "name")

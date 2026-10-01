@@ -76,6 +76,11 @@ thinkube_branch:
   default: main
   help: "Git branch for thinkube repos (passed to playbooks as THINKUBE_BRANCH)"
 
+platform_version:
+  type: str
+  help: "The platform's version as MAJOR.MINOR, for example 0.1; templates deploy from their newest tag of this version"
+  # No default - must be provided during deployment
+
 # Computed values (not asked to user)
 _templates_suffix: .jinja
 

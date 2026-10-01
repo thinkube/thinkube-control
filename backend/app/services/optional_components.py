@@ -7,7 +7,6 @@ Service for managing optional Thinkube components
 
 import json
 import logging
-import os
 import time
 import yaml
 from typing import Dict, List, Any, Optional
@@ -17,20 +16,14 @@ from sqlalchemy.orm import Session
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
-from app.services.metadata_fetcher import CatalogUnavailableError
+from app.services.metadata_fetcher import CatalogUnavailableError, platform_metadata_url
 
 logger = logging.getLogger(__name__)
 
-# Component catalog: fetched from thinkube-metadata at runtime, cached in memory.
-# Components require local playbooks so only the platform catalog is used — no user merge.
-#
-# THINKUBE_METADATA_REPO overrides the metadata repo (default
-# `thinkube/thinkube-metadata`). Contributors testing a forked metadata
-# repo set this without editing thinkube-control source. The same env
-# var is read by the installer's release_resolver — keeping the
-# convention shared across components.
-_METADATA_REPO = os.environ.get("THINKUBE_METADATA_REPO", "thinkube/thinkube-metadata")
-_COMPONENTS_CATALOG_URL = f"https://raw.githubusercontent.com/{_METADATA_REPO}/main/optional_components.json"
+# Component catalog: fetched from thinkube-metadata at the platform's release
+# ref at runtime, cached in memory. Components require local playbooks so only
+# the platform catalog is used — no user merge.
+_COMPONENTS_CATALOG_FILE = "optional_components.json"
 _COMPONENTS_CATALOG_CACHE: Optional[Dict[str, Any]] = None
 _COMPONENTS_CATALOG_CACHE_TIME: float = 0
 _COMPONENTS_CATALOG_TTL: float = 300  # 5 minutes
@@ -52,20 +45,21 @@ def get_components_catalog() -> Dict[str, Any]:
         return _COMPONENTS_CATALOG_CACHE
 
     import urllib.request
-    req = urllib.request.Request(_COMPONENTS_CATALOG_URL, headers={"User-Agent": "thinkube-control"})
+    catalog_url = platform_metadata_url(_COMPONENTS_CATALOG_FILE)
+    req = urllib.request.Request(catalog_url, headers={"User-Agent": "thinkube-control"})
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             body = resp.read().decode()
     except Exception as e:
-        raise CatalogUnavailableError(f"Cannot fetch catalog {_COMPONENTS_CATALOG_URL}: {e}") from e
+        raise CatalogUnavailableError(f"Cannot fetch catalog {catalog_url}: {e}") from e
     try:
         data = json.loads(body)
     except ValueError as e:
-        raise CatalogUnavailableError(f"Catalog {_COMPONENTS_CATALOG_URL} is not valid JSON: {e}") from e
+        raise CatalogUnavailableError(f"Catalog {catalog_url} is not valid JSON: {e}") from e
     components = data.get("components") if isinstance(data, dict) else None
     if not isinstance(components, dict):
         raise CatalogUnavailableError(
-            f"Catalog {_COMPONENTS_CATALOG_URL} has no 'components' mapping"
+            f"Catalog {catalog_url} has no 'components' mapping"
         )
 
     _COMPONENTS_CATALOG_CACHE = components

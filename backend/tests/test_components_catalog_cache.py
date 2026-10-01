@@ -17,7 +17,8 @@ CATALOG = {"components": {"qdrant": {"display_name": "Qdrant"}}}
 
 
 @pytest.fixture(autouse=True)
-def clean_cache():
+def clean_cache(monkeypatch):
+    monkeypatch.setenv("THINKUBE_BRANCH", "release-0.1")
     oc._COMPONENTS_CATALOG_CACHE = None
     oc._COMPONENTS_CATALOG_CACHE_TIME = 0
     yield
@@ -54,7 +55,10 @@ def test_a_failed_fetch_raises_an_error_naming_the_url(monkeypatch):
 
     with pytest.raises(CatalogUnavailableError) as err:
         oc.get_components_catalog()
-    assert oc._COMPONENTS_CATALOG_URL in str(err.value)
+    assert (
+        "https://raw.githubusercontent.com/thinkube/thinkube-metadata/release-0.1/optional_components.json"
+        in str(err.value)
+    )
     assert "handshake timed out" in str(err.value)
     assert oc._COMPONENTS_CATALOG_CACHE is None
 

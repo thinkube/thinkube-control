@@ -2,11 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-The version of a template: its newest release tag.
+The version of a template: the release tag a deploy generates from.
 
 A template release is a git tag vMAJOR.MINOR.PATCH on the template
-repository. A deploy generates the application from the newest one, so the
+repository. A deploy generates the application from one release, so the
 version is the exact code the application came from. Other tags are ignored.
+
+A template in the thinkube GitHub organization is part of the platform: its
+release is the newest tag whose MAJOR.MINOR equals the platform's version,
+read from THINKUBE_PLATFORM_VERSION. Any other template (one a user published
+from an app) carries its own version numbers: its release is its newest tag.
 """
 
 import os
@@ -15,10 +20,26 @@ import subprocess
 from typing import Dict
 
 RELEASE_TAG = re.compile(r"^refs/tags/v(\d+)\.(\d+)\.(\d+)$")
+PLATFORM_VERSION = re.compile(r"^(\d+)\.(\d+)$")
+PLATFORM_TEMPLATE = re.compile(r"^https://github\.com/thinkube/", re.IGNORECASE)
 
 
 class TemplateNotReleased(RuntimeError):
-    """The template repository has no vMAJOR.MINOR.PATCH tag."""
+    """The template repository has no release tag a deploy can use."""
+
+
+def platform_version() -> tuple:
+    """The platform's MAJOR.MINOR, from THINKUBE_PLATFORM_VERSION, as (major, minor)."""
+    value = os.environ.get("THINKUBE_PLATFORM_VERSION")
+    if not value:
+        raise RuntimeError(
+            "THINKUBE_PLATFORM_VERSION is not set; thinkube-control receives it from the "
+            "platform_version answer of its deploy"
+        )
+    match = PLATFORM_VERSION.match(value)
+    if not match:
+        raise RuntimeError(f"THINKUBE_PLATFORM_VERSION is '{value}', expected MAJOR.MINOR, for example 0.1")
+    return tuple(int(part) for part in match.groups())
 
 
 def github_git_env() -> Dict[str, str]:
@@ -41,11 +62,18 @@ def github_git_env() -> Dict[str, str]:
 
 
 def latest_release_tag(template_url: str) -> str:
-    """The newest vMAJOR.MINOR.PATCH tag of the template repository.
+    """The release tag a deploy of the template generates from.
 
-    Raises TemplateNotReleased when the repository has none, and RuntimeError
-    when its tags cannot be read.
+    For a template in the thinkube organization, the newest vMAJOR.MINOR.PATCH
+    tag whose MAJOR.MINOR is the platform's version; for any other template,
+    its newest vMAJOR.MINOR.PATCH tag.
+
+    Raises TemplateNotReleased when the repository has no such tag, and
+    RuntimeError when its tags cannot be read or THINKUBE_PLATFORM_VERSION is
+    missing for a platform template.
     """
+    wanted = platform_version() if PLATFORM_TEMPLATE.match(template_url) else None
+
     result = subprocess.run(
         ["git", "ls-remote", "--tags", "--refs", template_url],
         capture_output=True,
@@ -61,8 +89,17 @@ def latest_release_tag(template_url: str) -> str:
         ref = line.split("\t")[-1]
         match = RELEASE_TAG.match(ref)
         if match:
-            releases.append((tuple(int(part) for part in match.groups()), ref[len("refs/tags/"):]))
+            version = tuple(int(part) for part in match.groups())
+            if wanted is None or version[:2] == wanted:
+                releases.append((version, ref[len("refs/tags/"):]))
     if not releases:
+        if wanted is not None:
+            raise TemplateNotReleased(
+                f"{template_url} has no release tag for platform version {wanted[0]}.{wanted[1]} "
+                f"(v{wanted[0]}.{wanted[1]}.PATCH). Tag a release of the template for this "
+                f"platform version, for example: git tag v{wanted[0]}.{wanted[1]}.0 && "
+                f"git push origin v{wanted[0]}.{wanted[1]}.0"
+            )
         raise TemplateNotReleased(
             f"{template_url} has no release tag (vMAJOR.MINOR.PATCH). "
             "Tag the template's current state to release it, for example: "

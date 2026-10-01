@@ -5,8 +5,10 @@
 Shared metadata fetcher for thinkube-control.
 
 Fetches catalog JSON files from two sources:
-1. thinkube/thinkube-metadata (platform catalog, public)
-2. {GITHUB_USERNAME}/{GITHUB_USERNAME}-metadata (user catalog, private, authenticated)
+1. thinkube/thinkube-metadata (platform catalog, public), at the platform's
+   release ref: the branch the platform was installed from, THINKUBE_BRANCH
+2. {GITHUB_USERNAME}/{GITHUB_USERNAME}-metadata (user catalog, private,
+   authenticated), at main: it belongs to the user, not to a platform release
 
 Merges the results and keeps them in memory for five minutes. When a fetch
 fails and no fresh copy is in memory, CatalogUnavailableError is raised with
@@ -29,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 _PLATFORM_ORG = "thinkube"
 _PLATFORM_METADATA_REPO = "thinkube-metadata"
+_USER_METADATA_REF = "main"
 _CACHE_TTL: float = 300  # 5 minutes
 
 # Per-catalog memory cache: {catalog_name: {"data": ..., "time": float}}
@@ -39,8 +42,24 @@ class CatalogUnavailableError(Exception):
     """A metadata catalog could not be fetched or read."""
 
 
-def _github_raw_url(org: str, repo: str, filename: str) -> str:
-    return f"https://raw.githubusercontent.com/{org}/{repo}/main/{filename}"
+def platform_ref() -> str:
+    """The platform's release ref, the branch the platform was installed from (THINKUBE_BRANCH)."""
+    ref = os.environ.get("THINKUBE_BRANCH")
+    if not ref:
+        raise RuntimeError(
+            "THINKUBE_BRANCH is not set; thinkube-control receives it from the "
+            "thinkube_branch answer of its deploy"
+        )
+    return ref
+
+
+def _github_raw_url(org: str, repo: str, ref: str, filename: str) -> str:
+    return f"https://raw.githubusercontent.com/{org}/{repo}/{ref}/{filename}"
+
+
+def platform_metadata_url(filename: str) -> str:
+    """The address of a thinkube-metadata file at the platform's release ref."""
+    return _github_raw_url(_PLATFORM_ORG, _PLATFORM_METADATA_REPO, platform_ref(), filename)
 
 
 def _fetch_json(url: str, token: Optional[str] = None, timeout: int = 10) -> dict:
@@ -152,7 +171,7 @@ def fetch_merged_catalog(
     github_username, github_token = _get_github_config()
 
     # Platform catalog (public, no auth)
-    platform_url = _github_raw_url(_PLATFORM_ORG, _PLATFORM_METADATA_REPO, file_name)
+    platform_url = platform_metadata_url(file_name)
     try:
         platform_data = _fetch_json(platform_url)
     except urllib.error.HTTPError as e:
@@ -168,7 +187,7 @@ def fetch_merged_catalog(
     # User catalog (private, with auth)
     if github_username and github_token:
         user_repo = f"{github_username}-metadata"
-        user_url = _github_raw_url(github_username, user_repo, file_name)
+        user_url = _github_raw_url(github_username, user_repo, _USER_METADATA_REF, file_name)
         user_items = None
         try:
             user_data = _fetch_json(user_url, token=github_token)

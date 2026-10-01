@@ -31,19 +31,22 @@ from app.models.deployment_schemas import (
 
 logger = logging.getLogger(__name__)
 from app.core.config import settings
-from app.api.templates import deployment_type
+from app.api.templates import _template_release, deployment_type
 
 router = APIRouter(tags=["stacks"])
 
 
 async def _fetch_thinkube_yaml(org: str, repo: str) -> dict:
-    """Fetch and parse thinkube.yaml from the main branch of a GitHub repository.
+    """Fetch and parse thinkube.yaml of a template at the release tag its deploy uses.
 
     The dependency graph is built from these files, so one that cannot be read
     stops the stack: a template read as having no dependencies could be
     deployed before the services it needs.
     """
-    url = f"https://raw.githubusercontent.com/{org}/{repo}/main/thinkube.yaml"
+    release, not_released = await _template_release(f"https://github.com/{org}/{repo}")
+    if release is None:
+        raise HTTPException(status_code=409, detail=f"{not_released} Until then the stack cannot be deployed.")
+    url = f"https://raw.githubusercontent.com/{org}/{repo}/{release}/thinkube.yaml"
     headers = {"Authorization": f"token {os.environ['GITHUB_TOKEN']}"}
     async with aiohttp.ClientSession(headers=headers) as session:
         async with session.get(url) as response:

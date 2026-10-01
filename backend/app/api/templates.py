@@ -116,24 +116,33 @@ def deployment_type(template_url: str) -> str:
     return "component" if entry and entry.get("deployment_type") == "component" else "user_app"
 
 
-# Template release tags, keyed by template URL, with the time they were read.
-_template_versions: Dict[str, Tuple[float, Optional[str]]] = {}
+# Template release tags, keyed by template URL, with the time they were read:
+# (time, tag, None) for a released template, (time, None, reason) for one with
+# no release tag a deploy can use.
+_template_versions: Dict[str, Tuple[float, Optional[str], Optional[str]]] = {}
 _TEMPLATE_VERSION_TTL = 300
 
 
-async def _template_version(template_url: str) -> Optional[str]:
-    """The template's newest release tag, or None while it has none."""
+async def _template_release(template_url: str) -> Tuple[Optional[str], Optional[str]]:
+    """The release tag a deploy of the template uses (scripts/template_version.py),
+    as (tag, None), or (None, reason) while the template has no such tag."""
     sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
     from template_version import TemplateNotReleased, latest_release_tag
 
     cached = _template_versions.get(template_url)
     if cached and time.monotonic() - cached[0] < _TEMPLATE_VERSION_TTL:
-        return cached[1]
+        return cached[1], cached[2]
     try:
-        version = await asyncio.to_thread(latest_release_tag, template_url)
-    except TemplateNotReleased:
-        version = None
-    _template_versions[template_url] = (time.monotonic(), version)
+        version, reason = await asyncio.to_thread(latest_release_tag, template_url), None
+    except TemplateNotReleased as e:
+        version, reason = None, str(e)
+    _template_versions[template_url] = (time.monotonic(), version, reason)
+    return version, reason
+
+
+async def _template_version(template_url: str) -> Optional[str]:
+    """The release tag a deploy of the template uses, or None while it has none."""
+    version, _ = await _template_release(template_url)
     return version
 
 
@@ -218,15 +227,11 @@ async def get_template_metadata(
 
         # Every template carries manifest.yaml at its root. It is read at the
         # release a deploy generates from, so the form matches what is deployed.
-        release = await _template_version(template_url)
+        release, not_released = await _template_release(template_url)
         if release is None:
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    f"{template_url} has no release tag (vMAJOR.MINOR.PATCH), so it cannot be deployed. "
-                    "Tag the template's current state to release it, for example: "
-                    "git tag v0.1.0 && git push origin v0.1.0"
-                ),
+                detail=f"{not_released} Until then it cannot be deployed.",
             )
         manifest_url = f"https://raw.githubusercontent.com/{org}/{repo}/{release}/manifest.yaml"
 
