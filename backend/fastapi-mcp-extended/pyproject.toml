@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fastapi-mcp-extended"
-version = "0.2.0"
+version = "0.1.0"
 description = "Extended FastAPI-MCP server with resource and prompt support"
 readme = "README.md"
 requires-python = ">=3.9"
