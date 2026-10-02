@@ -71,6 +71,12 @@ master_node_ip:
   help: "Kubernetes master node IP address"
   # No default - must be provided during deployment
 
+model_aliases:
+  type: json
+  help: "LLM gateway model aliases, alias -> model id"
+  # No default - the thinkube playbooks pass it from thinkube_model_aliases
+  # (ansible/40_thinkube/core/thinkube-control/vars/model_aliases.yaml)
+
 thinkube_branch:
   type: str
   default: main

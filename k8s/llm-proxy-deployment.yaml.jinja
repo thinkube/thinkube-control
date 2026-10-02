@@ -36,7 +36,7 @@ spec:
         - name: REQUEST_TIMEOUT_SECONDS
           value: "300"
         - name: MODEL_ALIASES
-          value: "{}"
+          value: {{ model_aliases | tojson | tojson }}
         - name: KEYCLOAK_URL
           value: "https://{{ auth_subdomain }}.{{ domain_name }}"
         - name: KEYCLOAK_REALM
