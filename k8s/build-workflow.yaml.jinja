@@ -3,8 +3,9 @@
 
 # Build workflow for thinkube-control
 # Triggered by Gitea webhooks. It builds the backend, frontend and LLM proxy
-# images and pushes them to Harbor. It runs no tests: the backend tests run
-# with backend/run_tests.sh.
+# images and pushes them to Harbor. The LLM proxy's Go unit tests run inside
+# its image build (proxy/Containerfile); the backend tests run with
+# backend/run_tests.sh.
 #
 # Build tool: Buildah (library/buildah, mirrored from quay.io/buildah/stable),
 # in a pod that is not privileged. Beyond a default pod it needs:
