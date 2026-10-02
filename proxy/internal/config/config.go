@@ -7,6 +7,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strconv"
 	"time"
@@ -35,7 +36,12 @@ func Load() *Config {
 		ListenAddr:          envOrDefault("LISTEN_ADDR", ":8080"),
 		MaxRequestBodyBytes: envInt64("MAX_REQUEST_BODY_BYTES", 10*1024*1024),
 	}
-	cfg.ModelAliases = parseModelAliases(envOrDefault("MODEL_ALIASES", "{}"))
+	aliases, err := parseModelAliases(os.Getenv("MODEL_ALIASES"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "MODEL_ALIASES: %v\n", err)
+		os.Exit(1)
+	}
+	cfg.ModelAliases = aliases
 	return cfg
 }
 
@@ -64,8 +70,15 @@ func envInt64(key string, fallback int64) int64 {
 	return fallback
 }
 
-func parseModelAliases(raw string) map[string]string {
+// parseModelAliases reads the alias table, a JSON object of alias -> model
+// id. The deployment always sets it; an empty object means no aliases.
+func parseModelAliases(raw string) (map[string]string, error) {
+	if raw == "" {
+		return nil, fmt.Errorf("not set; the deployment passes the alias table as a JSON object")
+	}
 	aliases := make(map[string]string)
-	_ = json.Unmarshal([]byte(raw), &aliases)
-	return aliases
+	if err := json.Unmarshal([]byte(raw), &aliases); err != nil {
+		return nil, fmt.Errorf("not a JSON object of alias -> model id: %w", err)
+	}
+	return aliases, nil
 }
