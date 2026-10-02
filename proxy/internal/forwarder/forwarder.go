@@ -9,7 +9,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"time"
 )
@@ -51,64 +50,6 @@ func (f *Forwarder) Forward(ctx context.Context, backendURL string, body io.Read
 	}
 
 	return resp, nil
-}
-
-func (f *Forwarder) ForwardStream(ctx context.Context, backendURL string, body io.Reader, w http.ResponseWriter) error {
-	req, err := http.NewRequestWithContext(ctx, "POST", backendURL, body)
-	if err != nil {
-		return fmt.Errorf("create stream request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-
-	resp, err := f.streamClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("stream request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(resp.StatusCode)
-		w.Write(body)
-		return nil
-	}
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		return fmt.Errorf("response writer does not support flushing")
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
-
-	buf := make([]byte, 4096)
-	for {
-		select {
-		case <-ctx.Done():
-			slog.Debug("client disconnected during stream")
-			return ctx.Err()
-		default:
-		}
-
-		n, err := resp.Body.Read(buf)
-		if n > 0 {
-			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
-				return writeErr
-			}
-			flusher.Flush()
-		}
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("read stream: %w", err)
-		}
-	}
 }
 
 func (f *Forwarder) ForwardStreamRaw(ctx context.Context, backendURL string, body io.Reader) (*http.Response, error) {

@@ -145,7 +145,7 @@ func (h *AnthropicHandler) handleNonStream(r *http.Request, w http.ResponseWrite
 		return
 	}
 
-	respBody = normalizeReasoning(respBody)
+	respBody = normalizeReasoning(respBody, thinkingDisabled(body))
 
 	var openaiResp protocol.OpenAIResponse
 	if err := json.Unmarshal(respBody, &openaiResp); err != nil {

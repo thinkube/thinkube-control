@@ -13,6 +13,8 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+# The unit tests gate the image: a failing test stops the build.
+RUN CGO_ENABLED=0 go test ./...
 RUN CGO_ENABLED=0 GOOS=linux go build -o /llm-proxy ./cmd/proxy
 
 # Stage 2: Runtime

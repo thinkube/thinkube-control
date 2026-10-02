@@ -68,6 +68,7 @@ func (h *OpenAIHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) 
 	}
 
 	backendURL := resolved.BackendURL + resolved.APIPath + "/chat/completions"
+	thinkingOff := thinkingDisabled(body)
 
 	if resolved.ServingName != "" && resolved.ServingName != req.Model {
 		body = rewriteModelField(body, resolved.ServingName)
@@ -89,7 +90,7 @@ func (h *OpenAIHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) 
 		metrics.ActiveStreams.WithLabelValues("openai", resolved.ModelID).Inc()
 		defer metrics.ActiveStreams.WithLabelValues("openai", resolved.ModelID).Dec()
 
-		err = h.forwarder.ForwardStream(r.Context(), backendURL, bytes.NewReader(body), w)
+		err = h.forwardStream(r, w, backendURL, body, thinkingOff)
 		if err != nil {
 			slog.Error("stream forward failed", "error", err)
 		}
@@ -103,7 +104,7 @@ func (h *OpenAIHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) 
 		defer resp.Body.Close()
 
 		respBody, _ := io.ReadAll(resp.Body)
-		respBody = normalizeReasoning(respBody)
+		respBody = normalizeReasoning(respBody, thinkingOff)
 
 		for k, vv := range resp.Header {
 			if k == "Content-Length" {
@@ -132,6 +133,39 @@ func (h *OpenAIHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) 
 		"duration_ms", duration.Milliseconds(),
 		"user_id", userID,
 	)
+}
+
+// forwardStream relays the backend's SSE stream, shaping the reasoning of
+// each chunk as normalizeReasoning does for a whole response. A backend
+// error status is relayed with its body.
+func (h *OpenAIHandler) forwardStream(r *http.Request, w http.ResponseWriter, backendURL string, body []byte, thinkingOff bool) error {
+	resp, err := h.forwarder.ForwardStreamRaw(r.Context(), backendURL, bytes.NewReader(body))
+	if err != nil {
+		WriteError(w, "openai", http.StatusBadGateway, "backend_error", "Backend request failed")
+		metrics.ErrorsTotal.WithLabelValues("openai", "backend").Inc()
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		errBody, _ := io.ReadAll(resp.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		w.Write(errBody)
+		return nil
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return fmt.Errorf("response writer does not support flushing")
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	return shapeStream(resp.Body, w, flusher, thinkingOff)
 }
 
 // ListModels answers the OpenAI model list from the backend's registry: the
