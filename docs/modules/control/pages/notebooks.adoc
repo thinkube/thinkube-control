@@ -1,14 +1,14 @@
 = Notebook execution over MCP
 :page-type: reference
 
-_The operations that let Claude Code start a notebook server where the work needs to be, run a notebook in it with no JupyterLab tab open, and stop it when the GPU should go back to serving models._
+_The operations that let the agent start a notebook server where the work needs to be, run a notebook in it with no JupyterLab tab open, and stop it when the GPU should go back to serving models._
 
 .TL;DR
-Ask Claude Code to start a notebook server and run a notebook. No browser tab is needed. This page lists every operation and its limits.
+Ask your agent Code to start a notebook server and run a notebook. No browser tab is needed. This page lists every operation and its limits.
 
 == How it works
 
-Thinkube Control forwards the notebook operations to `tk-notebook-mcp`, a server extension inside the notebook server. The extension works on the notebook's shared document, the same one a JupyterLab tab edits. When no tab has created the document, the extension creates it. An edit or an output written by Claude Code appears in any tab that has the notebook open, and the document's autosave writes it to the file. A kernel is held by one call at a time. A second call for the same kernel waits five seconds and then answers with what holds it.
+Thinkube Control forwards the notebook operations to `tk-notebook-mcp`, a server extension inside the notebook server. The extension works on the notebook's shared document, the same one a JupyterLab tab edits. When no tab has created the document, the extension creates it. An edit or an output written by the agent appears in any tab that has the notebook open, and the document's autosave writes it to the file. A kernel is held by one call at a time. A second call for the same kernel waits five seconds and then answers with what holds it.
 
 The server operations go to JupyterHub itself, with the service token Thinkube Control is registered with.
 
@@ -91,7 +91,7 @@ Paths are relative to the notebooks folder, for example `examples/research-assis
 | Whether a kernel is idle or busy; the kernels running with their notebooks, and the kernel types installed.
 |===
 
-Over MCP a call that waits for a cell is held open by Claude Code for a limited time. For anything longer than a few minutes use the background pair and poll.
+Over MCP a call that waits for a cell is held open by the agent for a limited time. For anything longer than a few minutes use the background pair and poll.
 
 == Unattended runs
 
@@ -113,11 +113,11 @@ Up to three unattended runs run at a time, each on its own server. Thinkube Cont
 
 == See it in the IDE
 
-Thinkube IDE carries the Thinkube Notebook View extension. In a terminal, `tk-notebook-open <path>` shows the notebook in an editor tab: the notebook server's own single-document page, signed in, on the kernel Claude is using, with copy and paste working. The tab shows one notebook with its toolbar and kernel; the extension's `page` setting switches it to the whole of JupyterLab. Ask Claude to show the notebook and it runs that command after opening it. The tab's title bar has *Reload* and *Open in the browser*.
+Thinkube IDE carries the Thinkube Notebook View extension. In a terminal, `tk-notebook-open <path>` shows the notebook in an editor tab: the notebook server's own single-document page, signed in, on the kernel the agent is using, with copy and paste working. The tab shows one notebook with its toolbar and kernel; the extension's `page` setting switches it to the whole of JupyterLab. Ask your agent to show the notebook and it runs that command after opening it. The tab's title bar has *Reload* and *Open in the browser*.
 
-A tab takes a moment to attach after it opens. Until it attaches, a running cell's progress is written to the file, but the tab shows no change. The tab fills in only when the cell ends. `jupyter_kernel_status` reports `connections`, the number of open tabs attached to the kernel. `0` means no tab is attached yet; `1` or more means one is. To let you watch a run, Claude Code opens the tab and waits until `connections` is at least one before it runs the cell. Then the progress bar and the printed output appear as they happen. A run with no tab open does not wait, because there is nothing to watch.
+A tab takes a moment to attach after it opens. Until it attaches, a running cell's progress is written to the file, but the tab shows no change. The tab fills in only when the cell ends. `jupyter_kernel_status` reports `connections`, the number of open tabs attached to the kernel. `0` means no tab is attached yet; `1` or more means one is. To let you watch a run, the agent opens the tab and waits until `connections` is at least one before it runs the cell. Then the progress bar and the printed output appear as they happen. A run with no tab open does not wait, because there is nothing to watch.
 
-A progress bar moves in the tab during a run Claude starts when it is the text form, `from tqdm import tqdm`. The widget form, `tqdm.auto`, keeps its progress outside the cell's outputs and only fills in when the cell ends.
+A progress bar moves in the tab during a run the agent starts when it is the text form, `from tqdm import tqdm`. The widget form, `tqdm.auto`, keeps its progress outside the cell's outputs and only fills in when the cell ends.
 
 == Large outputs
 

@@ -1,10 +1,10 @@
 = Thinkube Control
 :page-type: reference
 
-_The control panel: what each of its pages does, and the operations it exposes to Claude Code as MCP resources and tools._
+_The control panel: what each of its pages does, and the operations it exposes to the agent as MCP resources and tools._
 
 .TL;DR
-You can ask Claude Code to do anything these pages do. Open Thinkube Control when you want to see the state of things or click instead of asking.
+You can ask your agent Code to do anything these pages do. Open Thinkube Control when you want to see the state of things or click instead of asking.
 
 The installer deploys Thinkube Control as a core component.
 
@@ -56,10 +56,10 @@ Every card's *details* page shows the service's health status and the health his
 
 == The operations
 
-Every page above is also a set of operations, each reachable from Claude Code by name. Claude Code reads the full list from Thinkube Control when it starts. Ask Claude Code what it can do; it answers from the live list.
+Every page above is also a set of operations, each reachable from the agent by name. The agent reads the full list from Thinkube Control when it starts. Ask your agent Code what it can do; it answers from the live list.
 
 == Calling it from outside the browser
 
 The REST API is at `https://control.<your domain>/api/v1`, with its OpenAPI description at `/api/v1/docs`. Create a token under *API Tokens* and send it as `Authorization: Bearer tk_…`. The same token is accepted by the LLM Gateway.
 
-Thinkube IDE arrives with this connection made: Claude Code's MCP configuration points at `https://control.<your domain>/mcp` with a token the installer created.
+Thinkube IDE arrives with this connection made: each agent's MCP configuration points at `https://control.<your domain>/mcp` with a token the installer created.
