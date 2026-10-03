@@ -19,7 +19,6 @@ restart of thinkube-control and the worker picks them up again.
 
 import asyncio
 import logging
-from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -94,28 +93,6 @@ def cancel_queued(db: Session, deployment: TemplateDeployment) -> bool:
     deployment.output = "Removed from the queue before it started"
     db.commit()
     return True
-
-
-def mark_orphaned_runs(db: Session, still_running) -> int:
-    """A run recorded as pending or running with no task behind it is marked failed.
-
-    A run lives as a task in one backend process and dies with it, while its
-    record keeps saying running, and the queue starts nothing while such a
-    record exists. ``still_running(run_id)`` says whether this process holds
-    the run; one that began on a pod that was replaced is caught that way.
-    """
-    stuck = [
-        run for run in db.query(TemplateDeployment).filter(TemplateDeployment.status.in_(["pending", "running"])).all()
-        if not still_running(str(run.id))
-    ]
-    for run in stuck:
-        run.status = "failed"
-        run.output = "thinkube-control stopped while this run was in progress; start it again"
-        run.completed_at = run.completed_at or datetime.now(timezone.utc)
-        logger.warning(f"Run queue: {run.name} ({run.id}) has no task behind it; marked failed")
-    if stuck:
-        db.commit()
-    return len(stuck)
 
 
 class RunQueue:

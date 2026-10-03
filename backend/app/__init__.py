@@ -264,16 +264,11 @@ async def app_lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"custom image build reconciliation: {e}")
             try:
-                from app.db.session import SessionLocal
+                from app.db.init_deployments import mark_interrupted_runs
                 from app.services.background_executor import background_executor
-                from app.services.run_queue import mark_orphaned_runs
 
-                db = SessionLocal()()
-                try:
-                    if mark_orphaned_runs(db, still_running=lambda run_id: run_id in background_executor.running_deployments):
-                        run_queue.wake()
-                finally:
-                    db.close()
+                if mark_interrupted_runs(still_running=lambda run_id: run_id in background_executor.running_deployments):
+                    run_queue.wake()
             except Exception as e:
                 logger.warning(f"deployment run reconciliation: {e}")
 

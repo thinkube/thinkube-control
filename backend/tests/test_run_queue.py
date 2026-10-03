@@ -128,7 +128,10 @@ def test_one_run_starts_at_a_time(db, executor):
     assert len(executor.started) == 1
 
 
+
 def test_a_run_with_no_task_behind_it_is_marked_failed_and_frees_the_queue(db, executor):
+    from app.db.init_deployments import INTERRUPTED, mark_interrupted_runs
+
     dead = run("optional-weaviate", "optional://weaviate", 0, status="running",
                variables={"playbook": "ansible/40_thinkube/optional/weaviate/00_install.yaml", "component": "weaviate"})
     waiting = run("optional-nats", "optional://nats", 1, status=rq.QUEUED,
@@ -138,18 +141,20 @@ def test_a_run_with_no_task_behind_it_is_marked_failed_and_frees_the_queue(db, e
 
     assert asyncio.run(rq.run_queue.start_next(db)) is None
 
-    assert rq.mark_orphaned_runs(db, still_running=lambda run_id: False) == 1
+    assert mark_interrupted_runs(db, still_running=lambda run_id: False) == 1
     assert dead.status == "failed"
-    assert "start it again" in dead.output
+    assert dead.output == INTERRUPTED
     assert dead.completed_at is not None
 
     assert asyncio.run(rq.run_queue.start_next(db)) == str(waiting.id)
 
 
 def test_a_run_this_process_holds_is_left_running(db):
+    from app.db.init_deployments import mark_interrupted_runs
+
     alive = run("optional-weaviate", "optional://weaviate", 0, status="running")
     db.add(alive)
     db.commit()
 
-    assert rq.mark_orphaned_runs(db, still_running=lambda run_id: run_id == str(alive.id)) == 0
+    assert mark_interrupted_runs(db, still_running=lambda run_id: run_id == str(alive.id)) == 0
     assert alive.status == "running"

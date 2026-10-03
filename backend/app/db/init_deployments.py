@@ -15,13 +15,16 @@ logger = logging.getLogger(__name__)
 INTERRUPTED = "thinkube-control restarted while this run was in progress; start it again"
 
 
-def mark_interrupted_runs(db: Session = None) -> int:
-    """A deployment run left pending or running at startup is marked failed.
+def mark_interrupted_runs(db: Session = None, still_running=None) -> int:
+    """A deployment run left pending or running with no task behind it is marked failed.
 
     Playbook and template runs are tasks and child processes of the backend
-    process, and they end with its pod while their rows keep saying running.
-    At startup this process has started no run yet, so every such row belongs
-    to a run that was interrupted.
+    process, and they end with its pod while their rows keep saying running;
+    the run queue starts nothing while such a row exists. At startup this
+    process has started no run yet, so every such row belongs to a run that
+    was interrupted. Later, ``still_running(run_id)`` says whether this
+    process holds the run: one the old pod took during a rollout, after this
+    pod had started, is caught that way.
     """
     close_db = False
     if db is None:
@@ -34,6 +37,8 @@ def mark_interrupted_runs(db: Session = None) -> int:
             .filter(TemplateDeployment.status.in_(["pending", "running"]))
             .all()
         )
+        if still_running is not None:
+            stuck = [run for run in stuck if not still_running(str(run.id))]
         for run in stuck:
             logger.warning(f"Deployment run {run.id} ({run.name}) was {run.status} when thinkube-control stopped; marked failed")
             run.status = "failed"
