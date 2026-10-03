@@ -177,6 +177,12 @@ class BackgroundExecutor:
                     deployment.status = "failed"
                     deployment.output = result.get("error", f"Component {component_name} {verb} failed")
 
+            except asyncio.CancelledError:
+                # thinkube-control is stopping (a rollout replaces its pod):
+                # the playbook dies with it.
+                deployment.status = "failed"
+                deployment.output = f"thinkube-control stopped while {component_name} was being {verb}ed; start it again"
+                raise
             except Exception as e:
                 logger.error(f"Component deployment {deployment_id} failed: {e}")
                 deployment.status = "failed"

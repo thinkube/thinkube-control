@@ -263,6 +263,19 @@ async def app_lifespan(app: FastAPI):
                 )
             except Exception as e:
                 logger.warning(f"custom image build reconciliation: {e}")
+            try:
+                from app.db.session import SessionLocal
+                from app.services.background_executor import background_executor
+                from app.services.run_queue import mark_orphaned_runs
+
+                db = SessionLocal()()
+                try:
+                    if mark_orphaned_runs(db, still_running=lambda run_id: run_id in background_executor.running_deployments):
+                        run_queue.wake()
+                finally:
+                    db.close()
+            except Exception as e:
+                logger.warning(f"deployment run reconciliation: {e}")
 
     venv_reconcile_task = asyncio.create_task(reconcile_venv_builds())
 
