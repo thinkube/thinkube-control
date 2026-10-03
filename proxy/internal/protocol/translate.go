@@ -31,28 +31,47 @@ func TranslateAnthropicToOpenAI(req *AnthropicRequest) (*OpenAIRequest, error) {
 		out.Stop = req.StopSequences
 	}
 
-	// System prompt
+	// System prompt. Anthropic also allows system messages inside the
+	// conversation; OpenAI-compatible backends whose chat template takes one
+	// leading system message (Qwen's refuses any other) get them joined into
+	// it, after the top-level system prompt and in conversation order.
+	var systemParts []string
 	if len(req.System) > 0 {
 		systemText, err := parseSystemPrompt(req.System)
 		if err != nil {
 			return nil, fmt.Errorf("parse system prompt: %w", err)
 		}
 		if systemText != "" {
-			out.Messages = append(out.Messages, OpenAIMessage{
-				Role:    "system",
-				Content: systemText,
-			})
+			systemParts = append(systemParts, systemText)
 		}
 	}
 
 	// Messages
+	var conversation []OpenAIMessage
 	for _, msg := range req.Messages {
+		if msg.Role == "system" {
+			systemText, err := parseSystemPrompt(msg.Content)
+			if err != nil {
+				return nil, fmt.Errorf("parse system message: %w", err)
+			}
+			if systemText != "" {
+				systemParts = append(systemParts, systemText)
+			}
+			continue
+		}
 		translated, err := translateMessage(msg)
 		if err != nil {
 			return nil, fmt.Errorf("translate message: %w", err)
 		}
-		out.Messages = append(out.Messages, translated...)
+		conversation = append(conversation, translated...)
 	}
+	if len(systemParts) > 0 {
+		out.Messages = append(out.Messages, OpenAIMessage{
+			Role:    "system",
+			Content: strings.Join(systemParts, "\n\n"),
+		})
+	}
+	out.Messages = append(out.Messages, conversation...)
 
 	// Tools
 	for _, rawTool := range req.Tools {

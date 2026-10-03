@@ -7,6 +7,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 )
 
@@ -61,6 +62,57 @@ func TestTranslateSystemPromptString(t *testing.T) {
 	}
 	if out.Messages[0].Content != "You are a pirate." {
 		t.Errorf("system content = %v", out.Messages[0].Content)
+	}
+}
+
+// A system message inside the conversation joins the leading one: Qwen's chat
+// template refuses a system message anywhere but first.
+func TestTranslateSystemMessageInConversationJoinsTheLeadingOne(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "test-model",
+		MaxTokens: 100,
+		System:    json.RawMessage(`[{"type":"text","text":"You are a pirate."}]`),
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`"Ahoy"`)},
+			{Role: "system", Content: json.RawMessage(`[{"type":"text","text":"Working directory: /tmp"}]`)},
+			{Role: "assistant", Content: json.RawMessage(`"Arr"`)},
+			{Role: "system", Content: json.RawMessage(`"Be brief."`)},
+		},
+	}
+
+	out, err := TranslateAnthropicToOpenAI(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var roles []string
+	for _, m := range out.Messages {
+		roles = append(roles, m.Role)
+	}
+	if got := fmt.Sprint(roles); got != "[system user assistant]" {
+		t.Fatalf("roles = %s, want [system user assistant]", got)
+	}
+	if out.Messages[0].Content != "You are a pirate.\n\nWorking directory: /tmp\n\nBe brief." {
+		t.Errorf("system content = %q", out.Messages[0].Content)
+	}
+}
+
+func TestTranslateSystemMessageWithoutTopLevelSystem(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "test-model",
+		MaxTokens: 100,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`"Ahoy"`)},
+			{Role: "system", Content: json.RawMessage(`"Be brief."`)},
+		},
+	}
+
+	out, err := TranslateAnthropicToOpenAI(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(out.Messages) != 2 || out.Messages[0].Role != "system" || out.Messages[0].Content != "Be brief." || out.Messages[1].Role != "user" {
+		t.Fatalf("messages = %+v, want the system message first, then the user message", out.Messages)
 	}
 }
 
