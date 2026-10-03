@@ -154,6 +154,7 @@ class Service(ServiceBase):
     template_version: Optional[str] = None  # Release tag of that template
     gpu_count: Optional[int] = None  # Number of GPUs used
     gpu_nodes: Optional[List[str]] = None  # Nodes where GPUs are allocated
+    nodes: Optional[List[str]] = None  # Nodes the service's running pods are on
 
 
 class ServiceDetail(Service):

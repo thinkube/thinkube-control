@@ -21,6 +21,7 @@ export interface Service {
   url?: string;
   icon?: string;
   gpu_count?: number;
+  nodes?: string[] | null;
   gpu_nodes?: string[];
   component_version: string | null;
   version_error: string | null;

@@ -26,6 +26,7 @@ const STATE_BAR: Record<AppCardState, string> = {
 };
 
 const BORDER_TEXT_BACKGROUND = { background: 'linear-gradient(to bottom, var(--background) 50%, var(--card) 50%)' };
+const BOTTOM_BORDER_TEXT_BACKGROUND = { background: 'linear-gradient(to bottom, var(--card) 50%, var(--background) 50%)' };
 
 interface AppCardProps {
   state: AppCardState;
@@ -36,6 +37,8 @@ interface AppCardProps {
   label?: string;
   /** Written into the top border line, at the right. */
   version?: string | null;
+  /** Written into the bottom border line, at the right: the nodes it runs on. */
+  nodes?: string[] | null;
   icon: ReactNode;
   name: string;
   onNameClick?: () => void;
@@ -57,6 +60,7 @@ export function AppCard({
   srDescription,
   label,
   version,
+  nodes,
   icon,
   name,
   onNameClick,
@@ -87,6 +91,17 @@ export function AppCard({
           style={BORDER_TEXT_BACKGROUND}
         >
           v{version}
+        </span>
+      )}
+      {/* The nodes are written into the bottom border line the same way; the
+          card is above that line and the page below it. */}
+      {nodes && nodes.length > 0 && (
+        <span
+          className="absolute -bottom-2 right-4 px-1.5 text-[11px] leading-4 font-medium tracking-wide text-muted-foreground"
+          style={BOTTOM_BORDER_TEXT_BACKGROUND}
+          title={`Runs on ${nodes.join(', ')}`}
+        >
+          {nodes.join(' · ')}
         </span>
       )}
       <TkCardHeader className="px-5 pb-3">

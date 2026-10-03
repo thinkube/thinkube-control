@@ -190,6 +190,20 @@ class K8sServiceManager:
             logger.error(f"Failed to get cluster-wide GPU usage: {e}")
             return {}
 
+    def get_nodes_by_namespace(self) -> Dict[str, List[str]]:
+        """The nodes each namespace's running pods are on, in one K8s API call.
+
+        Returns:
+            Dict mapping namespace -> sorted node names. A namespace with no
+            running pod is absent.
+        """
+        pods = self.core_v1.list_pod_for_all_namespaces(field_selector="status.phase=Running")
+        nodes_by_namespace: Dict[str, set] = {}
+        for pod in pods.items:
+            if pod.spec and pod.spec.node_name:
+                nodes_by_namespace.setdefault(pod.metadata.namespace, set()).add(pod.spec.node_name)
+        return {ns: sorted(nodes) for ns, nodes in nodes_by_namespace.items()}
+
     def get_deployment_status(
         self, namespace: str, name: str
     ) -> Optional[Dict[str, Any]]:

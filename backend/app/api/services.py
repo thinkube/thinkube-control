@@ -7,6 +7,7 @@ import logging
 from typing import List, Optional
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
+from kubernetes.client.rest import ApiException
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func
 
@@ -94,6 +95,12 @@ async def list_services(
     except Exception as e:
         logger.warning(f"Could not get GPU info: {e}")
 
+    # The nodes each service's pods run on, shown on its card
+    try:
+        nodes_by_namespace = K8sServiceManager().get_nodes_by_namespace()
+    except ApiException as e:
+        raise HTTPException(status_code=502, detail=f"Could not read where the pods run from Kubernetes: {e.reason}")
+
     # Convert to Pydantic schemas with latest health status
     service_responses = []
     for service in services:
@@ -114,6 +121,9 @@ async def list_services(
             gpu_info = gpu_by_namespace[service.namespace]
             service_schema.gpu_count = gpu_info.get("total_gpus", 0)
             service_schema.gpu_nodes = gpu_info.get("gpu_nodes", [])
+
+        if service.namespace:
+            service_schema.nodes = nodes_by_namespace.get(service.namespace)
 
         service_responses.append(service_schema)
 
