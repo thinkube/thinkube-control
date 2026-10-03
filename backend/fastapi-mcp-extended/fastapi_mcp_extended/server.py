@@ -12,6 +12,7 @@ import mcp.types as types
 from .classifier import EndpointClassifier
 from .resources import ResourceHandler
 from .prompts import PromptHandler
+from .schema import complete_union_types
 from .types import ResourceMapping, PromptDefinition
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,9 @@ class ExtendedFastApiMCP(FastApiMCP):
         if self._prompt_definitions:
             for prompt_def in self._prompt_definitions:
                 self.prompt_handler.add_prompt(prompt_def)
+
+        for tool in self.tools:
+            complete_union_types(tool.inputSchema)
 
         # Store original tools list before filtering
         self._all_tools = self.tools.copy()
