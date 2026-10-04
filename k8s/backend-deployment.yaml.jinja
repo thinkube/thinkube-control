@@ -1,0 +1,270 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thinkube-control-backend
+  namespace: {{ namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: thinkube-control-backend
+  template:
+    metadata:
+      labels:
+        app: thinkube-control-backend
+    spec:
+      priorityClassName: thinkube-platform
+      serviceAccountName: {{ namespace }}
+      containers:
+      - name: control-backend
+        image: {{ backend_image_repo }}
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+        env:
+        - name: KEYCLOAK_URL
+          value: "https://{{ auth_subdomain }}.{{ domain_name }}"
+        - name: KEYCLOAK_REALM
+          value: "{{ keycloak_realm }}"
+        - name: KEYCLOAK_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: {{ namespace }}-keycloak
+              key: client_id
+        - name: KEYCLOAK_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: {{ namespace }}-keycloak
+              key: client_secret
+        # Encrypts the values in the Secrets store. Created once by the
+        # thinkube-control deploy playbooks and never replaced.
+        - name: THINKUBE_ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: thinkube-encryption-key
+              key: key
+        - name: KEYCLOAK_VERIFY_SSL
+          value: "true"
+        - name: FRONTEND_URL
+          value: "https://{{ control_subdomain }}.{{ domain_name }}"
+        - name: BACKEND_CORS_ORIGINS
+          value: '["https://{{ control_subdomain }}.{{ domain_name }}"]'
+        - name: DOMAIN_NAME
+          value: "{{ domain_name }}"
+        # The share of a unified-memory GPU node's RAM that AI work may use,
+        # leaving the rest to the system. It caps the GPU namespace quota.
+        - name: LLM_UMA_AI_BUDGET_GB
+          value: "96"
+        # Dashboard service URLs - only deployed services
+        - name: SEAWEEDFS_URL
+          value: "https://seaweedfs.{{ domain_name }}"
+        - name: HARBOR_URL
+          value: "https://{{ registry_subdomain }}.{{ domain_name }}"
+        - name: GITEA_URL
+          value: "https://git.{{ domain_name }}"
+        - name: ARGOCD_URL
+          value: "https://argocd.{{ domain_name }}"
+        - name: ARGO_WORKFLOWS_URL
+          value: "https://argo.{{ domain_name }}"
+        # PostgreSQL configuration
+        - name: POSTGRES_HOST
+          value: "postgresql-official.postgres.svc.cluster.local"
+        - name: POSTGRES_PORT
+          value: "5432"
+        - name: POSTGRES_USER
+          value: "{{ admin_username }}"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-official
+              key: postgres-password
+        - name: POSTGRES_DB
+          value: "thinkube_control"
+        # MLflow configuration
+        - name: MLFLOW_TRACKING_URI
+          value: "http://mlflow.mlflow.svc.cluster.local:5000"
+        - name: MLFLOW_KEYCLOAK_TOKEN_URL
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-auth-config
+              key: keycloak-token-url
+        - name: MLFLOW_KEYCLOAK_CLIENT_ID
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-auth-config
+              key: client-id
+        - name: MLFLOW_CLIENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-auth-config
+              key: client-secret
+        - name: MLFLOW_AUTH_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-auth-config
+              key: username
+        - name: MLFLOW_AUTH_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mlflow-auth-config
+              key: password
+        # LLM Gateway configuration
+        - name: LLM_MODEL_REFRESH_INTERVAL_SECONDS
+          value: "60"
+        - name: LLM_BACKEND_PROBE_INTERVAL_SECONDS
+          value: "30"
+        - name: LLM_OLLAMA_URL
+          value: "http://ollama.ollama.svc.cluster.local:11434"
+        - name: LLM_MODEL_LOAD_TIMEOUT_SECONDS
+          # Backstop for a load stuck in `loading`. Must stay ABOVE the wrapper's
+          # own health-wait (VLLM_LOAD_TIMEOUT_SECONDS, default 1800s) so a genuine
+          # crash surfaces via the wrapper (pod NotReady) before this blunt
+          # scale-to-zero fires. Slowest legit DFlash init (weights + compile +
+          # flashinfer autotune + dual graph capture) is ~700s on a cold cache, so
+          # this is generous headroom; the JuiceFS + compile-cache follow-ups shrink it.
+          value: "1920"
+        - name: LLM_GPU_TOTAL_MEMORY_GB
+          value: "128"
+        - name: LLM_GPU_SHARED_MEMORY
+          value: "true"
+        - name: LLM_GPU_MEMORY_THRESHOLD
+          value: "0.85"
+        - name: LLM_GPU_MEMORY_MAP
+          value: '{"NVIDIA-GB10-SHARED": 128}'
+        - name: LLM_MODEL_IDLE_TIMEOUT_MINUTES
+          value: "30"
+        # Notebook server access is read from the running pod via the K8s API.
+        # The Hub itself (start, stop, named servers) takes the service token
+        # JupyterHub's deploy playbook copies into this namespace.
+        - name: JUPYTERHUB_API_URL
+          value: "http://hub.jupyterhub.svc.cluster.local:8081/hub/api"
+        # The platform's one user, who owns the notebook servers.
+        - name: JUPYTERHUB_USERNAME
+          value: "{{ auth_realm_username }}"
+        - name: JUPYTERHUB_SERVICE_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: jupyterhub-service-token
+              key: token
+              optional: true
+        # Services not yet deployed - uncomment when ready
+        # - name: OPENSEARCH_URL
+        #   value: "https://osd.{{ domain_name }}"
+        # - name: QDRANT_URL
+        #   value: "https://qdrantc.{{ domain_name }}"
+        # - name: AWX_URL
+        #   value: "https://awx.{{ domain_name }}"
+        # - name: PGADMIN_URL
+        #   value: "https://pgadm.{{ domain_name }}"
+        # - name: DEVPI_URL
+        #   value: "https://devpi.{{ domain_name }}"
+        # - name: JUPYTERHUB_URL
+        #   value: "https://jupyterhub.{{ domain_name }}"
+        # - name: CODE_SERVER_URL
+        #   value: "https://code-server.{{ domain_name }}"
+        # - name: MKDOCS_URL
+        #   value: "https://docs.{{ domain_name }}"
+        # Ansible configuration
+        - name: ANSIBLE_HOST_KEY_CHECKING
+          value: "False"
+        - name: ANSIBLE_SSH_ARGS
+          value: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+        - name: ANSIBLE_BECOME_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ansible-credentials
+              key: become-password
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: admin-credentials
+              key: admin-password
+        - name: SYSTEM_USERNAME
+          value: "{{ system_username }}"
+        - name: MASTER_NODE_NAME
+          value: "{{ master_node_name }}"
+        - name: MASTER_NODE_IP
+          value: "{{ master_node_ip }}"
+        - name: THINKUBE_BRANCH
+          value: "{{ thinkube_branch }}"
+        - name: THINKUBE_PLATFORM_VERSION
+          value: "{{ platform_version }}"
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: github-token
+              key: token
+        - name: GITHUB_USERNAME
+          value: "{{ github_username }}"
+        - name: HOME
+          value: "/home/thinkube"
+        - name: HARBOR_ROBOT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: harbor-credentials
+              key: harbor-robot-token
+        - name: ARGOCD_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: argocd-credentials
+              key: argocd-password
+        - name: ARGOCD_DEPLOYMENT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: argocd-credentials
+              key: argocd-deployment-secret
+        securityContext:
+          privileged: true
+          runAsUser: 1000
+          runAsGroup: 1000
+        resources:
+          limits:
+            cpu: 500m
+            memory: 2Gi
+          requests:
+            cpu: 100m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 20
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 10
+        # Mount volumes for ansible execution
+        volumeMounts:
+        - name: shared-code
+          mountPath: /home/thinkube
+        - name: container-storage
+          mountPath: /var/lib/containers
+      # Add nodeSelector to ensure pod runs on control plane node
+      nodeSelector:
+        kubernetes.io/hostname: {{ master_node_name }}
+      # Add host aliases so container can resolve control plane node
+      hostAliases:
+      - ip: "{{ master_node_ip }}"
+        hostnames:
+        - "{{ master_node_name }}"
+      # Define volumes
+      volumes:
+      - name: shared-code
+        hostPath:
+          path: /home/{{ system_username }}/shared-code
+          type: Directory
+      - name: container-storage
+        hostPath:
+          path: /var/lib/containers
+          type: DirectoryOrCreate
+      imagePullSecrets:
+      - name: app-pull-secret

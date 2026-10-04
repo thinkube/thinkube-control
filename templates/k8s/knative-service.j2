@@ -1,0 +1,257 @@
+#jinja2: lstrip_blocks: True, trim_blocks: True
+# Generated Knative Service for scale-to-zero workloads
+# Knative handles scaling and lifecycle; DomainMapping provides external routing
+{% set deployment = thinkube_spec.spec.deployment | default({}) %}
+{% set container = thinkube_spec.spec.containers[0] %}
+---
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: {{ project_name }}
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    networking.knative.dev/ingress.class: gateway-api.ingress.networking.knative.dev
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/min-scale: "{{ deployment.minScale | default(0) }}"
+        autoscaling.knative.dev/max-scale: "{{ deployment.maxScale | default(5) }}"
+    spec:
+      containerConcurrency: {{ deployment.containerConcurrency | default(0) }}
+      timeoutSeconds: {{ deployment.timeoutSeconds | default(300) }}
+      imagePullSecrets:
+        - name: app-pull-secret
+      containers:
+        - name: {{ container.name }}
+          image: {{ container_registry }}/thinkube/{{ project_name }}-{{ container.name }}:latest
+          imagePullPolicy: Always
+{% if container.port is defined %}
+          ports:
+            - containerPort: {{ container.port }}
+              protocol: TCP
+{% endif %}
+          {% if deployment_env_from is defined and deployment_env_from | length > 0 %}
+          envFrom:
+            {% for env_source in deployment_env_from %}
+            - {{ env_source | to_yaml | indent(14) }}
+            {% endfor %}
+          {% endif %}
+          env:
+            # Service-based environment variables
+            {% if thinkube_spec.spec.services is defined and 'database' in thinkube_spec.spec.services %}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-db-credentials
+                  key: url
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-db-credentials
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-db-credentials
+                  key: password
+            - name: POSTGRES_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-db-credentials
+                  key: database
+            - name: POSTGRES_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-db-credentials
+                  key: host
+            - name: POSTGRES_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-db-credentials
+                  key: port
+            {% endif %}
+            {% if thinkube_spec.spec.services is defined and 'cache' in thinkube_spec.spec.services %}
+            - name: CACHE_URL
+              value: "redis://valkey-master.valkey.svc.cluster.local:6379"
+            - name: REDIS_URL
+              value: "redis://valkey-master.valkey.svc.cluster.local:6379"
+            {% endif %}
+            {% if thinkube_spec.spec.services is defined and 'queue' in thinkube_spec.spec.services %}
+            - name: QUEUE_URL
+              value: "redis://valkey-master.valkey.svc.cluster.local:6379"
+            {% endif %}
+            # Dependency-injected environment variables
+            {% if thinkube_spec.spec.dependencies is defined %}
+            {% for dep in thinkube_spec.spec.dependencies %}
+            {% if dep.resolved_url is defined %}
+            - name: {{ dep.env }}
+              value: "{{ dep.resolved_url }}"
+            {% endif %}
+            {% endfor %}
+            {% endif %}
+            # User-configurable environment variables
+            {% if thinkube_spec.spec.env is defined %}
+            {% for env_var in thinkube_spec.spec.env %}
+            {% if env_var.default is defined %}
+            - name: {{ env_var.name }}
+              value: "{{ env_var.default }}"
+            {% endif %}
+            {% endfor %}
+            {% endif %}
+            # Manifest parameters (from deploy-time input, e.g. model_id)
+            {% if manifest_params is defined %}
+            {% for param_name, param_value in manifest_params.items() %}
+            - name: {{ param_name | upper }}
+              value: "{{ param_value }}"
+            {% endfor %}
+            {% endif %}
+            # Names the container may show the browser (thinkube.yaml publicEnv).
+            # An allow-list of names only; every container holds the full
+            # environment, secrets included, so an absent list publishes nothing.
+            {% if container.publicEnv is defined %}
+            - name: PUBLIC_ENV_VARS
+              value: "{{ container.publicEnv | join(',') }}"
+            {% endif %}
+            # Platform-wide environment variables
+            - name: APP_NAME
+              value: "{{ project_name }}"
+            - name: APP_TITLE
+              value: "{{ project_name | replace('-', ' ') | title }}"
+            - name: DOMAIN_NAME
+              value: "{{ domain_name }}"
+            - name: CONTAINER_REGISTRY
+              value: "{{ container_registry }}"
+            - name: KEYCLOAK_URL
+              value: "https://auth.{{ domain_name }}"
+            - name: KEYCLOAK_BASE_URL
+              value: "https://auth.{{ domain_name }}"
+            - name: KEYCLOAK_REALM
+              value: "thinkube"
+            - name: KEYCLOAK_CLIENT_ID
+              value: "{{ project_name }}"
+            - name: KEYCLOAK_CLIENT_SECRET
+              value: ""
+            - name: FRONTEND_URL
+              value: "https://{{ project_name }}.{{ domain_name }}"
+            - name: APP_URL
+              value: "https://{{ project_name }}.{{ domain_name }}"
+            - name: API_BASE_URL
+              value: "https://{{ project_name }}.{{ domain_name }}"
+            # MLflow authentication and S3 access credentials
+            - name: MLFLOW_KEYCLOAK_TOKEN_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: keycloak-token-url
+            - name: MLFLOW_KEYCLOAK_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: keycloak-client-id
+            - name: MLFLOW_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: mlflow-client-secret
+            - name: MLFLOW_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: mlflow-username
+            - name: MLFLOW_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: admin-password
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: admin-password
+            - name: SEAWEEDFS_ENDPOINT
+              value: "{{ seaweedfs_endpoint }}"
+            - name: SEAWEEDFS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-storage-credentials
+                  key: access-key
+            - name: SEAWEEDFS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-storage-credentials
+                  key: secret-key
+            # Container-specific environment variables (if defined)
+            {% if container.environment is defined %}
+            {% for env in container.environment %}
+            - name: {{ env.name }}
+              {% if env.value is defined %}
+              value: "{{ env.value }}"
+              {% elif env.valueFrom is defined %}
+              valueFrom:
+                {% if env.valueFrom.secretKeyRef is defined %}
+                secretKeyRef:
+                  name: {{ env.valueFrom.secretKeyRef.name }}
+                  key: {{ env.valueFrom.secretKeyRef.key }}
+                {% elif env.valueFrom.configMapKeyRef is defined %}
+                configMapKeyRef:
+                  name: {{ env.valueFrom.configMapKeyRef.name }}
+                  key: {{ env.valueFrom.configMapKeyRef.key }}
+                {% endif %}
+              {% endif %}
+            {% endfor %}
+            {% endif %}
+{% if container.size is defined %}
+          resources:
+            {% if container.size == 'small' %}
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+            {% elif container.size == 'medium' %}
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
+            {% elif container.size == 'large' %}
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "2000m"
+            {% elif container.size == 'xlarge' %}
+            requests:
+              memory: "4Gi"
+              cpu: "1000m"
+            limits:
+              memory: "16Gi"
+              cpu: "4000m"
+            {% else %}
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+            {% endif %}
+{% endif %}
+{% if container.health is defined %}
+          readinessProbe:
+            httpGet:
+              path: {{ container.health }}
+              port: {{ container.port | default(8080) }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+{% endif %}
+  traffic:
+    - latestRevision: true
+      percent: 100

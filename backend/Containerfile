@@ -1,0 +1,43 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# Use optimized base image with common dependencies from library
+# Cache bust: 2025-11-30 - force pull new base image with thinkube user
+ARG REGISTRY
+FROM ${REGISTRY}/library/python-base:3.12-slim
+
+WORKDIR /app
+
+# All dependencies pre-installed in base image (python-base:3.12-slim)
+# Including: Python packages, system tools (git, ssh, debugging tools)
+# Including: hera-workflows, kubernetes, kubernetes-asyncio
+# See: thinkube/ansible/.../base-images/python-base.Containerfile.j2
+
+# Install additional dependencies not in the base image
+COPY backend/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# Copy and install fastapi-mcp-extended package
+COPY backend/fastapi-mcp-extended /app/fastapi-mcp-extended
+RUN pip install --no-cache-dir /app/fastapi-mcp-extended
+
+# Copy application code
+COPY backend/app /app/app
+COPY backend/start.sh /app/start.sh
+
+# Copy template files and Python manifest generators
+COPY templates /app/templates
+
+# Make startup script executable
+RUN chmod +x /app/start.sh
+
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Expose FastAPI port
+EXPOSE 8000
+
+# Command to run the server via startup script
+CMD ["/app/start.sh"]

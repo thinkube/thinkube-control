@@ -1,0 +1,347 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# Build workflow for thinkube-control
+# Triggered by Gitea webhooks. It builds the backend, frontend and LLM proxy
+# images and pushes them to Harbor. The LLM proxy's Go unit tests run inside
+# its image build (proxy/Containerfile); the backend tests run with
+# backend/run_tests.sh.
+#
+# Build tool: Buildah (library/buildah, mirrored from quay.io/buildah/stable),
+# in a pod that is not privileged. Beyond a default pod it needs:
+#   - runAsUser 0, capability SYS_ADMIN and AppArmor Unconfined: Buildah
+#     unpacks each layer in its own mount namespace. Without them unpacking
+#     fails with "remount /, flags: 0x44000: permission denied".
+#   - --isolation chroot: RUN steps run without a nested OCI runtime, which
+#     this pod cannot provide.
+#   - --ulimit nofile=524288:524288: Buildah raises RLIMIT_NOFILE for RUN
+#     steps, and a RUN step fails when that is above the pod's hard limit.
+# Cache: the layer cache lives in Harbor, in <image>/cache.
+#
+# Multi-arch support: When build_architectures has multiple entries, builds run on
+# per-arch nodes using git-clone init containers and creates manifest lists.
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: {{ project_name }}-build
+  namespace: argo
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/part-of: thinkube
+    app.kubernetes.io/component: ci-cd
+    thinkube.io/trigger: webhook
+    thinkube.io/build-type: container
+    # Critical for webhook adapter to identify the app
+    thinkube.io/app-name: {{ project_name }}
+    thinkube.io/namespace: {{ namespace }}
+spec:
+  entrypoint: build-and-push
+  serviceAccountName: image-builder
+  arguments:
+    parameters:
+    - name: webhook-timestamp
+      value: ""  # Will be set by Argo Events sensor
+
+  # Use artifact repository for build artifacts
+  artifactRepositoryRef:
+    configMap: artifact-repositories
+    key: default-v1
+
+  # Volumes
+  volumes:
+  - name: docker-config
+    secret:
+      secretName: docker-config
+  - name: shared-code
+    hostPath:
+      path: /home/{{ system_username }}/shared-code/{{ project_name }}
+      type: Directory
+  - name: workspace
+    emptyDir: {}
+  # Buildah's image store for one build; it goes with the pod.
+  - name: buildah-storage
+    emptyDir: {}
+
+  templates:
+  - name: build-and-push
+    dag:
+      tasks:
+{% if build_architectures is defined and build_architectures | length > 1 %}
+      # Multi-arch: per-arch builds then manifest creation
+{% for arch in build_architectures %}
+      - name: build-backend-{{ arch }}
+        template: build-on-arch
+        arguments:
+          parameters:
+          - name: image-tag
+            value: "{% raw %}{{workflow.uid}}{% endraw %}"
+          - name: target-arch
+            value: "{{ arch }}"
+          - name: component
+            value: "backend"
+          - name: dockerfile
+            value: "backend/Containerfile"
+          - name: context
+            value: "."
+
+      - name: build-frontend-{{ arch }}
+        template: build-on-arch
+        arguments:
+          parameters:
+          - name: image-tag
+            value: "{% raw %}{{workflow.uid}}{% endraw %}"
+          - name: target-arch
+            value: "{{ arch }}"
+          - name: component
+            value: "frontend"
+          - name: dockerfile
+            value: "frontend/Containerfile"
+          - name: context
+            value: "frontend"
+
+      - name: build-llm-proxy-{{ arch }}
+        template: build-on-arch
+        arguments:
+          parameters:
+          - name: image-tag
+            value: "{% raw %}{{workflow.uid}}{% endraw %}"
+          - name: target-arch
+            value: "{{ arch }}"
+          - name: component
+            value: "llm-proxy"
+          - name: dockerfile
+            value: "proxy/Containerfile"
+          - name: context
+            value: "proxy"
+{% endfor %}
+
+      - name: manifest-backend
+        dependencies:
+{% for arch in build_architectures %}
+          - build-backend-{{ arch }}
+{% endfor %}
+        template: create-manifest
+        arguments:
+          parameters:
+          - name: image-tag
+            value: "{% raw %}{{workflow.uid}}{% endraw %}"
+          - name: component
+            value: "backend"
+
+      - name: manifest-frontend
+        dependencies:
+{% for arch in build_architectures %}
+          - build-frontend-{{ arch }}
+{% endfor %}
+        template: create-manifest
+        arguments:
+          parameters:
+          - name: image-tag
+            value: "{% raw %}{{workflow.uid}}{% endraw %}"
+          - name: component
+            value: "frontend"
+
+      - name: manifest-llm-proxy
+        dependencies:
+{% for arch in build_architectures %}
+          - build-llm-proxy-{{ arch }}
+{% endfor %}
+        template: create-manifest
+        arguments:
+          parameters:
+          - name: image-tag
+            value: "{% raw %}{{workflow.uid}}{% endraw %}"
+          - name: component
+            value: "llm-proxy"
+{% else %}
+      # Single-arch builds on control plane
+{% for component, dockerfile, context in [("backend", "backend/Containerfile", "."), ("frontend", "frontend/Containerfile", "frontend"), ("llm-proxy", "proxy/Containerfile", "proxy")] %}
+      - name: build-{{ component }}
+        template: build
+        arguments:
+          parameters:
+          - name: image-tag
+            value: "{% raw %}{{workflow.uid}}{% endraw %}"
+          - name: component
+            value: "{{ component }}"
+          - name: dockerfile
+            value: "{{ dockerfile }}"
+          - name: context
+            value: "{{ context }}"
+{% endfor %}
+{% endif %}
+
+  # Single-arch build on the control plane, from the shared checkout
+  - name: build
+    nodeSelector:
+      kubernetes.io/hostname: {{ master_node_name }}
+    inputs:
+      parameters:
+      - name: image-tag
+      - name: component
+      - name: dockerfile
+      - name: context
+    container:
+      image: {{ container_registry }}/library/buildah:v1.43.4
+      command: ["/bin/bash", "-c"]
+      securityContext:
+        runAsUser: 0
+        capabilities:
+          add: ["SYS_ADMIN"]
+        appArmorProfile:
+          type: Unconfined
+      env:
+        - name: REGISTRY_AUTH_FILE
+          value: /registry-auth/config.json
+      args:
+        - |
+          set -e
+          # A node on Wi-Fi can lose DNS for seconds at a time; wait for the name
+          # before the first lookup that would fail the build.
+          for try in $(seq 1 30); do
+            getent hosts {{ container_registry }} >/dev/null && break
+            [ "$try" = 30 ] && { echo "{{ container_registry }} does not resolve after 60s"; exit 1; }
+            sleep 2
+          done
+          IMAGE="{{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-{% raw %}{{inputs.parameters.component}}{% endraw %}"
+          TAG="{% raw %}{{inputs.parameters.image-tag}}{% endraw %}"
+          buildah build \
+            --isolation chroot --storage-driver overlay \
+            --ulimit nofile=524288:524288 \
+            --layers --cache-from "${IMAGE}/cache" --cache-to "${IMAGE}/cache" \
+            --build-arg REGISTRY={{ container_registry }} \
+            -f "/workspace/{% raw %}{{inputs.parameters.dockerfile}}{% endraw %}" -t "${IMAGE}:${TAG}" \
+            "/workspace/{% raw %}{{inputs.parameters.context}}{% endraw %}"
+          buildah push --storage-driver overlay --retry 3 "${IMAGE}:${TAG}"
+      volumeMounts:
+      - name: docker-config
+        mountPath: /registry-auth
+      - name: shared-code
+        mountPath: /workspace
+      - name: buildah-storage
+        mountPath: /var/lib/containers
+      resources:
+        requests:
+          memory: "2Gi"
+          cpu: "250m"
+        limits:
+          memory: "4Gi"
+          cpu: "2"
+
+{% if build_architectures is defined and build_architectures | length > 1 %}
+  # Per-arch build with git-clone init container
+  - name: build-on-arch
+    nodeSelector:
+      kubernetes.io/arch: "{% raw %}{{inputs.parameters.target-arch}}{% endraw %}"
+    inputs:
+      parameters:
+      - name: image-tag
+      - name: target-arch
+      - name: component
+      - name: dockerfile
+      - name: context
+    initContainers:
+      - name: git-clone
+        image: {{ container_registry }}/library/ci-utils:latest
+        command: ["/bin/sh", "-c"]
+        env:
+          - name: GITEA_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: gitea-admin-token
+                key: token
+        args:
+          - |
+            # A node on Wi-Fi can lose DNS for seconds at a time; wait for the name
+            # before the first lookup that would fail the build.
+            for try in $(seq 1 30); do
+              getent hosts git.{{ domain_name }} >/dev/null && break
+              [ "$try" = 30 ] && { echo "git.{{ domain_name }} does not resolve after 60s"; exit 1; }
+              sleep 2
+            done
+            git clone --depth 1 "https://gitea_admin:${GITEA_TOKEN}@git.{{ domain_name }}/{{ gitea_org | default('thinkube-deployments') }}/{{ project_name }}.git" /workspace
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+    container:
+      image: {{ container_registry }}/library/buildah:v1.43.4
+      command: ["/bin/bash", "-c"]
+      securityContext:
+        runAsUser: 0
+        capabilities:
+          add: ["SYS_ADMIN"]
+        appArmorProfile:
+          type: Unconfined
+      env:
+        - name: REGISTRY_AUTH_FILE
+          value: /registry-auth/config.json
+      args:
+        - |
+          set -e
+          # A node on Wi-Fi can lose DNS for seconds at a time; wait for the name
+          # before the first lookup that would fail the build.
+          for try in $(seq 1 30); do
+            getent hosts {{ container_registry }} >/dev/null && break
+            [ "$try" = 30 ] && { echo "{{ container_registry }} does not resolve after 60s"; exit 1; }
+            sleep 2
+          done
+          IMAGE="{{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-{% raw %}{{inputs.parameters.component}}{% endraw %}"
+          TAG="{% raw %}{{inputs.parameters.image-tag}}-{{inputs.parameters.target-arch}}{% endraw %}"
+          buildah build \
+            --isolation chroot --storage-driver overlay \
+            --ulimit nofile=524288:524288 \
+            --layers --cache-from "${IMAGE}/cache" --cache-to "${IMAGE}/cache" \
+            --platform "linux/{% raw %}{{inputs.parameters.target-arch}}{% endraw %}" \
+            --build-arg REGISTRY={{ container_registry }} \
+            -f "/workspace/{% raw %}{{inputs.parameters.dockerfile}}{% endraw %}" -t "${IMAGE}:${TAG}" \
+            "/workspace/{% raw %}{{inputs.parameters.context}}{% endraw %}"
+          buildah push --storage-driver overlay --retry 3 "${IMAGE}:${TAG}"
+      volumeMounts:
+      - name: docker-config
+        mountPath: /registry-auth
+      - name: workspace
+        mountPath: /workspace
+      - name: buildah-storage
+        mountPath: /var/lib/containers
+      resources:
+        requests:
+          memory: "2Gi"
+          cpu: "1"
+        limits:
+          memory: "4Gi"
+          cpu: "2"
+
+  # Create multi-arch manifest from per-arch images using crane
+  - name: create-manifest
+    inputs:
+      parameters:
+      - name: image-tag
+      - name: component
+    container:
+      image: {{ container_registry }}/library/ci-utils:latest
+      command: ["/bin/sh", "-c"]
+      env:
+        - name: DOCKER_CONFIG
+          value: /registry-auth
+      args:
+        - |
+          set -e
+          # A node on Wi-Fi can lose DNS for seconds at a time; wait for the name
+          # before the first lookup that would fail the build.
+          for try in $(seq 1 30); do
+            getent hosts {{ container_registry }} >/dev/null && break
+            [ "$try" = 30 ] && { echo "{{ container_registry }} does not resolve after 60s"; exit 1; }
+            sleep 2
+          done
+          IMAGE="{{ registry_subdomain }}.{{ domain_name }}/thinkube/thinkube-control-{% raw %}{{inputs.parameters.component}}{% endraw %}"
+          TAG="{% raw %}{{inputs.parameters.image-tag}}{% endraw %}"
+
+          echo "Creating multi-arch manifest for ${IMAGE}:${TAG}"
+          crane index append --tag "${IMAGE}:${TAG}"{% for arch in build_architectures %} --manifest "${IMAGE}:${TAG}-{{ arch }}"{% endfor %}
+
+          crane tag "${IMAGE}:${TAG}" latest
+          echo "Multi-arch manifest pushed"
+      volumeMounts:
+      - name: docker-config
+        mountPath: /registry-auth
+{% endif %}

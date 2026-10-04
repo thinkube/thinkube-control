@@ -1,0 +1,1053 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Template deployment API endpoints
+Handles downloading and executing templates from GitHub
+"""
+
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Query, Request
+from pydantic import BaseModel, HttpUrl
+from typing import Optional, Dict, Any, List, Tuple
+from uuid import UUID, uuid4
+import time
+import tempfile
+import shutil
+from pathlib import Path
+import asyncio
+import logging
+import os
+import sys
+
+from sqlalchemy.orm import Session
+from sqlalchemy import desc, and_
+
+from app.core.api_tokens import get_current_user_dual_auth
+from app.core.config import settings
+from app.utils.copier_generator import CopierGenerator
+from app.db.session import get_db
+from app.models.deployments import TemplateDeployment, DeploymentLog
+from app.models.deployment_schemas import (
+    TemplateDeployAsyncRequest,
+    DeploymentResponse,
+    DeploymentStatus,
+    DeploymentLogsResponse,
+    DeploymentLogEntry,
+    DeploymentListResponse,
+)
+from pathlib import Path
+from app.services.background_executor import background_executor
+from app.services.dependency_manager import DependencyManager
+from app.services.model_downloader import ModelDownloaderService
+from app.services.metadata_fetcher import CatalogUnavailableError, fetch_merged_catalog
+from typing import List as TypingList
+import yaml
+import aiohttp
+
+logger = logging.getLogger(__name__)
+router = APIRouter(tags=["templates"])
+
+# Where a deploy's checkout lives, as scripts/deploy_application.py places it.
+APPS_DIR = "/home/thinkube/apps"
+COMPONENTS_DIR = "/home/thinkube/components"
+
+
+class TemplateParameter(BaseModel):
+    """Template parameter definition"""
+
+    name: str
+    type: str  # str, bool, int, choice
+    description: str
+    default: Optional[Any] = None
+    required: Optional[bool] = True
+    # Type-specific fields
+    choices: Optional[list[str]] = None  # For choice type
+    pattern: Optional[str] = None  # For str type
+    min: Optional[int] = None  # For int type
+    max: Optional[int] = None  # For int type
+    minLength: Optional[int] = None  # For str type
+    maxLength: Optional[int] = None  # For str type
+    placeholder: Optional[str] = None
+    group: Optional[str] = None
+    order: Optional[int] = None
+    # Dynamic choice fields
+    dynamic_source: Optional[str] = None  # e.g., "model_catalog"
+    filter: Optional[Dict[str, Any]] = None  # Filter criteria for dynamic choices
+
+
+class TemplateSecret(BaseModel):
+    """A secret the template's application reads from the Secrets store.
+
+    The name is the variable the containers receive. Names are validated by
+    scripts/app_secrets.py, which both deploy paths also use.
+    """
+
+    name: str
+    description: str = ""
+    required: bool = True
+
+
+class TemplateMetadata(BaseModel):
+    """Template metadata from manifest.yaml"""
+
+    apiVersion: str
+    kind: str
+    metadata: Dict[str, Any]
+    parameters: list[TemplateParameter]
+    secrets: list[TemplateSecret] = []
+
+
+def catalog_template(template_url: str) -> Optional[dict]:
+    """The template catalog's entry for a template address, or None when the catalog does not list it."""
+    wanted = template_url.rstrip("/")
+    repositories = fetch_merged_catalog(
+        catalog_name="repositories",
+        file_name="repositories.json",
+        extract_key="repositories",
+        merge_strategy="list",
+        dedup_key="name",
+    )
+    return next((r for r in repositories if r.get("github_url", "").rstrip("/") == wanted), None)
+
+
+def deployment_type(template_url: str) -> str:
+    """component when the template catalog lists the template as one, otherwise user_app."""
+    entry = catalog_template(template_url)
+    return "component" if entry and entry.get("deployment_type") == "component" else "user_app"
+
+
+# Template release tags, keyed by template URL, with the time they were read:
+# (time, tag, None) for a released template, (time, None, reason) for one with
+# no release tag a deploy can use.
+_template_versions: Dict[str, Tuple[float, Optional[str], Optional[str]]] = {}
+_TEMPLATE_VERSION_TTL = 300
+
+
+async def _template_release(template_url: str) -> Tuple[Optional[str], Optional[str]]:
+    """The release tag a deploy of the template uses (scripts/template_version.py),
+    as (tag, None), or (None, reason) while the template has no such tag."""
+    sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
+    from template_version import TemplateNotReleased, latest_release_tag
+
+    cached = _template_versions.get(template_url)
+    if cached and time.monotonic() - cached[0] < _TEMPLATE_VERSION_TTL:
+        return cached[1], cached[2]
+    try:
+        version, reason = await asyncio.to_thread(latest_release_tag, template_url), None
+    except TemplateNotReleased as e:
+        version, reason = None, str(e)
+    _template_versions[template_url] = (time.monotonic(), version, reason)
+    return version, reason
+
+
+async def _template_version(template_url: str) -> Optional[str]:
+    """The release tag a deploy of the template uses, or None while it has none."""
+    version, _ = await _template_release(template_url)
+    return version
+
+
+@router.get("/list", operation_id="list_templates")
+async def list_available_templates(
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """
+    List available templates from repositories.json metadata
+
+    Dynamically discovers application templates from the thinkube-metadata repository.
+    """
+    try:
+        # Fetch repositories from platform + user metadata repos (merged, cached)
+        repositories = fetch_merged_catalog(
+            catalog_name="repositories",
+            file_name="repositories.json",
+            extract_key="repositories",
+
+            merge_strategy="list",
+            dedup_key="name",
+        )
+
+        # Filter for application_template type
+        templates = []
+        for repo in repositories:
+            if repo.get("type") == "application_template":
+                # Components are installed from the Optional Components menu,
+                # so they do not belong in the templates listing.
+                if repo.get("deployment_type") == "component":
+                    continue
+
+                entry = {
+                    "name": repo["name"],
+                    "description": repo.get("description", ""),
+                    "url": repo.get("github_url", ""),
+                    "org": repo.get("org", "thinkube"),
+                    "deployment_type": repo.get("deployment_type", "app"),
+                    "source": repo.get("_source", "platform"),
+                }
+                if repo.get("fixed_name"):
+                    entry["fixed_name"] = repo["fixed_name"]
+                templates.append(entry)
+
+        versions = await asyncio.gather(*(_template_version(t["url"]) for t in templates))
+        for template, version in zip(templates, versions):
+            template["version"] = version
+
+        logger.info(f"Discovered {len(templates)} application templates")
+        return {"templates": templates}
+
+    except CatalogUnavailableError:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing templates: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list templates: {str(e)}"
+        )
+
+
+@router.get(
+    "/metadata", response_model=TemplateMetadata, operation_id="get_template_metadata"
+)
+async def get_template_metadata(
+    template_url: str, current_user: dict = Depends(get_current_user_dual_auth)
+):
+    """
+    Fetch template metadata from manifest.yaml
+
+    Downloads manifest.yaml from the GitHub repository and parses it
+    to extract parameter definitions for dynamic form generation.
+    """
+    try:
+        # Extract org and repo from URL
+        url_parts = template_url.rstrip("/").split("/")
+        if len(url_parts) < 2:
+            raise HTTPException(status_code=400, detail="Invalid GitHub URL format")
+
+        org = url_parts[-2]
+        repo = url_parts[-1]
+
+        # Every template carries manifest.yaml at its root. It is read at the
+        # release a deploy generates from, so the form matches what is deployed.
+        release, not_released = await _template_release(template_url)
+        if release is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{not_released} Until then it cannot be deployed.",
+            )
+        manifest_url = f"https://raw.githubusercontent.com/{org}/{repo}/{release}/manifest.yaml"
+
+        # The GitHub token grants access to every repository the user can
+        # reach, in any organization, and public repositories accept it too.
+        github_token = os.environ.get("GITHUB_TOKEN")
+        if not github_token:
+            raise HTTPException(status_code=500, detail="GITHUB_TOKEN is not set in thinkube-control.")
+        headers = {"Authorization": f"token {github_token}"}
+
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get(manifest_url) as response:
+                if response.status != 200:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Template has no manifest.yaml at release {release} ({manifest_url}: HTTP {response.status}).",
+                    )
+                content = await response.text()
+
+        # Parse manifest.yaml
+        try:
+            template_data = yaml.safe_load(content)
+        except yaml.YAMLError as e:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid YAML in manifest.yaml: {str(e)}"
+            )
+
+        # Validate and extract metadata
+        if not template_data or template_data.get("apiVersion") != "thinkube.io/v1":
+            # Not a valid Thinkube template
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid manifest.yaml: must have apiVersion: thinkube.io/v1",
+            )
+
+        # Convert parameters to Pydantic models
+        parameters = []
+        for param_data in template_data.get("parameters", []):
+            # Handle dynamic choices from model catalog
+            dynamic_source = param_data.get("dynamic_source")
+            filter_criteria = param_data.get("filter", {})
+            choices = param_data.get("choices")
+
+            if dynamic_source == "model_catalog":
+                # Fetch models from catalog and apply filters
+                try:
+                    model_service = ModelDownloaderService()
+                    available_models = model_service.get_available_models()
+                    downloaded_models = model_service.check_all_models_exist()
+
+                    # Apply filters
+                    filtered_models = []
+                    for model in available_models:
+                        # Check server_type filter
+                        if "server_type" in filter_criteria:
+                            required_type = filter_criteria["server_type"]
+                            if required_type not in model.get("server_type", []):
+                                continue
+
+                        # Check is_downloaded filter
+                        if filter_criteria.get("is_downloaded", False):
+                            if not downloaded_models.get(model["id"], False):
+                                continue
+
+                        filtered_models.append(model["id"])
+
+                    # Use filtered models as choices
+                    choices = filtered_models
+                    logger.info(f"Dynamic choices for {param_data['name']}: {len(choices)} models")
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Cannot list models for parameter '{param_data['name']}' from the model catalog: {e}",
+                    ) from e
+
+            param = TemplateParameter(
+                name=param_data["name"],
+                type=param_data["type"],
+                description=param_data.get("description", ""),
+                default=param_data.get("default"),
+                required=param_data.get("required", True),
+                choices=choices,
+                pattern=param_data.get("pattern"),
+                min=param_data.get("min"),
+                max=param_data.get("max"),
+                minLength=param_data.get("minLength"),
+                maxLength=param_data.get("maxLength"),
+                placeholder=param_data.get("placeholder"),
+                group=param_data.get("group"),
+                order=param_data.get("order"),
+                dynamic_source=dynamic_source,
+                filter=filter_criteria,
+            )
+            parameters.append(param)
+
+        sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
+        from app_secrets import SecretsRefused, declared_secrets
+
+        try:
+            secrets = [
+                TemplateSecret(name=s.name, description=s.description, required=s.required)
+                for s in declared_secrets(template_data)
+            ]
+        except SecretsRefused as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        return TemplateMetadata(
+            apiVersion=template_data["apiVersion"],
+            kind=template_data["kind"],
+            metadata=template_data.get("metadata", {}),
+            parameters=parameters,
+            secrets=secrets,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch template metadata: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to fetch template metadata: {str(e)}"
+        )
+
+
+@router.post(
+    "/deploy-async", response_model=DeploymentResponse, operation_id="deploy_template"
+)
+async def deploy_template_async(
+    request: TemplateDeployAsyncRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """
+    Create an application from a template: the first deploy of a new app.
+
+    Queues the deploy and answers at once with a deployment ID; get_deployment_status and
+    get_deployment_logs follow it. The deploy copies the template into the checkout
+    /home/thinkube/apps/<name> (components: /home/thinkube/components/<name>), generates
+    k8s/ from thinkube.yaml, creates the app's database if it needs one, creates the Gitea
+    repository thinkube-deployments/<name>, pushes to it, and waits for the build.
+
+    Do NOT use this to ship code changes to an app that exists. For code, commit and push
+    to the app's Gitea repository: the push is the deploy (it builds, tests and rolls
+    out). get_commit_rollout says when a pushed commit is live. A name that belongs to an
+    existing app answers status "conflict"; see redeploy_template for what a redeploy
+    replaces.
+
+    Optional components that are templates (vllm, tensorrt, text-embeddings) are refused
+    here: install_optional_component installs them.
+    """
+    return await _queue_template_deploy(request, db, current_user, first_deploy=True)
+
+
+async def _queue_template_deploy(
+    request: TemplateDeployAsyncRequest,
+    db: Session,
+    current_user: dict,
+    first_deploy: bool,
+) -> DeploymentResponse:
+    """Queue a template deploy. A first deploy of a component template is refused."""
+    try:
+        # Extract org and repo from URL
+        url_parts = str(request.template_url).rstrip("/").split("/")
+        if len(url_parts) < 2:
+            raise ValueError("Invalid GitHub URL format")
+
+        # Extract overwrite flag from variables
+        overwrite_confirmed = request.variables.pop("_overwrite_confirmed", False)
+        # A component's commits pushed after its last template deploy are replaced only when confirmed.
+        replace_developer_commits = request.variables.pop("_replace_developer_commits", False) is True
+
+        # Determine if this is a component deployment
+        template_repo = catalog_template(str(request.template_url))
+        is_component = bool(template_repo) and template_repo.get("deployment_type") == "component"
+        service_type = "component" if is_component else "user_app"
+
+        # A component is installed from Optional Components, which records its
+        # deployment itself; this endpoint only renders an installed one again.
+        if is_component and first_deploy:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{template_repo.get('name')} is the optional component "
+                    f"'{template_repo.get('fixed_name')}', not an application template. "
+                    "Install it from Optional Components."
+                ),
+            )
+
+        if is_component:
+            expected_name = template_repo.get("fixed_name")
+            if expected_name and request.template_name != expected_name:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Component must use the fixed name '{expected_name}'",
+                )
+
+        # Check for service name conflicts
+        dep_manager = DependencyManager(db)
+        is_valid, conflict_message = dep_manager.validate_service_name(
+            request.template_name, service_type
+        )
+
+        # If there's a hard conflict (name used by a different service type), reject
+        if not is_valid:
+            raise HTTPException(
+                status_code=400,
+                detail=conflict_message
+                or f"Service name '{request.template_name}' is not available",
+            )
+
+        # What the deploy replaces in the checkout the developer works in; nothing when there is none.
+        sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
+        from checkout_state import replacement_warning
+        from component_checkout import checkout_path
+
+        checkout = checkout_path(APPS_DIR, COMPONENTS_DIR, request.template_name, service_type)
+        replaced = replacement_warning(checkout, Path(checkout, ".git").exists())
+
+        # Components auto-confirm overwrites; user apps need explicit confirmation
+        if conflict_message and not is_component and not overwrite_confirmed:
+            return DeploymentResponse(
+                deployment_id="",
+                status="conflict",
+                message=f"{conflict_message}. {replaced}" if replaced else f"{conflict_message}.",
+                requires_confirmation=True,
+                websocket_url="",
+            )
+
+        # Extract domain for use in defaults
+        domain_name = settings.DOMAIN_NAME
+
+        # Prepare variables with smart defaults
+        deployment_vars = {
+            "template_url": str(request.template_url),
+            "app_name": request.template_name,
+            "deployment_namespace": request.template_name,  # Same as app_name - no prefixes
+            **request.variables,
+            # Add system variables
+            "domain_name": domain_name,
+            # NOTE: github_token is intentionally NOT stored here. It is injected
+            # at execution time by ansible_env.prepare_auth_vars() so the secret
+            # never persists in the deployment record (and never leaks back out
+            # through list_deployments / get_deployment_status responses).
+            "overwrite_existing": overwrite_confirmed,  # Pass to deployment
+            # Where the checkout lives and what the deploy checks before replacing it.
+            "deployment_type": service_type,
+            "replace_developer_commits": replace_developer_commits,
+        }
+
+        # Provide sensible defaults for standard parameters from CopierGenerator
+        # These are the same standard parameters that CopierGenerator always includes
+        standard_defaults = {
+            "project_name": request.template_name,
+            "project_description": deployment_vars.get(
+                "app_description", f"A Thinkube application: {request.template_name}"
+            ),
+            "author_name": current_user.get("preferred_username", "thinkube-user"),
+            "author_email": current_user.get("email")
+            or f"{current_user.get('preferred_username', 'thinkube-user')}@{domain_name}",
+        }
+
+        # Apply standard defaults only if not already provided
+        for key, default_value in standard_defaults.items():
+            if key not in deployment_vars:
+                deployment_vars[key] = default_value
+
+        # Note: Template-specific parameters should have defaults in manifest.yaml
+        # If they don't have defaults and aren't provided, the template author
+        # intended them to be required, so we let copier handle the validation
+
+        # Create deployment record
+        deployment = TemplateDeployment(
+            id=uuid4(),
+            name=request.template_name,
+            template_url=str(request.template_url),
+            status="pending",
+            variables=deployment_vars,
+            created_by=current_user.get("preferred_username") or "unknown",
+        )
+        # The deploy waits in the run queue and runs on the server, detached
+        # from this call. The status endpoint reports its place and progress;
+        # the deployment websocket follows its steps as they are recorded.
+        from app.services.run_queue import DuplicateRun, enqueue
+
+        try:
+            queue_position = enqueue(db, deployment)
+        except DuplicateRun as duplicate:
+            raise HTTPException(status_code=409, detail=str(duplicate))
+
+        return DeploymentResponse(
+            deployment_id=str(deployment.id),
+            status="queued",
+            message=f"Deployment queued at position {queue_position}. Check the status endpoint for progress.",
+            queue_position=queue_position,
+            websocket_url=f"/ws/deployment/{deployment.id}",
+            conflict_warning=replaced,
+        )
+
+    except HTTPException:
+        raise
+    except CatalogUnavailableError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create deployment: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create deployment: {str(e)}"
+        )
+
+
+@router.post(
+    "/redeploy-async",
+    response_model=DeploymentResponse,
+    operation_id="redeploy_template",
+)
+async def redeploy_template_async(
+    request: TemplateDeployAsyncRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """
+    Render an existing app again from its template. Not the way to ship code changes.
+
+    What it does, in order, in the checkout /home/thinkube/apps/<name> the IDE edits
+    (components: /home/thinkube/components/<name>):
+    1. Resets the checkout to Gitea's main with git reset --hard. Uncommitted changes and
+       unpushed commits there would be destroyed, so the redeploy refuses and names them
+       when the checkout has any.
+    2. Copies the template over the checkout with copier copy --force.
+    3. Regenerates k8s/ from thinkube.yaml.
+    4. Creates the app's database if it is missing; an existing database is kept.
+    5. Commits and pushes the result to Gitea, and waits for the build.
+
+    Use it after changing thinkube.yaml, or to render the app again from its template, and
+    only on a checkout that is clean and fully pushed.
+
+    Do NOT use it to ship code changes. For code, commit and push to the app's Gitea
+    repository (git pull --rebase first: every build commits the new image tag): the push
+    is the deploy, it builds, tests and rolls out the app. get_commit_rollout says whether a
+    pushed commit is live.
+    """
+    request.variables["_overwrite_confirmed"] = True
+    return await _queue_template_deploy(request, db, current_user, first_deploy=False)
+
+
+@router.get(
+    "/deployments",
+    response_model=DeploymentListResponse,
+    operation_id="list_deployments",
+)
+async def list_deployments(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """
+    List template deployments with pagination
+
+    Optionally filter by status: pending, running, success, failed, cancelled
+    """
+    query = db.query(TemplateDeployment)
+
+    # Filter by status if provided
+    if status:
+        query = query.filter(TemplateDeployment.status == status)
+
+    # Filter by user if not admin
+    # Check if user has admin role
+    is_admin = "admin" in current_user.get("realm_access", {}).get("roles", [])
+    if not is_admin:
+        query = query.filter(
+            TemplateDeployment.created_by == current_user.get("preferred_username")
+        )
+
+    # Get total count
+    total_count = query.count()
+
+    # Apply pagination
+    offset = (page - 1) * page_size
+    deployments = (
+        query.order_by(desc(TemplateDeployment.created_at))
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+
+    return DeploymentListResponse(
+        deployments=[DeploymentStatus.model_validate(d.to_dict()) for d in deployments],
+        total_count=total_count,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get(
+    "/deployments/{deployment_id}",
+    response_model=DeploymentStatus,
+    operation_id="get_deployment_status",
+)
+async def get_deployment_status(
+    deployment_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """Get deployment status by ID"""
+    deployment = db.query(TemplateDeployment).filter_by(id=deployment_id).first()
+
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+
+    # Check permissions
+    is_admin = "admin" in current_user.get("realm_access", {}).get("roles", [])
+    if not is_admin and deployment.created_by != current_user.get("preferred_username"):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    status = deployment.to_dict()
+    # Progress from the run's own log rows: the step it is on, and how many
+    # it has passed. A playbook run logs a row per task; a deploy script logs
+    # a row per phase.
+    steps = (
+        db.query(DeploymentLog)
+        .filter(DeploymentLog.deployment_id == deployment.id, DeploymentLog.type.in_(["task", "phase"]))
+        .order_by(DeploymentLog.timestamp.desc())
+        .limit(1)
+        .all()
+    )
+    status["steps_done"] = (
+        db.query(DeploymentLog)
+        .filter(DeploymentLog.deployment_id == deployment.id, DeploymentLog.type.in_(["task", "phase"]))
+        .count()
+    )
+    status["current_step"] = (steps[0].task_name or steps[0].message) if steps else None
+    if deployment.status == "queued":
+        from app.services.run_queue import position
+
+        status["queue_position"] = position(db, deployment)
+    if deployment.status in ("failed", "cancelled"):
+        last_error = (
+            db.query(DeploymentLog)
+            .filter(DeploymentLog.deployment_id == deployment.id, DeploymentLog.type.in_(["failed", "error"]))
+            .order_by(DeploymentLog.timestamp.desc())
+            .first()
+        )
+        if last_error is not None:
+            status["reason"] = last_error.message
+    return DeploymentStatus.model_validate(status)
+
+
+@router.get(
+    "/deployments/{deployment_id}/logs",
+    response_model=DeploymentLogsResponse,
+    operation_id="get_deployment_logs",
+)
+async def get_deployment_logs(
+    deployment_id: UUID,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """
+    Get deployment logs with pagination
+
+    Returns logs in chronological order with offset/limit pagination.
+    """
+    # Check deployment exists and permissions
+    deployment = db.query(TemplateDeployment).filter_by(id=deployment_id).first()
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+
+    # Check permissions - admin or creator can view logs
+    is_admin = "admin" in current_user.get("realm_access", {}).get("roles", [])
+    if not is_admin and deployment.created_by != current_user.get("preferred_username"):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Get logs
+    query = db.query(DeploymentLog).filter_by(deployment_id=deployment_id)
+    total_count = query.count()
+
+    logs = query.order_by(DeploymentLog.timestamp).offset(offset).limit(limit).all()
+
+    return DeploymentLogsResponse(
+        deployment_id=str(deployment_id),
+        logs=[DeploymentLogEntry.model_validate(log.to_dict()) for log in logs],
+        total_count=total_count,
+        has_more=(offset + limit) < total_count,
+    )
+
+
+@router.delete("/deployments/{deployment_id}")
+async def cancel_deployment(
+    deployment_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """
+    Cancel a deployment, or remove it from the run queue
+
+    Only deployments in 'queued', 'pending' or 'running' status can be cancelled.
+    """
+    deployment = db.query(TemplateDeployment).filter_by(id=deployment_id).first()
+
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+
+    # Check permissions
+    is_admin = "admin" in current_user.get("realm_access", {}).get("roles", [])
+    if not is_admin and deployment.created_by != current_user.get("preferred_username"):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    from app.services.run_queue import cancel_queued
+
+    if cancel_queued(db, deployment):
+        return {"message": "Deployment removed from the queue"}
+
+    # Check if deployment can be cancelled
+    if deployment.status not in ["pending", "running"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot cancel deployment in '{deployment.status}' status",
+        )
+
+    # Cancel the deployment
+    cancelled = await background_executor.cancel_deployment(str(deployment_id))
+
+    if not cancelled:
+        # Deployment might have just completed
+        db.refresh(deployment)
+        if deployment.status in ["success", "failed"]:
+            raise HTTPException(
+                status_code=400, detail=f"Deployment already {deployment.status}"
+            )
+
+    return {"message": "Deployment cancellation requested"}
+
+
+@router.get("/deployments/{deployment_id}/debug-logs", operation_id="get_deployment_debug_logs")
+async def get_deployment_debug_logs(
+    deployment_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """
+    🤖 Get debug log files for a deployment
+
+    Returns paths to debug log files stored in /home/shared-logs/deployments/{app_name}/
+    """
+    # Check deployment exists and permissions
+    deployment = db.query(TemplateDeployment).filter_by(id=deployment_id).first()
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+
+    # Check permissions
+    is_admin = current_user.get("is_admin", False)
+    if not is_admin and deployment.created_by != current_user.get("preferred_username"):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Find log files - check both possible locations
+    app_name = deployment.variables.get("app_name", "unknown")
+    shared_log_dir = Path("/home/thinkube/shared-logs/deployments") / app_name
+    tmp_log_dir = Path("/tmp/thinkube-deployments") / app_name
+
+    # Check which directory exists
+    log_dir = None
+    if shared_log_dir.exists():
+        log_dir = shared_log_dir
+    elif tmp_log_dir.exists():
+        log_dir = tmp_log_dir
+
+    debug_logs = []
+    if log_dir:
+        # Find all log files for this deployment
+        for log_file in sorted(log_dir.glob("deployment-*.log"), reverse=True):
+            # Get file stats
+            stats = log_file.stat()
+            debug_logs.append(
+                {
+                    "filename": log_file.name,
+                    "path": str(log_file),
+                    "size": stats.st_size,
+                    "created": stats.st_ctime,
+                    "modified": stats.st_mtime,
+                }
+            )
+
+        # Also look for variable dumps
+        for var_file in sorted(log_dir.glob("deployment-*-vars.yaml"), reverse=True):
+            stats = var_file.stat()
+            debug_logs.append(
+                {
+                    "filename": var_file.name,
+                    "path": str(var_file),
+                    "size": stats.st_size,
+                    "created": stats.st_ctime,
+                    "modified": stats.st_mtime,
+                    "type": "variables",
+                }
+            )
+
+    return {
+        "deployment_id": str(deployment_id),
+        "app_name": app_name,
+        "log_directory": str(log_dir),
+        "debug_logs": debug_logs,
+        "message": f"🤖 Found {len(debug_logs)} debug log files",
+    }
+
+
+@router.get("/deployments/{deployment_id}/debug-logs/{filename}", operation_id="download_debug_log")
+async def download_debug_log(
+    deployment_id: UUID,
+    filename: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """
+    🤖 Download a specific debug log file
+
+    Returns the content of the debug log file
+    """
+    from fastapi.responses import FileResponse
+
+    # Check deployment exists and permissions
+    deployment = db.query(TemplateDeployment).filter_by(id=deployment_id).first()
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+
+    # Check permissions
+    is_admin = current_user.get("is_admin", False)
+    if not is_admin and deployment.created_by != current_user.get("preferred_username"):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    # Validate filename to prevent path traversal
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    # Find the log file - check both possible locations
+    app_name = deployment.variables.get("app_name", "unknown")
+    shared_log_file = Path("/home/thinkube/shared-logs/deployments") / app_name / filename
+    tmp_log_file = Path("/tmp/thinkube-deployments") / app_name / filename
+
+    log_file = None
+    if shared_log_file.exists():
+        log_file = shared_log_file
+    elif tmp_log_file.exists():
+        log_file = tmp_log_file
+    else:
+        raise HTTPException(status_code=404, detail="Log file not found")
+
+    # Return the file
+    return FileResponse(path=str(log_file), filename=filename, media_type="text/plain")
+
+
+class PublishTemplateRequest(BaseModel):
+    """Request to publish an app as a template."""
+    app_name: str
+    template_name: str
+    description: str
+    tags: TypingList[str] = []
+    private: bool = True
+
+
+@router.get("/apps", operation_id="list_deployed_apps")
+async def list_deployed_apps(
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """
+    List deployed apps in /home/thinkube/apps/ that can be published as templates.
+
+    Returns apps that have a thinkube.yaml or manifest.yaml file.
+    """
+    apps_dir = Path("/home/thinkube/apps")
+    if not apps_dir.exists():
+        return {"apps": []}
+
+    apps = []
+    for app_path in sorted(apps_dir.iterdir()):
+        if not app_path.is_dir():
+            continue
+
+        has_thinkube = (app_path / "thinkube.yaml").exists()
+        has_manifest = (app_path / "manifest.yaml").exists()
+
+        if not has_thinkube and not has_manifest:
+            continue
+
+        app_info = {
+            "name": app_path.name,
+            "path": str(app_path),
+            "has_thinkube_yaml": has_thinkube,
+            "has_manifest_yaml": has_manifest,
+        }
+
+        # Read thinkube.yaml for metadata if available
+        if has_thinkube:
+            try:
+                with open(app_path / "thinkube.yaml") as f:
+                    config = yaml.safe_load(f)
+                app_info["description"] = config.get("metadata", {}).get("description", "")
+                app_info["deployment_type"] = config.get("spec", {}).get("type", "app")
+            except Exception:
+                pass
+
+        apps.append(app_info)
+
+    return {"apps": apps}
+
+
+@router.post("/publish", operation_id="publish_template")
+async def publish_template(
+    request: PublishTemplateRequest,
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """
+    Publish a deployed app as a reusable template to the user's GitHub org.
+
+    Copies app source (excluding .git, k8s/, etc.) to a new GitHub repo,
+    and registers it in the user's metadata repo so it appears in the catalog.
+    """
+    from app.services.github_publisher import GitHubPublisher
+
+    try:
+        publisher = GitHubPublisher()
+    except RuntimeError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=str(e),
+        )
+
+    try:
+        result = await publisher.publish_app_as_template(
+            app_name=request.app_name,
+            template_name=request.template_name,
+            description=request.description,
+            tags=request.tags,
+            private=request.private,
+        )
+
+        return {
+            "status": "success",
+            "message": f"Published '{request.app_name}' as template '{request.template_name}'",
+            **result,
+        }
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        logger.error(f"Failed to publish template: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"Unexpected error publishing template: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to publish template: {str(e)}",
+        )
+
+
+@router.post(
+    "/apps/{app_name}/regenerate-manifests",
+    operation_id="regenerate_app_manifests",
+)
+async def regenerate_app_manifests(
+    app_name: str,
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """
+    Regenerate k8s/ manifests for a deployed app from its current thinkube.yaml.
+
+    Called by the pre-commit hook in code-server when a developer modifies
+    thinkube.yaml in an already-deployed app. Reads the current thinkube.yaml,
+    fetches cluster secrets, and regenerates all k8s/ manifest files.
+
+    Returns a dict of {filename: content} for each generated manifest.
+    The pre-commit hook writes these files and stages them for commit.
+    """
+    from app.services.manifest_generator import ManifestGenerator
+
+    domain_name = settings.DOMAIN_NAME
+
+    # Validate the app exists
+    app_path = Path(f"/home/thinkube/apps/{app_name}")
+    if not app_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"App '{app_name}' not found at {app_path}"
+        )
+
+    thinkube_yaml = app_path / "thinkube.yaml"
+    if not thinkube_yaml.exists():
+        raise HTTPException(
+            status_code=400,
+            detail=f"App '{app_name}' has no thinkube.yaml"
+        )
+
+    try:
+        generator = ManifestGenerator(app_name=app_name, domain=domain_name)
+        generated_files = generator.regenerate()
+
+        return {
+            "app_name": app_name,
+            "files_generated": list(generated_files.keys()),
+            "file_count": len(generated_files),
+            "manifests": generated_files,
+        }
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to regenerate manifests for {app_name}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to regenerate manifests: {str(e)}"
+        )

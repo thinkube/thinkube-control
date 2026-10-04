@@ -1,0 +1,332 @@
+/*
+ * Copyright Alejandro Martínez Corriá and the Thinkube contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+package server
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"time"
+
+	"github.com/thinkube/thinkube-control/proxy/internal/auth"
+	"github.com/thinkube/thinkube-control/proxy/internal/forwarder"
+	"github.com/thinkube/thinkube-control/proxy/internal/metrics"
+	"github.com/thinkube/thinkube-control/proxy/internal/resolver"
+)
+
+type OpenAIHandler struct {
+	resolver  *resolver.Resolver
+	forwarder *forwarder.Forwarder
+	maxBody   int64
+}
+
+func NewOpenAIHandler(r *resolver.Resolver, f *forwarder.Forwarder, maxBody int64) *OpenAIHandler {
+	return &OpenAIHandler{resolver: r, forwarder: f, maxBody: maxBody}
+}
+
+type openAIChatRequest struct {
+	Model  string `json:"model"`
+	Stream bool   `json:"stream"`
+}
+
+func (h *OpenAIHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	claims := auth.ClaimsFromContext(r.Context())
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, h.maxBody+1))
+	if err != nil {
+		WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		return
+	}
+	if int64(len(body)) > h.maxBody {
+		WriteError(w, "openai", http.StatusRequestEntityTooLarge, "request_too_large", "Request body exceeds maximum size")
+		return
+	}
+
+	var req openAIChatRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Invalid JSON in request body")
+		return
+	}
+
+	if req.Model == "" {
+		WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Missing required field: model")
+		return
+	}
+
+	tier := r.Header.Get("X-LLM-Tier")
+	resolved, err := h.resolver.Resolve(r.Context(), req.Model, tier)
+	if err != nil {
+		writeResolveError(w, "openai", req.Model, err)
+		return
+	}
+
+	backendURL := resolved.BackendURL + resolved.APIPath + "/chat/completions"
+	thinkingOff := thinkingDisabled(body)
+
+	if resolved.ServingName != "" && resolved.ServingName != req.Model {
+		body = rewriteModelField(body, resolved.ServingName)
+	}
+
+	userID := ""
+	if claims != nil {
+		userID = claims.Username
+	}
+
+	slog.Debug("forwarding OpenAI request",
+		"model", resolved.ModelID,
+		"backend", backendURL,
+		"stream", req.Stream,
+		"user", userID,
+	)
+
+	if req.Stream {
+		metrics.ActiveStreams.WithLabelValues("openai", resolved.ModelID).Inc()
+		defer metrics.ActiveStreams.WithLabelValues("openai", resolved.ModelID).Dec()
+
+		err = h.forwardStream(r, w, backendURL, body, thinkingOff)
+		if err != nil {
+			slog.Error("stream forward failed", "error", err)
+		}
+	} else {
+		resp, err := h.forwarder.Forward(r.Context(), backendURL, bytes.NewReader(body), r.Header)
+		if err != nil {
+			WriteError(w, "openai", http.StatusBadGateway, "backend_error", "Backend request failed")
+			metrics.ErrorsTotal.WithLabelValues("openai", "backend").Inc()
+			return
+		}
+		defer resp.Body.Close()
+
+		respBody, _ := io.ReadAll(resp.Body)
+		respBody = normalizeReasoning(respBody, thinkingOff)
+
+		for k, vv := range resp.Header {
+			if k == "Content-Length" {
+				continue
+			}
+			for _, v := range vv {
+				w.Header().Add(k, v)
+			}
+		}
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(respBody)))
+		w.WriteHeader(resp.StatusCode)
+		w.Write(respBody)
+
+		h.recordUsage(respBody, resolved.ModelID, resolved.BackendURL)
+	}
+
+	duration := time.Since(start)
+	metrics.RequestsTotal.WithLabelValues("openai", resolved.ModelID, resolved.BackendURL, "200").Inc()
+	metrics.RequestDuration.WithLabelValues("openai", resolved.ModelID, resolved.BackendURL).Observe(duration.Seconds())
+
+	slog.Info("request completed",
+		"protocol", "openai",
+		"model", resolved.ModelID,
+		"backend", resolved.BackendURL,
+		"stream", req.Stream,
+		"duration_ms", duration.Milliseconds(),
+		"user_id", userID,
+	)
+}
+
+// forwardStream relays the backend's SSE stream, shaping the reasoning of
+// each chunk as normalizeReasoning does for a whole response. A backend
+// error status is relayed with its body.
+func (h *OpenAIHandler) forwardStream(r *http.Request, w http.ResponseWriter, backendURL string, body []byte, thinkingOff bool) error {
+	resp, err := h.forwarder.ForwardStreamRaw(r.Context(), backendURL, bytes.NewReader(body))
+	if err != nil {
+		WriteError(w, "openai", http.StatusBadGateway, "backend_error", "Backend request failed")
+		metrics.ErrorsTotal.WithLabelValues("openai", "backend").Inc()
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		errBody, _ := io.ReadAll(resp.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		w.Write(errBody)
+		return nil
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return fmt.Errorf("response writer does not support flushing")
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	return shapeStream(resp.Body, w, flusher, thinkingOff)
+}
+
+// ListModels answers the OpenAI model list from the backend's registry: the
+// models that are served or could be. The backend route carries a trailing
+// slash; without it the backend redirects, and the forwarder does not follow
+// redirects, so the exact path matters. A backend answer that is not 200 or
+// not the expected shape is reported, never shown as an empty list.
+func (h *OpenAIHandler) ListModels(w http.ResponseWriter, r *http.Request) {
+	modelsURL := fmt.Sprintf("%s/api/v1/llm/models/", h.resolver.BackendURL())
+	resp, err := h.forwarder.ForwardGet(r.Context(), modelsURL)
+	if err != nil {
+		WriteError(w, "openai", http.StatusBadGateway, "backend_error", "Failed to fetch models")
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		WriteError(w, "openai", http.StatusBadGateway, "backend_error",
+			fmt.Sprintf("The model registry answered HTTP %d", resp.StatusCode))
+		return
+	}
+
+	var backendResp struct {
+		Models []struct {
+			ID         string   `json:"id"`
+			Name       string   `json:"name"`
+			ServerType []string `json:"server_type"`
+			State      string   `json:"state"`
+		} `json:"models"`
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(body, &backendResp); err != nil {
+		WriteError(w, "openai", http.StatusBadGateway, "backend_error", "The model registry answered something that is not a model list")
+		return
+	}
+
+	type openAIModel struct {
+		ID      string `json:"id"`
+		Object  string `json:"object"`
+		Created int64  `json:"created"`
+		OwnedBy string `json:"owned_by"`
+	}
+
+	models := []openAIModel{}
+	for _, m := range backendResp.Models {
+		if m.State == "available" || m.State == "deployable" {
+			models = append(models, openAIModel{
+				ID:      m.ID,
+				Object:  "model",
+				Created: time.Now().Unix(),
+				OwnedBy: "local",
+			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"object": "list",
+		"data":   models,
+	})
+}
+
+type openAIEmbeddingRequest struct {
+	Model string `json:"model"`
+}
+
+func (h *OpenAIHandler) Embeddings(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	claims := auth.ClaimsFromContext(r.Context())
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, h.maxBody+1))
+	if err != nil {
+		WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		return
+	}
+	if int64(len(body)) > h.maxBody {
+		WriteError(w, "openai", http.StatusRequestEntityTooLarge, "request_too_large", "Request body exceeds maximum size")
+		return
+	}
+
+	var req openAIEmbeddingRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Invalid JSON in request body")
+		return
+	}
+
+	if req.Model == "" {
+		WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Missing required field: model")
+		return
+	}
+
+	tier := r.Header.Get("X-LLM-Tier")
+	resolved, err := h.resolver.Resolve(r.Context(), req.Model, tier)
+	if err != nil {
+		writeResolveError(w, "openai", req.Model, err)
+		return
+	}
+
+	backendURL := resolved.BackendURL + resolved.APIPath + "/embeddings"
+
+	if resolved.ServingName != "" && resolved.ServingName != req.Model {
+		body = rewriteModelField(body, resolved.ServingName)
+	}
+
+	userID := ""
+	if claims != nil {
+		userID = claims.Username
+	}
+
+	slog.Debug("forwarding embeddings request",
+		"model", resolved.ModelID,
+		"backend", backendURL,
+		"user", userID,
+	)
+
+	resp, err := h.forwarder.Forward(r.Context(), backendURL, bytes.NewReader(body), r.Header)
+	if err != nil {
+		WriteError(w, "openai", http.StatusBadGateway, "backend_error", "Backend request failed")
+		metrics.ErrorsTotal.WithLabelValues("openai", "backend").Inc()
+		return
+	}
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+
+	for k, vv := range resp.Header {
+		if k == "Content-Length" {
+			continue
+		}
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
+	}
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(respBody)))
+	w.WriteHeader(resp.StatusCode)
+	w.Write(respBody)
+
+	duration := time.Since(start)
+	metrics.RequestsTotal.WithLabelValues("openai", resolved.ModelID, resolved.BackendURL, "200").Inc()
+	metrics.RequestDuration.WithLabelValues("openai", resolved.ModelID, resolved.BackendURL).Observe(duration.Seconds())
+
+	slog.Info("embeddings request completed",
+		"protocol", "openai",
+		"model", resolved.ModelID,
+		"backend", resolved.BackendURL,
+		"duration_ms", duration.Milliseconds(),
+		"user_id", userID,
+	)
+}
+
+func (h *OpenAIHandler) recordUsage(body []byte, model, backend string) {
+	var resp struct {
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(body, &resp); err == nil && resp.Usage.PromptTokens > 0 {
+		metrics.TokensTotal.WithLabelValues("openai", model, backend, "input").Add(float64(resp.Usage.PromptTokens))
+		metrics.TokensTotal.WithLabelValues("openai", model, backend, "output").Add(float64(resp.Usage.CompletionTokens))
+	}
+}
+

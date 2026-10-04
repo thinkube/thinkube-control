@@ -1,0 +1,1278 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Node management API endpoints for discovering, adding, and removing cluster nodes."""
+
+import asyncio
+import logging
+import os
+import tempfile
+import uuid
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+import yaml
+
+from app.core.api_tokens import get_current_user_dual_auth
+from app.services import detached
+from app.services.ansible_environment import ansible_env
+from app.services.network_discovery import network_discovery
+from app.services.node_manager import node_manager
+from app.services.scrub import Scrubber
+
+logger = logging.getLogger(__name__)
+# Every node endpoint reads or changes the cluster and its machines: all need a login.
+router = APIRouter(prefix="/nodes", tags=["nodes"], dependencies=[Depends(get_current_user_dual_auth)])
+
+GPU_OPERATOR_DIR = Path(
+    "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
+    "40_thinkube/core/infrastructure/gpu_operator"
+)
+COREDNS_DIR = Path(
+    "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
+    "40_thinkube/core/infrastructure/coredns"
+)
+CODE_SERVER_DIR = Path(
+    "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
+    "40_thinkube/core/code-server"
+)
+SSH_SETUP_DIR = Path(
+    "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
+    "00_initial_setup"
+)
+NETWORKING_DIR = Path(
+    "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
+    "30_networking"
+)
+JOIN_WORKERS = Path(
+    "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
+    "40_thinkube/core/infrastructure/k8s/20_join_workers.yaml"
+)
+JUICEFS_DEPLOY = Path(
+    "/home/thinkube/thinkube-platform/core/thinkube/ansible/"
+    "40_thinkube/core/juicefs/10_deploy.yaml"
+)
+IMAGE_BUILD_TOKEN = Path("/home/thinkube/.image_build_completed_platforms")
+
+
+def _read_build_token() -> set:
+    """Read architectures that have completed image builds."""
+    if not IMAGE_BUILD_TOKEN.exists():
+        return set()
+    content = IMAGE_BUILD_TOKEN.read_text().strip()
+    if not content:
+        return set()
+    archs = set()
+    for p in content.split(","):
+        p = p.strip()
+        if p.startswith("linux/"):
+            archs.add(p.split("/", 1)[1])
+    return archs
+
+
+def _find_inventory_group_hosts(inventory: dict, group_name: str) -> List[str]:
+    """Find hosts for a named group anywhere in the inventory tree."""
+    results = []
+
+    def _walk(node: dict):
+        if not isinstance(node, dict):
+            return
+        for key, value in node.items():
+            if key == group_name and isinstance(value, dict):
+                hosts = value.get("hosts")
+                if isinstance(hosts, dict):
+                    results.extend(hosts.keys())
+            if isinstance(value, dict):
+                _walk(value)
+
+    _walk(inventory)
+    return results
+
+
+class DiscoverRequest(BaseModel):
+    ip: str
+    username: Optional[str] = None
+
+
+class RemoveNodeRequest(BaseModel):
+    hostname: str
+
+
+class VerifySSHRequest(BaseModel):
+    nodes: List[Dict[str, str]]
+    password: Optional[str] = None
+
+
+class DetectHardwareRequest(BaseModel):
+    nodes: List[Dict[str, str]]
+
+
+class DiscoverNetworkRequest(BaseModel):
+    scan_cidrs: Optional[List[str]] = None
+
+
+class AddNodesBatchRequest(BaseModel):
+    nodes: List[Dict[str, Any]]
+    # The nodes' SSH password, used only where the cluster key is not yet
+    # authorized. Without it, ANSIBLE_BECOME_PASSWORD, or else SYSTEM_PASSWORD.
+    password: Optional[str] = None
+
+
+class AddNodesJob:
+    """One run of adding nodes: its progress events and its outcome.
+
+    The run is a task in this backend process and outlives the request that
+    started it. The events have the shapes the panel's run view reads:
+    task, ok, changed, failed, output, warning, error, and a last complete
+    event with status success or failed. The job lives in memory only, so
+    a restart of thinkube-control forgets it.
+    """
+
+    def __init__(self, job_id: str, node_count: int):
+        self.id = job_id
+        self.node_count = node_count
+        self.status = "running"
+        self.events: List[Dict[str, Any]] = []
+        self._last_error: Optional[str] = None
+
+    def send(self, event: Dict[str, Any]) -> None:
+        self.events.append(event)
+        if event.get("type") == "error":
+            self._last_error = event.get("message")
+        if event.get("type") == "complete":
+            self.status = event["status"]
+
+    def end(self) -> None:
+        """Close a run that stopped without a complete event, as failed."""
+        if self.status != "running":
+            return
+        reason = self._last_error or "the run stopped without a result"
+        self.send({"type": "complete", "status": "failed", "message": f"Adding nodes failed: {reason}"})
+
+
+_add_node_jobs: Dict[str, AddNodesJob] = {}
+
+
+async def _stream_playbook(
+    progress: "AddNodesJob",
+    playbook_path: Path,
+    extra_vars: Dict[str, Any],
+    step_name: str,
+    step_number: int,
+    limit: Optional[str] = None,
+) -> bool:
+    """Run an Ansible playbook, recording its output in the job. Returns True on success."""
+    progress.send(
+        {"type": "playbook_start", "task_name": step_name, "task_number": step_number}
+    )
+    progress.send(
+        {"type": "task", "task_name": step_name, "task_number": step_number}
+    )
+
+    if not playbook_path.exists():
+        progress.send(
+            {"type": "error", "message": f"Playbook not found: {playbook_path}"}
+        )
+        return False
+
+    temp_vars_fd, temp_vars_path = tempfile.mkstemp(
+        suffix=".yml", prefix="ansible-vars-"
+    )
+    try:
+        with os.fdopen(temp_vars_fd, "w") as f:
+            yaml.dump(extra_vars, f)
+    except Exception:
+        os.close(temp_vars_fd)
+        raise
+
+    try:
+        inventory_path = ansible_env.get_inventory_path()
+        cmd = [
+            "stdbuf", "-oL", "-eL",
+            "ansible-playbook",
+            "-i", str(inventory_path),
+            str(playbook_path),
+            "-e", f"@{temp_vars_path}",
+            "-v",
+        ]
+        if limit:
+            cmd.extend(["--limit", limit])
+
+        env = ansible_env.get_environment(context="optional")
+        scrub = Scrubber.for_run(extra_vars, env)
+
+        logger.info(f"Running playbook: {' '.join(cmd)}")
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=env,
+            cwd=str(playbook_path.parent),
+            limit=1024 * 1024,
+        )
+
+        current_task = "Initializing"
+        in_failed_block = False
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+
+            line_text = line.decode("utf-8", errors="replace").rstrip()
+            if not line_text:
+                continue
+            line_text = scrub.clean(line_text)
+
+            if "TASK [" in line_text:
+                in_failed_block = False
+                task_start = line_text.find("TASK [") + 6
+                task_end = line_text.find("]", task_start)
+                if task_end > task_start:
+                    current_task = line_text[task_start:task_end]
+                    progress.send(
+                        {"type": "task", "task_name": current_task}
+                    )
+            elif line_text.startswith("ok:") or line_text.startswith("changed:"):
+                msg_type = "ok" if line_text.startswith("ok:") else "changed"
+                progress.send(
+                    {"type": msg_type, "message": line_text, "task": current_task}
+                )
+            elif line_text.startswith("fatal:") or line_text.startswith("failed:"):
+                in_failed_block = True
+                progress.send(
+                    {"type": "failed", "message": line_text, "task": current_task}
+                )
+            elif line_text.startswith("skipping:"):
+                progress.send(
+                    {"type": "output", "message": line_text}
+                )
+            elif "PLAY RECAP" in line_text or "PLAY [" in line_text:
+                in_failed_block = False
+                progress.send(
+                    {"type": "output", "message": line_text}
+                )
+            elif in_failed_block:
+                progress.send(
+                    {"type": "output", "message": line_text}
+                )
+            elif line_text.startswith("[WARNING]") or line_text.startswith("[DEPRECATION"):
+                pass
+            else:
+                progress.send(
+                    {"type": "output", "message": line_text}
+                )
+
+        await process.wait()
+        return process.returncode == 0
+
+    finally:
+        try:
+            os.unlink(temp_vars_path)
+        except OSError:
+            pass
+
+
+async def _run_gpu_setup(
+    progress: "AddNodesJob",
+    extra_vars: Dict[str, Any],
+    step: int,
+) -> bool:
+    """Deploy GPU operator and configure time-slicing profiles."""
+    gpu_deploy = GPU_OPERATOR_DIR / "10_deploy.yaml"
+
+    progress.send(
+        {"type": "task", "task_name": "Configure GPU on new nodes", "task_number": step}
+    )
+    ok = await _stream_playbook(
+        progress=progress,
+        playbook_path=gpu_deploy,
+        extra_vars=extra_vars,
+        step_name="Configure GPU on new nodes",
+        step_number=step,
+    )
+    if not ok:
+        progress.send(
+            {"type": "error", "message": "GPU Operator deployment failed"}
+        )
+        return False
+    progress.send(
+        {"type": "ok", "message": "GPU Operator deployed"}
+    )
+
+    # Always run time-slicing config — the playbook self-gates on whether
+    # DGX Spark nodes exist in baremetal_gpus. Running it every time ensures
+    # the correct per-node profiles are applied (DGX Spark gets time-slicing,
+    # standard GPUs do not).
+    step += 1
+    time_slicing = GPU_OPERATOR_DIR / "15_configure_time_slicing.yaml"
+    progress.send(
+        {"type": "task", "task_name": "Configure GPU time-slicing profiles", "task_number": step}
+    )
+    ts_ok = await _stream_playbook(
+        progress=progress,
+        playbook_path=time_slicing,
+        extra_vars=extra_vars,
+        step_name="Configure GPU time-slicing profiles",
+        step_number=step,
+    )
+    if not ts_ok:
+        progress.send(
+            {"type": "error", "message": "GPU time-slicing configuration failed"}
+        )
+        return False
+    progress.send(
+        {"type": "ok", "message": "GPU time-slicing profiles configured"}
+    )
+
+    return True
+
+
+@router.get("/list")
+async def list_nodes():
+    """List all cluster nodes with architecture, role, status, and resources."""
+    try:
+        nodes = node_manager.get_cluster_nodes()
+        architectures = sorted(set(n["architecture"] for n in nodes if n["architecture"] != "unknown"))
+        return {
+            "nodes": nodes,
+            "architectures": architectures,
+            "node_count": len(nodes),
+        }
+    except Exception as e:
+        logger.error(f"Failed to list nodes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/discover")
+async def discover_node(request: DiscoverRequest):
+    """Discover a single node's hardware via SSH (legacy)."""
+    result = await node_manager.discover_node(request.ip, request.username)
+    if "error" in result:
+        return {"success": False, **result}
+    return {"success": True, **result}
+
+
+@router.post("/discover-network")
+async def discover_network(request: DiscoverNetworkRequest = DiscoverNetworkRequest()):
+    """Scan the network for nodes available to join the cluster.
+
+    Ping-sweeps one or more CIDRs (defaults to inventory's network_cidr).
+    Automatically excludes existing cluster nodes and MetalLB VIPs.
+    """
+    try:
+        result = await network_discovery.discover(request.scan_cidrs)
+        return result
+    except Exception as e:
+        logger.error(f"Network discovery failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/verify-ssh")
+async def verify_ssh(request: VerifySSHRequest):
+    """Test SSH connectivity to selected nodes using the cluster key.
+
+    If key auth fails, distributes the key with the password given in the
+    request, or else the cluster's ANSIBLE_BECOME_PASSWORD, or else
+    SYSTEM_PASSWORD, as adding nodes does. A node that needs a password when
+    none is set is reported as needs_password.
+    """
+    password = (
+        request.password
+        or os.environ.get("ANSIBLE_BECOME_PASSWORD")
+        or os.environ.get("SYSTEM_PASSWORD")
+    )
+
+    results = []
+    for node_info in request.nodes:
+        ip = node_info.get("ip", "")
+        if not ip:
+            continue
+
+        key_ok = await node_manager.test_ssh_key_auth(ip)
+        if key_ok:
+            results.append({"ip": ip, "ssh_status": "key_ok"})
+        elif password:
+            dist_result = await node_manager.distribute_ssh_key(ip, password)
+            if dist_result["success"]:
+                results.append({"ip": ip, "ssh_status": "key_distributed"})
+            else:
+                results.append({
+                    "ip": ip,
+                    "ssh_status": "failed",
+                    "error": dist_result.get("error", "Unknown error"),
+                })
+        else:
+            results.append({"ip": ip, "ssh_status": "needs_password"})
+
+    return {"results": results}
+
+
+@router.post("/detect-hardware-batch")
+async def detect_hardware_batch(request: DetectHardwareRequest):
+    """Detect hardware on multiple nodes in parallel."""
+    async def detect_one(node_info: Dict[str, str]) -> Dict[str, Any]:
+        ip = node_info["ip"]
+        result = await node_manager.discover_node(ip)
+        if "error" in result:
+            return result
+        try:
+            result.update(await node_manager.detect_lvm_status(ip))
+        except RuntimeError as e:
+            return {"ip": ip, "error": str(e)}
+        result["validation"] = node_manager.validate_hardware(result)
+        return result
+
+    results = await asyncio.gather(
+        *[detect_one(n) for n in request.nodes]
+    )
+    return {"results": list(results)}
+
+
+def _add_node_playbooks(overlay_provider: str) -> List[Path]:
+    """Every playbook adding nodes runs, so a missing one stops the run before it touches a node."""
+    playbooks = [
+        GPU_OPERATOR_DIR / "10_deploy.yaml",
+        GPU_OPERATOR_DIR / "15_configure_time_slicing.yaml",
+        SSH_SETUP_DIR / "11_update_ssh_for_workers.yaml",
+        COREDNS_DIR / "15_configure_node_dns.yaml",
+        CODE_SERVER_DIR / "15_configure_environment.yaml",
+        SSH_SETUP_DIR / "14_harden_node_logging.yaml",
+        SSH_SETUP_DIR / "16_tune_dgx_spark.yaml",
+        JUICEFS_DEPLOY,
+        JOIN_WORKERS,
+    ]
+    playbooks.extend(_overlay_playbooks(overlay_provider))
+    return playbooks
+
+
+def _overlay_playbooks(overlay_provider: str) -> List[Path]:
+    """The install and setup playbooks of the overlay network on new nodes."""
+    if overlay_provider == "tailscale":
+        return [NETWORKING_DIR / "06_install_tailscale.yaml", NETWORKING_DIR / "11_setup_tailscale.yaml"]
+    return [NETWORKING_DIR / "05_install_zerotier.yaml", NETWORKING_DIR / "10_setup_zerotier.yaml"]
+
+
+@router.post("/add-batch")
+async def add_nodes_batch(
+    request: AddNodesBatchRequest,
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """Start adding nodes and return at once with the job id to poll.
+
+    The run happens on the server, detached from this call: a closed tab or
+    a proxy timeout does not end it. Poll GET /nodes/add-batch/{job_id} for
+    its progress and outcome. The SSH password, when given, travels in this
+    body only.
+    """
+    if not request.nodes:
+        raise HTTPException(status_code=400, detail="No nodes provided")
+
+    running = [j for j in _add_node_jobs.values() if j.status == "running"]
+    if running:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Nodes are already being added (job {running[0].id}); wait for it to end",
+        )
+
+    validation = node_manager.validate_inventory()
+    if not validation["valid"]:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Inventory validation failed: {validation.get('error')}",
+        )
+
+    # The overlay provider determines which install path the run takes, and
+    # which credentials it needs. Fail early with a clear message instead of
+    # letting the per-node loop discover this.
+    inventory = node_manager.read_inventory()
+    inv_vars = inventory.get("all", {}).get("vars", {})
+    if not inv_vars.get("network_mode"):
+        raise HTTPException(status_code=500, detail="network_mode missing from inventory")
+    overlay_provider = inv_vars.get("overlay_provider")
+    if not overlay_provider:
+        raise HTTPException(
+            status_code=500,
+            detail="overlay_provider missing from inventory",
+        )
+    if overlay_provider == "zerotier":
+        for required in ("zerotier_network_id", "zerotier_api_token"):
+            if not inv_vars.get(required):
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"{required} missing from inventory (required for ZeroTier mode)",
+                )
+    elif overlay_provider == "tailscale":
+        for required in ("tailscale_auth_key", "tailscale_api_token"):
+            if not inv_vars.get(required):
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"{required} missing from inventory (required for Tailscale mode)",
+                )
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unsupported overlay_provider: {overlay_provider!r}",
+        )
+
+    missing = [str(p) for p in _add_node_playbooks(overlay_provider) if not p.exists()]
+    if missing:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Playbooks missing from the thinkube checkout: {', '.join(missing)}",
+        )
+
+    existing_nodes = node_manager.get_cluster_nodes()
+    existing_names = {n["name"] for n in existing_nodes}
+    for node_info in request.nodes:
+        hostname = node_info.get("hostname", "")
+        if hostname in existing_names:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Node '{hostname}' already exists in the cluster",
+            )
+
+    password = (
+        request.password
+        or os.environ.get("ANSIBLE_BECOME_PASSWORD")
+        or os.environ.get("SYSTEM_PASSWORD")
+    )
+
+    job = AddNodesJob(str(uuid.uuid4()), len(request.nodes))
+    _add_node_jobs[job.id] = job
+    detached.start(f"add-nodes:{job.id}", _add_nodes(job, request.nodes, password))
+
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "message": f"Adding {job.node_count} node(s); poll /nodes/add-batch/{job.id} for progress",
+        "node_count": job.node_count,
+    }
+
+
+@router.get("/add-batch/{job_id}")
+async def get_add_nodes_job(
+    job_id: str,
+    after: int = 0,
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """The progress of an add-nodes run: its status and the events after the first ``after``."""
+    job = _add_node_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No add-nodes job {job_id} in this thinkube-control process. "
+                "Jobs live in memory: a restart forgets them. The node list shows what joined."
+            ),
+        )
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "events": job.events[after:],
+        "next": len(job.events),
+    }
+
+
+async def _add_nodes(progress: AddNodesJob, nodes: List[Dict[str, Any]], password: Optional[str]) -> None:
+    """Add ``nodes`` to the cluster, recording each step in ``progress``.
+
+    Handles the full pipeline: SSH key distribution, overlay network setup
+    (ZeroTier or Tailscale), hardware detection, inventory update, and k8s join.
+    """
+    try:
+        inventory = node_manager.read_inventory()
+        inv_vars = inventory.get("all", {}).get("vars", {})
+        network_mode = inv_vars["network_mode"]
+        overlay_provider = inv_vars["overlay_provider"]
+        step = 1
+
+        progress.send({
+            "type": "start",
+            "message": f"Starting addition of {len(nodes)} node(s)",
+            "job_id": progress.id,
+        })
+
+        # Cilium load-balancer VIPs need static routes published into the
+        # ZeroTier network so all nodes can reach them. Tailscale's tailnet
+        # is a flat L3 mesh and the operator publishes Service IPs as
+        # tailnet devices, so no equivalent step is needed.
+        if network_mode == "overlay" and overlay_provider == "zerotier":
+            await node_manager._ensure_zerotier_vip_routes(
+                inventory,
+                inv_vars,
+                inv_vars["zerotier_network_id"],
+                inv_vars["zerotier_api_token"],
+            )
+
+        added_hostnames = []
+        non_gpu_hostnames = []
+        any_gpu_detected = False
+
+        batch_failed = False
+        failed_hostname = ""
+
+        for node_info in nodes:
+            ip = node_info.get("ip", "")
+            hostname = node_info.get("hostname", "")
+            lan_ip = node_info.get("lan_ip", ip)
+
+            progress.send({
+                "type": "task",
+                "task_name": f"[{hostname or ip}] Distribute SSH key",
+                "task_number": step,
+            })
+
+            # Step: Distribute SSH key if needed
+            key_ok = await node_manager.test_ssh_key_auth(ip)
+            if key_ok:
+                progress.send({
+                    "type": "ok",
+                    "message": f"[{hostname or ip}] SSH key already authorized",
+                })
+            elif password:
+                dist_result = await node_manager.distribute_ssh_key(ip, password)
+                if not dist_result["success"]:
+                    progress.send({
+                        "type": "error",
+                        "message": f"[{hostname or ip}] SSH key distribution failed: {dist_result.get('error')}. Aborting batch.",
+                    })
+                    batch_failed = True
+                    failed_hostname = hostname or ip
+                    break
+                progress.send({
+                    "type": "ok",
+                    "message": f"[{hostname or ip}] SSH key distributed successfully",
+                })
+            else:
+                progress.send({
+                    "type": "error",
+                    "message": f"[{hostname or ip}] SSH key auth failed, no password was given and neither ANSIBLE_BECOME_PASSWORD nor SYSTEM_PASSWORD is set. Aborting batch.",
+                })
+                batch_failed = True
+                failed_hostname = hostname or ip
+                break
+
+            step += 1
+
+            # Step: Expand LVM if needed
+            lvm_expandable = node_info.get("lvm_expandable", False)
+            lvm_lv_path = node_info.get("lvm_lv_path", "")
+            if lvm_expandable and lvm_lv_path:
+                progress.send({
+                    "type": "task",
+                    "task_name": f"[{hostname or ip}] Expand LVM volume",
+                    "task_number": step,
+                })
+                try:
+                    result = await node_manager.expand_lvm(ip, lvm_lv_path)
+                    if result["success"]:
+                        progress.send({
+                            "type": "ok",
+                            "message": f"[{hostname or ip}] LVM expanded to {result.get('new_size', 'full disk')}",
+                        })
+                    else:
+                        progress.send({
+                            "type": "error",
+                            "message": f"[{hostname or ip}] LVM expansion failed: {result.get('error')}. Aborting batch.",
+                        })
+                        batch_failed = True
+                        failed_hostname = hostname or ip
+                        break
+                except Exception as e:
+                    progress.send({
+                        "type": "error",
+                        "message": f"[{hostname or ip}] LVM expansion failed: {e}. Aborting batch.",
+                    })
+                    batch_failed = True
+                    failed_hostname = hostname or ip
+                    break
+                step += 1
+
+            # Step: Overlay network setup (ZeroTier or Tailscale)
+            overlay_ip = node_info.get("overlay_ip")
+            if network_mode == "overlay" and not overlay_ip:
+                # Check if an overlay IP is already configured on the node.
+                # In Tailscale mode we still SSH over the LAN (the tailnet
+                # IP isn't reachable until the daemon is fully online), so
+                # only run the wait_for_ssh probe in ZeroTier mode.
+                existing_overlay_ip = await node_manager.detect_overlay_ip(ip, overlay_provider)
+                already_configured = bool(existing_overlay_ip)
+                if existing_overlay_ip and overlay_provider == "zerotier":
+                    already_configured = await node_manager.wait_for_ssh(
+                        existing_overlay_ip, retries=2, interval=3
+                    )
+                if already_configured:
+                    overlay_ip = existing_overlay_ip
+                    progress.send({
+                        "type": "ok",
+                        "message": f"[{hostname or ip}] Overlay network already configured ({overlay_ip})",
+                    })
+                    step += 1
+                else:
+                    provider_name = overlay_provider.capitalize()
+                    progress.send({
+                        "type": "task",
+                        "task_name": f"[{hostname or ip}] Setup {provider_name}",
+                        "task_number": step,
+                    })
+
+                    if overlay_provider == "tailscale":
+                        ts_result = await node_manager.setup_tailscale_on_node(ip, hostname or ip)
+                        if not ts_result["success"]:
+                            progress.send({
+                                "type": "error",
+                                "message": f"[{hostname or ip}] Tailscale setup failed: {ts_result.get('error')}. Aborting batch.",
+                            })
+                            batch_failed = True
+                            failed_hostname = hostname or ip
+                            break
+
+                        overlay_ip = ts_result["overlay_ip"]
+                        progress.send({
+                            "type": "ok",
+                            "message": f"[{hostname or ip}] Tailscale configured with IP {overlay_ip}, waiting for tunnel...",
+                        })
+                    else:
+                        # ZeroTier (default)
+                        assigned_ip = await network_discovery.get_next_available_overlay_ip()
+                        if not assigned_ip:
+                            progress.send({
+                                "type": "error",
+                                "message": f"[{hostname or ip}] No available overlay IPs. Aborting batch.",
+                            })
+                            batch_failed = True
+                            failed_hostname = hostname or ip
+                            break
+
+                        zt_result = await node_manager.setup_zerotier_on_node(ip, assigned_ip)
+                        if not zt_result["success"]:
+                            progress.send({
+                                "type": "error",
+                                "message": f"[{hostname or ip}] ZeroTier setup failed: {zt_result.get('error')}. Aborting batch.",
+                            })
+                            batch_failed = True
+                            failed_hostname = hostname or ip
+                            break
+
+                        overlay_ip = zt_result["overlay_ip"]
+                        progress.send({
+                            "type": "ok",
+                            "message": f"[{hostname or ip}] ZeroTier configured with IP {overlay_ip}, waiting for tunnel...",
+                        })
+
+                    # In ZeroTier mode the controller talks to nodes over
+                    # the overlay link, so we must wait for the tunnel to
+                    # be reachable. In Tailscale mode the controller keeps
+                    # using the LAN IP for SSH (and the inventory's
+                    # ansible_host is the LAN IP too) — the tailnet IP is
+                    # captured for inventory but not used as a transport.
+                    if overlay_provider == "zerotier":
+                        overlay_reachable = await node_manager.wait_for_ssh(
+                            overlay_ip, retries=12, interval=5
+                        )
+                        if not overlay_reachable:
+                            progress.send({
+                                "type": "error",
+                                "message": f"[{hostname or ip}] Overlay tunnel to {overlay_ip} not reachable after 60s. Aborting batch.",
+                            })
+                            batch_failed = True
+                            failed_hostname = hostname or ip
+                            break
+                        progress.send({
+                            "type": "ok",
+                            "message": f"[{hostname or ip}] Overlay tunnel established",
+                        })
+                    step += 1
+
+            # Step: Detect hardware (if not already provided).
+            # connect_ip is the address we SSH into for in-band probes:
+            #   - ZeroTier: prefer the overlay IP (it's stable and matches
+            #     ansible_host in the generated inventory).
+            #   - Tailscale: always use the LAN IP — that's what
+            #     ansible_host is set to, and the tailnet IP isn't a
+            #     reliable transport for the controller's SSH.
+            connect_ip = (
+                overlay_ip if overlay_provider == "zerotier" and overlay_ip else ip
+            )
+            architecture = node_info.get("architecture")
+            gpu_detected = node_info.get("gpu_detected", False)
+            gpu_count = node_info.get("gpu_count", 0)
+            gpu_model = node_info.get("gpu_model", "")
+
+            if not architecture:
+                progress.send({
+                    "type": "task",
+                    "task_name": f"[{hostname or ip}] Detect hardware",
+                    "task_number": step,
+                })
+                hw = await node_manager.discover_node(connect_ip)
+                if "error" in hw:
+                    progress.send({
+                        "type": "error",
+                        "message": f"[{hostname or ip}] Hardware detection failed: {hw['error']}. Aborting batch.",
+                    })
+                    batch_failed = True
+                    failed_hostname = hostname or ip
+                    break
+
+                hostname = hostname or hw.get("hostname", ip)
+                architecture = hw.get("architecture", "unknown")
+                gpu_detected = hw.get("gpu_detected", False)
+                gpu_count = hw.get("gpu_count", 0)
+                gpu_model = hw.get("gpu_model", "")
+                progress.send({
+                    "type": "ok",
+                    "message": f"[{hostname}] Detected: {architecture}, {hw.get('cpu_cores', '?')} cores, {hw.get('memory_gb', '?')} GB RAM",
+                })
+                step += 1
+
+            # Step: Prepare Ansible Python environment (reuses connect_ip
+            # picked above — same provider-aware rule).
+            progress.send({
+                "type": "task",
+                "task_name": f"[{hostname}] Prepare Python environment",
+                "task_number": step,
+            })
+            py_result = await node_manager.prepare_ansible_python(connect_ip)
+            if py_result["success"]:
+                progress.send({
+                    "type": "ok",
+                    "message": f"[{hostname}] Python venv ready",
+                })
+            else:
+                progress.send({
+                    "type": "error",
+                    "message": f"[{hostname}] Python setup failed: {py_result.get('error')}. Aborting batch.",
+                })
+                batch_failed = True
+                failed_hostname = hostname
+                break
+            step += 1
+
+            # Step: Update inventory
+            progress.send({
+                "type": "task",
+                "task_name": f"[{hostname}] Update inventory",
+                "task_number": step,
+            })
+            try:
+                node_manager.add_node_to_inventory(
+                    hostname=hostname,
+                    ip=ip,
+                    architecture=architecture,
+                    overlay_ip=overlay_ip or None,
+                    lan_ip=lan_ip or None,
+                    gpu_detected=gpu_detected,
+                    gpu_count=gpu_count,
+                    gpu_model=gpu_model,
+                )
+                progress.send({
+                    "type": "ok",
+                    "message": f"[{hostname}] Added to inventory",
+                })
+                added_hostnames.append(hostname)
+                if gpu_detected:
+                    any_gpu_detected = True
+                else:
+                    non_gpu_hostnames.append(hostname)
+            except Exception as e:
+                progress.send({
+                    "type": "error",
+                    "message": f"[{hostname}] Inventory update failed: {e}. Aborting batch.",
+                })
+                batch_failed = True
+                failed_hostname = hostname
+                break
+
+            step += 1
+
+        if batch_failed:
+            progress.send({
+                "type": "complete",
+                "status": "failed",
+                "message": f"Batch aborted: {failed_hostname} failed. No nodes were joined.",
+            })
+            return
+
+        if not added_hostnames:
+            progress.send({
+                "type": "complete",
+                "status": "failed",
+                "message": "No nodes were successfully prepared for joining",
+            })
+            return
+
+        # Step: Validate inventory
+        progress.send({
+            "type": "task",
+            "task_name": "Validate inventory",
+            "task_number": step,
+        })
+        validation = node_manager.validate_inventory()
+        if not validation["valid"]:
+            progress.send({
+                "type": "error",
+                "message": f"Inventory validation failed: {validation.get('error')}",
+            })
+            return
+        progress.send({"type": "ok", "message": "Inventory is valid"})
+        step += 1
+
+        inventory = node_manager.read_inventory()
+        # Read the build completion token — the set of architectures that
+        # have actually completed image builds. This is the ONLY reliable
+        # source; container_build_platforms in inventory can be stale from
+        # incomplete runs.
+        built_archs = _read_build_token()
+
+        extra_vars = {}
+        try:
+            extra_vars = ansible_env.prepare_auth_vars(extra_vars)
+        except RuntimeError as e:
+            progress.send({"type": "error", "message": str(e)})
+            return
+
+        # Step: Set up overlay network on new nodes (before k8s join)
+        install_playbook, setup_playbook = _overlay_playbooks(overlay_provider)
+        for pb, desc in [(install_playbook, f"Install {overlay_provider}"), (setup_playbook, f"Configure {overlay_provider}")]:
+            progress.send({
+                "type": "task",
+                "task_name": f"{desc} on new nodes",
+                "task_number": step,
+            })
+            overlay_ok = await _stream_playbook(
+                progress=progress,
+                playbook_path=pb,
+                extra_vars=extra_vars,
+                step_name=f"{desc} on new nodes",
+                step_number=step,
+                limit=",".join(added_hostnames),
+            )
+            if not overlay_ok:
+                progress.send({
+                    "type": "complete",
+                    "status": "failed",
+                    "message": f"{desc} failed on new nodes",
+                })
+                return
+            step += 1
+
+        # Step: Run join workers playbook
+        playbook_path = JOIN_WORKERS
+
+        # Include control plane + localhost so post-join plays run too
+        cp_hosts = _find_inventory_group_hosts(inventory, "k8s_control_plane")
+        limit_hosts = ",".join(added_hostnames + cp_hosts + ["localhost"])
+        join_ok = await _stream_playbook(
+            progress=progress,
+            playbook_path=playbook_path,
+            extra_vars=extra_vars,
+            step_name=f"Join node(s) to cluster: {','.join(added_hostnames)}",
+            step_number=step,
+            limit=limit_hosts,
+        )
+
+        if not join_ok:
+            progress.send({
+                "type": "complete",
+                "status": "failed",
+                "message": "Node join failed",
+            })
+            return
+
+        step += 1
+
+        # Cordon all new nodes immediately to prevent scheduling
+        # until DNS, GPU, and image setup are complete.
+        for h in added_hostnames:
+            ok, msg = await node_manager.cordon_node(h)
+            if ok:
+                progress.send({
+                    "type": "ok",
+                    "message": f"[{h}] Cordoned — preventing scheduling until setup completes",
+                })
+            else:
+                logger.warning(f"Could not cordon {h}: {msg}")
+
+        needs_rebuild = False
+        post_join_architectures = built_archs
+        try:
+            # Disable GPU operator on nodes without compatible GPUs.
+            # NFD detects physical GPUs regardless of compatibility (Volta+
+            # required), so incompatible-GPU nodes need explicit false labels
+            # to prevent operator DaemonSets from scheduling there.
+            for nh in non_gpu_hostnames:
+                if node_manager.disable_gpu_operator_on_node(nh):
+                    progress.send({
+                        "type": "ok",
+                        "message": f"[{nh}] GPU operator disabled (no compatible GPU)",
+                    })
+                else:
+                    logger.warning(f"Could not disable GPU operator labels on {nh}")
+
+            # Set up SSH from control plane to new workers so that
+            # build playbooks can delegate tasks (synchronize/rsync).
+            ssh_playbook = SSH_SETUP_DIR / "11_update_ssh_for_workers.yaml"
+            progress.send({
+                "type": "task",
+                "task_name": "Configure inter-node SSH",
+                "task_number": step,
+            })
+            ssh_ok = await _stream_playbook(
+                progress=progress,
+                playbook_path=ssh_playbook,
+                extra_vars=extra_vars,
+                step_name="Configure inter-node SSH",
+                step_number=step,
+            )
+            if not ssh_ok:
+                logger.warning("Inter-node SSH setup failed — build delegation may fail")
+            step += 1
+
+            # Configure DNS on new nodes so they can resolve internal
+            # domains (the cluster registry, etc.) before image pulls.
+            dns_playbook = COREDNS_DIR / "15_configure_node_dns.yaml"
+            progress.send({
+                "type": "task",
+                "task_name": "Configure DNS on new nodes",
+                "task_number": step,
+            })
+            dns_ok = await _stream_playbook(
+                progress=progress,
+                playbook_path=dns_playbook,
+                extra_vars=extra_vars,
+                step_name="Configure DNS on new nodes",
+                step_number=step,
+                limit=",".join(added_hostnames),
+            )
+            if not dns_ok:
+                logger.warning("DNS configuration failed on new nodes — continuing")
+                progress.send({
+                    "type": "warning",
+                    "message": "DNS configuration failed on new nodes — continuing",
+                })
+            step += 1
+
+            # Update code-server hostAliases so the new node hostname
+            # resolves inside the code-server pod. The playbook only
+            # restarts code-server when the host list actually changed.
+            cs_playbook = CODE_SERVER_DIR / "15_configure_environment.yaml"
+            progress.send({
+                "type": "task",
+                "task_name": "Update code-server environment for new nodes",
+                "task_number": step,
+            })
+            cs_ok = await _stream_playbook(
+                progress=progress,
+                playbook_path=cs_playbook,
+                extra_vars=extra_vars,
+                step_name="Update code-server environment for new nodes",
+                step_number=step,
+            )
+            if not cs_ok:
+                logger.warning("Code-server environment update failed — continuing")
+                progress.send({
+                    "type": "warning",
+                    "message": "Code-server environment update failed — continuing",
+                })
+            step += 1
+
+            # Bound node log growth so a message flood can't fill the disk
+            # (rsyslog dedup + journald rate-limit + logrotate cap). Defense-in
+            # -depth after the JuiceFS OOM-flood (TEP-tgmtd3 / SP-tgqg1j_SL-2);
+            # unconditional — every newly added node gets it.
+            logging_playbook = SSH_SETUP_DIR / "14_harden_node_logging.yaml"
+            progress.send({
+                "type": "task",
+                "task_name": "Harden node logging against floods",
+                "task_number": step,
+            })
+            logging_ok = await _stream_playbook(
+                progress=progress,
+                playbook_path=logging_playbook,
+                extra_vars=extra_vars,
+                step_name="Harden node logging against floods",
+                step_number=step,
+                limit=",".join(added_hostnames),
+            )
+            if not logging_ok:
+                logger.warning("Node logging hardening failed on new nodes — continuing")
+                progress.send({
+                    "type": "warning",
+                    "message": "Node logging hardening failed on new nodes — continuing",
+                })
+            step += 1
+
+            # DGX Spark unified-memory host tuning. The playbook self-detects
+            # GB10 hardware (DMI + nvidia-smi) and end_hosts on non-Spark
+            # nodes, so it's safe to run on every newly added node.
+            spark_playbook = SSH_SETUP_DIR / "16_tune_dgx_spark.yaml"
+            progress.send({
+                "type": "task",
+                "task_name": "Apply DGX Spark unified-memory tuning",
+                "task_number": step,
+            })
+            spark_ok = await _stream_playbook(
+                progress=progress,
+                playbook_path=spark_playbook,
+                extra_vars=extra_vars,
+                step_name="Apply DGX Spark unified-memory tuning",
+                step_number=step,
+                limit=",".join(added_hostnames),
+            )
+            if not spark_ok:
+                logger.warning("DGX Spark tuning failed on new nodes — continuing")
+                progress.send({
+                    "type": "warning",
+                    "message": "DGX Spark tuning failed on new nodes — continuing",
+                })
+            step += 1
+
+            # GPU Operator setup — if any node has GPUs and setup fails,
+            # there is no point rebuilding images for a broken cluster state.
+            if any_gpu_detected:
+                gpu_ok = await _run_gpu_setup(
+                    progress=progress,
+                    extra_vars=extra_vars,
+                    step=step,
+                )
+                if not gpu_ok:
+                    progress.send({
+                        "type": "complete",
+                        "status": "failed",
+                        "message": f"Node(s) {', '.join(added_hostnames)} joined but GPU operator setup failed. "
+                                   "Fix the issue and re-run add-node to resume.",
+                    })
+                    return
+                step += 1
+
+            # Prepare kubelet plugin directory on new nodes so the JuiceFS
+            # CSI DaemonSet can schedule. Only runs Play 1 (k8s_cluster)
+            # by limiting to new nodes — Play 2 (k8s_control_plane) is
+            # skipped since JuiceFS is already installed.
+            juicefs_playbook = JUICEFS_DEPLOY
+            progress.send({
+                "type": "task",
+                "task_name": "Prepare JuiceFS kubelet directory on new nodes",
+                "task_number": step,
+            })
+            juicefs_ok = await _stream_playbook(
+                progress=progress,
+                playbook_path=juicefs_playbook,
+                extra_vars=extra_vars,
+                step_name="Prepare JuiceFS kubelet directory on new nodes",
+                step_number=step,
+                limit=",".join(added_hostnames),
+            )
+            if not juicefs_ok:
+                logger.warning("JuiceFS CSI setup failed on new nodes — continuing")
+                progress.send({
+                    "type": "warning",
+                    "message": "JuiceFS CSI setup failed on new nodes — continuing",
+                })
+            step += 1
+
+            # Check if images need to be rebuilt for new architectures.
+            # Update inventory build platforms so the playbooks will
+            # target all architectures when run manually.
+            post_join_architectures = set(node_manager.get_cluster_architectures())
+            unbuilt_archs = post_join_architectures - built_archs
+            needs_rebuild = len(unbuilt_archs) > 0
+
+            if needs_rebuild:
+                node_manager.update_build_platforms()
+
+        except Exception:
+            raise
+        # Nodes stay cordoned — user will uncordon after building images.
+
+        hostnames_csv = ",".join(added_hostnames)
+        architectures = sorted(post_join_architectures)
+
+        if needs_rebuild:
+            platforms_str = ",".join(f"linux/{a}" for a in architectures)
+            tk_images_cmd = f"tk_images rebuild --uncordon {hostnames_csv}"
+            progress.send({
+                "type": "complete",
+                "status": "success",
+                "message": (
+                    f"Successfully added {len(added_hostnames)} node(s): {', '.join(added_hostnames)}"
+                    + (" — GPU operator configured" if any_gpu_detected else "")
+                    + f". Nodes are cordoned. New architecture detected — images need rebuilding for {platforms_str}."
+                    + f" Open a terminal and run:\n\n  {tk_images_cmd}\n"
+                ),
+                "architectures": architectures,
+                "images_rebuilt": False,
+                "needs_image_rebuild": True,
+                "tk_images_command": tk_images_cmd,
+            })
+        else:
+            # All images already exist — uncordon immediately.
+            for h in added_hostnames:
+                # Restart any pods that cached wrong-arch images before cordon took effect
+                restarted = await node_manager.restart_crashlooping_pods(h)
+                if restarted:
+                    progress.send({
+                        "type": "ok",
+                        "message": f"[{h}] Restarted {len(restarted)} crash-looping pod(s): {', '.join(restarted)}",
+                    })
+
+                ok, msg = await node_manager.uncordon_node(h)
+                if ok:
+                    progress.send({
+                        "type": "ok",
+                        "message": f"[{h}] Uncordoned — node ready for scheduling",
+                    })
+                else:
+                    logger.warning(f"Could not uncordon {h}: {msg}")
+
+            progress.send({
+                "type": "complete",
+                "status": "success",
+                "message": (
+                    f"Successfully added {len(added_hostnames)} node(s): {', '.join(added_hostnames)}"
+                    + (" — GPU operator configured" if any_gpu_detected else "")
+                    + ". All images already built — nodes are ready."
+                ),
+                "architectures": architectures,
+                "images_rebuilt": False,
+                "needs_image_rebuild": False,
+            })
+
+    except Exception as e:
+        logger.error(f"Batch node addition error: {e}", exc_info=True)
+        progress.send({"type": "error", "message": str(e)})
+    finally:
+        progress.end()
+
+
+@router.post("/remove")
+async def remove_node(request: RemoveNodeRequest):
+    """Remove a node from the cluster and inventory."""
+    nodes = node_manager.get_cluster_nodes()
+    node = next((n for n in nodes if n["name"] == request.hostname), None)
+
+    if node and node["role"] == "control_plane":
+        raise HTTPException(status_code=400, detail="Cannot remove control plane node")
+
+    if node:
+        success, msg = await node_manager.delete_node(request.hostname)
+        if not success:
+            raise HTTPException(status_code=500, detail=msg)
+
+    try:
+        node_manager.remove_node_from_inventory(request.hostname)
+    except Exception as e:
+        logger.error(f"Failed to remove from inventory: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Node removed from cluster but inventory update failed: {e}",
+        )
+
+    return {
+        "success": True,
+        "message": f"Node {request.hostname} removed from cluster and inventory",
+    }

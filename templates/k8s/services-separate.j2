@@ -1,0 +1,26 @@
+# Generated services for separate_pods mode
+# Each container with a port gets its own service
+{% for container in thinkube_spec.spec.containers %}
+{% if container.port is defined %}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ container.name }}
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/component: {{ container.name }}
+    app.kubernetes.io/managed-by: argocd
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/component: {{ container.name }}
+  ports:
+    - port: {{ container.port }}
+      targetPort: {{ container.port }}
+      protocol: TCP
+      name: http
+{% endif %}
+{% endfor %}

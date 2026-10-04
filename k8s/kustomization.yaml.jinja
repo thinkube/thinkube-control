@@ -1,0 +1,30 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - inventory-configmap.yaml
+  - node-metrics-daemonset.yaml
+  - backend-deployment.yaml
+  - backend-service.yaml
+  - frontend-deployment.yaml
+  - frontend-service.yaml
+  - llm-proxy-deployment.yaml
+  - llm-proxy-service.yaml
+  - llm-proxy-httproute.yaml
+  - llm-proxy-traffic-policy.yaml
+  - ingress.yaml
+  - backend-traffic-policy.yaml
+  - keycloak-setup.yaml
+
+images:
+  - name: {{ backend_image_repo }}
+    newTag: latest
+  - name: {{ frontend_image_repo }}
+    newTag: latest
+  - name: {{ llm_proxy_image_repo }}
+    newTag: latest

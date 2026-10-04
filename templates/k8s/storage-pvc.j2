@@ -1,0 +1,76 @@
+# Generated PersistentVolumeClaims for containers with volume mounts or GPU resources
+{% for container in thinkube_spec.spec.containers %}
+{% if container.volume is defined %}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ project_name }}-{{ container.name }}-storage
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/component: {{ container.name }}
+    app.kubernetes.io/managed-by: argocd
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: k8s-hostpath
+{% elif container.gpu is defined and container.gpu.count is defined %}
+# Auto-generated static PV/PVC for GPU containers (JuiceFS MLflow root access)
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ project_name }}-{{ container.name }}-mlflow-root
+spec:
+  capacity:
+    storage: 1Ti
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  # Size the JuiceFS NVMe block cache to hold a model working set so warm
+  # reloads read from local NVMe instead of re-streaming weights from SeaweedFS
+  # (~180 MB/s). The 100 GiB default is exceeded by multi-model working sets
+  # (measured ~32% miss), forcing re-fetches. 512000 MiB = 500 GiB; cap is a
+  # lazy eviction ceiling, not a preallocation. free-space-ratio keeps 15% of
+  # the node disk free so the cache can never fill it. (TEP-tgmtd3 / SP-tgqg1j_SL-3)
+  mountOptions:
+    - cache-size=512000
+    - free-space-ratio=0.15
+  csi:
+    driver: csi.juicefs.com
+    fsType: juicefs
+    volumeHandle: mlflow
+    nodePublishSecretRef:
+      name: juicefs-mlflow-secret
+      namespace: juicefs
+    volumeAttributes:
+      juicefs/mount-cpu-limit: ""
+      juicefs/mount-cpu-request: ""
+      juicefs/mount-memory-limit: ""
+      juicefs/mount-memory-request: ""
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ project_name }}-{{ container.name }}-mlflow-models
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/component: {{ container.name }}
+    app.kubernetes.io/managed-by: argocd
+    app.kubernetes.io/purpose: mlflow-model-storage
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Ti
+  volumeName: {{ project_name }}-{{ container.name }}-mlflow-root
+  storageClassName: ""
+{% endif %}
+{% endfor %}

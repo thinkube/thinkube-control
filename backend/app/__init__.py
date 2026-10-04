@@ -1,0 +1,592 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# app/__init__.py
+from contextlib import asynccontextmanager
+import asyncio
+import logging
+import os
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi_mcp import FastApiMCP
+from fastapi_mcp_extended import ExtendedFastApiMCP
+from app.core.config import settings
+from app.mcp_prompts import prompt_definitions
+from app.api.router import api_router
+from app.db.session import Base, get_engine, SessionLocal
+
+# Import models to ensure they're registered with Base
+from app.core.api_tokens import APIToken
+from app.models.services import Service, ServiceHealth, ServiceAction, ServiceEndpoint
+from app.models.favorites import UserFavorite
+from app.models.container_images import ContainerImage, ImageMirrorJob
+from app.models.custom_images import CustomImageBuild
+from app.models.jupyter_venvs import JupyterVenv
+from app.services import health_checker, ServiceDiscovery
+from app.services.llm_model_registry import llm_model_registry
+from app.services.llm_backend_discovery import llm_backend_discovery
+from app.services.llm_ollama_client import ollama_client
+from app.services.llm_pod_manager import llm_pod_manager
+from app.services.metadata_fetcher import CatalogUnavailableError
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def app_lifespan(app: FastAPI):
+    # Startup: Create database tables
+    # Create tables in main database (for auth/tokens)
+    Base.metadata.create_all(bind=get_engine())
+
+    # Add order_index column if it doesn't exist
+    try:
+        from sqlalchemy import text
+
+        with get_engine().connect() as conn:
+            # Check if order_index column exists
+            result = conn.execute(
+                text(
+                    """
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name='user_favorites' AND column_name='order_index'
+            """
+                )
+            )
+            if not result.fetchone():
+                # Add the column if it doesn't exist
+                conn.execute(
+                    text(
+                        "ALTER TABLE user_favorites ADD COLUMN order_index INTEGER DEFAULT 0"
+                    )
+                )
+                conn.commit()
+                logger.info("Added order_index column to user_favorites table")
+    except Exception as e:
+        logger.warning(f"Could not add order_index column: {e}")
+
+    # Add architectures_built column to jupyter_venvs if it doesn't exist
+    try:
+        from sqlalchemy import text
+
+        with get_engine().connect() as conn:
+            result = conn.execute(
+                text(
+                    """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name='jupyter_venvs' AND column_name='architectures_built'
+            """
+                )
+            )
+            if not result.fetchone():
+                conn.execute(
+                    text(
+                        "ALTER TABLE jupyter_venvs ADD COLUMN architectures_built JSON"
+                    )
+                )
+                conn.commit()
+                logger.info("Added architectures_built column to jupyter_venvs table")
+    except Exception as e:
+        logger.warning(f"Could not add architectures_built column: {e}")
+
+    # fix_feed tables made before the feed was read with git have no
+    # feed_commit column.
+    from sqlalchemy import text
+
+    with get_engine().connect() as conn:
+        if not conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='fix_feed' AND column_name='feed_commit'"
+            )
+        ).fetchone():
+            conn.execute(text("ALTER TABLE fix_feed ADD COLUMN feed_commit VARCHAR(40)"))
+            conn.commit()
+            logger.info("Added feed_commit column to fix_feed table")
+
+    # Initialize services in database
+    try:
+        from app.db.init_services import init_services
+
+        init_services()
+    except Exception as e:
+        # If it's a duplicate key error, the services are already initialized
+        if "duplicate key value violates unique constraint" in str(e):
+            logger.info("Services already initialized, skipping")
+        else:
+            logger.error(f"Failed to initialize services: {e}")
+
+    # Initialize container images in database
+    try:
+        from app.db.init_images import init_images
+
+        init_images()
+    except Exception as e:
+        # Log but don't fail startup - images can be synced later via API
+        logger.warning(f"Failed to initialize container images: {e}")
+        logger.info("Container images can be synced later via /api/v1/harbor/images/sync")
+
+    # Initialize Jupyter venv templates
+    try:
+        from app.db.init_venvs import init_venvs, mark_orphaned_builds
+
+        init_venvs()
+        mark_orphaned_builds()
+    except Exception as e:
+        logger.warning(f"Failed to initialize Jupyter venv templates: {e}")
+
+    try:
+        from app.api.custom_images import mark_orphaned_image_builds
+
+        mark_orphaned_image_builds()
+    except Exception as e:
+        logger.warning(f"Could not mark interrupted custom image builds: {e}")
+
+    # Start health check background task
+    health_check_task = asyncio.create_task(health_checker.start())
+    logger.info("Started health check background task")
+
+    # Start periodic discovery task as backup (every 5 minutes)
+    async def periodic_discovery():
+        """Run service discovery periodically as a backup"""
+        from app.db.session import SessionLocal
+        from app.services import ServiceDiscovery
+
+        while True:
+            try:
+                await asyncio.sleep(300)  # 5 minutes
+                session_factory = SessionLocal()
+                db = session_factory()
+                try:
+                    discovery = ServiceDiscovery(db, settings.DOMAIN_NAME)
+                    discovery.discover_all()
+                    logger.info("Periodic service discovery completed")
+                except Exception as e:
+                    logger.error(f"Periodic discovery failed: {e}")
+                finally:
+                    db.close()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in periodic discovery task: {e}")
+
+    discovery_task = asyncio.create_task(periodic_discovery())
+    logger.info("Started periodic discovery task (5 minute interval)")
+
+    # Reconcile gateway-managed pods before backend discovery starts
+    await llm_pod_manager.reconcile()
+    logger.info("LLM pod manager reconciled")
+
+    # Start LLM backend discovery first so registry reconciliation has backend data
+    llm_discovery_task = asyncio.create_task(llm_backend_discovery.start_polling())
+    logger.info("Started LLM backend discovery polling")
+    llm_registry_task = asyncio.create_task(llm_model_registry.start_polling())
+    logger.info("Started LLM model registry polling")
+
+    # Background poller for mirror job status
+    async def poll_mirror_jobs():
+        """Periodically sync mirror job status with Argo Workflows."""
+        await asyncio.sleep(30)  # Initial delay
+        while True:
+            try:
+                from app.db.session import SessionLocal
+                from app.models.model_mirrors import ModelMirrorJob
+                from app.services.model_downloader import ModelDownloaderService
+
+                db = SessionLocal()()
+                try:
+                    running_jobs = db.query(ModelMirrorJob).filter(
+                        ModelMirrorJob.status.in_(["pending", "running"])
+                    ).all()
+                    if running_jobs:
+                        service = ModelDownloaderService()
+                        for job in running_jobs:
+                            if job.workflow_name:
+                                try:
+                                    wf_status = service.get_download_status(job.workflow_name)
+                                    if wf_status["status"] == "Succeeded" and job.status != "succeeded":
+                                        job.status = "succeeded"
+                                        job.error_message = None
+                                        logger.info(f"Mirror job {job.model_id} completed (background sync)")
+                                    elif wf_status["status"] in ("Failed", "Error") and job.status != "failed":
+                                        job.status = "failed"
+                                        job.error_message = wf_status.get("message", "Workflow failed")
+                                        logger.info(f"Mirror job {job.model_id} failed (background sync)")
+                                except Exception:
+                                    pass
+                        db.commit()
+                finally:
+                    db.close()
+            except Exception as e:
+                logger.debug(f"Mirror job poller error: {e}")
+            await asyncio.sleep(60)
+
+    mirror_poll_task = asyncio.create_task(poll_mirror_jobs())
+    logger.info("Started mirror job status poller (60s interval)")
+
+    # Keep the cluster-resources cache warm so /cluster/resources returns
+    # instantly (a full pod list is multi-second; JupyterHub calls this on the
+    # spawn path with a tight timeout).
+    from app.api.cluster_resources import refresh_cluster_resources_loop
+    cluster_resources_task = asyncio.create_task(refresh_cluster_resources_loop())
+    logger.info("Started cluster resources refresh task (15s interval)")
+
+    # Unattended notebook runs that were in flight when thinkube-control last stopped
+    from app.api.jupyter_servers import resume_notebook_jobs
+    try:
+        await resume_notebook_jobs()
+    except Exception as e:
+        logger.warning(f"Could not resume notebook jobs: {e}")
+
+    # Deployment runs end with the backend process; rows a previous process
+    # left pending or running would otherwise say so for ever.
+    try:
+        from app.db.init_deployments import mark_interrupted_runs
+        mark_interrupted_runs()
+    except Exception as e:
+        logger.warning(f"Could not mark interrupted deployment runs: {e}")
+
+    # Deployment runs start one at a time from the run queue; queued runs
+    # recorded before this start are picked up again.
+    from app.services.run_queue import run_queue
+    run_queue.start()
+
+    # A venv build or a custom image build lives as a task in one backend
+    # process. When a rollout replaces the pod under a build, the new pod never
+    # had the task, so the record would say building for ever; this loop marks
+    # such records failed.
+    async def reconcile_venv_builds():
+        from app.db.init_venvs import mark_orphaned_builds
+        from app.api.custom_images import mark_orphaned_image_builds
+        from app.services import detached
+
+        while True:
+            await asyncio.sleep(60)
+            try:
+                mark_orphaned_builds(
+                    still_running=lambda venv_id, status: detached.running(
+                        f"venv-delete:{venv_id}" if status == "deleting" else f"venv-build:{venv_id}"
+                    )
+                )
+            except Exception as e:
+                logger.debug(f"venv build reconciliation: {e}")
+            try:
+                mark_orphaned_image_builds(
+                    still_running=lambda build_id: detached.running(f"image-build:{build_id}")
+                )
+            except Exception as e:
+                logger.warning(f"custom image build reconciliation: {e}")
+            try:
+                from app.db.init_deployments import mark_interrupted_runs
+                from app.services.background_executor import background_executor
+
+                if mark_interrupted_runs(still_running=lambda run_id: run_id in background_executor.running_deployments):
+                    run_queue.wake()
+            except Exception as e:
+                logger.warning(f"deployment run reconciliation: {e}")
+
+    venv_reconcile_task = asyncio.create_task(reconcile_venv_builds())
+
+    # News and fixes from thinkube-fixes: read at start and every six hours.
+    async def check_fixes_feed():
+        from app.services.fixes_feed import CHECK_INTERVAL_SECONDS, check_now
+
+        while True:
+            db = SessionLocal()()
+            try:
+                await asyncio.to_thread(check_now, db)
+            except Exception as e:
+                logger.error(f"News and fixes check could not record its result: {e}")
+            finally:
+                db.close()
+            await asyncio.sleep(CHECK_INTERVAL_SECONDS)
+
+    fixes_feed_task = asyncio.create_task(check_fixes_feed())
+
+    yield
+
+    # Shutdown: Clean up resources
+    health_checker.stop()
+    llm_model_registry.stop()
+    llm_backend_discovery.stop()
+
+    health_check_task.cancel()
+    venv_reconcile_task.cancel()
+    fixes_feed_task.cancel()
+    discovery_task.cancel()
+    llm_registry_task.cancel()
+    llm_discovery_task.cancel()
+    mirror_poll_task.cancel()
+    cluster_resources_task.cancel()
+    for task in [health_check_task, discovery_task, llm_registry_task, llm_discovery_task]:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+    await llm_backend_discovery.close()
+    await ollama_client.close()
+
+
+def create_app() -> FastAPI:
+    """Factory function to create FastAPI app with MCP server."""
+    # First, set up routes and create MCP before creating the app
+    # This is needed to properly combine lifespans
+
+    # Create the FastAPI app
+    app = FastAPI(
+        title=settings.PROJECT_NAME,
+        openapi_url=f"{settings.API_V1_STR}/openapi.json",
+        docs_url=f"{settings.API_V1_STR}/docs",
+        redoc_url=f"{settings.API_V1_STR}/redoc",
+        lifespan=app_lifespan,
+    )
+
+    # Set up CORS
+    if settings.BACKEND_CORS_ORIGINS:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=[str(origin) for origin in settings.BACKEND_CORS_ORIGINS],
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
+
+    # A metadata catalog that cannot be fetched is an upstream failure.
+    @app.exception_handler(CatalogUnavailableError)
+    async def catalog_unavailable(request, exc: CatalogUnavailableError):
+        return JSONResponse(status_code=502, content={"detail": str(exc)})
+
+    # Include the API router
+    app.include_router(api_router, prefix=settings.API_V1_STR)
+
+    # Root endpoint
+    @app.get("/")
+    async def root():
+        return {
+            "message": "Welcome to the K8s Dashboard Hub API",
+            "docs_url": f"{settings.API_V1_STR}/docs",
+            "redoc_url": f"{settings.API_V1_STR}/redoc",
+            "openapi_url": f"{settings.API_V1_STR}/openapi.json",
+            "version": "1.0.0",
+        }
+
+    # Health check endpoint
+    @app.get("/health")
+    async def health():
+        return {"status": "ok"}
+
+    # Set up MCP using extended fastapi-mcp with resource support
+    try:
+        # Create Extended MCP server with resource and prompt support
+        mcp = ExtendedFastApiMCP(
+            app,
+            # Enable automatic resource conversion for GET endpoints
+            auto_convert_resources=True,
+            # The multi-step task guides of app/mcp_prompts.py
+            prompt_definitions=prompt_definitions(settings.DOMAIN_NAME),
+            # Include all operations (will be automatically classified)
+            include_operations=MCP_OPERATIONS,
+        )
+
+        # Mount the MCP server with HTTP transport
+        mcp.mount_http()
+        logger.info("Extended MCP server mounted at /mcp with resources, tools, and prompts")
+        print("INFO: Extended MCP server mounted at /mcp with resources, tools, and prompts")
+
+    except Exception as e:
+        logger.error(f"Failed to set up MCP server: {e}")
+        print(f"ERROR: Failed to set up MCP server: {e}")
+
+    return app
+
+
+# The operation ids the MCP server exposes. An id listed here that no route
+# declares is silently absent from the server; the tests check the ones the
+# prompts name.
+MCP_OPERATIONS = [
+    # === Auth & Tokens ===
+    "get_user_info",               # Resource
+    "list_tokens",                 # Resource
+    "verify_current_token",        # Resource
+    "create_token",                # Tool
+    "delete_token",                # Tool
+
+    # === Services ===
+    "list_services_minimal",       # Resource
+    "get_service_details",         # Resource
+    "get_service_health_history",  # Resource
+    "get_service_dependencies",    # Resource
+    "describe_pod",                # Resource
+    "get_container_logs",          # Resource
+    "toggle_service",              # Tool
+    "restart_service",             # Tool
+    "trigger_health_check",        # Tool
+    "sync_services",               # Tool
+
+    # === Dashboards ===
+    "list_dashboards",             # Resource
+    "get_dashboard_categories",    # Resource
+    "get_dashboard",               # Resource
+
+    # === Templates & Deployments ===
+    "list_templates",              # Resource
+    "get_template_metadata",       # Resource
+    "list_deployments",            # Resource
+    "get_deployment_status",       # Resource
+    "get_deployment_logs",         # Resource
+    "get_deployment_debug_logs",   # Resource
+    "download_debug_log",          # Resource
+    "deploy_template",             # Tool
+    "redeploy_template",           # Tool
+    "cancel_deployment",           # Tool
+    "list_deployed_apps",          # Resource
+    "publish_template",            # Tool
+    "get_commit_rollout",          # Resource
+
+    # === Harbor Images ===
+    "list_harbor_images",          # Resource
+    "get_harbor_image",            # Resource
+    "get_image_statistics",        # Resource
+    "list_harbor_jobs",            # Resource
+    "get_harbor_job_status",       # Resource
+    "list_harbor_projects",        # Resource
+    "check_harbor_health",         # Resource
+    "register_harbor_image",       # Tool
+    "remirror_harbor_image",       # Tool
+    "bulk_mirror_images",          # Tool
+    "delete_image",                # Tool
+
+    # === Secrets ===
+    "list_secrets",                # Resource
+    "get_secret",                  # Resource
+    "get_secret_apps",             # Resource
+    "create_secret",               # Tool
+    "update_secret",               # Tool
+    "delete_secret",               # Tool
+
+    # === Custom Images ===
+    "list_custom_images",          # Resource
+    "get_custom_image",            # Resource
+    "get_base_registry",           # Resource
+    "get_image_dockerfile",        # Resource
+    "get_build_logs",              # Resource
+    "download_build_log",          # Resource
+    "create_custom_image",         # Tool
+    "build_custom_image",          # Tool
+    "delete_custom_image",         # Tool
+
+    # === Models ===
+    "get_model_catalog",           # Resource
+    "list_mirror_jobs",            # Resource
+    "get_mirror_status",           # Resource
+    "check_mlflow_status",         # Resource
+    "submit_model_mirror",         # Tool
+    "cancel_model_mirror",         # Tool
+    "reset_mirror_job",            # Tool
+    "delete_model",                # Tool
+
+    # === Jupyter Venvs ===
+    "list_jupyter_venvs",          # Resource
+    "get_jupyter_venv",            # Resource
+    "get_venv_templates",          # Resource
+    "get_venv_template_details",   # Resource
+    "get_venv_build_logs",         # Resource
+    "download_venv_build_log",     # Resource
+    "create_jupyter_venv",         # Tool
+    "build_jupyter_venv",          # Tool
+    "delete_jupyter_venv",         # Tool
+
+    # === JupyterHub Config ===
+    "get_jupyterhub_config",       # Resource
+
+    # === Optional Components ===
+    "list_optional_components",    # Resource
+    "get_component_info",          # Resource
+    "get_component_status",        # Resource
+    "install_optional_component",  # Tool
+    "uninstall_optional_component", # Tool
+
+    # === code-server ===
+    "redeploy_code_server",        # Tool
+    "get_code_server_redeploy",    # Resource
+
+    # === Run queue ===
+    "list_runs",                   # Resource
+    "cancel_queued_run",           # Tool
+
+    # === News and fixes ===
+    "list_news_and_fixes",         # Resource
+    "check_for_fixes",             # Tool
+    "apply_fix",                   # Tool
+    "mark_news_read",              # Tool
+
+    # === Knative ===
+    "list_knative_services",       # Resource
+    "get_knative_service",         # Resource
+
+    # === Cluster & GPU ===
+    "get_cluster_resources",       # Resource
+    "get_gpu_metrics",             # Resource
+
+    # === LLM Gateway ===
+    "get_llm_models",              # Resource
+    "get_llm_model_status",        # Resource
+    "resolve_llm_model",           # Resource
+    "get_llm_backends",            # Resource
+    "get_llm_gpu_status",          # Resource
+    "get_llm_load_options",        # Resource
+    "refresh_llm_registry",        # Tool
+    "load_llm_model",              # Tool
+    "unload_llm_model",            # Tool
+
+    # === Debug ===
+    "resolve_hostname",            # Resource
+    "test_connectivity",           # Resource
+    "get_environment",             # Resource
+    "test_ssh",                    # Resource
+
+    # === Notebook server (JupyterHub) and unattended runs ===
+    "jupyter_notebook_status",     # Resource
+    "start_notebook_server",       # Tool
+    "stop_notebook_server",        # Tool
+    "run_notebook_job",            # Tool
+    "notebook_job_status",         # Resource
+    "list_notebook_jobs",          # Resource
+    "cancel_notebook_job",         # Tool
+
+    # === Notebooks (forwarded to tk-notebook-mcp in the server) ===
+    "jupyter_list_notebooks",      # Resource
+    "jupyter_list_cells",          # Resource
+    "jupyter_read_cell",           # Resource
+    "jupyter_list_kernels",        # Resource
+    "jupyter_kernel_status",       # Resource
+    "jupyter_check_execution_status",   # Resource
+    "jupyter_check_all_cells_status",   # Resource
+    "jupyter_use_notebook",        # Tool
+    "jupyter_close_notebook",      # Tool
+    "jupyter_create_notebook",     # Tool
+    "jupyter_execute_cell",        # Tool
+    "jupyter_execute_cell_async",  # Tool
+    "jupyter_execute_all_cells",   # Tool
+    "jupyter_execute_code",        # Tool
+    "jupyter_insert_cell",         # Tool
+    "jupyter_overwrite_cell",      # Tool
+    "jupyter_delete_cell",         # Tool
+    "jupyter_move_cell",           # Tool
+    "jupyter_insert_and_execute_cell",  # Tool
+    "jupyter_restart_kernel",      # Tool
+    "jupyter_interrupt_kernel",    # Tool
+
+    # === Docs (Context7-style; active only when the docs are deployed) ===
+    "search_thinkube_docs",        # Tool
+    "get_thinkube_doc",            # Tool
+]
+
+
+# Create the app instance for production use
+app = create_app()
+
+# Export the app and factory for uvicorn and tests
+__all__ = ["app", "create_app"]

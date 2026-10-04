@@ -1,0 +1,61 @@
+= News and fixes
+:page-type: reference
+
+_How your cluster learns about fixes and news after you install it, and what happens when you apply a fix._
+
+.TL;DR
+A bell with a number in the top bar of Thinkube Control means there is news or a fix for your cluster. Open *News & Fixes* and click *Apply* on a fix. Nothing is applied until you do.
+
+== Where news and fixes come from
+
+Thinkube Control keeps a clone of the public repository https://github.com/thinkube/thinkube-fixes[thinkube/thinkube-fixes] in `thinkube-platform/fixes/thinkube-fixes`, beside the other platform repositories you see in Thinkube IDE. It fetches the repository when it starts and every six hours, and reads the file for your release, for example `releases/0.1.json` on a Thinkube 0.1 cluster. *Check now* on the page fetches it at once. The page shows the commit it read, so you can look at the same commit in Thinkube IDE.
+
+If a check fails, for example because the cluster has no internet access at that moment, the page shows the error and the time of the check. The entries shown are then the ones from the last check that worked.
+
+== The page
+
+*News & Fixes* is in the *Configuration & Security* group of the sidebar.
+
+Fixes come first, security fixes before bug fixes. Each fix shows the component, the version installed on your cluster, and the version that carries the fix. A fix shows only when the component is installed and its version is older than the fixed one.
+
+[cols="1,3",options="header"]
+|===
+| Shown | Meaning
+
+| *Apply* | The fix is for a component on your cluster. Click to apply it.
+| *applied* | The component runs the fixed version or a newer one.
+| A command to run | The fix is for Thinkube Control itself. Applying it restarts Thinkube Control, so it cannot do it itself. Run the command shown in a Thinkube IDE terminal.
+|===
+
+News follows the fixes. *Mark read* takes a news entry out of the count in the top bar.
+
+== What Apply does
+
+*Apply* starts a run in the run queue, like an optional component install. The runs dialog opens and shows its log.
+
+. Thinkube Control moves its copy of the `thinkube` repository forward to your release branch, which holds the fix. It only moves forward. If git cannot move it forward, the run stops with git's own message and the copy is left as it was.
+. It runs the component's install playbook from that copy. The component can restart while this runs.
+. The playbook records the new component version. The fix then shows as *applied*, and the card of the component shows the new version.
+
+A fix entry contains no code. It only names a commit of `thinkube/thinkube`, so everything that runs comes from that repository.
+
+== The operations
+
+[cols="1,2",options="header"]
+|===
+| Operation | What it does
+
+| `list_news_and_fixes`
+| The news and the fixes, the status of each fix on this cluster, and the time and error of the last check.
+
+| `check_for_fixes`
+| Reads the feed now.
+
+| `apply_fix`
+| Queues a fix with status *available*. It answers with a run id; `get_deployment_status` follows the run.
+
+| `mark_news_read`
+| Marks a news entry read.
+|===
+
+Ask your agent: _"Are there fixes for my cluster?"_ or _"Apply the Valkey fix."_

@@ -1,0 +1,107 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
+---
+# ansible/playbooks/build_venv.yaml
+# Description:
+#   Builds a custom venv for ALL architectures present in the cluster.
+#   For each architecture, finds a GPU node and creates a K8s Job.
+#   A custom venv is stored at <base>/custom/<venv_name>/<arch>/; a template
+#   (is_template=true) is the built-in venv and is rebuilt in place at
+#   <base>/<arch>/<venv_name>/, replacing what the release installed, so
+#   arm64 and amd64 builds coexist.
+#
+# Usage:
+#   ansible-playbook -i /path/to/inventory.yaml build_venv.yaml \
+#     -e venv_name=my-custom-venv \
+#     -e packages='["numpy", "pandas", "scikit-learn"]'
+#
+# Optional:
+#   -e target_architecture=arm64    # Build only for one architecture
+#
+# Variables:
+#   - venv_name: Name of the venv to create
+#   - packages: JSON list of packages to install
+#   - kubeconfig: Path to kubeconfig file
+#   - harbor_registry: Container registry hostname
+
+- name: Build custom venv for all cluster architectures
+  hosts: k8s_control_plane
+  gather_facts: true
+  vars:
+    venvs_host_path: /var/lib/jupyterhub-venvs
+    custom_venvs_subpath: custom
+    job_namespace: jupyterhub
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - venv_name is defined
+          - packages is defined
+        fail_msg: "Required variables venv_name and packages must be provided"
+
+    - name: Parse packages if string
+      ansible.builtin.set_fact:
+        package_list: "{{ packages if packages is sequence and packages is not string else packages | from_json }}"
+        venv_is_template: "{{ is_template | default(false) | bool }}"
+
+    - name: Get all cluster nodes
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: v1
+        kind: Node
+      delegate_to: localhost
+      register: all_nodes
+
+    - name: Build architecture list and node mapping
+      ansible.builtin.set_fact:
+        cluster_architectures: >-
+          {%- set archs = [] -%}
+          {%- for node in all_nodes.resources -%}
+            {%- set arch = node.metadata.labels['kubernetes.io/arch'] -%}
+            {%- if arch not in archs -%}
+              {%- set _ = archs.append(arch) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ archs | sort }}
+        arch_builds: >-
+          {%- set builds = [] -%}
+          {%- set seen = [] -%}
+          {%- for node in all_nodes.resources -%}
+            {%- set arch = node.metadata.labels['kubernetes.io/arch'] -%}
+            {%- if arch not in seen -%}
+              {%- set _ = seen.append(arch) -%}
+              {%- set _ = builds.append({'arch': arch, 'node': node.metadata.name}) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ builds }}
+
+    - name: Filter to single architecture if requested
+      ansible.builtin.set_fact:
+        arch_builds: "{{ arch_builds | selectattr('arch', 'equalto', target_architecture) | list }}"
+      when: target_architecture is defined and target_architecture != ''
+
+    - name: Display build plan
+      ansible.builtin.debug:
+        msg: "Building venv '{{ venv_name }}' for: {{ arch_builds | map(attribute='arch') | join(', ') }}"
+
+    - name: Display build targets
+      ansible.builtin.debug:
+        msg: "{{ item.arch }}: building on node {{ item.node }}"
+      loop: "{{ arch_builds }}"
+      loop_control:
+        label: "{{ item.arch }}"
+
+    - name: Build venv for each architecture
+      ansible.builtin.include_tasks: build_venv_on_node.yaml
+      vars:
+        target_build_node: "{{ item.node }}"
+        target_build_arch: "{{ item.arch }}"
+      loop: "{{ arch_builds }}"
+      loop_control:
+        label: "{{ item.arch }} on {{ item.node }}"
+
+    - name: Report completed architectures
+      ansible.builtin.debug:
+        msg: "Venv '{{ venv_name }}' built for: {{ arch_builds | map(attribute='arch') | join(', ') }}"

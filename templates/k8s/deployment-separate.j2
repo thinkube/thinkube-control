@@ -1,0 +1,404 @@
+#jinja2: lstrip_blocks: True, trim_blocks: True
+# Generated deployments for separate_pods mode
+# Each container gets its own deployment
+{% for container in thinkube_spec.spec.containers %}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ project_name }}-{{ container.name }}
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/component: {{ container.name }}
+    app.kubernetes.io/managed-by: argocd
+spec:
+  replicas: {{ thinkube_spec.spec.deployment.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ project_name }}
+      app.kubernetes.io/component: {{ container.name }}
+  {% if container.gpu is defined and container.gpu.count is defined %}
+  # Longer progress deadline for GPU workloads that may need to download large models
+  progressDeadlineSeconds: 3600  # 1 hour for model downloads
+  {% endif %}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ project_name }}
+        app.kubernetes.io/component: {{ container.name }}
+    spec:
+      priorityClassName: thinkube-workload
+      imagePullSecrets:
+        - name: app-pull-secret
+{% if thinkube_spec.spec.services is defined and 'workflows' in thinkube_spec.spec.services %}
+      # The projected token of this account is what authorises the pod to
+      # submit workflows into this namespace.
+      serviceAccountName: {{ project_name }}-workflows
+{% endif %}
+{% if container.gpu is defined and container.gpu.memory is defined %}
+      affinity:
+        nodeAffinity:
+          # Use preferred instead of required to support both discrete GPUs and unified memory systems
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: nvidia.com/gpu.memory
+                operator: Gt
+                # Convert memory string to MB for comparison (e.g., "20Gi" -> 20480)
+                {% set memory_value = container.gpu.memory.replace('Gi', '') | int * 1024 %}
+                values: ["{{ memory_value }}"]
+{% endif %}
+      containers:
+        - name: {{ container.name }}
+          image: {{ container_registry }}/thinkube/{{ project_name }}-{{ container.name }}:latest
+          imagePullPolicy: Always
+{% if container.port is defined %}
+
+          ports:
+            - containerPort: {{ container.port }}
+              protocol: TCP
+{%- endif %}
+
+          {% if deployment_env_from is defined and deployment_env_from | length > 0 %}
+          envFrom:
+            {% for env_source in deployment_env_from %}
+            - {{ env_source | to_yaml | indent(14) }}
+            {% endfor %}
+          {% endif %}
+          env:
+            # Service-based environment variables
+            {% if thinkube_spec.spec.services is defined and 'database' in thinkube_spec.spec.services %}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-db-credentials
+                  key: url
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-db-credentials
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-db-credentials
+                  key: password
+            - name: POSTGRES_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-db-credentials
+                  key: database
+            - name: POSTGRES_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-db-credentials
+                  key: host
+            - name: POSTGRES_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-db-credentials
+                  key: port
+            {% endif %}
+            {% if thinkube_spec.spec.services is defined and 'cache' in thinkube_spec.spec.services %}
+            - name: CACHE_URL
+              value: "redis://valkey-master.valkey.svc.cluster.local:6379"
+            - name: REDIS_URL
+              value: "redis://valkey-master.valkey.svc.cluster.local:6379"
+            {% endif %}
+            {% if thinkube_spec.spec.services is defined and 'queue' in thinkube_spec.spec.services %}
+            - name: QUEUE_URL
+              value: "redis://valkey-master.valkey.svc.cluster.local:6379"
+            {% endif %}
+            {% if thinkube_spec.spec.services is defined and 'workflows' in thinkube_spec.spec.services %}
+            - name: WORKFLOWS_NAMESPACE
+              value: "{{ k8s_namespace }}"
+            - name: WORKFLOWS_SERVER_URL
+              value: "http://argo-workflows-server.argo.svc.cluster.local:2746"
+            - name: WORKFLOWS_SERVICE_ACCOUNT
+              value: "{{ project_name }}-workflows"
+            - name: WORKFLOWS_UI_URL
+              value: "https://argo.{{ domain_name }}/workflows/{{ k8s_namespace }}"
+            # A step runs in one of this application's own images, named here
+            # so a workflow never has to assemble the reference itself.
+            {% for c in thinkube_spec.spec.containers %}
+            - name: CONTAINER_IMAGE_{{ c.name | upper | replace('-', '_') }}
+              value: "{{ container_registry }}/thinkube/{{ project_name }}-{{ c.name }}:latest"
+            {% endfor %}
+            {% endif %}
+            # Dependency-injected environment variables
+            {% if thinkube_spec.spec.dependencies is defined %}
+            {% for dep in thinkube_spec.spec.dependencies %}
+            {% if dep.resolved_url is defined %}
+            - name: {{ dep.env }}
+              value: "{{ dep.resolved_url }}"
+            {% endif %}
+            {% endfor %}
+            {% endif %}
+            # User-configurable environment variables
+            {% if thinkube_spec.spec.env is defined %}
+            {% for env_var in thinkube_spec.spec.env %}
+            {% if env_var.default is defined %}
+            - name: {{ env_var.name }}
+              value: "{{ env_var.default }}"
+            {% endif %}
+            {% endfor %}
+            {% endif %}
+            # Manifest parameters (from deploy-time input, e.g. model_id)
+            {% if manifest_params is defined %}
+            {% for param_name, param_value in manifest_params.items() %}
+            - name: {{ param_name | upper }}
+              value: "{{ param_value }}"
+            {% endfor %}
+            {% endif %}
+            # Names the container may show the browser (thinkube.yaml publicEnv).
+            # An allow-list of names only; every container holds the full
+            # environment, secrets included, so an absent list publishes nothing.
+            {% if container.publicEnv is defined %}
+            - name: PUBLIC_ENV_VARS
+              value: "{{ container.publicEnv | join(',') }}"
+            {% endif %}
+            # Platform-wide environment variables
+            - name: APP_NAME
+              value: "{{ project_name }}"
+            - name: APP_TITLE
+              value: "{{ project_name | replace('-', ' ') | title }}"
+            - name: DOMAIN_NAME
+              value: "{{ domain_name }}"
+            - name: CONTAINER_REGISTRY
+              value: "{{ container_registry }}"
+            - name: KEYCLOAK_URL
+              value: "https://auth.{{ domain_name }}"
+            - name: KEYCLOAK_BASE_URL
+              value: "https://auth.{{ domain_name }}"
+            - name: KEYCLOAK_REALM
+              value: "thinkube"
+            - name: KEYCLOAK_CLIENT_ID
+              value: "{{ k8s_namespace }}"
+            - name: KEYCLOAK_CLIENT_SECRET
+              value: ""
+            - name: FRONTEND_URL
+              value: "https://{{ project_name }}.{{ domain_name }}"
+            - name: APP_URL
+              value: "https://{{ project_name }}.{{ domain_name }}"
+            - name: API_BASE_URL
+              value: "https://{{ project_name }}.{{ domain_name }}/api"
+            # MLflow authentication and S3 access credentials
+            - name: MLFLOW_KEYCLOAK_TOKEN_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: keycloak-token-url
+            - name: MLFLOW_KEYCLOAK_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: keycloak-client-id
+            - name: MLFLOW_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: mlflow-client-secret
+            - name: MLFLOW_AUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: mlflow-username
+            - name: MLFLOW_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: admin-password
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-mlflow-credentials
+                  key: admin-password
+            - name: SEAWEEDFS_ENDPOINT
+              value: "{{ seaweedfs_endpoint }}"
+            - name: SEAWEEDFS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-storage-credentials
+                  key: access-key
+            - name: SEAWEEDFS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-storage-credentials
+                  key: secret-key
+{% if container.gpu is defined and container.gpu.count is defined %}
+            # Persist FlashInfer's JIT kernel cache on the NVMe hostPath so the
+            # ~150s kernel build is reused across restarts instead of recompiled
+            # every boot (SP-tgqg1j_SL-5 / TEP-tgmtd3, flashinfer#2252). FlashInfer
+            # caches under $FLASHINFER_WORKSPACE_BASE/.cache/flashinfer; the default
+            # ($HOME=/root) is ephemeral. /root/.cache/vllm is the persistent
+            # hostPath mounted for GPU containers (the SL-4 vllm-compile-cache).
+            - name: FLASHINFER_WORKSPACE_BASE
+              value: "/root/.cache/vllm"
+{% endif %}
+            # Container-specific environment variables (if defined)
+            {% if container.environment is defined %}
+            {% for env in container.environment %}
+            - name: {{ env.name }}
+              {% if env.value is defined %}
+              value: "{{ env.value }}"
+              {% elif env.valueFrom is defined %}
+              valueFrom:
+                {% if env.valueFrom.secretKeyRef is defined %}
+                secretKeyRef:
+                  name: {{ env.valueFrom.secretKeyRef.name }}
+                  key: {{ env.valueFrom.secretKeyRef.key }}
+                {% elif env.valueFrom.configMapKeyRef is defined %}
+                configMapKeyRef:
+                  name: {{ env.valueFrom.configMapKeyRef.name }}
+                  key: {{ env.valueFrom.configMapKeyRef.key }}
+                {% endif %}
+              {% endif %}
+            {% endfor %}
+            {% endif %}
+{% if container.size is defined %}
+
+          resources:
+            {% if container.size == 'small' %}
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+            {% elif container.size == 'medium' %}
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
+            {% elif container.size == 'large' %}
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "2000m"
+            {% elif container.size == 'xlarge' %}
+            requests:
+              memory: "4Gi"
+              cpu: "1000m"
+            limits:
+              # xlarge is for ML/AI workloads - use dynamic resize API for larger allocations
+              memory: "16Gi"
+              cpu: "4000m"
+            {% else %}
+            # Default to small if size is not recognized
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
+            {% endif %}
+{%- endif %}
+{% if container.gpu is defined and container.gpu.count is defined and container.gpu.memory is defined %}
+{% if container.size is not defined %}
+
+          resources:
+            requests:
+              nvidia.com/gpu: {{ container.gpu.count }}
+            limits:
+              nvidia.com/gpu: {{ container.gpu.count }}
+{% else %}
+
+            # GPU resources added to existing resources
+              nvidia.com/gpu: {{ container.gpu.count }}
+{% endif %}
+{% elif container.gpu is defined %}
+          # ERROR: GPU configuration requires both 'count' and 'memory' fields
+{% endif %}
+          resizePolicy:
+            - resourceName: cpu
+              restartPolicy: NotRequired
+            - resourceName: memory
+              restartPolicy: RestartContainer
+{% if container.health is defined %}
+{% if container.gpu is defined %}
+          # Startup probe for initial model loading (first deployment)
+          startupProbe:
+            httpGet:
+              path: {{ container.health }}
+              port: {{ container.port | default(8080) }}
+            initialDelaySeconds: 30  # Give container time to start web server
+            periodSeconds: 10        # Check every 10 seconds
+            timeoutSeconds: 10
+            failureThreshold: 60      # 60 * 10 = 600 seconds (10 minutes) max for initial startup
+            successThreshold: 1
+
+          # Liveness probe starts after startup probe succeeds
+          livenessProbe:
+            httpGet:
+              path: {{ container.health }}
+              port: {{ container.port | default(8080) }}
+            initialDelaySeconds: 30  # After startup succeeds
+            periodSeconds: 30
+            timeoutSeconds: 10
+          
+          # Readiness probe for quick subsequent restarts (with cached models)
+          readinessProbe:
+            httpGet:
+              path: {{ container.health }}
+              port: {{ container.port | default(8080) }}
+            initialDelaySeconds: 10  # Quick check after startup succeeds
+            periodSeconds: 10
+            timeoutSeconds: 10
+{% else %}
+          # Standard probes for non-GPU containers
+
+          livenessProbe:
+            httpGet:
+              path: {{ container.health }}
+              port: {{ container.port | default(8080) }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: {{ container.health }}
+              port: {{ container.port | default(8080) }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+{% endif %}
+{% endif %}
+{% if container.volume is defined %}
+
+          volumeMounts:
+            - name: app-storage
+              mountPath: {{ container.volume }}
+{% elif container.gpu is defined and container.gpu.count is defined %}
+          # Auto-add MLflow model storage for GPU containers (JuiceFS)
+          volumeMounts:
+            - name: mlflow-models
+              mountPath: /mlflow-models
+            # Persist torch.compile + flashinfer autotune across pod restarts so
+            # reloads skip ~226s of recompile/re-autotune (TEP-tgmtd3 / SP-tgqg1j_SL-4).
+            - name: vllm-compile-cache
+              mountPath: /root/.cache/vllm
+{%- endif %}
+      {% if container.volume is defined %}
+      volumes:
+        - name: app-storage
+          persistentVolumeClaim:
+            claimName: {{ project_name }}-{{ container.name }}-storage
+      {% elif container.gpu is defined and container.gpu.count is defined %}
+      # Auto-add MLflow model storage volume for GPU containers (JuiceFS)
+      volumes:
+        - name: mlflow-models
+          persistentVolumeClaim:
+            claimName: {{ project_name }}-{{ container.name }}-mlflow-models
+        # Node-local cache for vLLM's compile/autotune artifacts. hostPath (not
+        # emptyDir) so it survives pod restarts; the cache is inherently node- and
+        # vLLM-version-specific, so per-node is correct. (TEP-tgmtd3 / SP-tgqg1j_SL-4)
+        - name: vllm-compile-cache
+          hostPath:
+            path: /var/lib/thinkube/vllm-compile-cache/{{ project_name }}-{{ container.name }}
+            type: DirectoryOrCreate
+      {% endif %}
+{% endfor %}

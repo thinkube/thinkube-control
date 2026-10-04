@@ -1,0 +1,463 @@
+# Generated Argo Workflow template for building and testing containers
+# Supports multi-architecture builds when cluster has nodes of different architectures
+#
+# Build tool: Buildah (library/buildah, mirrored from quay.io/buildah/stable),
+# in a pod that is not privileged. Beyond a default pod it needs:
+#   - runAsUser 0, capability SYS_ADMIN and AppArmor Unconfined: Buildah
+#     unpacks each layer in its own mount namespace. Without them unpacking
+#     fails with "remount /, flags: 0x44000: permission denied".
+#   - --isolation chroot: RUN steps run without a nested OCI runtime, which
+#     this pod cannot provide.
+#   - --ulimit nofile=524288:524288: Buildah raises RLIMIT_NOFILE for RUN
+#     steps, and a RUN step fails when that is above the pod's hard limit.
+# Cache: the layer cache lives in Harbor, in <image>/cache.
+---
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: {{ project_name }}-build
+  namespace: argo
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/part-of: thinkube
+    app.kubernetes.io/component: ci-cd
+    thinkube.io/trigger: webhook
+    thinkube.io/build-type: container
+    # Critical for webhook adapter to identify the app
+    thinkube.io/app-name: {{ project_name }}
+    thinkube.io/namespace: {{ k8s_namespace }}
+spec:
+  entrypoint: ci-cd-pipeline
+
+  # Service account for the build pods
+  serviceAccountName: image-builder
+
+  # Global parameters - webhook-timestamp comes from Argo Events
+  arguments:
+    parameters:
+      - name: webhook-timestamp
+        value: ""  # Set by Argo Events sensor
+      - name: image_tag
+        value: "{{ "{{" }}workflow.uid{{ "}}" }}"
+
+  # Volumes for builds and tests
+  volumes:
+    - name: docker-config
+      secret:
+        secretName: harbor-docker-config
+        items:
+          - key: config.json
+            path: config.json
+    - name: shared-code
+      hostPath:
+        path: /home/{{ system_username }}/shared-code/apps/{{ project_name }}
+        type: Directory
+    - name: workspace
+      emptyDir: {}
+    # Buildah's image store for one build; it goes with the pod.
+    - name: buildah-storage
+      emptyDir: {}
+
+  templates:
+    - name: ci-cd-pipeline
+      dag:
+        tasks:
+{% for container in thinkube_spec.spec.containers %}
+        # {{ container.name }} test (conditional)
+        - name: test-{{ container.name }}
+          template: execute-container-test
+          arguments:
+            parameters:
+              - name: container_name
+                value: "{{ container.name }}"
+              - name: build_path
+                value: "{{ container.build | replace('./', '') }}"
+              - name: test_enabled
+                value: "{% if container.test is defined %}{{ container.test.enabled | default(true) | lower }}{% else %}false{% endif %}"
+              - name: test_command
+                value: "{% if container.test is defined %}{{ container.test.command | default('') }}{% endif %}"
+              - name: test_image
+                value: "{% if container.test is defined and container.test.image is defined %}{% if '/' in container.test.image %}{{ container.test.image }}{% else %}{{ container_registry }}/library/{{ container.test.image }}{% endif %}{% else %}{{ container_registry }}/library/test-runner:latest{% endif %}"
+
+{% if build_architectures is defined and build_architectures | length > 1 %}
+        # Per-architecture builds for {{ container.name }}
+{% for arch in build_architectures %}
+        - name: build-{{ container.name }}-{{ arch }}
+          dependencies: [test-{{ container.name }}]
+          template: buildah-build-on-arch
+          arguments:
+            parameters:
+              - name: container_name
+                value: "{{ container.name }}"
+              - name: dockerfile_path
+                value: "{{ container.build | replace('./', '') }}/Containerfile"
+              - name: context_path
+                value: "{{ container.build | replace('./', '') }}"
+              - name: target_arch
+                value: "{{ arch }}"
+{% endfor %}
+
+        # Create multi-arch manifest for {{ container.name }}
+        - name: manifest-{{ container.name }}
+          dependencies:
+{% for arch in build_architectures %}
+            - build-{{ container.name }}-{{ arch }}
+{% endfor %}
+          template: create-manifest
+          arguments:
+            parameters:
+              - name: container_name
+                value: "{{ container.name }}"
+{% else %}
+        # Single-architecture build for {{ container.name }}
+        - name: build-{{ container.name }}
+          dependencies: [test-{{ container.name }}]
+          template: buildah-build
+          arguments:
+            parameters:
+              - name: container_name
+                value: "{{ container.name }}"
+              - name: dockerfile_path
+                value: "{{ container.build | replace('./', '') }}/Containerfile"
+              - name: context_path
+                value: "{{ container.build | replace('./', '') }}"
+{% endif %}
+{% endfor %}
+
+    # Template to execute container tests
+    - name: execute-container-test
+      inputs:
+        parameters:
+          - name: container_name
+          - name: build_path
+          - name: test_enabled
+          - name: test_command
+          - name: test_image
+      steps:
+        - - name: check-test-enabled
+            template: check-condition
+            arguments:
+              parameters:
+                - name: condition
+                  value: "{{ "{{" }}inputs.parameters.test_enabled{{ "}}" }}"
+        - - name: run-test
+            when: "{{ "{{" }}steps.check-test-enabled.outputs.result{{ "}}" }} == true"
+            template: run-test
+            arguments:
+              parameters:
+                - name: container_name
+                  value: "{{ "{{" }}inputs.parameters.container_name{{ "}}" }}"
+                - name: build_path
+                  value: "{{ "{{" }}inputs.parameters.build_path{{ "}}" }}"
+                - name: test_command
+                  value: "{{ "{{" }}inputs.parameters.test_command{{ "}}" }}"
+                - name: test_image
+                  value: "{{ "{{" }}inputs.parameters.test_image{{ "}}" }}"
+
+    # Template that runs the actual test
+    - name: run-test
+      nodeSelector:
+        kubernetes.io/hostname: {{ master_node_name }}
+      inputs:
+        parameters:
+          - name: container_name
+          - name: build_path
+          - name: test_command
+          - name: test_image
+      container:
+        image: "{{ "{{" }}inputs.parameters.test_image{{ "}}" }}"
+        imagePullPolicy: Always
+        command: ["/bin/sh", "-c"]
+        env:
+          - name: ADMIN_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: {{ project_name }}-build-credentials
+                key: username
+          - name: ADMIN_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: {{ project_name }}-build-credentials
+                key: password
+          # The store this app's tests own, named after the app so two
+          # apps never write into each other's rows.
+          - name: TEST_DATABASE_NAME
+            value: "test_{{ project_name | replace('-', '_') }}"
+        args:
+          - |
+            set -e
+            # The shared checkout is the person's own tree, read here and never
+            # written: a test install made in this image writes native modules
+            # for this image's C library into it, and nothing else can use them.
+            # The container's source is copied into a scratch tree first, without
+            # any dependency store, and the tests run and install there.
+            SRC=/workspace/{{ "{{" }}inputs.parameters.build_path{{ "}}" }}
+            WORK=$(mktemp -d /tmp/test-tree.XXXXXX)
+            (cd "$SRC" && tar cf - --exclude=node_modules --exclude=.venv --exclude=__pycache__ --exclude=dist --exclude=htmlcov .) | (cd "$WORK" && tar xf -)
+            cd "$WORK"
+            # Package caches are kept, and kept apart by architecture.
+            #
+            # They cannot go in the scratch tree: a cold cache every run is
+            # slow, and npm 10.9 fails outright resolving this kind of tree
+            # from nothing ("Cannot read properties of null (reading
+            # edgesOut)"). They cannot be shared across architectures either:
+            # this cluster is amd64 and arm64, and one cache written by both
+            # is read back as a corrupt tree. So: beside the checkout, named
+            # for the architecture that filled it, and never inside the
+            # source the tests run on.
+            CACHES="/workspace/.cache/$(uname -m)"
+            mkdir -p "$CACHES/npm" "$CACHES/pip" 2>/dev/null || true
+            export npm_config_cache="$CACHES/npm"
+            export PIP_CACHE_DIR="$CACHES/pip"
+
+            # Get test command - MUST be provided, no auto-detection
+            TEST_CMD="{{ "{{" }}inputs.parameters.test_command{{ "}}" }}"
+
+            # If test is enabled but no command provided, FAIL
+            if [ -z "$TEST_CMD" ]; then
+              echo "ERROR: Tests are enabled but no test command was specified in thinkube.yaml"
+              echo "Please add test.command to your container configuration"
+              exit 1
+            fi
+
+            # Run the provided test command
+            echo "Running tests: $TEST_CMD"
+            $TEST_CMD
+        volumeMounts:
+          - name: shared-code
+            mountPath: /workspace
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1"
+
+    # Single-arch build (runs on control plane with hostPath)
+    - name: buildah-build
+      nodeSelector:
+        kubernetes.io/hostname: {{ master_node_name }}
+      inputs:
+        parameters:
+          - name: container_name
+          - name: dockerfile_path
+          - name: context_path
+      container:
+        image: {{ container_registry }}/library/buildah:v1.43.4
+        command: ["/bin/bash", "-c"]
+        # Buildah runs as root in the pod and unpacks layers in its own mount
+        # namespace: that needs SYS_ADMIN, and the runtime's default AppArmor
+        # profile forbids those mounts. The pod stays unprivileged.
+        securityContext:
+          runAsUser: 0
+          capabilities:
+            add: ["SYS_ADMIN"]
+          appArmorProfile:
+            type: Unconfined
+        env:
+          - name: REGISTRY_AUTH_FILE
+            value: /registry-auth/config.json
+        args:
+          - |
+            set -e
+            # A node on Wi-Fi can lose DNS for seconds at a time; wait for the name
+            # before the first lookup that would fail the build.
+            for try in $(seq 1 30); do
+              getent hosts {{ container_registry }} >/dev/null && break
+              [ "$try" = 30 ] && { echo "{{ container_registry }} does not resolve after 60s"; exit 1; }
+              sleep 2
+            done
+            IMAGE="{{ container_registry }}/thinkube/{{ project_name }}-{{ "{{" }}inputs.parameters.container_name{{ "}}" }}"
+            TAG="{{ "{{" }}workflow.parameters.image_tag{{ "}}" }}"
+            # --ulimit keeps RUN steps inside the pod's open-file limit; the
+            # layer cache lives in the registry, beside the image. Only the push
+            # retries: a cache miss answers "not found", and retrying it would
+            # hold every changed step for seconds.
+            buildah build \
+              --isolation chroot --storage-driver overlay \
+              --ulimit nofile=524288:524288 \
+              --layers --cache-from "${IMAGE}/cache" --cache-to "${IMAGE}/cache" \
+              --build-arg CONTAINER_REGISTRY={{ container_registry }} \
+              -f "/workspace/{{ "{{" }}inputs.parameters.dockerfile_path{{ "}}" }}" \
+              -t "${IMAGE}:${TAG}" \
+              "/workspace/{{ "{{" }}inputs.parameters.context_path{{ "}}" }}"
+            buildah push --storage-driver overlay --retry 3 "${IMAGE}:${TAG}"
+            buildah push --storage-driver overlay --retry 3 "${IMAGE}:${TAG}" "docker://${IMAGE}:latest"
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "8"
+        volumeMounts:
+          - name: docker-config
+            mountPath: /registry-auth
+          - name: shared-code
+            mountPath: /workspace
+          - name: buildah-storage
+            mountPath: /var/lib/containers
+
+{% if build_architectures is defined and build_architectures | length > 1 %}
+    # Per-arch build with git-clone init container for worker nodes
+    - name: buildah-build-on-arch
+      nodeSelector:
+        kubernetes.io/arch: "{{ "{{" }}inputs.parameters.target_arch{{ "}}" }}"
+      inputs:
+        parameters:
+          - name: container_name
+          - name: dockerfile_path
+          - name: context_path
+          - name: target_arch
+      initContainers:
+        - name: git-clone
+          image: {{ container_registry }}/library/ci-utils:latest
+          command: ["/bin/sh", "-c"]
+          env:
+            - name: GIT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-build-credentials
+                  key: username
+            - name: GIT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ project_name }}-build-credentials
+                  key: password
+          args:
+            - |
+              # A node on Wi-Fi can lose DNS for seconds at a time; wait for the name
+              # before the first lookup that would fail the build.
+              for try in $(seq 1 30); do
+                getent hosts git.{{ domain_name }} >/dev/null && break
+                [ "$try" = 30 ] && { echo "git.{{ domain_name }} does not resolve after 60s"; exit 1; }
+                sleep 2
+              done
+              git clone --depth 1 "https://${GIT_USERNAME}:${GIT_PASSWORD}@git.{{ domain_name }}/{{ gitea_org | default('thinkube-deployments') }}/{{ project_name }}.git" /workspace
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "2"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+      container:
+        image: {{ container_registry }}/library/buildah:v1.43.4
+        command: ["/bin/bash", "-c"]
+        # Buildah runs as root in the pod and unpacks layers in its own mount
+        # namespace: that needs SYS_ADMIN, and the runtime's default AppArmor
+        # profile forbids those mounts. The pod stays unprivileged.
+        securityContext:
+          runAsUser: 0
+          capabilities:
+            add: ["SYS_ADMIN"]
+          appArmorProfile:
+            type: Unconfined
+        env:
+          - name: REGISTRY_AUTH_FILE
+            value: /registry-auth/config.json
+        args:
+          - |
+            set -e
+            # A node on Wi-Fi can lose DNS for seconds at a time; wait for the name
+            # before the first lookup that would fail the build.
+            for try in $(seq 1 30); do
+              getent hosts {{ container_registry }} >/dev/null && break
+              [ "$try" = 30 ] && { echo "{{ container_registry }} does not resolve after 60s"; exit 1; }
+              sleep 2
+            done
+            IMAGE="{{ container_registry }}/thinkube/{{ project_name }}-{{ "{{" }}inputs.parameters.container_name{{ "}}" }}"
+            TAG="{{ "{{" }}workflow.parameters.image_tag{{ "}}" }}-{{ "{{" }}inputs.parameters.target_arch{{ "}}" }}"
+            # --ulimit keeps RUN steps inside the pod's open-file limit; the
+            # layer cache lives in the registry, beside the image. Only the push
+            # retries: a cache miss answers "not found", and retrying it would
+            # hold every changed step for seconds.
+            buildah build \
+              --isolation chroot --storage-driver overlay \
+              --ulimit nofile=524288:524288 \
+              --layers --cache-from "${IMAGE}/cache" --cache-to "${IMAGE}/cache" \
+              --platform linux/{{ "{{" }}inputs.parameters.target_arch{{ "}}" }} \
+              --build-arg CONTAINER_REGISTRY={{ container_registry }} \
+              -f "/workspace/{{ "{{" }}inputs.parameters.dockerfile_path{{ "}}" }}" \
+              -t "${IMAGE}:${TAG}" \
+              "/workspace/{{ "{{" }}inputs.parameters.context_path{{ "}}" }}"
+            buildah push --storage-driver overlay --retry 3 "${IMAGE}:${TAG}"
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "8"
+        volumeMounts:
+          - name: docker-config
+            mountPath: /registry-auth
+          - name: workspace
+            mountPath: /workspace
+          - name: buildah-storage
+            mountPath: /var/lib/containers
+
+    # Create multi-arch manifest list from per-arch images using crane
+    - name: create-manifest
+      inputs:
+        parameters:
+          - name: container_name
+      container:
+        image: {{ container_registry }}/library/ci-utils:latest
+        command: ["/bin/sh", "-c"]
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "2"
+        env:
+          - name: DOCKER_CONFIG
+            value: /registry-auth
+        args:
+          - |
+            set -e
+            # A node on Wi-Fi can lose DNS for seconds at a time; wait for the name
+            # before the first lookup that would fail the build.
+            for try in $(seq 1 30); do
+              getent hosts {{ container_registry }} >/dev/null && break
+              [ "$try" = 30 ] && { echo "{{ container_registry }} does not resolve after 60s"; exit 1; }
+              sleep 2
+            done
+            IMAGE="{{ container_registry }}/thinkube/{{ project_name }}-{{ "{{" }}inputs.parameters.container_name{{ "}}" }}"
+            TAG="{{ "{{" }}workflow.parameters.image_tag{{ "}}" }}"
+
+            echo "Creating multi-arch manifest for ${IMAGE}:${TAG}"
+
+            # Create manifest list from per-arch images
+            crane index append --tag "${IMAGE}:${TAG}"{% for arch in build_architectures %} --manifest "${IMAGE}:${TAG}-{{ arch }}"{% endfor %}
+
+            # Also tag as :latest
+            crane tag "${IMAGE}:${TAG}" latest
+
+            echo "Multi-arch manifest created and pushed"
+        volumeMounts:
+          - name: docker-config
+            mountPath: /registry-auth
+{% endif %}
+
+    # Helper template to check conditions
+    - name: check-condition
+      inputs:
+        parameters:
+          - name: condition
+      script:
+        image: {{ container_registry }}/library/ci-utils:latest
+        imagePullPolicy: Always
+        command: [bash]
+        source: |
+          if [ "{{ "{{" }}inputs.parameters.condition{{ "}}" }}" = "true" ]; then
+            echo "true"
+          else
+            echo "false"
+          fi

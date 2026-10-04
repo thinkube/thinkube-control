@@ -1,0 +1,81 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
+# app/api/router.py
+from fastapi import APIRouter
+from app.api import (
+    auth,
+    dashboards,
+    cicd,
+    tokens,
+    websocket_executor,
+    websocket_harbor,
+    templates,
+    stacks,
+    knative_services,
+    debug,
+    services,
+    pod_resources,
+    service_discovery_config,
+    secrets,
+    resource_status,
+    optional_components,
+    harbor_images,
+    jupyter_images,
+    cluster_resources,
+    custom_images,
+    jupyterhub_config,
+    model_mirrors,
+    gpu_metrics,
+    jupyter_venvs,
+    jupyter_notebooks,
+    jupyter_servers,
+    nodes,
+    docs_search,
+    code_server,
+    fixes,
+    runs,
+)
+from app.api.llm.router import llm_router
+
+api_router = APIRouter()
+
+# Include the routes from the different modules
+api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
+api_router.include_router(dashboards.router, prefix="/dashboards", tags=["dashboards"])
+api_router.include_router(services.router, prefix="/services", tags=["services"])
+api_router.include_router(pod_resources.router, prefix="/services", tags=["services"])
+api_router.include_router(cicd.router, prefix="/cicd", tags=["cicd"])
+api_router.include_router(tokens.router, prefix="/tokens", tags=["api-tokens"])
+api_router.include_router(templates.router, prefix="/templates", tags=["templates"])
+api_router.include_router(stacks.router, prefix="/stacks", tags=["stacks"])
+api_router.include_router(knative_services.router, tags=["knative-services"])
+api_router.include_router(
+    service_discovery_config.router, prefix="/config", tags=["service-discovery-config"]
+)
+api_router.include_router(secrets.router, prefix="/secrets", tags=["secrets"])
+api_router.include_router(resource_status.router, prefix="/resource-status", tags=["resource-status"])
+api_router.include_router(optional_components.router, prefix="/optional-components", tags=["optional-components"])
+api_router.include_router(code_server.router, prefix="/code-server", tags=["code-server"])
+api_router.include_router(runs.router, prefix="/runs", tags=["runs"])
+api_router.include_router(fixes.router, prefix="/fixes", tags=["fixes"])
+api_router.include_router(harbor_images.router, tags=["harbor-images"])
+api_router.include_router(jupyter_images.router, tags=["jupyter-images"])
+api_router.include_router(cluster_resources.router, tags=["cluster-resources"])
+api_router.include_router(custom_images.router, tags=["custom-images"])
+api_router.include_router(jupyterhub_config.router, tags=["jupyterhub-config"])
+api_router.include_router(model_mirrors.router, prefix="/models", tags=["models"])
+api_router.include_router(gpu_metrics.router, tags=["gpu-metrics"])
+api_router.include_router(jupyter_venvs.router, tags=["jupyter-venvs"])
+api_router.include_router(jupyter_servers.router, tags=["jupyter-server"])
+api_router.include_router(jupyter_notebooks.router, tags=["jupyter-notebooks"])
+api_router.include_router(nodes.router, tags=["nodes"])
+api_router.include_router(debug.router, tags=["debug"])
+api_router.include_router(docs_search.router, prefix="/docs", tags=["docs"])
+
+# LLM Gateway API
+api_router.include_router(llm_router, prefix="/llm", tags=["llm"])
+
+# Include WebSocket routes (no prefix for WebSocket endpoints)
+api_router.include_router(websocket_executor.router)
+api_router.include_router(websocket_harbor.router)

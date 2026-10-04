@@ -1,0 +1,105 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
+---
+# ansible/playbooks/sync_venv_tasks.yaml
+# Description:
+#   Tasks to sync a venv from source node to other GPU nodes.
+#   When filter_architecture is set, only syncs to nodes of the same architecture.
+#   Venvs contain native binaries and must match architecture.
+#
+# Required variables:
+#   - source_node: Node where venv was built
+#   - venv_name: Name of venv to sync
+#   - venvs_host_path: Base path for venvs (default: /var/lib/jupyterhub-venvs)
+#   - custom_venvs_subpath: Subpath for custom venvs (default: custom)
+# Optional variables:
+#   - filter_architecture: Only sync to nodes matching this arch (e.g. "arm64", "amd64")
+
+- name: Get list of target GPU nodes (excluding source)
+  ansible.builtin.set_fact:
+    all_target_nodes: "{{ groups['baremetal_gpus'] | difference([source_node]) }}"
+
+# The architecture is the one the build just made the venv for. A node's
+# architecture comes from its Kubernetes label, which every node carries.
+- name: Require the architecture to sync for
+  ansible.builtin.assert:
+    that:
+      - filter_architecture is defined
+      - filter_architecture != ''
+    fail_msg: "sync_venv_tasks needs filter_architecture, the architecture the venv was built for"
+
+- name: Use the given architecture
+  ansible.builtin.set_fact:
+    effective_filter_arch: "{{ filter_architecture }}"
+
+- name: Filter target nodes by architecture
+  ansible.builtin.set_fact:
+    target_nodes: >-
+      {%- set ns = namespace(nodes=[]) -%}
+      {%- for node in all_nodes.resources -%}
+        {%- set name = node.metadata.name -%}
+        {%- set arch = node.metadata.labels.get('kubernetes.io/arch', '') -%}
+        {%- if name in all_target_nodes and arch == effective_filter_arch -%}
+          {%- set ns.nodes = ns.nodes + [name] -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ ns.nodes }}
+
+- name: Display sync info
+  ansible.builtin.debug:
+    msg: "Syncing venv '{{ venv_name }}' from {{ source_node }} to {{ target_nodes | join(', ') }}{{ ' (arch: ' + filter_architecture + ')' if filter_architecture is defined and filter_architecture != '' else '' }}"
+  when: target_nodes | length > 0
+
+- name: Get source node connection info
+  ansible.builtin.set_fact:
+    source_host: "{{ hostvars[source_node]['ansible_host'] }}"
+
+- name: Resolve the directory to sync
+  ansible.builtin.set_fact:
+    sync_dir_effective: "{{ sync_dir | default(venvs_host_path | default('/var/lib/jupyterhub-venvs') ~ '/' ~ custom_venvs_subpath | default('custom') ~ '/' ~ venv_name ~ '/' ~ effective_filter_arch) }}"
+
+- name: Remove a shadow copy on each target node
+  ansible.builtin.file:
+    path: "{{ remove_dir }}"
+    state: absent
+  delegate_to: "{{ item }}"
+  become: true
+  loop: "{{ target_nodes }}"
+  when: target_nodes | length > 0 and (remove_dir | default('')) != ''
+
+# rsync creates the last folder of its destination only; a custom venv's
+# parent, custom/<name>/, does not exist yet on a node the venv is new to.
+- name: Create the venv's parent folder on each target node
+  ansible.builtin.file:
+    path: "{{ sync_dir_effective | dirname }}"
+    state: directory
+    mode: "0755"
+  delegate_to: "{{ item }}"
+  become: true
+  loop: "{{ target_nodes }}"
+  when: target_nodes | length > 0
+
+- name: Sync venv to each target node
+  delegate_to: "{{ item }}"
+  ansible.posix.synchronize:
+    src: "{{ sync_dir_effective }}/"
+    dest: "{{ sync_dir_effective }}/"
+    mode: pull
+    rsync_opts:
+      - "--archive"
+      - "--compress"
+      - "--delete"
+  become: true
+  loop: "{{ target_nodes }}"
+  when: target_nodes | length > 0
+
+- name: Sync complete
+  ansible.builtin.debug:
+    msg: "Venv '{{ venv_name }}' synced to {{ target_nodes | length }} node(s)"
+  when: target_nodes | length > 0
+
+- name: No sync needed
+  ansible.builtin.debug:
+    msg: "No matching target nodes for sync"
+  when: target_nodes | length == 0
