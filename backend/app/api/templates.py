@@ -124,16 +124,17 @@ _TEMPLATE_VERSION_TTL = 300
 
 
 async def _template_release(template_url: str) -> Tuple[Optional[str], Optional[str]]:
-    """The release tag a deploy of the template uses (scripts/template_version.py),
-    as (tag, None), or (None, reason) while the template has no such tag."""
+    """The ref a deploy of the template uses (template_ref in
+    scripts/template_version.py), as (ref, None), or (None, reason) while the
+    template has none."""
     sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
-    from template_version import TemplateNotReleased, latest_release_tag
+    from template_version import TemplateNotReleased, template_ref
 
     cached = _template_versions.get(template_url)
     if cached and time.monotonic() - cached[0] < _TEMPLATE_VERSION_TTL:
         return cached[1], cached[2]
     try:
-        version, reason = await asyncio.to_thread(latest_release_tag, template_url), None
+        version, reason = await asyncio.to_thread(template_ref, template_url), None
     except TemplateNotReleased as e:
         version, reason = None, str(e)
     _template_versions[template_url] = (time.monotonic(), version, reason)

@@ -31,7 +31,7 @@ from app_databases import create_statement, database_names, exists, exists_query
 from checkout_state import STATUS_COMMAND, UNPUSHED_COMMAND, changed_files
 from checkout_state import refusal as checkout_refusal
 from component_checkout import check_declared_type, checkout_path, developer_commits, parse_log, refusal
-from template_version import github_git_env, latest_release_tag
+from template_version import github_git_env, template_ref
 from deploy_log import format_line
 
 
@@ -96,7 +96,7 @@ class ApplicationDeployer:
         # Will be populated during deployment
         self.secrets = {}
         self.thinkube_config = {}
-        self.template_version = None  # Set by run_copier: the template release tag used
+        self.template_version = None  # Set by run_copier: the template ref used (release tag or commit)
         self.k8s_core = None
         self.k8s_custom = None
 
@@ -287,12 +287,14 @@ git fetch origin main
     async def run_copier(self):
         """Run Copier to process the template (in thread pool to keep event loop responsive).
 
-        The application is generated from the template's newest release tag,
-        which Copier records in the application's .copier-answers.yml.
+        The application is generated from the template's ref (template_ref in
+        scripts/template_version.py: its release tag, or on a cluster that
+        develops the platform the head commit of the branch it follows), which
+        Copier records in the application's .copier-answers.yml.
         """
-        self.template_version = await asyncio.to_thread(latest_release_tag, self.template_url)
+        self.template_version = await asyncio.to_thread(template_ref, self.template_url)
         DeploymentLogger.log(
-            f"Copying template {self.template_url} (release {self.template_version}) over "
+            f"Copying template {self.template_url} (ref {self.template_version}) over "
             f"{self.local_repo_path} with copier copy --force"
         )
 

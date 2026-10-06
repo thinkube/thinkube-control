@@ -12,6 +12,13 @@ A template in the thinkube GitHub organization is part of the platform: its
 release is the newest tag whose MAJOR.MINOR equals the platform's version,
 read from THINKUBE_PLATFORM_VERSION. Any other template (one a user published
 from an app) carries its own version numbers: its release is its newest tag.
+
+A cluster follows one branch of the platform, THINKUBE_BRANCH. A cluster
+that follows a release branch (release-MAJOR.MINOR) is a user's cluster and
+deploys platform templates from their release tags. A cluster that follows
+any other branch develops the platform: it deploys a platform template from
+the commit at the head of that branch, so a template change is seen running
+there before it is tagged, and a tag is what every other cluster receives.
 """
 
 import os
@@ -22,6 +29,7 @@ from typing import Dict
 RELEASE_TAG = re.compile(r"^refs/tags/v(\d+)\.(\d+)\.(\d+)$")
 PLATFORM_VERSION = re.compile(r"^(\d+)\.(\d+)$")
 PLATFORM_TEMPLATE = re.compile(r"^https://github\.com/thinkube/", re.IGNORECASE)
+RELEASE_BRANCH = re.compile(r"^release-\d+\.\d+$")
 
 
 class TemplateNotReleased(RuntimeError):
@@ -106,3 +114,53 @@ def latest_release_tag(template_url: str) -> str:
             "git tag v0.1.0 && git push origin v0.1.0"
         )
     return max(releases)[1]
+
+
+def platform_branch() -> str:
+    """The branch of the platform this cluster follows, from THINKUBE_BRANCH."""
+    branch = os.environ.get("THINKUBE_BRANCH")
+    if not branch:
+        raise RuntimeError(
+            "THINKUBE_BRANCH is not set; thinkube-control receives it from the "
+            "thinkube_branch answer of its deploy"
+        )
+    return branch
+
+
+def branch_head(template_url: str, branch: str) -> str:
+    """The commit at the head of a branch of the template repository.
+
+    Raises TemplateNotReleased when the repository has no such branch, and
+    RuntimeError when its branches cannot be read.
+    """
+    result = subprocess.run(
+        ["git", "ls-remote", "--heads", template_url, f"refs/heads/{branch}"],
+        capture_output=True,
+        text=True,
+        env=github_git_env(),
+        timeout=60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Cannot read the branches of {template_url}: {result.stderr.strip()}")
+    for line in result.stdout.splitlines():
+        sha, ref = line.split("\t")
+        if ref == f"refs/heads/{branch}":
+            return sha
+    raise TemplateNotReleased(
+        f"{template_url} has no branch '{branch}', the branch this cluster follows "
+        f"(THINKUBE_BRANCH). Create it, or deploy on a cluster that follows a release branch."
+    )
+
+
+def template_ref(template_url: str) -> str:
+    """The git ref a deploy of the template generates from.
+
+    A platform template on a cluster that follows a branch other than a
+    release branch: the commit at the head of that branch. Every other case:
+    the release tag, as latest_release_tag gives it.
+    """
+    if PLATFORM_TEMPLATE.match(template_url):
+        branch = platform_branch()
+        if not RELEASE_BRANCH.match(branch):
+            return branch_head(template_url, branch)
+    return latest_release_tag(template_url)
