@@ -52,16 +52,6 @@ BUILDS = [
 ]
 
 
-def test_the_branch_creation_entry_of_the_first_push_is_not_a_push():
-    """Gitea records the first push to an empty repository twice: a commit_repo
-    entry with an empty content for the creation of main, then one with the
-    commits, at the same second."""
-    creation = {"id": 2, "op_type": "commit_repo", "created": "2026-09-18T08:23:23Z",
-                "ref_name": "refs/heads/main", "content": ""}
-    pushes = cr.parse_feed([creation, feed_entry("2026-09-18T08:23:23Z", MAIN[3].sha)])
-    assert [p.head for p in pushes] == [MAIN[3].sha]
-
-
 def test_the_push_that_delivered_a_commit_is_the_first_whose_head_reaches_it():
     push = cr.delivering_push(PUSHES, POSITION, cr.find_commit(MAIN, "c1"))
     assert push.head == MAIN[3].sha

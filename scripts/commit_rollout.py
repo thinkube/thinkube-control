@@ -68,11 +68,6 @@ def parse_feed(entries: list[dict]) -> list[Push]:
     for entry in entries:
         if entry.get("op_type") != "commit_repo":
             continue
-        # The push that creates main on an empty repository gets two
-        # commit_repo entries from Gitea: one for the branch's creation, with
-        # an empty content, and one with the commits. Only the second is a push.
-        if not entry.get("content"):
-            continue
         content = json.loads(entry["content"])
         head = (content.get("HeadCommit") or {}).get("Sha1")
         if not head:

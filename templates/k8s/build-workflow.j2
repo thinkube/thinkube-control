@@ -10,12 +10,6 @@
 #     this pod cannot provide.
 #   - --ulimit nofile=524288:524288: Buildah raises RLIMIT_NOFILE for RUN
 #     steps, and a RUN step fails when that is above the pod's hard limit.
-#
-# A build pod's memory limit comes from the container's buildSize in
-# thinkube.yaml (default small). It is separate from size, which is what the
-# container gets at run time: a frontend that runs in 512Mi can need 8Gi to
-# bundle.
-{% set build_memory = {'small': '4Gi', 'medium': '8Gi', 'large': '16Gi', 'xlarge': '32Gi'} %}
 # Cache: the layer cache lives in Harbor, in <image>/cache.
 ---
 apiVersion: argoproj.io/v1alpha1
@@ -99,8 +93,6 @@ spec:
                 value: "{{ container.build | replace('./', '') }}/Containerfile"
               - name: context_path
                 value: "{{ container.build | replace('./', '') }}"
-              - name: build_memory
-                value: "{{ build_memory[container.buildSize | default('small')] }}"
               - name: target_arch
                 value: "{{ arch }}"
 {% endfor %}
@@ -129,8 +121,6 @@ spec:
                 value: "{{ container.build | replace('./', '') }}/Containerfile"
               - name: context_path
                 value: "{{ container.build | replace('./', '') }}"
-              - name: build_memory
-                value: "{{ build_memory[container.buildSize | default('small')] }}"
 {% endif %}
 {% endfor %}
 
@@ -253,7 +243,6 @@ spec:
           - name: container_name
           - name: dockerfile_path
           - name: context_path
-          - name: build_memory
       container:
         image: {{ container_registry }}/library/buildah:v1.43.4
         command: ["/bin/bash", "-c"]
@@ -300,7 +289,7 @@ spec:
             memory: "1Gi"
             cpu: "500m"
           limits:
-            memory: "{{ "{{" }}inputs.parameters.build_memory{{ "}}" }}"
+            memory: "4Gi"
             cpu: "8"
         volumeMounts:
           - name: docker-config
@@ -320,7 +309,6 @@ spec:
           - name: container_name
           - name: dockerfile_path
           - name: context_path
-          - name: build_memory
           - name: target_arch
       initContainers:
         - name: git-clone
@@ -403,7 +391,7 @@ spec:
             memory: "1Gi"
             cpu: "500m"
           limits:
-            memory: "{{ "{{" }}inputs.parameters.build_memory{{ "}}" }}"
+            memory: "4Gi"
             cpu: "8"
         volumeMounts:
           - name: docker-config
