@@ -27,6 +27,7 @@ from thinkube_yaml_validator import (
     validate_knative_constraints as _validate_knative_constraints,
     validate_component_constraints as _validate_component_constraints,
     validate_replicas as _validate_replicas,
+    validate_build_size as _validate_build_size,
 )
 from manifest_plan import kustomization_content as _kustomization_content, kustomization_resources as _kustomization_resources
 from platform_credentials import (
@@ -247,6 +248,7 @@ class ManifestGenerator:
         violations = _validate_knative_constraints(self.thinkube_config)
         violations.extend(_validate_component_constraints(self.thinkube_config))
         violations.extend(_validate_replicas(self.thinkube_config))
+        violations.extend(_validate_build_size(self.thinkube_config))
         if violations:
             msg = "thinkube.yaml validation failed:\n" + "\n".join(f"  - {v}" for v in violations)
             raise ValueError(msg)

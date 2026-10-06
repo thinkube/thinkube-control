@@ -129,3 +129,25 @@ def validate_replicas(config: Dict[str, Any]) -> List[str]:
             )
 
     return errors
+
+
+BUILD_SIZES = ('small', 'medium', 'large', 'xlarge')
+
+
+def validate_build_size(config: Dict[str, Any]) -> List[str]:
+    """Return a list of constraint violations for containers' buildSize.
+
+    buildSize names the memory a container's build pod gets; the build
+    workflow template maps each value to a limit. An unknown value would
+    render into nothing, so it is refused here with the allowed values.
+    """
+    errors = []
+    for c in config.get('spec', {}).get('containers', []):
+        if 'buildSize' not in c:
+            continue
+        if c['buildSize'] not in BUILD_SIZES:
+            errors.append(
+                f"Container '{c.get('name', 'unnamed')}': buildSize '{c['buildSize']}' "
+                f"is not one of {', '.join(BUILD_SIZES)}."
+            )
+    return errors
