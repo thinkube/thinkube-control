@@ -28,6 +28,7 @@ from kubernetes_asyncio.client.rest import ApiException
 from kubernetes_asyncio.stream import WsApiClient
 
 from app_databases import create_statement, database_names, exists, exists_query
+from build_architectures import cluster_architectures, render_vars as architecture_render_vars
 from checkout_state import STATUS_COMMAND, UNPUSHED_COMMAND, changed_files
 from checkout_state import refusal as checkout_refusal
 from component_checkout import check_declared_type, checkout_path, developer_commits, parse_log, refusal
@@ -100,6 +101,7 @@ class ApplicationDeployer:
         self.template_version = None  # Set by run_copier: the template ref used (release tag or commit)
         self.k8s_core = None
         self.k8s_custom = None
+        self.build_architectures = None  # Set in phase 2 from the cluster's nodes
 
     async def initialize_k8s_clients(self):
         """Initialize Kubernetes async clients."""
@@ -364,6 +366,7 @@ git fetch origin main
             self.get_argocd_credentials(),
             self.get_gitea_token(),
             self.parse_thinkube_yaml(),
+            self.get_build_architectures(),
             return_exceptions=True
         )
 
@@ -374,6 +377,12 @@ git fetch origin main
                 raise result
 
         DeploymentLogger.success("Phase 2 complete - all resources gathered")
+
+    async def get_build_architectures(self):
+        """The architectures the app's images are built for. See scripts/build_architectures.py."""
+        nodes = await self.k8s_core.list_node()
+        self.build_architectures = cluster_architectures(n.metadata.labels for n in nodes.items)
+        DeploymentLogger.log(f"Cluster architectures: {self.build_architectures}")
 
     async def get_wildcard_cert(self):
         """Fetch wildcard TLS certificate."""
@@ -984,14 +993,6 @@ git fetch origin main
         if not master_node_name:
             raise ValueError("MASTER_NODE_NAME env var not set")
 
-        # Detect unique architectures across cluster nodes
-        nodes = await self.k8s_core.list_node()
-        architectures = sorted({
-            n.metadata.labels['kubernetes.io/arch']
-            for n in nodes.items
-        })
-        DeploymentLogger.log(f"Cluster architectures: {architectures}")
-
         render_vars = dict(
             project_name=self.app_name,
             k8s_namespace=self.namespace,
@@ -1003,8 +1004,7 @@ git fetch origin main
             thinkube_spec=self.thinkube_config,
             gitea_org="thinkube-deployments",
         )
-        if len(architectures) > 1:
-            render_vars['build_architectures'] = architectures
+        render_vars.update(architecture_render_vars(self.build_architectures))
 
         rendered = template.render(**render_vars)
 
@@ -1265,7 +1265,12 @@ data:
         master_node_name = os.environ.get('MASTER_NODE_NAME')
         if not master_node_name:
             raise ValueError("MASTER_NODE_NAME env var not set")
-        workflow_vars = {**template_vars, 'system_username': system_username, 'master_node_name': master_node_name}
+        workflow_vars = {
+            **template_vars,
+            'system_username': system_username,
+            'master_node_name': master_node_name,
+            **architecture_render_vars(self.build_architectures),
+        }
         workflow_content = workflow_template.render(**workflow_vars)
         write('build-workflow.yaml', workflow_content)
 

@@ -43,6 +43,7 @@ from manifest_parameters import (
     recorded_values as _recorded_parameter_values,
 )
 from dependency_resolution import knative_url, knative_view, service_url, service_view
+from build_architectures import cluster_architectures as _cluster_architectures, render_vars as _architecture_render_vars
 from namespace_quota import NON_GPU_QUOTA as _NON_GPU_QUOTA, memory_quota as _memory_quota, node_view as _node_view
 from app_secrets import (
     declared_secrets as _declared_secrets_of,
@@ -406,7 +407,13 @@ data:
             raise ValueError("SYSTEM_USERNAME env var not set")
         if not master_node_name:
             raise ValueError("MASTER_NODE_NAME env var not set")
-        workflow_vars = {**template_vars, 'system_username': system_username, 'master_node_name': master_node_name}
+        architectures = _cluster_architectures(n.metadata.labels for n in self.core_v1.list_node().items)
+        workflow_vars = {
+            **template_vars,
+            'system_username': system_username,
+            'master_node_name': master_node_name,
+            **_architecture_render_vars(architectures),
+        }
         generated_files['build-workflow.yaml'] = env.get_template('build-workflow.j2').render(**workflow_vars)
 
         # kustomization.yaml
@@ -432,8 +439,43 @@ data:
         for filename, content in generated_files.items():
             (k8s_dir / filename).write_text(content)
 
+        self._apply_build_template(generated_files['build-workflow.yaml'])
+
         logger.info(f"Regenerated {len(generated_files)} manifest files for {self.app_name}")
         return generated_files
+
+    def _apply_build_template(self, content: str):
+        """Make the cluster's build WorkflowTemplate the one just written to k8s/.
+
+        ArgoCD does not sync it, and the build a push starts runs from the
+        template already in the cluster. The commit that regenerated k8s/
+        is pushed after this, so its build already builds every container
+        thinkube.yaml declares.
+        """
+        from app.services.deploy_identity import deploy_api_client
+
+        [body] = [d for d in yaml.safe_load_all(content) if d and d.get('kind') == 'WorkflowTemplate']
+        name = body['metadata']['name']
+        namespace = body['metadata']['namespace']
+        writer = client.CustomObjectsApi(deploy_api_client())
+        args = dict(group='argoproj.io', version='v1alpha1', namespace=namespace, plural='workflowtemplates')
+        try:
+            existing = writer.get_namespaced_custom_object(name=name, **args)
+        except ApiException as e:
+            if e.status != 404:
+                raise RuntimeError(f"Cannot read WorkflowTemplate {namespace}/{name}: {e.reason}") from e
+            try:
+                writer.create_namespaced_custom_object(body=body, **args)
+            except ApiException as create_error:
+                raise RuntimeError(
+                    f"Cannot create WorkflowTemplate {namespace}/{name}: {create_error.reason}"
+                ) from create_error
+            return
+        body['metadata']['resourceVersion'] = existing['metadata']['resourceVersion']
+        try:
+            writer.replace_namespaced_custom_object(name=name, body=body, **args)
+        except ApiException as e:
+            raise RuntimeError(f"Cannot update WorkflowTemplate {namespace}/{name}: {e.reason}") from e
 
     @staticmethod
     def _declared_secrets(app_path: Path):

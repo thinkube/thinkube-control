@@ -24,6 +24,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 # The module adds the runtime checkout's scripts/ to the path when it loads;
 # importing the repository's modules first makes it use those.
+import build_architectures  # noqa: E402,F401
 import dependency_resolution  # noqa: E402,F401
 import manifest_plan  # noqa: E402,F401
 import namespace_quota  # noqa: E402,F401
@@ -217,3 +218,75 @@ def test_a_dependency_without_a_type_is_refused():
     g.thinkube_config = {"spec": {"dependencies": [{"name": "splitter", "env": "SPLITTER_URL"}]}}
     with pytest.raises(ValueError, match="has no type"):
         g._resolve_dependencies()
+
+
+# --- build template -----------------------------------------------------------
+
+BUILD_TEMPLATE = """\
+# comment
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: wf-check-build
+  namespace: argo
+spec:
+  entrypoint: ci-cd-pipeline
+"""
+
+
+class TemplateWriter:
+    def __init__(self, existing=None, read_status=None):
+        self.existing = existing
+        self.read_status = read_status
+        self.created = None
+        self.replaced = None
+
+    def get_namespaced_custom_object(self, group, version, namespace, plural, name):
+        if self.read_status:
+            raise ApiException(status=self.read_status, reason="Forbidden")
+        if self.existing is None:
+            raise ApiException(status=404, reason="Not Found")
+        return self.existing
+
+    def create_namespaced_custom_object(self, group, version, namespace, plural, body):
+        self.created = (namespace, plural, body)
+
+    def replace_namespaced_custom_object(self, group, version, namespace, plural, name, body):
+        self.replaced = (namespace, plural, name, body)
+
+
+@pytest.fixture
+def template_writer(monkeypatch):
+    """Route the generator's WorkflowTemplate writes to a fake, under the deploy identity."""
+    holder = {}
+    fake_identity = SimpleNamespace(deploy_api_client=lambda: "deploy-identity")
+    monkeypatch.setitem(sys.modules, "app.services.deploy_identity", fake_identity)
+
+    def custom_objects_api(api_client):
+        assert api_client == "deploy-identity"
+        return holder["writer"]
+
+    monkeypatch.setattr(mg.client, "CustomObjectsApi", custom_objects_api)
+    return holder
+
+
+def test_a_missing_build_template_is_created(template_writer):
+    template_writer["writer"] = TemplateWriter()
+    generator()._apply_build_template(BUILD_TEMPLATE)
+    namespace, plural, body = template_writer["writer"].created
+    assert (namespace, plural) == ("argo", "workflowtemplates")
+    assert body["metadata"]["name"] == "wf-check-build"
+
+
+def test_an_existing_build_template_is_replaced_at_its_resource_version(template_writer):
+    template_writer["writer"] = TemplateWriter(existing={"metadata": {"resourceVersion": "42"}})
+    generator()._apply_build_template(BUILD_TEMPLATE)
+    namespace, plural, name, body = template_writer["writer"].replaced
+    assert (namespace, name) == ("argo", "wf-check-build")
+    assert body["metadata"]["resourceVersion"] == "42"
+
+
+def test_a_build_template_that_cannot_be_read_stops_regeneration(template_writer):
+    template_writer["writer"] = TemplateWriter(read_status=403)
+    with pytest.raises(RuntimeError, match="Cannot read WorkflowTemplate argo/wf-check-build"):
+        generator()._apply_build_template(BUILD_TEMPLATE)
