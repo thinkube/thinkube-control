@@ -29,6 +29,7 @@ from thinkube_yaml_validator import (
     validate_replicas as _validate_replicas,
     validate_build_size as _validate_build_size,
 )
+from thinkube_yaml_placeholders import substitute as _substitute_placeholders
 from manifest_plan import kustomization_content as _kustomization_content, kustomization_resources as _kustomization_resources
 from platform_credentials import (
     RETIRED_MANIFESTS as _RETIRED_MANIFESTS,
@@ -237,7 +238,7 @@ class ManifestGenerator:
 
         # Parse thinkube.yaml
         with open(thinkube_path, 'r') as f:
-            self.thinkube_config = yaml.safe_load(f)
+            self.thinkube_config = _substitute_placeholders(yaml.safe_load(f), self.app_name, self.domain)
 
         # Inject metadata.name
         if 'metadata' not in self.thinkube_config:

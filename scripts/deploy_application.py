@@ -32,6 +32,7 @@ from checkout_state import STATUS_COMMAND, UNPUSHED_COMMAND, changed_files
 from checkout_state import refusal as checkout_refusal
 from component_checkout import check_declared_type, checkout_path, developer_commits, parse_log, refusal
 from template_version import github_git_env, template_ref
+from thinkube_yaml_placeholders import substitute as substitute_placeholders
 from deploy_log import format_line
 
 
@@ -596,7 +597,7 @@ git fetch origin main
         config_path = Path(self.local_repo_path) / "thinkube.yaml"
         try:
             with open(config_path, 'r') as f:
-                self.thinkube_config = yaml.safe_load(f)
+                self.thinkube_config = substitute_placeholders(yaml.safe_load(f), self.app_name, self.domain)
             # Inject metadata.name from deploy-time app name
             # thinkube.yaml doesn't contain the name — the platform provides it
             if 'metadata' not in self.thinkube_config:
@@ -1104,7 +1105,7 @@ git fetch origin main
             thinkube_path = Path(self.local_repo_path) / 'thinkube.yaml'
             if thinkube_path.exists():
                 with open(thinkube_path, 'r') as f:
-                    self.thinkube_config = yaml.safe_load(f)
+                    self.thinkube_config = substitute_placeholders(yaml.safe_load(f), self.app_name, self.domain)
 
         # Setup Jinja2 environment
         template_dir = Path("/home/thinkube/thinkube-control/templates/k8s")

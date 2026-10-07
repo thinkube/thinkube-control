@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 import dependency_resolution  # noqa: E402,F401
 import manifest_plan  # noqa: E402,F401
 import namespace_quota  # noqa: E402,F401
+import thinkube_yaml_placeholders  # noqa: E402,F401
 import thinkube_yaml_validator  # noqa: E402,F401
 
 spec = importlib.util.spec_from_file_location(

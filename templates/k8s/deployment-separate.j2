@@ -141,7 +141,7 @@ spec:
             {% for env_var in thinkube_spec.spec.env %}
             {% if env_var.default is defined %}
             - name: {{ env_var.name }}
-              value: "{{ env_var.default }}"
+              value: {{ env_var.default | string | to_json }}
             {% endif %}
             {% endfor %}
             {% endif %}
@@ -149,7 +149,7 @@ spec:
             {% if manifest_params is defined %}
             {% for param_name, param_value in manifest_params.items() %}
             - name: {{ param_name | upper }}
-              value: "{{ param_value }}"
+              value: {{ param_value | string | to_json }}
             {% endfor %}
             {% endif %}
             # Names the container may show the browser (thinkube.yaml publicEnv).

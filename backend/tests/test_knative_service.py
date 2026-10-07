@@ -65,3 +65,21 @@ def test_no_container_carries_resize_policy():
     for container in containers(render(SPEC)):
         assert "resizePolicy" not in container
         assert container["readinessProbe"]["httpGet"]["path"] == "/health"
+
+
+def test_env_defaults_render_as_yaml_strings_whatever_they_hold():
+    """A default holding quotes, braces or colons (a JSON object, a URL) or a
+    number reaches the container as exactly that string."""
+    spec = {"spec": {
+        **SPEC["spec"],
+        "env": [
+            {"name": "EXTRA_BODY", "default": '{"chat_template_kwargs": {"enable_thinking": false}}'},
+            {"name": "BASE_URL", "default": "https://llm.thinkube.com/v1"},
+            {"name": "WORKERS", "default": 4},
+        ],
+    }}
+    [container] = containers(render(spec))
+    env = {e["name"]: e.get("value") for e in container["env"]}
+    assert env["EXTRA_BODY"] == '{"chat_template_kwargs": {"enable_thinking": false}}'
+    assert env["BASE_URL"] == "https://llm.thinkube.com/v1"
+    assert env["WORKERS"] == "4"
