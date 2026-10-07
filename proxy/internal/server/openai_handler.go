@@ -73,6 +73,7 @@ func (h *OpenAIHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) 
 	if resolved.ServingName != "" && resolved.ServingName != req.Model {
 		body = rewriteModelField(body, resolved.ServingName)
 	}
+	body = typeToolParameters(body)
 
 	userID := ""
 	if claims != nil {
