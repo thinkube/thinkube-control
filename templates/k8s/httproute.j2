@@ -1,6 +1,8 @@
 #jinja2: lstrip_blocks: True, trim_blocks: True
 # Generated HTTPRoute configuration (Gateway API)
 # Routes traffic through thinkube-gateway in gateway-system namespace
+# Every rule allows a request 600s, as the LLM gateway's route does: Envoy's
+# default of 15s ends a long response, such as a streamed LLM answer, midway.
 {% set routes = thinkube_spec.spec.routes | default([]) %}
 {% set containers_with_ports = thinkube_spec.spec.containers | selectattr('port', 'defined') | list %}
 ---
@@ -31,6 +33,8 @@ spec:
       backendRefs:
         - name: {{ container.name }}
           port: {{ container.port }}
+      timeouts:
+        request: 600s
     {% endif %}
   {% endfor %}
 {% elif containers_with_ports %}
@@ -41,4 +45,6 @@ spec:
       backendRefs:
         - name: {{ containers_with_ports[0].name }}
           port: {{ containers_with_ports[0].port }}
+      timeouts:
+        request: 600s
 {% endif %}
