@@ -273,6 +273,9 @@ class LLMGPUTracker:
     def get_node(self, node_name: str) -> Optional[GPUNode]:
         return self._gpu_nodes.get(node_name)
 
+    def node_names(self) -> List[str]:
+        return sorted(self._gpu_nodes)
+
     def is_uma(self, node_name: str) -> bool:
         node = self._gpu_nodes.get(node_name)
         if node:

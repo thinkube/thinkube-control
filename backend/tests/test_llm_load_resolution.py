@@ -51,9 +51,15 @@ def world(monkeypatch):
     async def plan_sizing(node_name, target_gb, gpu_count=1, weight_gb=None):
         return {"fits": target_gb <= state["fits_up_to_gb"], "reason": "ok"}
 
+    gpu_nodes = {"tkamd2", "tkspark"}
+
+    async def check_can_load(estimated, node_name=None):
+        return True, ""
+
     monkeypatch.setattr(trk, "llm_gpu_tracker", SimpleNamespace(
         get_status=get_status, plan_sizing=plan_sizing, is_uma=lambda n: n == "tkspark",
-        get_node=lambda n: SimpleNamespace(per_gpu_vram_gb=24.0, gpu_count=1)))
+        check_can_load=check_can_load, node_names=lambda: sorted(gpu_nodes),
+        get_node=lambda n: SimpleNamespace(per_gpu_vram_gb=24.0, gpu_count=1) if n in gpu_nodes else None))
     monkeypatch.setattr(llm_lifecycle, "_gpus_needed", lambda est, n: 1)
 
     captured = {}
@@ -115,32 +121,49 @@ def test_an_explicit_context_is_kept(world):
     assert world.captured["context"] == 65536
 
 
-def test_a_second_model_on_an_occupied_backend_is_refused(world, monkeypatch):
-    """vLLM serves one model per pod: a load onto a backend that serves another model is refused, not ignored."""
+def test_a_type_on_a_node_needs_no_running_pod(world):
+    """'vllm-tkamd2' names vLLM on tkamd2 even when no vLLM pod runs there yet."""
+    asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3-8B", backend="vllm-tkamd2"))
+    assert world.captured["backend"] == "vllm"
+    assert world.captured["node"] == "tkamd2"
+
+
+def test_a_second_model_on_a_node_gets_its_own_backend(world, monkeypatch):
+    """Another model loaded on the node does not refuse the load: the memory plan decides."""
     import app.services.llm_model_registry as reg
-    other = entry(id="Qwen/Qwen3-8B", state=ModelState.available, backend_id="vllm-tkspark")
-    mine = entry(id="Qwen/Qwen3.5-4B")
+    import app.services.llm_pod_manager as pods
+
+    other = entry(id="Qwen/Qwen3-8B", state=ModelState.available, backend_id="vllm-tkspark/qwen-qwen3-8b")
+    mine = entry(id="Qwen/Qwen3.5-4B", stop_tokens=None, reasoning_format=None, tool_use=False,
+                 tool_call_parser=None, speculative_config=None, enforce_eager=False)
     models = {"Qwen/Qwen3-8B": other, "Qwen/Qwen3.5-4B": mine}
     monkeypatch.setattr(reg, "llm_model_registry", SimpleNamespace(
         get_model=lambda mid: models.get(mid), list_models=lambda: list(models.values()),
         update_model_state=lambda *a, **k: None))
-    # Use the real _load_performance up to the refusal; it returns before any sizing.
     monkeypatch.setattr(llm_lifecycle, "_load_performance", type(llm_lifecycle)._load_performance.__get__(llm_lifecycle))
-    result = asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3.5-4B", backend="vllm-tkspark"))
-    assert result.state == ModelState.deployable
-    assert "vllm-tkspark already serves Qwen/Qwen3-8B" in result.message
-    assert world.captured == {}
 
+    async def no_measure(e):
+        return None
 
-def test_reconcile_never_scales_a_shared_deployment_to_zero():
-    from app.services.llm_model_registry import LLMModelRegistry
+    async def no_drafter(e):
+        return None, None
 
-    registry = LLMModelRegistry()
-    registry._models = {
-        "a": entry(id="a", state=ModelState.available, backend_id="vllm-tkspark"),
-        "b": entry(id="b", state=ModelState.loading, backend_id="vllm-tkspark"),
-        "c": entry(id="c", state=ModelState.loading, backend_id="vllm-tkamd2"),
-    }
-    assert registry._others_on_backend("vllm-tkspark", "b") is True
-    assert registry._others_on_backend("vllm-tkamd2", "c") is False
-    assert registry._others_on_backend(None, "c") is False
+    ensured = []
+
+    async def ensure_pod(backend_type, node, **kwargs):
+        ensured.append((backend_type, node, kwargs.get("model_id")))
+        return True, None
+
+    monkeypatch.setattr(llm_lifecycle, "_ensure_measured_weight", no_measure)
+    monkeypatch.setattr(llm_lifecycle, "_resolve_dflash_drafter", no_drafter)
+    monkeypatch.setattr(pods.llm_pod_manager, "ensure_pod", ensure_pod)
+
+    async def load_and_settle():
+        result = await llm_lifecycle.load_model("Qwen/Qwen3.5-4B", backend="vllm-tkspark")
+        await asyncio.sleep(0)
+        return result
+
+    result = asyncio.run(load_and_settle())
+    assert result.state == ModelState.loading
+    assert result.backend_id == "vllm-tkspark/qwen-qwen3-5-4b"
+    assert ensured == [("vllm", "tkspark", "Qwen/Qwen3.5-4B")]

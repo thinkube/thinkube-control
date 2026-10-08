@@ -11,8 +11,10 @@ chosen node and GPU. Unloading the last model on a pod deletes that Deployment.
 """
 
 import asyncio
+import hashlib
 import logging
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
@@ -23,6 +25,28 @@ _k8s_executor = ThreadPoolExecutor(max_workers=4)
 GATEWAY_LABEL = "thinkube.io/managed-by"
 GATEWAY_LABEL_VALUE = "llm-gateway"
 BACKEND_TYPE_LABEL = "thinkube.io/backend-type"
+TARGET_NODE_LABEL = "thinkube.io/target-node"
+MODEL_LABEL = "thinkube.io/model"
+
+# Ollama hosts many models in one pod per node. Every other backend runs one
+# model per pod, so it gets one Deployment per model on a node, and the
+# model is part of that Deployment's name, labels and selector.
+SHARED_BACKENDS = {"ollama"}
+
+_SLUG_MAX = 40
+
+
+def model_slug(model_id: str) -> str:
+    """A model id as a Kubernetes name part: lowercase letters, digits and hyphens.
+
+    Long ids are cut and given a short hash of the full id, so two models
+    never share a slug.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", model_id.lower()).strip("-")
+    if len(slug) > _SLUG_MAX:
+        digest = hashlib.sha1(model_id.encode()).hexdigest()[:6]
+        slug = f"{slug[: _SLUG_MAX - 7].rstrip('-')}-{digest}"
+    return slug
 
 
 class ManagedPod:
@@ -37,8 +61,10 @@ class ManagedPod:
         pod_ip: Optional[str] = None,
         pod_name: Optional[str] = None,
         ready: bool = False,
+        model_slug: Optional[str] = None,
     ):
         self.deployment_name = deployment_name
+        self.model_slug = model_slug
         self.namespace = namespace
         self.backend_type = backend_type
         self.node_name = node_name
@@ -106,9 +132,27 @@ class LLMPodManager:
         }
         return names.get(backend_type, backend_type)
 
-    def _make_deployment_name(self, backend_type: str, node_name: str) -> str:
+    def _slug_for(self, backend_type: str, model_id: Optional[str]) -> Optional[str]:
+        """The model part of a backend's identity; none for a shared backend."""
+        if backend_type in SHARED_BACKENDS:
+            return None
+        if not model_id:
+            raise ValueError(f"A {backend_type} pod serves one model; the model is required")
+        return model_slug(model_id)
+
+    def _make_deployment_name(self, backend_type: str, node_name: str, model_id: Optional[str] = None) -> str:
         base = self._get_base_deployment_name(backend_type)
-        return f"{base}-{node_name}"
+        slug = self._slug_for(backend_type, model_id)
+        return f"{base}-{node_name}-{slug}" if slug else f"{base}-{node_name}"
+
+    def _key(self, backend_type: str, node_name: str, model_id: Optional[str] = None) -> str:
+        slug = self._slug_for(backend_type, model_id)
+        return f"{backend_type}-{node_name}/{slug}" if slug else f"{backend_type}-{node_name}"
+
+    def _pod_selector(self, backend_type: str, node_name: str, model_id: Optional[str] = None) -> str:
+        selector = f"{GATEWAY_LABEL}={GATEWAY_LABEL_VALUE},{TARGET_NODE_LABEL}={node_name}"
+        slug = self._slug_for(backend_type, model_id)
+        return f"{selector},{MODEL_LABEL}={slug}" if slug else selector
 
     def _get_container_env(self, deployment, env_name: str) -> Optional[str]:
         for container in deployment.spec.template.spec.containers:
@@ -118,9 +162,10 @@ class LLMPodManager:
                         return env_var.value
         return None
 
-    def get_managed_pod(self, backend_type: str, node_name: str) -> Optional[ManagedPod]:
-        key = f"{backend_type}-{node_name}"
-        return self._managed.get(key)
+    def get_managed_pod(
+        self, backend_type: str, node_name: str, model_id: Optional[str] = None
+    ) -> Optional[ManagedPod]:
+        return self._managed.get(self._key(backend_type, node_name, model_id))
 
     def list_managed_pods(self, backend_type: Optional[str] = None) -> List[ManagedPod]:
         pods = list(self._managed.values())
@@ -131,10 +176,14 @@ class LLMPodManager:
     async def ensure_pod(
         self, backend_type: str, node_name: str, gpu_count: int = 1,
         model_env: Optional[Dict[str, str]] = None,
+        model_id: Optional[str] = None,
         mem_limit_gb: Optional[float] = None,
         wait_ready: bool = True,
     ) -> Tuple[bool, Optional[ManagedPod]]:
         """Ensure a pod is running for this backend on the given node.
+
+        ``model_id`` names the model of a one-model backend; its pod is that
+        model's own Deployment.
 
         Returns (success, managed_pod). If wait_ready is False, creates the
         Deployment and returns immediately without waiting for pod readiness.
@@ -146,7 +195,7 @@ class LLMPodManager:
             )
             return False, None
 
-        key = f"{backend_type}-{node_name}"
+        key = self._key(backend_type, node_name, model_id)
 
         existing = self._managed.get(key)
         if existing and existing.ready and existing.pod_ip:
@@ -155,8 +204,7 @@ class LLMPodManager:
                 _k8s_executor,
                 self._find_pod_for_deployment,
                 existing.namespace,
-                self._get_base_deployment_name(backend_type),
-                node_name,
+                self._pod_selector(backend_type, node_name, model_id),
             )
             if pod_info and pod_info[2]:
                 restarted = await loop.run_in_executor(
@@ -164,13 +212,14 @@ class LLMPodManager:
                     self._check_and_sync_image,
                     backend_type,
                     node_name,
+                    model_id,
                 )
                 if restarted:
                     logger.info(f"Image updated for {key}, waiting for new pod")
                     self._managed.pop(key, None)
                     if not wait_ready:
                         return True, None
-                    pod = await self._wait_for_pod_ready(backend_type, node_name)
+                    pod = await self._wait_for_pod_ready(backend_type, node_name, model_id)
                     if pod:
                         self._managed[key] = pod
                         return True, pod
@@ -202,6 +251,7 @@ class LLMPodManager:
                 gpu_count,
                 model_env,
                 mem_limit_gb,
+                model_id,
             )
             if not success:
                 return False, None
@@ -210,7 +260,7 @@ class LLMPodManager:
                 logger.info(f"Deployment created for {key}, not waiting for readiness")
                 return True, None
 
-            pod = await self._wait_for_pod_ready(backend_type, node_name)
+            pod = await self._wait_for_pod_ready(backend_type, node_name, model_id)
             if pod:
                 self._managed[key] = pod
                 return True, pod
@@ -219,7 +269,7 @@ class LLMPodManager:
                 _k8s_executor,
                 self._delete_deployment,
                 self._get_namespace(backend_type),
-                self._make_deployment_name(backend_type, node_name),
+                self._make_deployment_name(backend_type, node_name, model_id),
             )
             return False, None
         finally:
@@ -230,6 +280,7 @@ class LLMPodManager:
         self, backend_type: str, node_name: str, gpu_count: int,
         model_env: Optional[Dict[str, str]] = None,
         mem_limit_gb: Optional[float] = None,
+        model_id: Optional[str] = None,
     ) -> bool:
         """Create a single-replica Deployment targeting a specific node.
 
@@ -248,7 +299,8 @@ class LLMPodManager:
             apps_v1 = client.AppsV1Api()
             namespace = self._get_namespace(backend_type)
             base_name = self._get_base_deployment_name(backend_type)
-            deploy_name = self._make_deployment_name(backend_type, node_name)
+            deploy_name = self._make_deployment_name(backend_type, node_name, model_id)
+            slug = self._slug_for(backend_type, model_id)
 
             base = apps_v1.read_namespaced_deployment(base_name, namespace)
 
@@ -262,7 +314,7 @@ class LLMPodManager:
                             needs_recreate = True
 
                     if not needs_recreate:
-                        pod_status, _ = self.check_pod_status(backend_type, node_name)
+                        pod_status, _ = self.check_pod_status(backend_type, node_name, model_id)
                         if pod_status == "failed":
                             needs_recreate = True
 
@@ -337,8 +389,10 @@ class LLMPodManager:
             selector_labels = {
                 GATEWAY_LABEL: GATEWAY_LABEL_VALUE,
                 BACKEND_TYPE_LABEL: backend_type,
-                "thinkube.io/target-node": node_name,
+                TARGET_NODE_LABEL: node_name,
             }
+            if slug:
+                selector_labels[MODEL_LABEL] = slug
 
             labels = pod_template.metadata.labels or {}
             labels.update(selector_labels)
@@ -377,7 +431,7 @@ class LLMPodManager:
             logger.error(f"Failed to create Deployment for {backend_type} on {node_name}: {e}")
             return False
 
-    def _check_and_sync_image(self, backend_type: str, node_name: str) -> bool:
+    def _check_and_sync_image(self, backend_type: str, node_name: str, model_id: Optional[str] = None) -> bool:
         """Check if the node deployment image matches the base and patch if not.
 
         Returns True if the image was updated (pod will restart).
@@ -393,7 +447,7 @@ class LLMPodManager:
             apps_v1 = client.AppsV1Api()
             namespace = self._get_namespace(backend_type)
             base_name = self._get_base_deployment_name(backend_type)
-            deploy_name = self._make_deployment_name(backend_type, node_name)
+            deploy_name = self._make_deployment_name(backend_type, node_name, model_id)
 
             base = apps_v1.read_namespaced_deployment(base_name, namespace)
             node_deploy = apps_v1.read_namespaced_deployment(deploy_name, namespace)
@@ -460,11 +514,11 @@ class LLMPodManager:
             logger.info(f"Synced env vars for {node_deploy.metadata.name}: {[v['name'] for v in patch_vars]}")
 
     async def _wait_for_pod_ready(
-        self, backend_type: str, node_name: str, timeout: int = 600
+        self, backend_type: str, node_name: str, model_id: Optional[str] = None, timeout: int = 600
     ) -> Optional[ManagedPod]:
         namespace = self._get_namespace(backend_type)
-        deploy_name = self._make_deployment_name(backend_type, node_name)
-        base_name = self._get_base_deployment_name(backend_type)
+        deploy_name = self._make_deployment_name(backend_type, node_name, model_id)
+        selector = self._pod_selector(backend_type, node_name, model_id)
 
         deadline = asyncio.get_event_loop().time() + timeout
         while asyncio.get_event_loop().time() < deadline:
@@ -474,8 +528,7 @@ class LLMPodManager:
                     _k8s_executor,
                     self._find_pod_for_deployment,
                     namespace,
-                    base_name,
-                    node_name,
+                    selector,
                 )
                 if pod_info:
                     pod_ip, pod_name, ready = pod_info
@@ -488,6 +541,7 @@ class LLMPodManager:
                             pod_ip=pod_ip,
                             pod_name=pod_name,
                             ready=True,
+                            model_slug=self._slug_for(backend_type, model_id),
                         )
             except Exception as e:
                 logger.debug(f"Waiting for pod {deploy_name}: {e}")
@@ -497,7 +551,7 @@ class LLMPodManager:
         return None
 
     def _find_pod_for_deployment(
-        self, namespace: str, base_name: str, node_name: str
+        self, namespace: str, selector: str
     ) -> Optional[Tuple[str, str, bool]]:
         try:
             from kubernetes import client, config as k8s_config
@@ -508,7 +562,6 @@ class LLMPodManager:
                 k8s_config.load_kube_config()
 
             v1 = client.CoreV1Api()
-            selector = f"{GATEWAY_LABEL}={GATEWAY_LABEL_VALUE},thinkube.io/target-node={node_name}"
             pods = v1.list_namespaced_pod(namespace, label_selector=selector)
 
             for pod in pods.items:
@@ -524,7 +577,9 @@ class LLMPodManager:
             logger.debug(f"Pod lookup failed: {e}")
             return None
 
-    def check_pod_status(self, backend_type: str, node_name: str) -> tuple[str, str]:
+    def check_pod_status(
+        self, backend_type: str, node_name: str, model_id: Optional[str] = None
+    ) -> tuple[str, str]:
         """Check the actual K8s pod status for a backend/node.
 
         Returns (status, detail) where status is one of:
@@ -540,7 +595,7 @@ class LLMPodManager:
 
             apps_v1 = client.AppsV1Api()
             namespace = self._get_namespace(backend_type)
-            deploy_name = self._make_deployment_name(backend_type, node_name)
+            deploy_name = self._make_deployment_name(backend_type, node_name, model_id)
 
             try:
                 apps_v1.read_namespaced_deployment(deploy_name, namespace)
@@ -550,8 +605,9 @@ class LLMPodManager:
                 raise
 
             v1 = client.CoreV1Api()
-            selector = f"{GATEWAY_LABEL}={GATEWAY_LABEL_VALUE},thinkube.io/target-node={node_name}"
-            pods = v1.list_namespaced_pod(namespace, label_selector=selector)
+            pods = v1.list_namespaced_pod(
+                namespace, label_selector=self._pod_selector(backend_type, node_name, model_id)
+            )
 
             if not pods.items:
                 return "progressing", ""
@@ -586,7 +642,7 @@ class LLMPodManager:
             logger.debug(f"Pod status check failed for {backend_type}/{node_name}: {e}")
             return "progressing", ""
 
-    def scale_to_zero(self, backend_type: str, node_name: str) -> bool:
+    def scale_to_zero(self, backend_type: str, node_name: str, model_id: Optional[str] = None) -> bool:
         """Scale a gateway-managed node deployment to 0, freeing its slot/budget.
 
         Idempotent and safe to call from reconciliation (sync): a missing or
@@ -604,7 +660,7 @@ class LLMPodManager:
 
             apps_v1 = client.AppsV1Api()
             namespace = self._get_namespace(backend_type)
-            deploy_name = self._make_deployment_name(backend_type, node_name)
+            deploy_name = self._make_deployment_name(backend_type, node_name, model_id)
             try:
                 dep = apps_v1.read_namespaced_deployment(deploy_name, namespace)
             except client.rest.ApiException as e:
@@ -616,18 +672,18 @@ class LLMPodManager:
             apps_v1.patch_namespaced_deployment(
                 deploy_name, namespace, {"spec": {"replicas": 0}}
             )
-            self._managed.pop(f"{backend_type}-{node_name}", None)
+            self._managed.pop(self._key(backend_type, node_name, model_id), None)
             logger.info(f"Scaled {deploy_name} to 0 (serves no model)")
             return True
         except Exception as e:
             logger.warning(f"scale_to_zero failed for {backend_type}/{node_name}: {e}")
             return False
 
-    async def delete_pod(self, backend_type: str, node_name: str) -> bool:
-        """Delete a gateway-managed Deployment for a backend on a node."""
-        key = f"{backend_type}-{node_name}"
+    async def delete_pod(self, backend_type: str, node_name: str, model_id: Optional[str] = None) -> bool:
+        """Delete a gateway-managed Deployment: a model's, or a shared backend's on a node."""
+        key = self._key(backend_type, node_name, model_id)
         namespace = self._get_namespace(backend_type)
-        deploy_name = self._make_deployment_name(backend_type, node_name)
+        deploy_name = self._make_deployment_name(backend_type, node_name, model_id)
 
         try:
             loop = asyncio.get_event_loop()
@@ -672,7 +728,11 @@ class LLMPodManager:
             loop = asyncio.get_event_loop()
             pods = await loop.run_in_executor(_k8s_executor, self._reconcile_sync)
             for pod in pods:
-                key = f"{pod.backend_type}-{pod.node_name}"
+                key = (
+                    f"{pod.backend_type}-{pod.node_name}/{pod.model_slug}"
+                    if pod.model_slug
+                    else f"{pod.backend_type}-{pod.node_name}"
+                )
                 self._managed[key] = pod
             if pods:
                 logger.info(f"Reconciled {len(pods)} gateway-managed pods")
@@ -709,13 +769,18 @@ class LLMPodManager:
                     continue
 
                 for deploy in deploys.items:
-                    node = (deploy.metadata.labels or {}).get("thinkube.io/target-node", "")
+                    labels = deploy.metadata.labels or {}
+                    node = labels.get(TARGET_NODE_LABEL, "")
                     if not node:
                         continue
+                    slug = labels.get(MODEL_LABEL)
 
                     self._sync_deployment_image(apps_v1, deploy, base, ns)
 
-                    pod_info = self._find_pod_for_deployment(ns, base_name, node)
+                    selector = f"{GATEWAY_LABEL}={GATEWAY_LABEL_VALUE},{TARGET_NODE_LABEL}={node}"
+                    if slug:
+                        selector = f"{selector},{MODEL_LABEL}={slug}"
+                    pod_info = self._find_pod_for_deployment(ns, selector)
                     pod_ip = pod_info[0] if pod_info else None
                     pod_name = pod_info[1] if pod_info else None
                     ready = pod_info[2] if pod_info else False
@@ -728,6 +793,7 @@ class LLMPodManager:
                         pod_ip=pod_ip,
                         pod_name=pod_name,
                         ready=ready,
+                        model_slug=slug,
                     ))
         except Exception as e:
             logger.error(f"Failed to list gateway deployments: {e}")

@@ -36,8 +36,8 @@ async def get_load_options(model_id: str):
     model supports. It is not the list of nodes that can serve the model: a
     vLLM, TensorRT-LLM or text-embeddings pod is created on the chosen node by
     the load itself, so a node without a pod is a valid target. Each such pod
-    serves one model; a node whose allocations already hold a backend of the
-    same type refuses a second model until the first is unloaded.
+    serves one model, and each model loaded on a node gets its own pod, so
+    several can share a node while ai_remaining_gb and a free slot allow.
     """
     from app.services.llm_backend_discovery import llm_backend_discovery
     from app.services.llm_gpu_tracker import llm_gpu_tracker
@@ -84,14 +84,15 @@ async def load_model(model_id: str, request: ModelLoadRequest = ModelLoadRequest
 
     node names the target; without it the node with the most AI memory left
     takes the model. backend is a type (vllm, tensorrt-llm, text-embeddings,
-    ollama) or a discovered backend id such as vllm-tkspark, which also names
-    the node. max_context_length defaults to the largest of 32768, 16384 and
+    ollama) or a type on a node such as vllm-tkspark, which also names the
+    node. max_context_length defaults to the largest of 32768, 16384 and
     8192 that the model allows and the node has memory for.
 
     The answer is HTTP 200 whether the load was accepted or refused: state
     "loading" with a backend_id means accepted, any other state means refused
-    and message says why (already loaded, node taken by another model of the
-    same one-model backend, does not fit the node, backend disabled). Follow
+    and message says why (already loaded, does not fit the node's remaining
+    memory, backend disabled). Several vLLM, TensorRT-LLM or embeddings models
+    can share a node, each in its own pod. Follow
     the load with get_llm_model_status until the state is "available", or
     "deployable" with last_error when it failed.
     """

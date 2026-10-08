@@ -11,6 +11,7 @@ import json as json_mod
 import httpx
 
 from app.api.llm.schemas import ModelLoadResponse, ModelState, ModelTier, model_id_to_ollama_name
+from app.services.llm_pod_manager import SHARED_BACKENDS, model_slug
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +21,15 @@ KNOWN_BACKEND_TYPES = ("tensorrt-llm", "text-embeddings", "ollama", "vllm")
 
 
 def parse_backend_id(backend_id: str) -> tuple[str, Optional[str]]:
-    """Parse 'backend_type-node_name' into (backend_type, node_name).
+    """Parse a backend id into (backend_type, node_name).
 
-    Handles compound types like 'tensorrt-llm'.
+    Ids are 'backend_type-node_name' for Ollama, which hosts many models per
+    node, and 'backend_type-node_name/model' for one-model backends. Handles
+    compound types like 'tensorrt-llm'.
     """
     if not backend_id:
         return backend_id, None
+    backend_id = backend_id.split("/", 1)[0]
     for prefix in KNOWN_BACKEND_TYPES:
         if backend_id == prefix:
             return prefix, None
@@ -145,32 +149,28 @@ class LLMLifecycleManager:
     BACKEND_TYPES = ("vllm", "tensorrt-llm", "text-embeddings", "ollama")
     CONTEXT_CHOICES = (32768, 16384, 8192)
 
-    def _model_on_backend(self, backend_id: str, except_model: Optional[str] = None):
-        """The model loaded or loading on a one-model backend, if any other than ``except_model``."""
-        from app.services.llm_model_registry import llm_model_registry
-
-        for other in llm_model_registry.list_models():
-            if other.id == except_model:
-                continue
-            if other.backend_id == backend_id and other.state in (ModelState.available, ModelState.loading, ModelState.unloading):
-                return other
-        return None
-
     def _resolve_backend_arg(self, backend: Optional[str]):
         """``(backend_type, node, refusal)`` for the caller's ``backend`` argument."""
         from app.services.llm_backend_discovery import llm_backend_discovery
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
 
         if not backend:
             return None, None, None
         if backend in self.BACKEND_TYPES:
             return backend, None, None
+        # '<type>-<node>' names a backend type on a GPU node; the load creates
+        # the pod there, so no pod has to be running. A full backend id
+        # ('vllm-tkspark/<model>') names the same type and node.
+        backend_type, node = parse_backend_id(backend)
+        if backend_type in self.BACKEND_TYPES and node and llm_gpu_tracker.get_node(node) is not None:
+            return backend_type, node, None
         found = llm_backend_discovery.get_backend(backend)
         if found is not None:
             return found.type, found.node, None
-        known = sorted(b.id for b in llm_backend_discovery.list_backends())
+        forms = sorted({f"{t}-{n}" for t in self.BACKEND_TYPES for n in llm_gpu_tracker.node_names()})
         return None, None, (
             f"backend '{backend}' is neither a backend type ({', '.join(self.BACKEND_TYPES)}) "
-            f"nor a known backend id ({', '.join(known) or 'none discovered yet'})"
+            f"nor a backend type on a GPU node ({', '.join(forms) or 'no GPU nodes known yet'})"
         )
 
     async def _pick_node(self) -> Optional[str]:
@@ -389,16 +389,9 @@ class LLMLifecycleManager:
                 message=f"No performance backend type found for {entry.server_type}"
             )
 
-        # A vLLM, TensorRT-LLM or embeddings pod serves one model. A second
-        # model asked for on the same type and node would neither load nor be
-        # refused: the existing pod is returned as it is. Refuse it here.
-        occupant = self._model_on_backend(f"{perf_type}-{node}", except_model=model_id)
-        if occupant is not None:
-            message = (
-                f"{perf_type}-{node} already serves {occupant.id} ({occupant.state.value}); "
-                f"unload it, or choose another node"
-            )
-            return ModelLoadResponse(model_id=model_id, state=entry.state, message=message)
+        # A vLLM, TensorRT-LLM or embeddings pod serves one model, and each
+        # model gets its own Deployment on the node. Whether a second model
+        # fits beside the first is the memory plan's decision below.
 
         # Measure the real checkpoint size (cached on the entry) before sizing,
         # so multimodal/mixed-precision weights aren't under-counted and the
@@ -488,7 +481,7 @@ class LLMLifecycleManager:
         if sizing.get("tensor_parallel_size"):
             payload["tensor_parallel_size"] = sizing["tensor_parallel_size"]
 
-        backend_id = f"{perf_type}-{node}"
+        backend_id = f"{perf_type}-{node}/{model_slug(model_id)}"
         llm_model_registry.update_model_state(model_id, ModelState.loading, backend_id)
 
         asyncio.create_task(
@@ -536,6 +529,7 @@ class LLMLifecycleManager:
 
             success, _ = await llm_pod_manager.ensure_pod(
                 perf_type, node, gpu_count=gpu_count, model_env=model_env,
+                model_id=model_id,
                 mem_limit_gb=payload.get("pod_mem_limit_gb"),
                 wait_ready=False,
             )
@@ -555,16 +549,6 @@ class LLMLifecycleManager:
             llm_model_registry.update_model_state(
                 model_id, ModelState.deployable, error=str(e)
             )
-
-    async def _cleanup_empty_pod(self, gpu_tracker, pod_manager, perf_type: str, node: str):
-        """Delete a pod only if no models are allocated on this backend type + node."""
-        node_allocs = gpu_tracker._allocations.get(node, [])
-        backend_allocs = [a for a in node_allocs if perf_type in a.backend_id]
-        if not backend_allocs:
-            logger.info(f"No models on {perf_type}/{node}, deleting pod")
-            await pod_manager.delete_pod(perf_type, node)
-        else:
-            logger.info(f"Pod {perf_type}/{node} still has {len(backend_allocs)} model(s), keeping it")
 
     async def unload_model(self, model_id: str, force: bool = False) -> ModelLoadResponse:
         from app.services.llm_model_registry import llm_model_registry
@@ -618,7 +602,9 @@ class LLMLifecycleManager:
             ]
             if not remaining:
                 logger.info(f"No models left on {backend_id}, deleting pod")
-                await llm_pod_manager.delete_pod(backend_type, node)
+                await llm_pod_manager.delete_pod(
+                    backend_type, node, None if backend_type in SHARED_BACKENDS else model_id
+                )
 
         return ModelLoadResponse(
             model_id=model_id, state=ModelState.deployable,
