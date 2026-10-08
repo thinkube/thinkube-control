@@ -245,6 +245,11 @@ class LLMModelRegistry:
                 backend_id=existing.backend_id if existing else None,
                 tier=existing.tier if existing else None,
             )
+            # The load deadline and the availability grace period run across
+            # refreshes; a new entry without them would restart both each time.
+            if existing:
+                model._loading_since = getattr(existing, "_loading_since", None)
+                model._last_available_at = getattr(existing, "_last_available_at", None)
             updated[model_id] = model
 
         catalog_serving = set()
