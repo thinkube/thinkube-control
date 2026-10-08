@@ -42,7 +42,10 @@ UMA_AI_BUDGET_DEDICATED_GB = float(os.getenv("LLM_UMA_AI_BUDGET_DEDICATED_GB", "
 FRAMEWORK_OVERHEAD_GB = float(os.getenv("LLM_FRAMEWORK_OVERHEAD_GB", "24"))
 
 
-CALIBRATED_MARGIN_GB = 1.0
+# The overhead vLLM measures at start changed by up to 2.2 GiB between two
+# starts of the same model and share on the DGX Spark (unified memory, where
+# other processes' memory changes count as vLLM's own).
+CALIBRATED_MARGIN_GB = 2.5
 
 
 def _share_util(share_gb: float, capacity_gb: float) -> float:
@@ -365,9 +368,10 @@ class LLMGPUTracker:
         exceeds it.
 
         share_gb, from a model's calibration, is the memory vLLM itself needs;
-        target_gb is then what the load takes from the node. The share is used
-        as it is, rounded up, and the margin covers the spread of vLLM's own
-        memory profiling (about 1 GiB, vllm-project/vllm#59318).
+        target_gb is then what the load takes from the node. vLLM gets the
+        share plus the margin, rounded up, and the node books target plus the
+        margin. The margin covers how much the overhead vLLM measures at start
+        changes from one start to the next.
         """
         node = self._gpu_nodes.get(node_name)
         if not node:
@@ -390,7 +394,7 @@ class LLMGPUTracker:
             # and the cgroup/quota must cover target + margin.
             if calibrated:
                 try:
-                    util = _share_util(share_gb, total_gb)
+                    util = _share_util(share_gb + margin, total_gb)
                 except ValueError as e:
                     return {"fits": False, "reason": f"{node_name}: {e}"}
             else:
@@ -412,7 +416,7 @@ class LLMGPUTracker:
             tp = max(gpu_count, 1)
             if calibrated:
                 try:
-                    util = _share_util(share_gb / tp, per_vram)
+                    util = _share_util((share_gb + margin) / tp, per_vram)
                 except ValueError as e:
                     return {"fits": False, "reason": f"{node_name}: {e}"}
             else:

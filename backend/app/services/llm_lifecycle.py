@@ -558,7 +558,8 @@ class LLMLifecycleManager:
         backend_id = f"{perf_type}-{node}/{model_slug(model_id)}"
         llm_model_registry.update_model_state(model_id, ModelState.loading, backend_id)
         if calibrated:
-            self._planned_gb[model_id] = estimated_memory
+            from app.services.llm_gpu_tracker import CALIBRATED_MARGIN_GB
+            self._planned_gb[model_id] = round(estimated_memory + CALIBRATED_MARGIN_GB, 2)
         else:
             self._planned_gb.pop(model_id, None)
 
