@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -43,6 +43,9 @@ class ModelEntry(BaseModel):
     # measured from MLflow rather than estimated from params×dtype. Used by the
     # sizing logic so multimodal/mixed-precision weights aren't under-counted.
     weight_bytes: Optional[int] = None
+    # Memory measured by thinkube-metadata's scripts/calibrate_models.py, keyed
+    # by memory type ("uma", "discrete"); the load is sized from it.
+    calibration: Optional[Dict[str, Any]] = None
     # Run vLLM in eager mode (--enforce-eager): skip torch.compile + CUDA-graph
     # capture. Keeps the init memory peak ≈ weights (small, predictable) at a
     # small decode cost on bandwidth-bound models.

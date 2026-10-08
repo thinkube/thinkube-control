@@ -17,7 +17,7 @@ def entry(**overrides):
     base = dict(
         id="Qwen/Qwen3-8B", role="primary", server_type=["vllm"], state=ModelState.deployable,
         context_length=131072, params_b=8.2, active_params_b=None, quantization="BF16", size="~16GB",
-        backend_id=None,
+        backend_id=None, calibration=None,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -48,7 +48,7 @@ def world(monkeypatch):
     async def get_status():
         return SimpleNamespace(nodes=state["nodes"])
 
-    async def plan_sizing(node_name, target_gb, gpu_count=1, weight_gb=None):
+    async def plan_sizing(node_name, target_gb, gpu_count=1, weight_gb=None, share_gb=None):
         return {"fits": target_gb <= state["fits_up_to_gb"], "reason": "ok"}
 
     gpu_nodes = {"tkamd2", "tkspark"}

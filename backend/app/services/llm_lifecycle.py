@@ -46,6 +46,8 @@ class LLMLifecycleManager:
     def __init__(self):
         self._load_timeout = int(os.getenv("LLM_MODEL_LOAD_TIMEOUT_SECONDS", "300"))
         self._loading_locks: dict[str, asyncio.Event] = {}
+        # Node memory planned for each calibrated model at its last load, in GiB.
+        self._planned_gb: dict[str, float] = {}
 
     LOADABLE_TYPES = {"ollama", "vllm", "tensorrt-llm", "text-embeddings"}
 
@@ -193,13 +195,56 @@ class LLMLifecycleManager:
         choices = [c for c in self.CONTEXT_CHOICES if c <= cap] or [min(cap, self.CONTEXT_CHOICES[-1])]
         weight = self._weight_gb(entry) or 0.0
         for context in choices:
-            estimated = self._estimate_memory(entry, context)
+            share, estimated = self._memory_plan(entry, context, node)
             sizing = await llm_gpu_tracker.plan_sizing(
-                node, estimated, self._gpus_needed(estimated, node), weight_gb=weight
+                node, estimated, self._gpus_needed(estimated, node), weight_gb=weight,
+                share_gb=share,
             )
             if sizing.get("fits"):
                 return context
         return choices[-1]
+
+    def _calibrated_memory(self, entry, context: int, node: str) -> Optional[tuple[float, float]]:
+        """``(vLLM share, node memory)`` in GiB from the model's calibration.
+
+        The calibration (models.json, written by thinkube-metadata's
+        scripts/calibrate_models.py) holds, per memory type, what vLLM measured
+        when the model ran alone: weights, KV cache bytes per token, the
+        overhead inside its memory share, and the node memory the load took.
+        The share is weights + overhead + context x KV bytes per token. On
+        unified memory the process's memory outside the share comes from the
+        same pool, so the node needs that too. None when the model has no
+        calibration for the node's memory type.
+        """
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+
+        memory_type = "uma" if llm_gpu_tracker.is_uma(node) else "discrete"
+        cal = (entry.calibration or {}).get(memory_type)
+        if not cal:
+            return None
+        gib = 1024 ** 3
+        fixed = cal["weight_bytes"] + cal["overhead_bytes"]
+        share = fixed + context * cal["kv_bytes_per_token"]
+        node_bytes = share
+        if memory_type == "uma":
+            measured_share = fixed + cal["measured_with"]["kv_tokens"] * cal["kv_bytes_per_token"]
+            node_bytes += cal["node_delta_bytes"] - measured_share
+        return round(share / gib, 2), round(node_bytes / gib, 2)
+
+    def _memory_plan(self, entry, context: Optional[int], node: str) -> tuple[Optional[float], float]:
+        """``(vLLM share or None, node memory)`` in GiB for a load of the model.
+
+        Calibrated models are sized from their calibration; a model without
+        one for the node's memory type keeps the estimate from its size.
+        """
+        calibrated = self._calibrated_memory(entry, context, node) if context else None
+        if calibrated:
+            return calibrated
+        return None, self._estimate_memory(entry, context)
+
+    def planned_memory_gb(self, model_id: str) -> Optional[float]:
+        """The node memory planned for the model's last load, when it was calibrated."""
+        return self._planned_gb.get(model_id)
 
     def _gpus_needed(self, estimated_memory_gb: float, node_name: str) -> int:
         import math
@@ -435,9 +480,15 @@ class LLMLifecycleManager:
             )
         drafter_gb = (self._weight_gb(drafter_entry) or 0.0) if drafter_entry else 0.0
 
-        estimated_memory = self._estimate_memory(
-            entry, max_context_length, extra_weight_gb=drafter_gb
-        )
+        # A calibration measured the model as it is served, drafter included.
+        calibrated = self._calibrated_memory(entry, max_context_length, node)
+        if calibrated:
+            share_gb, estimated_memory = calibrated
+        else:
+            share_gb = None
+            estimated_memory = self._estimate_memory(
+                entry, max_context_length, extra_weight_gb=drafter_gb
+            )
         gpu_count = self._gpus_needed(estimated_memory, node)
 
         # Architecture-aware sizing: translate the footprint into vLLM/pod knobs
@@ -447,6 +498,7 @@ class LLMLifecycleManager:
         sizing = await llm_gpu_tracker.plan_sizing(
             node, estimated_memory, gpu_count,
             weight_gb=(self._weight_gb(entry) or 0.0) + drafter_gb,
+            share_gb=share_gb,
         )
 
         # Node-safety rail: if it won't fit the operator-chosen node, refuse here
@@ -505,6 +557,10 @@ class LLMLifecycleManager:
 
         backend_id = f"{perf_type}-{node}/{model_slug(model_id)}"
         llm_model_registry.update_model_state(model_id, ModelState.loading, backend_id)
+        if calibrated:
+            self._planned_gb[model_id] = estimated_memory
+        else:
+            self._planned_gb.pop(model_id, None)
 
         asyncio.create_task(
             self._load_performance_background(

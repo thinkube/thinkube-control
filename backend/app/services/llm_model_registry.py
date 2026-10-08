@@ -233,6 +233,7 @@ class LLMModelRegistry:
                 tool_call_parser=entry.get("tool_call_parser"),
                 speculative_config=entry.get("speculative_config"),
                 weight_bytes=entry.get("weight_bytes") or (existing.weight_bytes if existing else None),
+                calibration=entry.get("calibration"),
                 enforce_eager=entry.get("enforce_eager", False),
                 tool_use=entry.get("tool_use", False),
                 stop_tokens=entry.get("stop_tokens", []),
@@ -492,7 +493,9 @@ class LLMModelRegistry:
         if any(a.model_id == model_id for a in existing):
             return
         entry = self._models.get(model_id)
-        estimated = lifecycle._estimate_memory(entry) if entry else 4.0
+        estimated = lifecycle.planned_memory_gb(model_id)
+        if estimated is None:
+            estimated = lifecycle._estimate_memory(entry) if entry else 4.0
         _, node_name = parse_backend_id(backend_id)
         gpu_tracker.record_allocation(model_id, backend_id, estimated, node_name=node_name)
 

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import logging
+import math
 import os
 import time
 from typing import Dict, List, Optional, Tuple
@@ -39,6 +40,25 @@ UMA_AI_BUDGET_DEDICATED_GB = float(os.getenv("LLM_UMA_AI_BUDGET_DEDICATED_GB", "
 # cache blocks". 24 GiB ≈ ~6 GiB overhead + ~18 GiB KV working set, which on a
 # 122 GiB UMA node with ~24.5 GiB weights floors util at ~0.40.
 FRAMEWORK_OVERHEAD_GB = float(os.getenv("LLM_FRAMEWORK_OVERHEAD_GB", "24"))
+
+
+CALIBRATED_MARGIN_GB = 1.0
+
+
+def _share_util(share_gb: float, capacity_gb: float) -> float:
+    """vLLM's --gpu-memory-utilization for a measured share, rounded up to 0.01.
+
+    A share the capacity cannot hold is refused, not trimmed: vLLM would start
+    with less KV cache than the context needs.
+    """
+    if capacity_gb <= 0:
+        raise ValueError("the node's memory capacity is unknown; a calibrated load cannot be sized")
+    util = math.ceil(share_gb / capacity_gb * 100) / 100
+    if util > 0.95:
+        raise ValueError(
+            f"the model needs {share_gb:.1f} GiB of vLLM memory, more than 95% of {capacity_gb:.1f} GiB"
+        )
+    return util
 
 
 def _floored_util(util: float, weight_gb: Optional[float], capacity_gb: float) -> float:
@@ -328,7 +348,7 @@ class LLMGPUTracker:
 
     async def plan_sizing(
         self, node_name: str, target_gb: float, gpu_count: int = 1,
-        weight_gb: Optional[float] = None,
+        weight_gb: Optional[float] = None, share_gb: Optional[float] = None,
     ) -> dict:
         """Translate a model footprint into arch-correct vLLM/pod knobs.
 
@@ -336,6 +356,11 @@ class LLMGPUTracker:
         pod_mem_limit_gb, tensor_parallel_size, fits, reason. The gateway plans
         strictly within ai_budget — fits is False when the footprint (+ margin)
         exceeds it.
+
+        share_gb, from a model's calibration, is the memory vLLM itself needs;
+        target_gb is then what the load takes from the node. The share is used
+        as it is, rounded up, and the margin covers the spread of vLLM's own
+        memory profiling (about 1 GiB, vllm-project/vllm#59318).
         """
         node = self._gpu_nodes.get(node_name)
         if not node:
@@ -344,7 +369,8 @@ class LLMGPUTracker:
         metrics = await self.fetch_node_metrics(node_name)
         total_gb, is_uma = await self._effective_total_gb(node, metrics)
         arch, reserved, ai_budget = self._budget_for(node, total_gb, is_uma)
-        margin = max(4.0, round(0.2 * target_gb, 1))
+        calibrated = share_gb is not None
+        margin = CALIBRATED_MARGIN_GB if calibrated else max(4.0, round(0.2 * target_gb, 1))
 
         # Co-residency: time-slices share the pool, so fit against what's LEFT
         # after the models already reserved on this node, and against free slots.
@@ -355,14 +381,20 @@ class LLMGPUTracker:
         if arch == "uma":
             # GPU memory == host RAM: util is a fraction of the whole device,
             # and the cgroup/quota must cover target + margin.
-            util = (
-                min(max(round(target_gb / total_gb, 2), 0.05), 0.95)
-                if total_gb
-                else 0.0
-            )
-            # Floor so the budget always covers weights + framework overhead —
-            # a small context can't drive util below the weight footprint.
-            util = round(_floored_util(util, weight_gb, total_gb), 2)
+            if calibrated:
+                try:
+                    util = _share_util(share_gb, total_gb)
+                except ValueError as e:
+                    return {"fits": False, "reason": f"{node_name}: {e}"}
+            else:
+                util = (
+                    min(max(round(target_gb / total_gb, 2), 0.05), 0.95)
+                    if total_gb
+                    else 0.0
+                )
+                # Floor so the budget always covers weights + framework overhead —
+                # a small context can't drive util below the weight footprint.
+                util = round(_floored_util(util, weight_gb, total_gb), 2)
             pod_mem = int(round(max(target_gb, util * total_gb) + margin))
             tp = 1
             remaining = max(ai_budget - reserved_on_node, 0.0)
@@ -371,16 +403,22 @@ class LLMGPUTracker:
             # Discrete VRAM: util is per-GPU; cgroup only needs host overhead.
             per_vram = node.per_gpu_vram_gb or (total_gb / max(node.gpu_count, 1))
             tp = max(gpu_count, 1)
-            per_gpu_target = (target_gb / tp) if tp else target_gb
-            util = (
-                min(max(round(per_gpu_target / per_vram, 2), 0.05), 0.95)
-                if per_vram
-                else 0.9
-            )
-            # Per-GPU floor: the model's weights are split across `tp` GPUs.
-            util = round(
-                _floored_util(util, (weight_gb / tp) if weight_gb else None, per_vram), 2
-            )
+            if calibrated:
+                try:
+                    util = _share_util(share_gb / tp, per_vram)
+                except ValueError as e:
+                    return {"fits": False, "reason": f"{node_name}: {e}"}
+            else:
+                per_gpu_target = (target_gb / tp) if tp else target_gb
+                util = (
+                    min(max(round(per_gpu_target / per_vram, 2), 0.05), 0.95)
+                    if per_vram
+                    else 0.9
+                )
+                # Per-GPU floor: the model's weights are split across `tp` GPUs.
+                util = round(
+                    _floored_util(util, (weight_gb / tp) if weight_gb else None, per_vram), 2
+                )
             pod_mem = int(round(max(8.0, 0.25 * target_gb + 4.0)))
             remaining = max((per_vram * tp) - reserved_on_node, 0.0)
             fits = target_gb <= remaining and free_slots >= tp
