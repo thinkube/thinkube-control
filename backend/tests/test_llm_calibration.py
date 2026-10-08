@@ -27,7 +27,8 @@ CAL_35B = {
 
 @pytest.fixture
 def mgr(monkeypatch):
-    monkeypatch.setattr(trk, "llm_gpu_tracker", SimpleNamespace(is_uma=lambda n: n == "tkspark"))
+    monkeypatch.setattr(trk, "llm_gpu_tracker", SimpleNamespace(
+        memory_type=lambda n: "uma" if n == "tkspark" else "discrete"))
     return LLMLifecycleManager()
 
 

@@ -302,6 +302,13 @@ class LLMGPUTracker:
             return node.is_uma
         return False
 
+    def memory_type(self, node_name: str) -> str:
+        """"uma" or "discrete", by the rule the sizing uses (_budget_for)."""
+        node = self._gpu_nodes.get(node_name)
+        if node is None:
+            raise ValueError(f"'{node_name}' is not a known GPU node")
+        return "uma" if (node.is_uma or node.arch == "uma") else "discrete"
+
     def _budget_for(
         self, node: GPUNode, total_gb: float, is_uma: bool
     ) -> Tuple[str, float, float]:

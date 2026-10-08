@@ -58,6 +58,7 @@ def world(monkeypatch):
 
     monkeypatch.setattr(trk, "llm_gpu_tracker", SimpleNamespace(
         get_status=get_status, plan_sizing=plan_sizing, is_uma=lambda n: n == "tkspark",
+        memory_type=lambda n: "uma" if n == "tkspark" else "discrete",
         check_can_load=check_can_load, node_names=lambda: sorted(gpu_nodes),
         get_node=lambda n: SimpleNamespace(per_gpu_vram_gb=24.0, gpu_count=1) if n in gpu_nodes else None))
     monkeypatch.setattr(llm_lifecycle, "_gpus_needed", lambda est, n: 1)

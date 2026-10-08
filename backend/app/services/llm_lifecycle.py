@@ -218,7 +218,7 @@ class LLMLifecycleManager:
         """
         from app.services.llm_gpu_tracker import llm_gpu_tracker
 
-        memory_type = "uma" if llm_gpu_tracker.is_uma(node) else "discrete"
+        memory_type = llm_gpu_tracker.memory_type(node)
         cal = (entry.calibration or {}).get(memory_type)
         if not cal:
             return None
