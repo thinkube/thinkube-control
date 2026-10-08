@@ -392,6 +392,28 @@ class LLMLifecycleManager:
         # A vLLM, TensorRT-LLM or embeddings pod serves one model, and each
         # model gets its own Deployment on the node. Whether a second model
         # fits beside the first is the memory plan's decision below.
+        #
+        # Engines on one node start one at a time: an engine sizes its cache
+        # from the memory it sees used while it starts, and counts what
+        # another engine allocates in the same moment as its own.
+        starting = next(
+            (
+                m.id for m in llm_model_registry.list_models()
+                if m.id != model_id
+                and m.state == ModelState.loading
+                and parse_backend_id(m.backend_id or "")[1] == node
+                and parse_backend_id(m.backend_id or "")[0] not in SHARED_BACKENDS
+            ),
+            None,
+        )
+        if starting:
+            return ModelLoadResponse(
+                model_id=model_id, state=ModelState.deployable,
+                message=(
+                    f"'{starting}' is starting on {node}; load this model "
+                    f"when that one is available or has failed"
+                ),
+            )
 
         # Measure the real checkpoint size (cached on the entry) before sizing,
         # so multimodal/mixed-precision weights aren't under-counted and the

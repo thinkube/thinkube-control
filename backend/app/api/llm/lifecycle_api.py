@@ -92,7 +92,8 @@ async def load_model(model_id: str, request: ModelLoadRequest = ModelLoadRequest
     "loading" with a backend_id means accepted, any other state means refused
     and message says why (already loaded, does not fit the node's remaining
     memory, backend disabled). Several vLLM, TensorRT-LLM or embeddings models
-    can share a node, each in its own pod. Follow
+    can share a node, each in its own pod; they start one at a time, so a
+    load on a node where another model is loading is refused. Follow
     the load with get_llm_model_status until the state is "available", or
     "deployable" with last_error when it failed.
     """

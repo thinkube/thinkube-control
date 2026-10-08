@@ -167,3 +167,20 @@ def test_a_second_model_on_a_node_gets_its_own_backend(world, monkeypatch):
     assert result.state == ModelState.loading
     assert result.backend_id == "vllm-tkspark/qwen-qwen3-5-4b"
     assert ensured == [("vllm", "tkspark", "Qwen/Qwen3.5-4B")]
+
+
+def test_a_load_waits_for_a_model_starting_on_the_node(world, monkeypatch):
+    """Engines on a node start one at a time: a load beside a loading model is refused."""
+    import app.services.llm_model_registry as reg
+
+    other = entry(id="Qwen/Qwen3-8B", state=ModelState.loading, backend_id="vllm-tkspark/qwen-qwen3-8b")
+    mine = entry(id="Qwen/Qwen3.5-4B")
+    models = {"Qwen/Qwen3-8B": other, "Qwen/Qwen3.5-4B": mine}
+    monkeypatch.setattr(reg, "llm_model_registry", SimpleNamespace(
+        get_model=lambda mid: models.get(mid), list_models=lambda: list(models.values()),
+        update_model_state=lambda *a, **k: None))
+    monkeypatch.setattr(llm_lifecycle, "_load_performance", type(llm_lifecycle)._load_performance.__get__(llm_lifecycle))
+
+    result = asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3.5-4B", backend="vllm-tkspark"))
+    assert result.state == ModelState.deployable
+    assert "Qwen/Qwen3-8B" in result.message

@@ -30,8 +30,9 @@ Rules that the tools do not state:
 - A vLLM, TensorRT-LLM or text-embeddings pod serves ONE model. Each model loaded on a node
   gets its own pod there, created on load and deleted on unload, so several models can
   share a node. A load that does not fit the node's remaining memory is refused, with the
-  reason; a loaded model is never replaced. Ollama is different: one Ollama pod per node
-  serves several models.
+  reason; a loaded model is never replaced. Models on one node start one at a time: while
+  one is loading, a second load on that node is refused; load it once the first is
+  available. Ollama is different: one Ollama pod per node serves several models.
 - `get_llm_load_options` lists in compatible_backends only the pods running NOW. An empty
   list, or a node that has no pod, does not mean the node cannot serve the model: the load
   creates the pod there. Choose by gpu_nodes, not by compatible_backends.
