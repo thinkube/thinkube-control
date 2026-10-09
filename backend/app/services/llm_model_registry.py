@@ -401,6 +401,22 @@ class LLMModelRegistry:
                     entry._last_available_at = datetime.utcnow()
                 elif datetime.utcnow() - last_avail > timedelta(seconds=120):
                     backend_type, node = parse_backend_id(entry.backend_id or "")
+                    # Discovery alone does not take a one-model pod down: the
+                    # pod is asked first. A pod that is still ready, or whose
+                    # state cannot be read, keeps the model and is checked again
+                    # after another grace period; a dead engine makes the pod
+                    # not ready through its /health probe.
+                    if backend_type and backend_type not in SHARED_BACKENDS and node:
+                        pod_status, pod_detail = llm_pod_manager.check_pod_status(
+                            backend_type, node, model_id
+                        )
+                        if pod_status in ("ready", "unknown"):
+                            entry._last_available_at = None
+                            logger.warning(
+                                f"Model {model_id} not seen by discovery for 120s, but its pod "
+                                f"is {pod_status} {pod_detail}; kept available"
+                            )
+                            continue
                     entry.state = ModelState.deployable
                     entry.backend_id = None
                     entry._last_available_at = None

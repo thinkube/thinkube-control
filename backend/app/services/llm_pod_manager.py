@@ -583,7 +583,8 @@ class LLMPodManager:
         """Check the actual K8s pod status for a backend/node.
 
         Returns (status, detail) where status is one of:
-        "ready", "progressing", "failed", "absent".
+        "ready", "progressing", "failed", "absent", or "unknown" when the
+        Kubernetes API could not be read.
         """
         try:
             from kubernetes import client, config as k8s_config
@@ -639,8 +640,8 @@ class LLMPodManager:
 
             return "progressing", ""
         except Exception as e:
-            logger.debug(f"Pod status check failed for {backend_type}/{node_name}: {e}")
-            return "progressing", ""
+            logger.warning(f"Pod status check failed for {backend_type}/{node_name}: {e}")
+            return "unknown", str(e)
 
     def scale_to_zero(self, backend_type: str, node_name: str, model_id: Optional[str] = None) -> bool:
         """Scale a gateway-managed node deployment to 0, freeing its slot/budget.

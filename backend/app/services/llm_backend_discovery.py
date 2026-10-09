@@ -73,6 +73,9 @@ class LLMBackendDiscovery:
                 return
             for entry in entries:
                 bid = entry.get("name", entry.get("url", "unknown"))
+                existing = self._backends.get(bid)
+                if existing is not None and existing.url == entry["url"]:
+                    continue
                 self._backends[bid] = BackendEntry(
                     id=bid,
                     name=entry.get("name", bid),
@@ -159,6 +162,15 @@ class LLMBackendDiscovery:
                         url = f"http://{pod_ip}:{port}"
                         display = f"{backend_type} ({where})"
 
+                    # The same pod keeps its entry, with the status and models
+                    # its probes found; rebuilding it on every pass would show
+                    # it as unknown and empty until the next probe. A new pod,
+                    # or a pod at a new address, starts from unknown.
+                    existing = self._backends.get(backend_id)
+                    if existing is not None and existing.url == url:
+                        existing.name = display
+                        existing.node = node_name
+                        continue
                     self._backends[backend_id] = BackendEntry(
                         id=backend_id,
                         name=display,
@@ -168,6 +180,7 @@ class LLMBackendDiscovery:
                         status="unknown",
                         node=node_name,
                     )
+                    self._probe_failures.pop(backend_id, None)
 
             stale = [
                 bid for bid in list(self._backends)
