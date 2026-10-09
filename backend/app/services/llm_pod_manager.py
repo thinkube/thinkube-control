@@ -207,13 +207,18 @@ class LLMPodManager:
                 self._pod_selector(backend_type, node_name, model_id),
             )
             if pod_info and pod_info[2]:
-                restarted = await loop.run_in_executor(
-                    _k8s_executor,
-                    self._check_and_sync_image,
-                    backend_type,
-                    node_name,
-                    model_id,
-                )
+                # A shared pod (Ollama) serves other models: a load of one
+                # more model must not restart it for a newer image. It takes
+                # the image when it is next created.
+                restarted = False
+                if backend_type not in SHARED_BACKENDS:
+                    restarted = await loop.run_in_executor(
+                        _k8s_executor,
+                        self._check_and_sync_image,
+                        backend_type,
+                        node_name,
+                        model_id,
+                    )
                 if restarted:
                     logger.info(f"Image updated for {key}, waiting for new pod")
                     self._managed.pop(key, None)
@@ -321,6 +326,11 @@ class LLMPodManager:
                     if needs_recreate:
                         apps_v1.delete_namespaced_deployment(deploy_name, namespace)
                     else:
+                        if (existing.spec.strategy and existing.spec.strategy.type) != "Recreate":
+                            apps_v1.patch_namespaced_deployment(
+                                deploy_name, namespace,
+                                {"spec": {"strategy": {"type": "Recreate", "rollingUpdate": None}}},
+                            )
                         self._sync_deployment_image(apps_v1, existing, base, namespace)
                         if model_env:
                             self._sync_deployment_env(apps_v1, existing, namespace, model_env)
@@ -413,6 +423,9 @@ class LLMPodManager:
                 ),
                 spec=client.V1DeploymentSpec(
                     replicas=1,
+                    # A second copy of a model never fits beside the first,
+                    # so a new pod starts only after the old one has gone.
+                    strategy=client.V1DeploymentStrategy(type="Recreate"),
                     selector=client.V1LabelSelector(
                         match_labels=selector_labels,
                     ),
@@ -753,21 +766,19 @@ class LLMPodManager:
 
             apps_v1 = client.AppsV1Api()
 
+            # Running pods keep their image: a newer backend image reaches a
+            # deployment at its next load (_create_node_deployment), so a
+            # restart of Thinkube Control never restarts the loaded models.
             for backend_type in BACKEND_NAMESPACES:
                 ns = self._get_namespace(backend_type)
-                base_name = self._get_base_deployment_name(backend_type)
-
-                try:
-                    base = apps_v1.read_namespaced_deployment(base_name, ns)
-                except Exception:
-                    continue
-
                 try:
                     deploys = apps_v1.list_namespaced_deployment(
                         ns, label_selector=f"{GATEWAY_LABEL}={GATEWAY_LABEL_VALUE}"
                     )
-                except Exception:
-                    continue
+                except client.rest.ApiException as e:
+                    if e.status == 404:
+                        continue  # the backend is not installed
+                    raise
 
                 for deploy in deploys.items:
                     labels = deploy.metadata.labels or {}
@@ -775,8 +786,6 @@ class LLMPodManager:
                     if not node:
                         continue
                     slug = labels.get(MODEL_LABEL)
-
-                    self._sync_deployment_image(apps_v1, deploy, base, ns)
 
                     selector = f"{GATEWAY_LABEL}={GATEWAY_LABEL_VALUE},{TARGET_NODE_LABEL}={node}"
                     if slug:
