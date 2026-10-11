@@ -95,7 +95,7 @@ def render(template, **extra):
     variables = dict(
         project_name="wf-check", k8s_namespace="wf-check", domain_name="thinkube.com",
         container_registry="registry.thinkube.com", admin_username="tkadmin",
-        thinkube_spec=spec, manifest_params={}, seaweedfs_endpoint="http://seaweedfs:8333",
+        thinkube_spec=spec, manifest_params={}, spec_env={}, seaweedfs_endpoint="http://seaweedfs:8333",
         deployment_env_from=[], system_username="thinkube", master_node_name="tkamd1",
         gitea_org="thinkube-deployments", build_architectures=["amd64", "arm64"],
     )

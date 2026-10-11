@@ -14,13 +14,16 @@ import json
 from pathlib import Path
 
 import jinja2
+import sys
 import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 TEMPLATES = REPO / "templates/k8s"
+sys.path.insert(0, str(REPO / "scripts"))
+import spec_env  # noqa: E402
 
 
-def render(spec):
+def render(spec, given=None):
     env = jinja2.Environment(
         loader=jinja2.FileSystemLoader(str(TEMPLATES)),
         undefined=jinja2.StrictUndefined,
@@ -38,6 +41,7 @@ def render(spec):
         admin_password="x",
         thinkube_spec=spec,
         manifest_params={},
+        spec_env=spec_env.resolve(spec, given or {}, "knative-demo"),
         mlflow_keycloak_token_url="",
         mlflow_keycloak_client_id="",
         mlflow_client_secret="",
@@ -83,3 +87,12 @@ def test_env_defaults_render_as_yaml_strings_whatever_they_hold():
     assert env["EXTRA_BODY"] == '{"chat_template_kwargs": {"enable_thinking": false}}'
     assert env["BASE_URL"] == "https://llm.thinkube.com/v1"
     assert env["WORKERS"] == "4"
+
+
+def test_a_value_given_at_deploy_reaches_the_container():
+    """A variable without a default is rendered with the value the deploy gave it."""
+    spec = {"spec": {**SPEC["spec"], "env": [{"name": "GATEWAY_URL"}, {"name": "MODE", "default": "fast"}]}}
+    [container] = containers(render(spec, {"GATEWAY_URL": "https://storage.thinkube.com", "MODE": "slow"}))
+    env = {e["name"]: e.get("value") for e in container["env"]}
+    assert env["GATEWAY_URL"] == "https://storage.thinkube.com"
+    assert env["MODE"] == "slow"

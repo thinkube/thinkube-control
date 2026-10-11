@@ -136,15 +136,11 @@ spec:
             {% endif %}
             {% endfor %}
             {% endif %}
-            # User-configurable environment variables
-            {% if thinkube_spec.spec.env is defined %}
-            {% for env_var in thinkube_spec.spec.env %}
-            {% if env_var.default is defined %}
-            - name: {{ env_var.name }}
-              value: {{ env_var.default | string | to_json }}
-            {% endif %}
+            # spec.env: the value given at deploy, else the default
+            {% for name, value in spec_env.items() %}
+            - name: {{ name }}
+              value: {{ value | string | to_json }}
             {% endfor %}
-            {% endif %}
             # Manifest parameters (from deploy-time input, e.g. model_id)
             {% if manifest_params is defined %}
             {% for param_name, param_value in manifest_params.items() %}

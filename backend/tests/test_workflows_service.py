@@ -65,6 +65,7 @@ def template_vars(config):
         "admin_password": "secret",
         "thinkube_spec": config,
         "manifest_params": {},
+        "spec_env": {},
         "seaweedfs_access_key": "AKIAEXAMPLE",
         "seaweedfs_password": "s3cr3t",
         "seaweedfs_endpoint": "http://seaweedfs-filer.seaweedfs.svc.cluster.local:8333",
