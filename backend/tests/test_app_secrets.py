@@ -210,6 +210,7 @@ def base_vars(spec, **extra):
         "admin_password": "x",
         "thinkube_spec": spec,
         "manifest_params": {},
+        "spec_env": {},
         "mlflow_keycloak_token_url": "",
         "mlflow_keycloak_client_id": "",
         "mlflow_client_secret": "",

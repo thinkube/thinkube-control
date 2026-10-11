@@ -457,6 +457,7 @@ git fetch origin main
         """Read the secrets manifest.yaml declares and check the store holds them."""
         from app_secrets import declared_secrets, env_from, refusal
         from manifest_parameters import declared_parameter_names, deployed_values
+        import spec_env
 
         manifest_path = Path(self.local_repo_path) / 'manifest.yaml'
         if not manifest_path.exists():
@@ -467,6 +468,8 @@ git fetch origin main
         self.declared_secrets = declared_secrets(manifest)
         self.deployment_env_from = env_from(self.app_name, self.declared_secrets)
         self.manifest_params = deployed_values(declared_parameter_names(manifest), self.params)
+        self.spec_env_given = spec_env.given_values(self.thinkube_config, self.params)
+        self.spec_env = spec_env.resolve(self.thinkube_config, self.spec_env_given, self.app_name)
         if not self.declared_secrets:
             return
 
@@ -792,6 +795,7 @@ git fetch origin main
     async def create_app_metadata(self):
         """Create or replace the application metadata ConfigMap."""
         from manifest_parameters import PARAMETERS_KEY, encode
+        import spec_env
 
         metadata = client.V1ConfigMap(
             metadata=client.V1ObjectMeta(name=f'{self.app_name}-metadata', namespace=self.namespace),
@@ -801,6 +805,7 @@ git fetch origin main
                 'namespace': self.namespace,
                 'config': yaml.dump(self.thinkube_config),
                 PARAMETERS_KEY: encode(self.manifest_params),
+                spec_env.ENV_KEY: spec_env.encode(self.spec_env_given),
             }
         )
         try:
@@ -1128,6 +1133,7 @@ git fetch origin main
             'admin_username': self.admin_username,
             'thinkube_spec': self.thinkube_config,
             'manifest_params': manifest_params,
+            'spec_env': self.spec_env,
             'seaweedfs_endpoint': seaweedfs_endpoint,
             'deployment_env_from': self.deployment_env_from,
         }
@@ -1181,6 +1187,7 @@ spec:
 
         # 3. Generate app-metadata.yaml
         from manifest_parameters import PARAMETERS_KEY, encode
+        import spec_env
         containers_json = json.dumps(self.thinkube_config.get('spec', {}).get('containers', []))
         app_metadata_content = f"""apiVersion: v1
 kind: ConfigMap
@@ -1192,6 +1199,7 @@ data:
   containers: |
     {containers_json}
   {PARAMETERS_KEY}: {json.dumps(encode(self.manifest_params))}
+  {spec_env.ENV_KEY}: {json.dumps(spec_env.encode(self.spec_env_given))}
 """
         write('app-metadata.yaml', app_metadata_content)
 

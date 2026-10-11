@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 import dependency_resolution  # noqa: E402,F401
 import manifest_plan  # noqa: E402,F401
 import namespace_quota  # noqa: E402,F401
+import spec_env  # noqa: E402,F401
 import thinkube_yaml_validator  # noqa: E402,F401
 
 spec = importlib.util.spec_from_file_location(
@@ -169,6 +170,32 @@ def test_an_unreadable_config_map_stops_rather_than_dropping_parameters(tmp_path
     app = app_with_manifest(tmp_path, [{"name": "model_id"}])
     with pytest.raises(RuntimeError, match="wf-check-metadata"):
         generator(Core(config_map=None))._read_manifest_params(app)
+
+
+# --- spec.env -----------------------------------------------------------------
+
+
+ENV_SPEC = {"spec": {"env": [{"name": "GATEWAY_URL"}, {"name": "WORKERS", "default": 4}]}}
+
+
+def test_spec_env_takes_the_values_given_at_the_last_deploy():
+    g = generator(Core(config_map={"env": json.dumps({"GATEWAY_URL": "https://storage.thinkube.com"})}))
+    g.thinkube_config = ENV_SPEC
+    assert g._read_spec_env() == {"GATEWAY_URL": "https://storage.thinkube.com", "WORKERS": "4"}
+    assert g.spec_env_given == {"GATEWAY_URL": "https://storage.thinkube.com"}
+
+
+def test_a_required_spec_env_variable_never_given_stops_regeneration():
+    g = generator(Core(config_map={"parameters": "{}"}))
+    g.thinkube_config = ENV_SPEC
+    with pytest.raises(ValueError, match="GATEWAY_URL"):
+        g._read_spec_env()
+
+
+def test_an_app_without_spec_env_does_not_read_the_config_map():
+    g = generator(Core(config_map=None))
+    g.thinkube_config = {"spec": {}}
+    assert g._read_spec_env() == {}
 
 
 # --- dependencies -------------------------------------------------------------

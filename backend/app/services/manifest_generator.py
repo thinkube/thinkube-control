@@ -40,6 +40,7 @@ from manifest_parameters import (
     declared_parameter_names as _declared_parameter_names,
     recorded_values as _recorded_parameter_values,
 )
+import spec_env as _spec_env
 from dependency_resolution import knative_url, knative_view, service_url, service_view
 from namespace_quota import NON_GPU_QUOTA as _NON_GPU_QUOTA, memory_quota as _memory_quota, node_view as _node_view
 from app_secrets import (
@@ -277,6 +278,7 @@ class ManifestGenerator:
 
         # The declared parameters, with the values the app was deployed with
         manifest_params = self._read_manifest_params(app_path)
+        spec_env = self._read_spec_env()
 
         # Setup Jinja2
         templates_dir = TEMPLATES_DIR
@@ -301,6 +303,7 @@ class ManifestGenerator:
             'admin_username': self.secrets['admin_username'],
             'thinkube_spec': self.thinkube_config,
             'manifest_params': manifest_params,
+            'spec_env': spec_env,
             'seaweedfs_endpoint': self.secrets['seaweedfs_endpoint'],
             'deployment_env_from': _env_from(self.app_name, self.declared_secrets),
         }
@@ -380,6 +383,7 @@ data:
   containers: |
     {containers_json}
   {_PARAMETERS_KEY}: {json.dumps(_encode_parameters(manifest_params))}
+  {_spec_env.ENV_KEY}: {json.dumps(_spec_env.encode(self.spec_env_given))}
 """
 
         if is_knative:
@@ -543,3 +547,24 @@ data:
                 f"parameters {self.app_name} was deployed with: {e.reason}"
             ) from e
         return _recorded_parameter_values(names, cm.data or {}, self.app_name, self._container_env())
+
+    def _read_spec_env(self) -> Dict[str, str]:
+        """The spec.env variables' values: as given at the last deploy, else their defaults.
+
+        The values given at deploy are in the app-metadata ConfigMap. A
+        variable without a default that the ConfigMap does not record stops
+        the regeneration, naming it.
+        """
+        if not _spec_env.declared(self.thinkube_config):
+            self.spec_env_given = {}
+            return {}
+        name = f'{self.app_name}-metadata'
+        try:
+            cm = self.core_v1.read_namespaced_config_map(name, self.namespace)
+        except ApiException as e:
+            raise RuntimeError(
+                f"Cannot read ConfigMap {self.namespace}/{name}, which holds the "
+                f"spec.env values {self.app_name} was deployed with: {e.reason}"
+            ) from e
+        self.spec_env_given = _spec_env.recorded(cm.data or {})
+        return _spec_env.resolve(self.thinkube_config, self.spec_env_given, self.app_name)
