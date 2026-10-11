@@ -106,6 +106,15 @@ func (r *Resolver) BackendURL() string {
 	return r.backendURL
 }
 
+// Aliases gives a copy of the alias table, alias -> model id.
+func (r *Resolver) Aliases() map[string]string {
+	out := make(map[string]string, len(r.aliases))
+	for alias, model := range r.aliases {
+		out[alias] = model
+	}
+	return out
+}
+
 // Resolve maps a model alias/id to a backend. On a transient backend failure it
 // retries once and, failing that, serves the last-known-good resolution within
 // lastGoodTTL — so a momentary backend stall/flap does not surface as a 404.

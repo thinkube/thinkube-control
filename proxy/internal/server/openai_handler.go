@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/thinkube/thinkube-control/proxy/internal/auth"
@@ -170,7 +171,10 @@ func (h *OpenAIHandler) forwardStream(r *http.Request, w http.ResponseWriter, ba
 }
 
 // ListModels answers the OpenAI model list from the backend's registry: the
-// models that are served or could be. The backend route carries a trailing
+// models that are served or could be. Each alias whose model is in the list
+// is listed too, after the models and by name, with `root` naming the model
+// it points to now; a model's own `root` is its id. An app reads `root` to
+// know which model an alias names before it calls it. The backend route carries a trailing
 // slash; without it the backend redirects, and the forwarder does not follow
 // redirects, so the exact path matters. A backend answer that is not 200 or
 // not the expected shape is reported, never shown as an empty list.
@@ -209,17 +213,27 @@ func (h *OpenAIHandler) ListModels(w http.ResponseWriter, r *http.Request) {
 		Object  string `json:"object"`
 		Created int64  `json:"created"`
 		OwnedBy string `json:"owned_by"`
+		Root    string `json:"root"`
 	}
 
+	now := time.Now().Unix()
 	models := []openAIModel{}
+	listed := map[string]bool{}
 	for _, m := range backendResp.Models {
 		if m.State == "available" || m.State == "deployable" {
-			models = append(models, openAIModel{
-				ID:      m.ID,
-				Object:  "model",
-				Created: time.Now().Unix(),
-				OwnedBy: "local",
-			})
+			models = append(models, openAIModel{ID: m.ID, Object: "model", Created: now, OwnedBy: "local", Root: m.ID})
+			listed[m.ID] = true
+		}
+	}
+	aliases := h.resolver.Aliases()
+	names := make([]string, 0, len(aliases))
+	for alias := range aliases {
+		names = append(names, alias)
+	}
+	sort.Strings(names)
+	for _, alias := range names {
+		if listed[aliases[alias]] {
+			models = append(models, openAIModel{ID: alias, Object: "model", Created: now, OwnedBy: "thinkube", Root: aliases[alias]})
 		}
 	}
 

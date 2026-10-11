@@ -33,7 +33,12 @@ func modelBackend(t *testing.T, models string) *httptest.Server {
 
 func listModels(t *testing.T, backendURL string) (int, map[string]any) {
 	t.Helper()
-	h := NewOpenAIHandler(resolver.New(backendURL, nil), forwarder.New(5*time.Second), 1<<20)
+	return listModelsWithAliases(t, backendURL, nil)
+}
+
+func listModelsWithAliases(t *testing.T, backendURL string, aliases map[string]string) (int, map[string]any) {
+	t.Helper()
+	h := NewOpenAIHandler(resolver.New(backendURL, aliases), forwarder.New(5*time.Second), 1<<20)
 	rec := httptest.NewRecorder()
 	h.ListModels(rec, httptest.NewRequest("GET", "/v1/models", nil))
 	var body map[string]any
@@ -63,6 +68,41 @@ func TestListModelsReturnsServedAndDeployableModels(t *testing.T) {
 	}
 	if data[0].(map[string]any)["id"] != "Qwen/Qwen3-8B" {
 		t.Fatalf("first model: %v", data[0])
+	}
+}
+
+// An alias is listed after the models, with root naming the model it points
+// to, so an app knows which model it names before calling it. A model's root
+// is its own id. An alias to a model the list does not hold is left out.
+func TestListModelsListsAliasesWithTheirRoot(t *testing.T) {
+	backend := modelBackend(t, `{"models":[
+		{"id":"nvidia/Qwen3.6-35B-A3B-NVFP4","state":"available","server_type":["vllm"]},
+		{"id":"Qwen/Qwen3-32B","state":"registered","server_type":["vllm"]}]}`)
+	defer backend.Close()
+
+	_, body := listModelsWithAliases(t, backend.URL, map[string]string{
+		"thinkube-fast":  "nvidia/Qwen3.6-35B-A3B-NVFP4",
+		"thinkube-big":   "Qwen/Qwen3-32B",
+		"thinkube-agent": "nvidia/Qwen3.6-35B-A3B-NVFP4",
+	})
+	data := body["data"].([]any)
+	got := []string{}
+	for _, d := range data {
+		m := d.(map[string]any)
+		got = append(got, m["id"].(string)+" -> "+m["root"].(string))
+	}
+	want := []string{
+		"nvidia/Qwen3.6-35B-A3B-NVFP4 -> nvidia/Qwen3.6-35B-A3B-NVFP4",
+		"thinkube-agent -> nvidia/Qwen3.6-35B-A3B-NVFP4",
+		"thinkube-fast -> nvidia/Qwen3.6-35B-A3B-NVFP4",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
 	}
 }
 
