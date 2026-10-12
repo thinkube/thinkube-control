@@ -251,3 +251,24 @@ spec:
   traffic:
     - latestRevision: true
       percent: 100
+---
+# Knative creates the service's two routes, public and in-cluster, and
+# leaves them without a timeout, so Envoy's default of 15s ends any longer
+# request although the service allows timeoutSeconds. Knative rewrites its
+# routes, so the timeout is set beside them, on the routes by name.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: {{ project_name }}-request-timeout
+  namespace: {{ k8s_namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: {{ project_name }}.{{ domain_name }}
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: {{ project_name }}.{{ k8s_namespace }}.svc.cluster.local
+  timeout:
+    http:
+      requestTimeout: {{ deployment.timeoutSeconds | default(300) }}s

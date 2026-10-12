@@ -60,7 +60,7 @@ SPEC = {"spec": {
 
 
 def containers(rendered):
-    [service] = [d for d in yaml.safe_load_all(rendered) if d]
+    [service] = [d for d in yaml.safe_load_all(rendered) if d and d["kind"] == "Service"]
     return service["spec"]["template"]["spec"]["containers"]
 
 
@@ -96,3 +96,13 @@ def test_a_value_given_at_deploy_reaches_the_container():
     env = {e["name"]: e.get("value") for e in container["env"]}
     assert env["GATEWAY_URL"] == "https://storage.thinkube.com"
     assert env["MODE"] == "slow"
+
+
+def test_both_routes_allow_the_services_own_timeout():
+    """Knative's routes get Envoy's 15s unless a policy names them; the policy carries timeoutSeconds."""
+    spec = {"spec": {**SPEC["spec"], "deployment": {"type": "knative", "timeoutSeconds": 600}}}
+    [policy] = [d for d in yaml.safe_load_all(render(spec)) if d and d["kind"] == "BackendTrafficPolicy"]
+    assert [r["name"] for r in policy["spec"]["targetRefs"]] == [
+        "knative-demo.thinkube.com", "knative-demo.knative-demo.svc.cluster.local",
+    ]
+    assert policy["spec"]["timeout"]["http"]["requestTimeout"] == "600s"

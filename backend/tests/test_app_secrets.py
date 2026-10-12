@@ -244,7 +244,7 @@ DECLARED = [DeclaredSecret("WF_CHECK_TOKEN")]
 def containers_of(rendered):
     out = []
     for doc in yaml.safe_load_all(rendered):
-        if not doc:
+        if not doc or "template" not in doc.get("spec", {}):
             continue
         pod = doc["spec"]["template"]["spec"]
         out.extend(pod["containers"])
