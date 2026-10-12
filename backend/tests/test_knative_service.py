@@ -106,3 +106,10 @@ def test_both_routes_allow_the_services_own_timeout():
         "knative-demo.thinkube.com", "knative-demo.knative-demo.svc.cluster.local",
     ]
     assert policy["spec"]["timeout"]["http"]["requestTimeout"] == "600s"
+
+
+def test_a_response_may_start_as_late_as_the_service_allows():
+    """Knative's own limit on the first response byte is 300s; it follows timeoutSeconds."""
+    spec = {"spec": {**SPEC["spec"], "deployment": {"type": "knative", "timeoutSeconds": 900}}}
+    [service] = [d for d in yaml.safe_load_all(render(spec)) if d and d["kind"] == "Service"]
+    assert service["spec"]["template"]["spec"]["responseStartTimeoutSeconds"] == 900

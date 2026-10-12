@@ -23,6 +23,10 @@ spec:
     spec:
       containerConcurrency: {{ deployment.containerConcurrency | default(0) }}
       timeoutSeconds: {{ deployment.timeoutSeconds | default(300) }}
+      # Knative ends a request whose first response byte takes longer than
+      # responseStartTimeoutSeconds, 300s by default, whatever timeoutSeconds
+      # allows; a service that answers only when its work is done needs both.
+      responseStartTimeoutSeconds: {{ deployment.timeoutSeconds | default(300) }}
       imagePullSecrets:
         - name: app-pull-secret
       containers:
