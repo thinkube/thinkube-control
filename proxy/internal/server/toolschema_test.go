@@ -24,7 +24,11 @@ func paramTypes(t *testing.T, params string) map[string]any {
 			} `json:"function"`
 		} `json:"tools"`
 	}
-	if err := json.Unmarshal(typeToolParameters(body), &req); err != nil {
+	typed, err := typeToolParameters(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(typed, &req); err != nil {
 		t.Fatal(err)
 	}
 	types := map[string]any{}
@@ -79,10 +83,35 @@ func TestABodyWithNothingToTypeIsReturnedAsItWas(t *testing.T) {
 	for _, body := range []string{
 		`{"model": "m", "messages": []}`,
 		`{"model": "m", "tools": [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {"q": {"type": "string"}}}}}]}`,
-		`not json`,
 	} {
-		if got := string(typeToolParameters([]byte(body))); got != body {
+		got, err := typeToolParameters([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != body {
 			t.Fatalf("body changed:\n got %s\nwant %s", got, body)
 		}
+	}
+}
+
+func TestABodyThatIsNotAnObjectIsRefused(t *testing.T) {
+	for _, body := range []string{`not json`, `[1, 2]`, `{"model": "m"} {}`} {
+		if _, err := typeToolParameters([]byte(body)); err == nil {
+			t.Fatalf("%s: no error", body)
+		}
+	}
+}
+
+// Typing a parameter changes that parameter only: the parameters stay in the
+// order the client wrote them, and so do the other keys of the request.
+func TestTypingKeepsTheOrderOfEverythingElse(t *testing.T) {
+	body := `{"model":"m","tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object","properties":{"zeta":{"type":"string"},"limit":{"type":["integer","null"]},"alpha":{"type":"string"}}}}}],"messages":[]}`
+	want := `{"model":"m","tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object","properties":{"zeta":{"type":"string"},"limit":{"type":"integer"},"alpha":{"type":"string"}}}}}],"messages":[]}`
+	got, err := typeToolParameters([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != want {
+		t.Fatalf("body:\n got %s\nwant %s", got, want)
 	}
 }

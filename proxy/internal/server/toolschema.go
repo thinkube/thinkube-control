@@ -21,45 +21,101 @@ import (
 // list. The type is set when the branches that are not null agree on one;
 // a $ref branch is resolved through the parameters' $defs or definitions.
 // Parameters that already have a type, or whose branches disagree, are left
-// as they are. The body is returned unchanged when nothing is set.
-func typeToolParameters(body []byte) []byte {
-	var req map[string]any
-	if err := json.Unmarshal(body, &req); err != nil {
-		return body
+// as they are. The body is returned unchanged when nothing is set; when a
+// type is set, only that property changes: every other key keeps its bytes
+// and its place.
+func typeToolParameters(body []byte) ([]byte, error) {
+	req, err := decodeObject(body)
+	if err != nil {
+		return nil, err
 	}
-	tools, ok := req["tools"].([]any)
+	rawTools, ok := req.get("tools")
 	if !ok {
-		return body
+		return body, nil
+	}
+	var tools []json.RawMessage
+	if err := json.Unmarshal(rawTools, &tools); err != nil {
+		return body, nil // "tools" that is not a list is the backend's to refuse
 	}
 	modified := false
-	for _, t := range tools {
-		tool, _ := t.(map[string]any)
-		fn, _ := tool["function"].(map[string]any)
-		params, _ := fn["parameters"].(map[string]any)
-		props, _ := params["properties"].(map[string]any)
-		defs := schemaDefs(params)
-		for _, p := range props {
-			prop, ok := p.(map[string]any)
-			if !ok {
-				continue
-			}
-			if typ := singleType(prop, defs); typ != "" {
-				if current, ok := prop["type"].(string); ok && current == typ {
-					continue
-				}
-				prop["type"] = typ
-				modified = true
-			}
+	for i, tool := range tools {
+		if typed, ok := editObject(tool, []string{"function", "parameters"}, typeProperties); ok {
+			tools[i] = typed
+			modified = true
 		}
 	}
 	if !modified {
-		return body
+		return body, nil
 	}
-	out, err := json.Marshal(req)
+	return req.set("tools", encodeArray(tools)).encode(), nil
+}
+
+// editObject applies edit to the object found at path inside raw, and
+// returns raw with that object replaced, or false when nothing changed or
+// the path does not lead to an object.
+func editObject(raw json.RawMessage, path []string, edit func(object) bool) (json.RawMessage, bool) {
+	obj, err := decodeObject(raw)
 	if err != nil {
-		return body
+		return raw, false
 	}
-	return out
+	if len(path) == 0 {
+		if !edit(obj) {
+			return raw, false
+		}
+		return obj.encode(), true
+	}
+	child, ok := obj.get(path[0])
+	if !ok {
+		return raw, false
+	}
+	edited, ok := editObject(child, path[1:], edit)
+	if !ok {
+		return raw, false
+	}
+	return obj.set(path[0], edited).encode(), true
+}
+
+// typeProperties sets the type of each property of a tool's parameters that
+// singleType can name, in place.
+func typeProperties(params object) bool {
+	var schema map[string]any
+	if err := json.Unmarshal(params.encode(), &schema); err != nil {
+		return false
+	}
+	defs := schemaDefs(schema)
+	rawProps, ok := params.get("properties")
+	if !ok {
+		return false
+	}
+	props, err := decodeObject(rawProps)
+	if err != nil {
+		return false
+	}
+	modified := false
+	for i, p := range props {
+		var prop map[string]any
+		if err := json.Unmarshal(p.value, &prop); err != nil {
+			continue
+		}
+		typ := singleType(prop, defs)
+		if typ == "" {
+			continue
+		}
+		if current, ok := prop["type"].(string); ok && current == typ {
+			continue
+		}
+		propObj, err := decodeObject(p.value)
+		if err != nil {
+			continue
+		}
+		typeName, _ := json.Marshal(typ) // a string always encodes
+		props[i].value = propObj.set("type", typeName).encode()
+		modified = true
+	}
+	if modified {
+		params.set("properties", props.encode())
+	}
+	return modified
 }
 
 // schemaDefs returns the definitions a $ref inside params can point at.

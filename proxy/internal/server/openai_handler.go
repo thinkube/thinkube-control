@@ -72,9 +72,15 @@ func (h *OpenAIHandler) ChatCompletions(w http.ResponseWriter, r *http.Request) 
 	thinkingOff := thinkingDisabled(body)
 
 	if resolved.ServingName != "" && resolved.ServingName != req.Model {
-		body = rewriteModelField(body, resolved.ServingName)
+		if body, err = rewriteModelField(body, resolved.ServingName); err != nil {
+			WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Request body is not a JSON object: "+err.Error())
+			return
+		}
 	}
-	body = typeToolParameters(body)
+	if body, err = typeToolParameters(body); err != nil {
+		WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Request body is not a JSON object: "+err.Error())
+		return
+	}
 
 	userID := ""
 	if claims != nil {
@@ -283,7 +289,10 @@ func (h *OpenAIHandler) Embeddings(w http.ResponseWriter, r *http.Request) {
 	backendURL := resolved.BackendURL + resolved.APIPath + "/embeddings"
 
 	if resolved.ServingName != "" && resolved.ServingName != req.Model {
-		body = rewriteModelField(body, resolved.ServingName)
+		if body, err = rewriteModelField(body, resolved.ServingName); err != nil {
+			WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Request body is not a JSON object: "+err.Error())
+			return
+		}
 	}
 
 	userID := ""

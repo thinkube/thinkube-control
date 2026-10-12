@@ -87,7 +87,10 @@ func (h *AnthropicHandler) Messages(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, "anthropic", http.StatusInternalServerError, "api_error", "Failed to encode translated request")
 		return
 	}
-	openaiBody = typeToolParameters(openaiBody)
+	if openaiBody, err = typeToolParameters(openaiBody); err != nil {
+		WriteError(w, "anthropic", http.StatusInternalServerError, "api_error", "Failed to type the translated request's tools: "+err.Error())
+		return
+	}
 
 	backendURL := resolved.BackendURL + resolved.APIPath + "/chat/completions"
 
