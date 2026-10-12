@@ -56,5 +56,18 @@ def test_a_variable_a_dependency_wires_is_left_to_the_dependency():
     assert spec_env.resolve(spec, {}, "app") == {"MODE": "fast"}
 
 
+def test_a_redeploy_keeps_the_recorded_values_and_the_given_ones_win():
+    recorded = {"GATEWAY_URL": "https://storage.thinkube.com", "MODE": "slow", "GONE": "x"}
+    assert spec_env.kept(SPEC, recorded, {"MODE": "fast"}) == {
+        "GATEWAY_URL": "https://storage.thinkube.com", "MODE": "fast",
+    }
+
+
+def test_a_first_deploy_has_only_the_given_values():
+    assert spec_env.kept(SPEC, {}, {"GATEWAY_URL": "https://storage.thinkube.com"}) == {
+        "GATEWAY_URL": "https://storage.thinkube.com",
+    }
+
+
 def test_no_spec_env_is_nothing_to_resolve():
     assert spec_env.resolve({"spec": {}}, {}, "app") == {}

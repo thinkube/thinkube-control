@@ -480,7 +480,9 @@ git fetch origin main
         self.declared_secrets = declared_secrets(manifest)
         self.deployment_env_from = env_from(self.app_name, self.declared_secrets)
         self.manifest_params = deployed_values(declared_parameter_names(manifest), self.params)
-        self.spec_env_given = spec_env.given_values(self.thinkube_config, self.params)
+        self.spec_env_given = spec_env.kept(
+            self.thinkube_config, await self._recorded_spec_env(), spec_env.given_values(self.thinkube_config, self.params)
+        )
         self.spec_env = spec_env.resolve(self.thinkube_config, self.spec_env_given, self.app_name)
         if not self.declared_secrets:
             return
@@ -490,6 +492,22 @@ git fetch origin main
         if problems:
             raise ValueError("Secrets cannot be delivered:\n" + "\n".join(f"  - {p}" for p in problems))
         DeploymentLogger.log(f"Secrets declared: {', '.join(s.name for s in self.declared_secrets)}")
+
+    async def _recorded_spec_env(self) -> Dict[str, str]:
+        """The spec.env values the app's last deploy recorded; a first deploy has no metadata ConfigMap yet."""
+        import spec_env
+
+        name = f'{self.app_name}-metadata'
+        try:
+            cm = await self.k8s_core.read_namespaced_config_map(name, self.namespace)
+        except ApiException as e:
+            if e.status == 404:
+                return {}
+            raise RuntimeError(
+                f"Cannot read ConfigMap {self.namespace}/{name}, which holds the "
+                f"spec.env values {self.app_name} was deployed with: {e.reason}"
+            ) from e
+        return spec_env.recorded(cm.data or {})
 
     async def apply_app_secrets(self):
         """Make <app>-secrets hold the declared secrets the store holds, and record the usage.

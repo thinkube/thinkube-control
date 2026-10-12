@@ -9,7 +9,8 @@ thinkube.yaml declares each variable with an optional default; a variable
 without one is required. The value a deploy gives a variable wins over its
 default; a required variable that is given none stops the deploy, naming
 it. The values given at deploy are recorded in the app's metadata
-ConfigMap, under ENV_KEY, so regenerating the manifests keeps them.
+ConfigMap, under ENV_KEY, so regenerating the manifests and redeploying
+keep them.
 """
 
 import json
@@ -28,6 +29,15 @@ def declared(thinkube_spec: Mapping) -> List[Mapping]:
 def given_values(thinkube_spec: Mapping, params: Mapping) -> Dict[str, str]:
     """The spec.env variables the deploy gave a value, as the deploy gave them: what is recorded."""
     return {e['name']: str(params[e['name']]) for e in declared(thinkube_spec) if params.get(e['name']) not in (None, '')}
+
+
+def kept(thinkube_spec: Mapping, recorded_values: Mapping[str, str], given: Mapping[str, str]) -> Dict[str, str]:
+    """The values a redeploy records: those recorded at the last deploy, with the ones given now winning.
+
+    A recorded variable that thinkube.yaml no longer declares is dropped.
+    """
+    names = {e['name'] for e in declared(thinkube_spec)}
+    return {**{k: v for k, v in recorded_values.items() if k in names}, **given}
 
 
 def resolve(thinkube_spec: Mapping, given: Mapping[str, str], app_name: str) -> Dict[str, str]:
