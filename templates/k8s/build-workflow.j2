@@ -54,9 +54,10 @@ spec:
         items:
           - key: config.json
             path: config.json
+    # The checkout on the control plane: a component's under components/, an app's under apps/.
     - name: shared-code
       hostPath:
-        path: /home/{{ system_username }}/shared-code/apps/{{ project_name }}
+        path: /home/{{ system_username }}/shared-code/{{ 'components' if thinkube_spec.spec.deployment is defined and thinkube_spec.spec.deployment.type == 'component' else 'apps' }}/{{ project_name }}
         type: Directory
     - name: workspace
       emptyDir: {}

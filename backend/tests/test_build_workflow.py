@@ -25,7 +25,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 from thinkube_yaml_validator import validate_build_size  # noqa: E402
 
 
-def render(containers, architectures=None):
+def render(containers, architectures=None, deployment=None):
     env = jinja2.Environment(
         loader=jinja2.FileSystemLoader(str(TEMPLATES)),
         undefined=jinja2.StrictUndefined,
@@ -40,7 +40,7 @@ def render(containers, architectures=None):
         gitea_org="thinkube-deployments",
         system_username="thinkube",
         master_node_name="tkamd1",
-        thinkube_spec={"spec": {"containers": containers}},
+        thinkube_spec={"spec": {"containers": containers, **({"deployment": deployment} if deployment else {})}},
     )
     if architectures:
         variables["build_architectures"] = architectures
@@ -116,3 +116,16 @@ def test_an_unknown_build_size_is_refused_with_the_allowed_values():
 
 def test_known_and_absent_build_sizes_pass():
     assert validate_build_size({"spec": {"containers": [BACKEND, FRONTEND]}}) == []
+
+
+def _checkout(workflow):
+    return next(v for v in workflow["spec"]["volumes"] if v["name"] == "shared-code")["hostPath"]["path"]
+
+
+def test_the_control_plane_build_mounts_an_app_from_apps():
+    assert _checkout(render([BACKEND])) == "/home/thinkube/shared-code/apps/notes"
+
+
+def test_the_control_plane_build_mounts_a_component_from_components():
+    workflow = render([BACKEND], deployment={"type": "component", "name": "notes"})
+    assert _checkout(workflow) == "/home/thinkube/shared-code/components/notes"
