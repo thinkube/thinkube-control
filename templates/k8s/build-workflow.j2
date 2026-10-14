@@ -85,7 +85,7 @@ spec:
               - name: test_image
                 value: "{% if container.test is defined and container.test.image is defined %}{% if '/' in container.test.image %}{{ container.test.image }}{% else %}{{ container_registry }}/library/{{ container.test.image }}{% endif %}{% else %}{{ container_registry }}/library/test-runner:latest{% endif %}"
 
-{% if build_architectures is defined and build_architectures | length > 1 %}
+{% if build_architectures is defined %}
         # Per-architecture builds for {{ container.name }}
 {% for arch in build_architectures %}
         - name: build-{{ container.name }}-{{ arch }}
@@ -316,7 +316,7 @@ spec:
           - name: buildah-storage
             mountPath: /var/lib/containers
 
-{% if build_architectures is defined and build_architectures | length > 1 %}
+{% if build_architectures is defined %}
     # Per-arch build with git-clone init container for worker nodes
     - name: buildah-build-on-arch
       nodeSelector:

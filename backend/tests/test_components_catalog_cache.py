@@ -19,6 +19,9 @@ CATALOG = {"components": {"qdrant": {"display_name": "Qdrant"}}}
 @pytest.fixture(autouse=True)
 def clean_cache(monkeypatch):
     monkeypatch.setenv("THINKUBE_BRANCH", "release-0.1")
+    # The user's catalog has its own tests (test_user_components.py).
+    monkeypatch.delenv("GITHUB_USERNAME", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     oc._COMPONENTS_CATALOG_CACHE = None
     oc._COMPONENTS_CATALOG_CACHE_TIME = 0
     yield

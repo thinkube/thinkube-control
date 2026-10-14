@@ -16,14 +16,27 @@ from sqlalchemy.orm import Session
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
-from app.services.metadata_fetcher import CatalogUnavailableError, platform_metadata_url
+from app.services.metadata_fetcher import (
+    _USER_METADATA_REF,
+    CatalogUnavailableError,
+    _extract,
+    _fetch_json,
+    _get_github_config,
+    _github_raw_url,
+    platform_metadata_url,
+)
 
 logger = logging.getLogger(__name__)
 
-# Component catalog: fetched from thinkube-metadata at the platform's release
-# ref at runtime, cached in memory. Components require local playbooks so only
-# the platform catalog is used — no user merge.
+# Component catalog: the platform's optional_components.json from
+# thinkube-metadata at the platform's release ref, and the user's from
+# <user>-metadata at main, cached in memory together. A playbook component
+# runs a playbook of the thinkube checkout, so only the platform catalog may
+# declare one; a user component installs from a template, like the inference
+# backends.
 _COMPONENTS_CATALOG_FILE = "optional_components.json"
+# The fields every component entry is read by.
+_REQUIRED_FIELDS = ("display_name", "description", "category", "requirements", "namespace")
 _COMPONENTS_CATALOG_CACHE: Optional[Dict[str, Any]] = None
 _COMPONENTS_CATALOG_CACHE_TIME: float = 0
 _COMPONENTS_CATALOG_TTL: float = 300  # 5 minutes
@@ -62,10 +75,67 @@ def get_components_catalog() -> Dict[str, Any]:
             f"Catalog {catalog_url} has no 'components' mapping"
         )
 
-    _COMPONENTS_CATALOG_CACHE = components
+    user_components = _user_components(components)
+    merged = {**components, **user_components}
+
+    _COMPONENTS_CATALOG_CACHE = merged
     _COMPONENTS_CATALOG_CACHE_TIME = now
-    logger.info(f"Fetched components catalog from thinkube-metadata: {len(components)} components")
-    return components
+    logger.info(
+        f"Fetched components catalog: {len(components)} platform components, "
+        f"{len(user_components)} user components"
+    )
+    return merged
+
+
+def _user_components(platform: Dict[str, Any]) -> Dict[str, Any]:
+    """The components of the user's metadata repository, each checked.
+
+    The repository is <GITHUB_USERNAME>-metadata, read at main with the
+    user's token. No file there means no user components. An entry that
+    reuses a platform component's name, has no template.url, declares
+    playbooks or lacks a field the components page reads makes the catalog
+    unavailable, with the entry named.
+    """
+    github_username, github_token = _get_github_config()
+    if not (github_username and github_token):
+        return {}
+    import urllib.error
+    url = _github_raw_url(
+        github_username, f"{github_username}-metadata", _USER_METADATA_REF, _COMPONENTS_CATALOG_FILE
+    )
+    try:
+        data = _fetch_json(url, token=github_token)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return {}
+        raise CatalogUnavailableError(f"Cannot fetch catalog {url}: HTTP {e.code} {e.reason}") from e
+    entries = _extract(data, "components", url, "dict")
+    checked = {}
+    for name, entry in entries.items():
+        if name in platform:
+            raise CatalogUnavailableError(
+                f"{url}: component '{name}' has the name of a platform component; give it its own"
+            )
+        if not isinstance(entry, dict) or not (entry.get("template") or {}).get("url"):
+            raise CatalogUnavailableError(
+                f"{url}: component '{name}' has no template.url; a user component installs from a template"
+            )
+        if "playbooks" in entry:
+            raise CatalogUnavailableError(
+                f"{url}: component '{name}' declares playbooks; only platform components run playbooks"
+            )
+        missing = [f for f in _REQUIRED_FIELDS if f not in entry]
+        if missing:
+            raise CatalogUnavailableError(f"{url}: component '{name}' lacks {', '.join(missing)}")
+        # The template deploy puts the component in a namespace named after it.
+        app_name = entry["template"].get("fixed_name") or name
+        if entry["namespace"] != app_name:
+            raise CatalogUnavailableError(
+                f"{url}: component '{name}' declares namespace '{entry['namespace']}', but it is "
+                f"deployed into '{app_name}' (template.fixed_name, or the component's name)"
+            )
+        checked[name] = {**entry, "source": "user"}
+    return checked
 
 
 class OptionalComponentService:

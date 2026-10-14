@@ -28,7 +28,13 @@ from kubernetes_asyncio.client.rest import ApiException
 from kubernetes_asyncio.stream import WsApiClient
 
 from app_databases import create_statement, database_names, exists, exists_query
-from build_architectures import cluster_architectures, render_vars as architecture_render_vars
+from build_architectures import (
+    app_architectures,
+    cluster_architectures,
+    declared_architectures,
+    node_label_architecture,
+    render_vars as architecture_render_vars,
+)
 from checkout_state import STATUS_COMMAND, UNPUSHED_COMMAND, changed_files
 from checkout_state import refusal as checkout_refusal
 from component_checkout import check_declared_type, checkout_path, developer_commits, parse_log, refusal
@@ -101,7 +107,9 @@ class ApplicationDeployer:
         self.template_version = None  # Set by run_copier: the template ref used (release tag or commit)
         self.k8s_core = None
         self.k8s_custom = None
-        self.build_architectures = None  # Set in phase 2 from the cluster's nodes
+        self.build_architectures = None  # Set in phase 2 from the cluster's nodes and thinkube.yaml
+        self.cluster_architectures = None
+        self.control_plane_architecture = None
 
     async def initialize_k8s_clients(self):
         """Initialize Kubernetes async clients."""
@@ -376,13 +384,39 @@ git fetch origin main
                 DeploymentLogger.error(f"Resource gathering failed: {result}")
                 raise result
 
+        self.choose_build_architectures()
+
         DeploymentLogger.success("Phase 2 complete - all resources gathered")
 
     async def get_build_architectures(self):
-        """The architectures the app's images are built for. See scripts/build_architectures.py."""
+        """The cluster's architectures and the control plane's. See scripts/build_architectures.py."""
+        master_node_name = os.environ.get('MASTER_NODE_NAME')
+        if not master_node_name:
+            raise ValueError("MASTER_NODE_NAME env var not set")
         nodes = await self.k8s_core.list_node()
-        self.build_architectures = cluster_architectures(n.metadata.labels for n in nodes.items)
-        DeploymentLogger.log(f"Cluster architectures: {self.build_architectures}")
+        self.cluster_architectures = cluster_architectures(n.metadata.labels for n in nodes.items)
+        self.control_plane_architecture = node_label_architecture(
+            ((n.metadata.name, n.metadata.labels) for n in nodes.items), master_node_name
+        )
+        DeploymentLogger.log(f"Cluster architectures: {self.cluster_architectures}")
+
+    def choose_build_architectures(self):
+        """The architectures the app's images are built for: the cluster's, or the declared ones.
+
+        spec.architectures keeps the pods to nodes of those architectures, which a
+        Deployment does with node affinity; Knative here does not allow node
+        selection (kubernetes.podspec-affinity is disabled), so a Knative app
+        cannot declare it.
+        """
+        spec = self.thinkube_config.get('spec', {})
+        declared = declared_architectures(spec)
+        if declared is not None and self._is_knative():
+            raise ValueError(
+                "spec.architectures needs deployment type app: Knative on this platform "
+                "does not allow node selection"
+            )
+        self.build_architectures = app_architectures(self.cluster_architectures, declared)
+        DeploymentLogger.log(f"Build architectures: {self.build_architectures}")
 
     async def get_wildcard_cert(self):
         """Fetch wildcard TLS certificate."""
@@ -1027,7 +1061,7 @@ git fetch origin main
             thinkube_spec=self.thinkube_config,
             gitea_org="thinkube-deployments",
         )
-        render_vars.update(architecture_render_vars(self.build_architectures))
+        render_vars.update(architecture_render_vars(self.build_architectures, self.control_plane_architecture))
 
         rendered = template.render(**render_vars)
 
@@ -1298,7 +1332,7 @@ data:
             **template_vars,
             'system_username': system_username,
             'master_node_name': master_node_name,
-            **architecture_render_vars(self.build_architectures),
+            **architecture_render_vars(self.build_architectures, self.control_plane_architecture),
         }
         workflow_content = workflow_template.render(**workflow_vars)
         write('build-workflow.yaml', workflow_content)

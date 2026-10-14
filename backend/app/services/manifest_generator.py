@@ -44,7 +44,13 @@ from manifest_parameters import (
 )
 import spec_env as _spec_env
 from dependency_resolution import knative_url, knative_view, service_url, service_view
-from build_architectures import cluster_architectures as _cluster_architectures, render_vars as _architecture_render_vars
+from build_architectures import (
+    app_architectures as _app_architectures,
+    cluster_architectures as _cluster_architectures,
+    declared_architectures as _declared_architectures,
+    node_label_architecture as _node_label_architecture,
+    render_vars as _architecture_render_vars,
+)
 from namespace_quota import (
     NON_GPU_CPU_QUOTA as _NON_GPU_CPU_QUOTA,
     NON_GPU_QUOTA as _NON_GPU_QUOTA,
@@ -420,12 +426,26 @@ data:
             raise ValueError("SYSTEM_USERNAME env var not set")
         if not master_node_name:
             raise ValueError("MASTER_NODE_NAME env var not set")
-        architectures = _cluster_architectures(n.metadata.labels for n in self.core_v1.list_node().items)
+        # The cluster's architectures, or those of them thinkube.yaml declares
+        # (scripts/build_architectures.py); a Knative app cannot declare them.
+        declared = _declared_architectures(self.thinkube_config.get('spec', {}))
+        if declared is not None and is_knative:
+            raise ValueError(
+                "spec.architectures needs deployment type app: Knative on this platform "
+                "does not allow node selection"
+            )
+        nodes = self.core_v1.list_node().items
+        architectures = _app_architectures(
+            _cluster_architectures(n.metadata.labels for n in nodes), declared
+        )
+        control_plane_architecture = _node_label_architecture(
+            ((n.metadata.name, n.metadata.labels) for n in nodes), master_node_name
+        )
         workflow_vars = {
             **template_vars,
             'system_username': system_username,
             'master_node_name': master_node_name,
-            **_architecture_render_vars(architectures),
+            **_architecture_render_vars(architectures, control_plane_architecture),
         }
         generated_files['build-workflow.yaml'] = env.get_template('build-workflow.j2').render(**workflow_vars)
 
