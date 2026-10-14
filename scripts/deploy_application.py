@@ -1122,21 +1122,21 @@ git fetch origin main
                     f"Deploy it first, then retry."
                 )
 
-    async def _compute_gpu_namespace_quota(self, has_gpu):
+    async def _compute_gpu_namespace_quota(self, has_gpu, containers):
         """(requests.memory, limits.memory, requests.cpu, limits.cpu) for the namespace.
 
         See scripts/namespace_quota.py.
         """
-        from namespace_quota import NON_GPU_CPU_QUOTA, NON_GPU_QUOTA, cpu_quota, memory_quota, node_view
+        from namespace_quota import namespace_quota, node_view
 
-        if not has_gpu:
-            return (*NON_GPU_QUOTA, *NON_GPU_CPU_QUOTA)
-        listed = await self.k8s_core.list_node()
-        nodes = [
-            node_view(n.metadata.name, n.status.allocatable, n.metadata.labels)
-            for n in listed.items
-        ]
-        return (*memory_quota(True, nodes, os.environ), *cpu_quota(True, nodes))
+        nodes = []
+        if has_gpu:
+            listed = await self.k8s_core.list_node()
+            nodes = [
+                node_view(n.metadata.name, n.status.allocatable, n.metadata.labels)
+                for n in listed.items
+            ]
+        return namespace_quota(has_gpu, nodes, os.environ, containers)
 
     def generate_k8s_manifests(self):
         """Generate all Kubernetes manifests from thinkube.yaml specification.
@@ -1464,7 +1464,7 @@ spec:
         # GPU nodes before the (sync) manifest generation reads it.
         _containers = self.thinkube_config.get('spec', {}).get('containers', [])
         _has_gpu = any(c.get('gpu', {}).get('count') for c in _containers)
-        self._gpu_quota = await self._compute_gpu_namespace_quota(_has_gpu)
+        self._gpu_quota = await self._compute_gpu_namespace_quota(_has_gpu, _containers)
         # Dependencies are resolved before the manifests that inject them are rendered.
         await self._resolve_dependencies()
 

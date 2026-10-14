@@ -101,3 +101,30 @@ def test_the_cpu_quota_holds_one_gpu_pod_per_slot_of_the_cluster():
 def test_gpu_work_on_a_cluster_without_gpus_gets_no_cpu_quota():
     with pytest.raises(QuotaError, match="no node in the cluster has one"):
         cpu_quota(True, [CPU])
+
+
+from namespace_quota import namespace_quota  # noqa: E402
+
+APY = {"name": "apy", "size": "xlarge"}
+
+
+def test_the_quota_holds_an_application_twice_for_its_rolling_update():
+    # One xlarge container is limited to 16Gi; the update runs two pods.
+    assert namespace_quota(False, [], {}, [APY]) == ("8Gi", "32Gi", "4", "8")
+
+
+def test_a_small_application_keeps_the_fixed_quota():
+    assert namespace_quota(False, [], {}, [{"name": "web", "size": "small"}]) == ("8Gi", "16Gi", "4", "8")
+
+
+def test_a_container_without_size_counts_as_the_limit_range_default():
+    assert namespace_quota(False, [], {}, [{"name": "web"}]) == ("8Gi", "16Gi", "4", "8")
+
+
+def test_the_gpu_quota_stands_when_it_already_holds_the_application_twice():
+    assert namespace_quota(True, [CPU, RTX, SPARK], BUDGET, [APY]) == ("48Gi", "96Gi", "12", "40")
+
+
+def test_an_unknown_size_is_refused():
+    with pytest.raises(QuotaError, match="size 'huge'"):
+        namespace_quota(False, [], {}, [{"name": "web", "size": "huge"}])
