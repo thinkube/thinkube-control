@@ -98,7 +98,14 @@ class TemplateMetadata(BaseModel):
 
 
 def catalog_template(template_url: str) -> Optional[dict]:
-    """The template catalog's entry for a template address, or None when the catalog does not list it."""
+    """The catalog entry for a template address, or None when no catalog lists it.
+
+    The template catalog (repositories.json) lists templates, the platform
+    components' among them. A user component is listed in the components
+    catalog only (the user's optional_components.json), so a template a
+    component installs from is a component template too, under the
+    component's fixed name.
+    """
     wanted = template_url.rstrip("/")
     repositories = fetch_merged_catalog(
         catalog_name="repositories",
@@ -107,7 +114,21 @@ def catalog_template(template_url: str) -> Optional[dict]:
         merge_strategy="list",
         dedup_key="name",
     )
-    return next((r for r in repositories if r.get("github_url", "").rstrip("/") == wanted), None)
+    listed = next((r for r in repositories if r.get("github_url", "").rstrip("/") == wanted), None)
+    if listed:
+        return listed
+    from app.services.optional_components import get_components_catalog
+
+    for name, component in get_components_catalog().items():
+        template = component.get("template") or {}
+        if (template.get("url") or "").rstrip("/") == wanted:
+            return {
+                "name": name,
+                "github_url": wanted,
+                "deployment_type": "component",
+                "fixed_name": template.get("fixed_name") or name,
+            }
+    return None
 
 
 def deployment_type(template_url: str) -> str:
