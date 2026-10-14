@@ -3,7 +3,7 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The namespace memory quota, computed from the GPU nodes or refused."""
+"""The namespace memory and CPU quota, computed from the GPU nodes or refused."""
 
 import sys
 from pathlib import Path
@@ -12,7 +12,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
-from namespace_quota import NON_GPU_QUOTA, QuotaError, memory_quota, node_view  # noqa: E402
+from namespace_quota import (  # noqa: E402
+    NON_GPU_CPU_QUOTA,
+    NON_GPU_QUOTA,
+    QuotaError,
+    cpu_quota,
+    memory_quota,
+    node_view,
+)
 
 BUDGET = {"LLM_UMA_AI_BUDGET_GB": "96"}
 
@@ -80,3 +87,17 @@ def test_a_unified_memory_node_needs_the_budget_to_be_set():
 def test_a_node_without_allocatable_resources_is_refused():
     with pytest.raises(QuotaError, match="no allocatable"):
         node_view("broken", None, {})
+
+
+def test_an_application_without_gpu_work_gets_the_fixed_cpu_quota():
+    assert cpu_quota(False, nodes=[]) == NON_GPU_CPU_QUOTA
+
+
+def test_the_cpu_quota_holds_one_gpu_pod_per_slot_of_the_cluster():
+    # Eight slots: four on each GPU node. Each GPU pod requests 1 CPU, limit 4.
+    assert cpu_quota(True, [CPU, RTX, SPARK]) == ("12", "40")
+
+
+def test_gpu_work_on_a_cluster_without_gpus_gets_no_cpu_quota():
+    with pytest.raises(QuotaError, match="no node in the cluster has one"):
+        cpu_quota(True, [CPU])

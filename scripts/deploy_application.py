@@ -1089,17 +1089,20 @@ git fetch origin main
                 )
 
     async def _compute_gpu_namespace_quota(self, has_gpu):
-        """(requests.memory, limits.memory) for the namespace. See scripts/namespace_quota.py."""
-        from namespace_quota import NON_GPU_QUOTA, memory_quota, node_view
+        """(requests.memory, limits.memory, requests.cpu, limits.cpu) for the namespace.
+
+        See scripts/namespace_quota.py.
+        """
+        from namespace_quota import NON_GPU_CPU_QUOTA, NON_GPU_QUOTA, cpu_quota, memory_quota, node_view
 
         if not has_gpu:
-            return NON_GPU_QUOTA
+            return (*NON_GPU_QUOTA, *NON_GPU_CPU_QUOTA)
         listed = await self.k8s_core.list_node()
         nodes = [
             node_view(n.metadata.name, n.status.allocatable, n.metadata.labels)
             for n in listed.items
         ]
-        return memory_quota(True, nodes, os.environ)
+        return (*memory_quota(True, nodes, os.environ), *cpu_quota(True, nodes))
 
     def generate_k8s_manifests(self):
         """Generate all Kubernetes manifests from thinkube.yaml specification.
@@ -1174,7 +1177,7 @@ metadata:
         write('namespace.yaml', namespace_content)
 
         # 1b. Generate resource-policies.yaml (LimitRange + ResourceQuota for namespace)
-        quota_req_mem, quota_lim_mem = getattr(self, '_gpu_quota', ('8Gi', '16Gi'))
+        quota_req_mem, quota_lim_mem, quota_req_cpu, quota_lim_cpu = self._gpu_quota
         resource_policies_content = f"""apiVersion: v1
 kind: LimitRange
 metadata:
@@ -1199,8 +1202,8 @@ spec:
   hard:
     requests.memory: "{quota_req_mem}"
     limits.memory: "{quota_lim_mem}"
-    requests.cpu: "4"
-    limits.cpu: "8"
+    requests.cpu: "{quota_req_cpu}"
+    limits.cpu: "{quota_lim_cpu}"
 """
         write('resource-policies.yaml', resource_policies_content)
 

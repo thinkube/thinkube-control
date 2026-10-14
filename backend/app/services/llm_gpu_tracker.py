@@ -41,6 +41,13 @@ UMA_AI_BUDGET_DEDICATED_GB = float(os.getenv("LLM_UMA_AI_BUDGET_DEDICATED_GB", "
 # 122 GiB UMA node with ~24.5 GiB weights floors util at ~0.40.
 FRAMEWORK_OVERHEAD_GB = float(os.getenv("LLM_FRAMEWORK_OVERHEAD_GB", "24"))
 
+# The same floor on a discrete GPU, where the budget is a share of one card's
+# VRAM. vLLM refuses to start when the card has less free memory than
+# util × VRAM, so a floor of 24 GiB above the weights would ask for 95% of a
+# 24 GiB card and fail beside any other model on it. 4 GiB covers activations,
+# CUDA graphs and a minimum KV cache for the default context.
+DISCRETE_FRAMEWORK_OVERHEAD_GB = float(os.getenv("LLM_DISCRETE_FRAMEWORK_OVERHEAD_GB", "4"))
+
 
 # The overhead vLLM measures at start changed by up to 2.2 GiB between two
 # starts of the same model and share on the DGX Spark (unified memory, where
@@ -64,15 +71,19 @@ def _share_util(share_gb: float, capacity_gb: float) -> float:
     return util
 
 
-def _floored_util(util: float, weight_gb: Optional[float], capacity_gb: float) -> float:
+def _floored_util(
+    util: float, weight_gb: Optional[float], capacity_gb: float,
+    overhead_gb: float = FRAMEWORK_OVERHEAD_GB,
+) -> float:
     """Raise `util` so its budget covers weights + framework overhead.
 
-    Never lowers util and never exceeds 0.95. A no-op when weight_gb/capacity
-    is unknown (preserves prior behaviour for callers that don't pass a weight).
+    overhead_gb is FRAMEWORK_OVERHEAD_GB on unified memory and
+    DISCRETE_FRAMEWORK_OVERHEAD_GB on a discrete GPU. Never lowers util and
+    never exceeds 0.95. A no-op when weight_gb/capacity is unknown.
     """
     if not weight_gb or capacity_gb <= 0:
         return util
-    min_util = (weight_gb + FRAMEWORK_OVERHEAD_GB) / capacity_gb
+    min_util = (weight_gb + overhead_gb) / capacity_gb
     return min(max(util, min_util), 0.95)
 
 
@@ -428,7 +439,11 @@ class LLMGPUTracker:
                 )
                 # Per-GPU floor: the model's weights are split across `tp` GPUs.
                 util = round(
-                    _floored_util(util, (weight_gb / tp) if weight_gb else None, per_vram), 2
+                    _floored_util(
+                        util, (weight_gb / tp) if weight_gb else None, per_vram,
+                        overhead_gb=DISCRETE_FRAMEWORK_OVERHEAD_GB,
+                    ),
+                    2,
                 )
             pod_mem = int(round(max(8.0, 0.25 * target_gb + 4.0)))
             remaining = max((per_vram * tp) - reserved_on_node, 0.0)

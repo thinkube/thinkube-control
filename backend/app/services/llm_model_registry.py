@@ -245,6 +245,8 @@ class LLMModelRegistry:
                 state=initial_state,
                 backend_id=existing.backend_id if existing else None,
                 tier=existing.tier if existing else None,
+                # Why the last load failed stays until the next load or unload sets it.
+                last_error=existing.last_error if existing else None,
             )
             # The load deadline and the availability grace period run across
             # refreshes; a new entry without them would restart both each time.

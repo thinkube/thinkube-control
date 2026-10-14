@@ -14,7 +14,11 @@ a measured weight_bytes over the heuristic when one is present.
 """
 
 from app.services.llm_lifecycle import LLMLifecycleManager
-from app.services.llm_gpu_tracker import _floored_util, FRAMEWORK_OVERHEAD_GB
+from app.services.llm_gpu_tracker import (
+    DISCRETE_FRAMEWORK_OVERHEAD_GB,
+    FRAMEWORK_OVERHEAD_GB,
+    _floored_util,
+)
 from app.api.llm.schemas import ModelEntry
 
 GIB = 1024 ** 3
@@ -77,3 +81,11 @@ def test_floor_noop_without_weight_or_capacity():
     # Callers that don't pass a weight (or unknown capacity) are unaffected.
     assert _floored_util(0.13, None, TOTAL_GB) == 0.13
     assert _floored_util(0.13, 24.57, 0) == 0.13
+
+
+def test_discrete_floor_leaves_room_for_another_model_on_the_card():
+    # SalamandraTA 7B (14.47 GiB) on a 24 GiB RTX 3090 shared with a 1.5 GiB
+    # embedding model: the floor must not ask vLLM for more than is free.
+    util = _floored_util(0.73, 14.47, 24.0, overhead_gb=DISCRETE_FRAMEWORK_OVERHEAD_GB)
+    assert util * 24.0 >= 14.47 + DISCRETE_FRAMEWORK_OVERHEAD_GB - 0.01
+    assert util * 24.0 <= 24.0 - 1.5

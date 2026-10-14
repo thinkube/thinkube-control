@@ -45,7 +45,13 @@ from manifest_parameters import (
 import spec_env as _spec_env
 from dependency_resolution import knative_url, knative_view, service_url, service_view
 from build_architectures import cluster_architectures as _cluster_architectures, render_vars as _architecture_render_vars
-from namespace_quota import NON_GPU_QUOTA as _NON_GPU_QUOTA, memory_quota as _memory_quota, node_view as _node_view
+from namespace_quota import (
+    NON_GPU_CPU_QUOTA as _NON_GPU_CPU_QUOTA,
+    NON_GPU_QUOTA as _NON_GPU_QUOTA,
+    cpu_quota as _cpu_quota,
+    memory_quota as _memory_quota,
+    node_view as _node_view,
+)
 from app_secrets import (
     declared_secrets as _declared_secrets_of,
     env_from as _env_from,
@@ -70,15 +76,18 @@ def _get_k8s_client():
 
 
 def _gpu_namespace_quota(has_gpu):
-    """(requests.memory, limits.memory) for a namespace. See scripts/namespace_quota.py."""
+    """(requests.memory, limits.memory, requests.cpu, limits.cpu) for a namespace.
+
+    See scripts/namespace_quota.py.
+    """
     if not has_gpu:
-        return _NON_GPU_QUOTA
+        return (*_NON_GPU_QUOTA, *_NON_GPU_CPU_QUOTA)
     config.load_incluster_config()
     nodes = [
         _node_view(n.metadata.name, n.status.allocatable, n.metadata.labels)
         for n in client.CoreV1Api().list_node().items
     ]
-    return _memory_quota(True, nodes, os.environ)
+    return (*_memory_quota(True, nodes, os.environ), *_cpu_quota(True, nodes))
 
 
 def _get_custom_objects_client():
@@ -325,7 +334,7 @@ class ManifestGenerator:
         services = self.thinkube_config.get('spec', {}).get('services', [])
         has_workflows = 'workflows' in services
         has_gpu = any(c.get('gpu', {}).get('count') for c in containers)
-        quota_req_mem, quota_lim_mem = _gpu_namespace_quota(has_gpu)
+        quota_req_mem, quota_lim_mem, quota_req_cpu, quota_lim_cpu = _gpu_namespace_quota(has_gpu)
         needs_storage = (
             'storage' in services or
             has_gpu or
@@ -367,8 +376,8 @@ spec:
   hard:
     requests.memory: "{quota_req_mem}"
     limits.memory: "{quota_lim_mem}"
-    requests.cpu: "4"
-    limits.cpu: "8"
+    requests.cpu: "{quota_req_cpu}"
+    limits.cpu: "{quota_lim_cpu}"
 """
 
         # 2. Files an earlier generator wrote with credentials in them

@@ -42,6 +42,25 @@ def get_model_catalog() -> List[Dict]:
     )
 
 
+def catalog_entry(model_id: str) -> Dict:
+    """The catalog entry of model_id.
+
+    A model missing from the cached catalog is looked up once more in a fresh
+    copy, so an entry added to a metadata repository is found before the
+    cache expires.
+
+    Raises ValueError when the model is not in the catalog.
+    """
+    model_info = next((m for m in get_model_catalog() if m["id"] == model_id), None)
+    if not model_info:
+        from app.services.metadata_fetcher import _memory_cache
+        _memory_cache.pop("models", None)
+        model_info = next((m for m in get_model_catalog() if m["id"] == model_id), None)
+    if not model_info:
+        raise ValueError(f"Model '{model_id}' not found in catalog")
+    return model_info
+
+
 class ModelDownloaderService:
     """Service for managing model downloads via Argo Workflows"""
 
@@ -107,14 +126,7 @@ class ModelDownloaderService:
             ValueError: If model_id not in catalog
             ApiException: If workflow submission fails
         """
-        # Validate model exists in catalog (retry with cache invalidation if not found)
-        model_info = next((m for m in get_model_catalog() if m["id"] == model_id), None)
-        if not model_info:
-            from app.services.metadata_fetcher import _memory_cache
-            _memory_cache.pop("models", None)
-            model_info = next((m for m in get_model_catalog() if m["id"] == model_id), None)
-        if not model_info:
-            raise ValueError(f"Model '{model_id}' not found in catalog")
+        model_info = catalog_entry(model_id)
 
         source = model_info.get("source", "huggingface")
         if source == "ollama":
