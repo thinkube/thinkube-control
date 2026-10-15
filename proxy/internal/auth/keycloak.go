@@ -119,7 +119,7 @@ func (p *JWKSProvider) GetKey(kid string) (*rsa.PublicKey, error) {
 			if ok {
 				return key, nil
 			}
-			return nil, fmt.Errorf("JWKS unavailable: %w", err)
+			return nil, fmt.Errorf("%w: JWKS: %v", ErrAuthUnavailable, err)
 		}
 		p.mu.RLock()
 		key, ok = p.keys[kid]

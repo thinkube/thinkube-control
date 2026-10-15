@@ -8,6 +8,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -15,6 +16,10 @@ import (
 	"sync"
 	"time"
 )
+
+// ErrAuthUnavailable marks a token that could not be checked: the backend or
+// Keycloak did not answer, or answered with an error. It is not a rejection.
+var ErrAuthUnavailable = errors.New("authentication service unavailable")
 
 type tokenCacheEntry struct {
 	claims  *Claims
@@ -75,12 +80,17 @@ func (v *APITokenValidator) verifyWithBackend(ctx context.Context, token string)
 
 	resp, err := v.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("backend token verify: %w", err)
+		return nil, fmt.Errorf("%w: backend token verify: %v", ErrAuthUnavailable, err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	// The backend answers 401 for a token it rejects; any other failure says
+	// nothing about the token.
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return nil, fmt.Errorf("token rejected: status %d", resp.StatusCode)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%w: backend token verify returned %d", ErrAuthUnavailable, resp.StatusCode)
 	}
 
 	var result struct {
@@ -91,7 +101,7 @@ func (v *APITokenValidator) verifyWithBackend(ctx context.Context, token string)
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+		return nil, fmt.Errorf("%w: decode backend token verify: %v", ErrAuthUnavailable, err)
 	}
 
 	if !result.Valid {
