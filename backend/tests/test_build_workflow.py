@@ -22,7 +22,7 @@ REPO = Path(__file__).resolve().parents[2]
 TEMPLATES = REPO / "templates/k8s"
 sys.path.insert(0, str(REPO / "scripts"))
 
-from thinkube_yaml_validator import validate_build_size  # noqa: E402
+from thinkube_yaml_validator import validate_build_size, validate_test_size  # noqa: E402
 
 
 def render(containers, architectures=None, deployment=None):
@@ -129,3 +129,59 @@ def test_the_control_plane_build_mounts_an_app_from_apps():
 def test_the_control_plane_build_mounts_a_component_from_components():
     workflow = render([BACKEND], deployment={"type": "component", "name": "notes"})
     assert _checkout(workflow) == "/home/thinkube/shared-code/components/notes"
+
+
+# A container's test.size sets the memory and CPU its test pod gets.
+
+
+def pipeline_test_tasks(workflow):
+    """The test tasks of the pipeline, by name, with their parameters as a dict."""
+    tasks = templates(workflow)["ci-cd-pipeline"]["dag"]["tasks"]
+    return {
+        t["name"]: {p["name"]: p["value"] for p in t["arguments"]["parameters"]}
+        for t in tasks
+        if t["name"].startswith("test-")
+    }
+
+
+def test_a_container_without_test_size_tests_in_1gi_and_one_cpu():
+    tasks = pipeline_test_tasks(render([{**BACKEND, "test": {"enabled": True, "command": "./run_tests.sh"}}]))
+    assert tasks["test-backend"]["test_memory"] == "1Gi"
+    assert tasks["test-backend"]["test_cpu"] == "1"
+
+
+@pytest.mark.parametrize(
+    "size,memory,cpu",
+    [("small", "1Gi", "1"), ("medium", "4Gi", "2"), ("large", "8Gi", "4"), ("xlarge", "16Gi", "8")],
+)
+def test_each_test_size_has_its_memory_and_cpu(size, memory, cpu):
+    tasks = pipeline_test_tasks(render([{**BACKEND, "test": {"enabled": True, "command": "./run_tests.sh", "size": size}}]))
+    assert (tasks["test-backend"]["test_memory"], tasks["test-backend"]["test_cpu"]) == (memory, cpu)
+
+
+def test_the_test_pod_resources_are_the_test_size_parameters():
+    run = templates(render([{**BACKEND, "test": {"enabled": True, "command": "./run_tests.sh", "size": "large"}}]))["run-test"]
+    assert {p["name"] for p in run["inputs"]["parameters"]} >= {"test_memory", "test_cpu", "test_memory_request", "test_cpu_request"}
+    assert "resources" not in run["container"], "the size reaches the pod through podSpecPatch only"
+    patch = json.loads(run["podSpecPatch"])
+    [main] = patch["containers"]
+    assert main["resources"]["limits"] == {"memory": "{{inputs.parameters.test_memory}}", "cpu": "{{inputs.parameters.test_cpu}}"}
+
+
+def test_the_test_pod_is_told_where_the_whole_checkout_is():
+    run = templates(render([{**BACKEND, "test": {"enabled": True, "command": "./run_tests.sh"}}]))["run-test"]
+    env = {e["name"]: e.get("value") for e in run["container"]["env"]}
+    assert env["SOURCE_ROOT"] == "/workspace"
+    assert {"name": "shared-code", "mountPath": "/workspace"} in run["container"]["volumeMounts"]
+
+
+def test_an_unknown_test_size_is_refused_with_the_allowed_values():
+    config = {"spec": {"containers": [{**BACKEND, "test": {"enabled": True, "size": "huge"}}]}}
+    [error] = validate_test_size(config)
+    assert "test.size 'huge'" in error
+    assert "small, medium, large, xlarge" in error
+
+
+def test_known_and_absent_test_sizes_pass():
+    config = {"spec": {"containers": [{**BACKEND, "test": {"size": "large"}}, {**FRONTEND}, {**BACKEND, "test": None}]}}
+    assert validate_test_size(config) == []

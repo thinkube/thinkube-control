@@ -16,6 +16,16 @@
 # container gets at run time: a frontend that runs in 512Mi can need 8Gi to
 # bundle.
 {% set build_memory = {'small': '4Gi', 'medium': '8Gi', 'large': '16Gi', 'xlarge': '32Gi'} %}
+#
+# A test pod's memory and CPU come from the container's test.size (default
+# small, 1Gi and one CPU). A suite that loads the whole application and runs
+# thousands of tests needs more than one that checks a single service.
+{% set test_resources = {
+  'small':  {'memory': '1Gi',  'cpu': '1', 'memory_request': '512Mi', 'cpu_request': '500m'},
+  'medium': {'memory': '4Gi',  'cpu': '2', 'memory_request': '2Gi',   'cpu_request': '1'},
+  'large':  {'memory': '8Gi',  'cpu': '4', 'memory_request': '4Gi',   'cpu_request': '2'},
+  'xlarge': {'memory': '16Gi', 'cpu': '8', 'memory_request': '8Gi',   'cpu_request': '4'},
+} %}
 # Cache: the layer cache lives in Harbor, in <image>/cache.
 ---
 apiVersion: argoproj.io/v1alpha1
@@ -85,6 +95,15 @@ spec:
                 value: "{% if container.test is defined %}{{ container.test.command | default('') }}{% endif %}"
               - name: test_image
                 value: "{% if container.test is defined and container.test.image is defined %}{% if '/' in container.test.image %}{{ container.test.image }}{% else %}{{ container_registry }}/library/{{ container.test.image }}{% endif %}{% else %}{{ container_registry }}/library/test-runner:latest{% endif %}"
+{% set sized = test_resources[(container.test | default({}, true)).size | default('small', true)] %}
+              - name: test_memory
+                value: "{{ sized.memory }}"
+              - name: test_cpu
+                value: "{{ sized.cpu }}"
+              - name: test_memory_request
+                value: "{{ sized.memory_request }}"
+              - name: test_cpu_request
+                value: "{{ sized.cpu_request }}"
 
 {% if build_architectures is defined %}
         # Per-architecture builds for {{ container.name }}
@@ -144,6 +163,10 @@ spec:
           - name: test_enabled
           - name: test_command
           - name: test_image
+          - name: test_memory
+          - name: test_cpu
+          - name: test_memory_request
+          - name: test_cpu_request
       steps:
         - - name: check-test-enabled
             template: check-condition
@@ -164,6 +187,14 @@ spec:
                   value: "{{ "{{" }}inputs.parameters.test_command{{ "}}" }}"
                 - name: test_image
                   value: "{{ "{{" }}inputs.parameters.test_image{{ "}}" }}"
+                - name: test_memory
+                  value: "{{ "{{" }}inputs.parameters.test_memory{{ "}}" }}"
+                - name: test_cpu
+                  value: "{{ "{{" }}inputs.parameters.test_cpu{{ "}}" }}"
+                - name: test_memory_request
+                  value: "{{ "{{" }}inputs.parameters.test_memory_request{{ "}}" }}"
+                - name: test_cpu_request
+                  value: "{{ "{{" }}inputs.parameters.test_cpu_request{{ "}}" }}"
 
     # Template that runs the actual test
     - name: run-test
@@ -175,6 +206,10 @@ spec:
           - name: build_path
           - name: test_command
           - name: test_image
+          - name: test_memory
+          - name: test_cpu
+          - name: test_memory_request
+          - name: test_cpu_request
       container:
         image: "{{ "{{" }}inputs.parameters.test_image{{ "}}" }}"
         imagePullPolicy: Always
@@ -194,6 +229,11 @@ spec:
           # apps never write into each other's rows.
           - name: TEST_DATABASE_NAME
             value: "test_{{ project_name | replace('-', '_') }}"
+          # The whole checkout, read-only: the tests run on a copy of the
+          # container's build directory, and a test that checks the
+          # repository itself (its docs, its other parts) reads it here.
+          - name: SOURCE_ROOT
+            value: /workspace
         args:
           - |
             set -e
@@ -237,13 +277,9 @@ spec:
         volumeMounts:
           - name: shared-code
             mountPath: /workspace
-        resources:
-          requests:
-            memory: "512Mi"
-            cpu: "500m"
-          limits:
-            memory: "1Gi"
-            cpu: "1"
+      # The test pod's resources, from the container's test.size.
+      podSpecPatch: |
+        {"containers": [{"name": "main", "resources": {"requests": {"memory": "{{ "{{" }}inputs.parameters.test_memory_request{{ "}}" }}", "cpu": "{{ "{{" }}inputs.parameters.test_cpu_request{{ "}}" }}"}, "limits": {"memory": "{{ "{{" }}inputs.parameters.test_memory{{ "}}" }}", "cpu": "{{ "{{" }}inputs.parameters.test_cpu{{ "}}" }}"}}}]}
 
     # Single-arch build (runs on control plane with hostPath)
     - name: buildah-build

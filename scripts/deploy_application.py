@@ -656,6 +656,7 @@ git fetch origin main
         """Parse and validate thinkube.yaml configuration."""
         from thinkube_yaml_validator import (
             validate_knative_constraints, validate_component_constraints, validate_replicas, validate_build_size,
+            validate_test_size,
         )
 
         config_path = Path(self.local_repo_path) / "thinkube.yaml"
@@ -672,6 +673,7 @@ git fetch origin main
             violations.extend(validate_component_constraints(self.thinkube_config))
             violations.extend(validate_replicas(self.thinkube_config))
             violations.extend(validate_build_size(self.thinkube_config))
+            violations.extend(validate_test_size(self.thinkube_config))
             if violations:
                 msg = "thinkube.yaml validation failed:\n" + "\n".join(f"  - {v}" for v in violations)
                 DeploymentLogger.error(msg)
