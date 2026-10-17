@@ -41,6 +41,7 @@ from app.core.config import settings
 from app.db.session import SessionLocal, get_db
 from app.models.notebook_jobs import NotebookJob
 from app.services import jupyterhub_client as hub
+from app.services import training_mode
 from app.services import notebook_resources as res
 
 logger = logging.getLogger(__name__)
@@ -70,11 +71,15 @@ class Placement(BaseModel):
     # where memory is short and still grow to its limit. A run that must not
     # be killed for memory asks the node to reserve all of it.
     reserve_memory: bool = False
+    # Training mode keeps new pods off its node; a job for that node is the
+    # training's own and is let through.
+    training_node: bool = False
 
     def user_options(self) -> Dict[str, str]:
         return {
             "profile": PROFILE,
             "reserve_memory": "yes" if self.reserve_memory else "no",
+            "training_node": "yes" if self.training_node else "no",
             "node": self.node,
             "cpu": str(self.cpu_cores),
             "memory": f"{self.memory_gb}G",
@@ -509,6 +514,8 @@ async def run_notebook_job(
         jupyter_notebooks._opt_int(request.gpus, "gpus"),
     )
     placement.reserve_memory = jupyter_notebooks._bool(request.reserve_memory, False)
+    training = await training_mode.status()
+    placement.training_node = training is not None and training["node"] == placement.node
     job = NotebookJob(
         server_name=f"{JOB_SERVER_PREFIX}{uuid.uuid4().hex[:8]}",
         notebook_path=request.notebook_path,
