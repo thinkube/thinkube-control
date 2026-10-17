@@ -50,6 +50,14 @@ rules:
     - replicasets
   verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
 
+# ClickHouse runs under the Altinity operator: a service toggle stops and
+# starts it through its ClickHouseInstallation (spec.stop), because the
+# operator undoes any scaling of the StatefulSet it owns.
+- apiGroups: ["clickhouse.altinity.com"]
+  resources:
+    - clickhouseinstallations
+  verbs: ["get", "patch"]
+
 # Batch resources
 - apiGroups: ["batch"]
   resources:

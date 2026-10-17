@@ -66,10 +66,15 @@ class Placement(BaseModel):
     cpu_cores: int
     memory_gb: int
     gpus: int
+    # The spawner requests a quarter of memory_gb, so a server can be placed
+    # where memory is short and still grow to its limit. A run that must not
+    # be killed for memory asks the node to reserve all of it.
+    reserve_memory: bool = False
 
     def user_options(self) -> Dict[str, str]:
         return {
             "profile": PROFILE,
+            "reserve_memory": "yes" if self.reserve_memory else "no",
             "node": self.node,
             "cpu": str(self.cpu_cores),
             "memory": f"{self.memory_gb}G",
@@ -351,6 +356,13 @@ class RunNotebookJobRequest(BaseModel):
     gpus: Union[int, str, None] = Field(None, description="GPUs to reserve for the run, 0 for none.")
     stop_on_error: Union[bool, str, None] = Field(True, description="Stop at the first cell that raises (default true).")
     cell_timeout_seconds: Union[int, str, None] = Field(None, description="Seconds allowed per cell; default 3600.")
+    reserve_memory: Union[bool, str, None] = Field(
+        False,
+        description=(
+            "Reserve all of memory_gb on the node (default false: a quarter is reserved and the rest is "
+            "used when free). For a long run that must not be killed for memory, such as a training."
+        ),
+    )
 
 
 class JobResponse(BaseModel):
@@ -387,16 +399,39 @@ def _read_job(job_id: uuid.UUID) -> Optional[Dict[str, Any]]:
         db.close()
 
 
-async def _stop_job_server(server_name: str) -> None:
+async def _remove_job_server(job_id: uuid.UUID, server_name: str) -> None:
+    """Remove a finished job's server from the Hub. A server left behind keeps
+    counting toward the Hub's limit of named servers, so a failure is written
+    on the job, where the person reading it sees what is left."""
     try:
-        await hub.stop_server(server_name)
-        await hub.wait_stopped(server_name)
+        await hub.remove_server(server_name)
     except hub.HubError as e:
-        logger.warning("could not stop job server %s: %s", server_name, e)
+        logger.error("could not remove job server %s: %s", server_name, e)
+        current = _read_job(job_id) or {}
+        said = f"the job's server {server_name} was not removed: {e}"
+        _update_job(job_id, error=f"{current['error']}; {said}" if current.get("error") else said)
+
+
+async def _remove_leftover_job_servers() -> None:
+    """Remove job servers that belong to no open job: a job that ended while
+    thinkube-control could not remove its server leaves one behind."""
+    db = _job_session()
+    try:
+        open_servers = {
+            j.server_name
+            for j in db.query(NotebookJob).filter(NotebookJob.status.in_(["starting", "running"])).all()
+        }
+    finally:
+        db.close()
+    for name in (await hub.user()).get("servers", {}):
+        if name.startswith(JOB_SERVER_PREFIX) and name not in open_servers:
+            await hub.remove_server(name)
+            logger.info("removed the leftover job server %s", name)
 
 
 async def _run_job(job_id: uuid.UUID, server_name: str, placement: Placement, notebook_path: str, kernel_name: Optional[str], stop_on_error: bool, cell_timeout: Optional[int]) -> None:
     try:
+        await _remove_leftover_job_servers()
         await hub.start_server(server_name, placement.user_options())
         await hub.wait_ready(server_name)
         health = None
@@ -434,7 +469,7 @@ async def _run_job(job_id: uuid.UUID, server_name: str, placement: Placement, no
         logger.error("notebook job %s failed: %s", job_id, e, exc_info=True)
         _update_job(job_id, status="error", error=f"{type(e).__name__}: {e}")
     finally:
-        await _stop_job_server(server_name)
+        await _remove_job_server(job_id, server_name)
         _job_tasks.pop(str(job_id), None)
 
 
@@ -473,6 +508,7 @@ async def run_notebook_job(
         jupyter_notebooks._opt_int(request.memory_gb, "memory_gb"),
         jupyter_notebooks._opt_int(request.gpus, "gpus"),
     )
+    placement.reserve_memory = jupyter_notebooks._bool(request.reserve_memory, False)
     job = NotebookJob(
         server_name=f"{JOB_SERVER_PREFIX}{uuid.uuid4().hex[:8]}",
         notebook_path=request.notebook_path,
@@ -529,8 +565,8 @@ async def cancel_notebook_job(job_id: uuid.UUID, current_user: dict = Depends(ge
     task = _job_tasks.pop(str(job_id), None)
     if task:
         task.cancel()
-    await _stop_job_server(job["server_name"])
-    return JobResponse(job=updated or job)
+    await _remove_job_server(job_id, job["server_name"])
+    return JobResponse(job=_read_job(job_id) or updated or job)
 
 
 async def resume_notebook_jobs() -> None:
@@ -554,9 +590,9 @@ async def resume_notebook_jobs() -> None:
                 try:
                     await _poll_job(job_id, server_name, execution_id)
                 finally:
-                    await _stop_job_server(server_name)
+                    await _remove_job_server(job_id, server_name)
             _job_tasks[str(job_id)] = asyncio.create_task(resume())
             logger.info("resumed polling notebook job %s on %s", job_id, server_name)
         else:
             _update_job(job_id, status="lost", error="thinkube-control restarted while the run was starting")
-            await _stop_job_server(server_name)
+            await _remove_job_server(job_id, server_name)

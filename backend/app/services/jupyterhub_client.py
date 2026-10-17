@@ -113,6 +113,23 @@ async def stop_server(name: str) -> None:
             raise
 
 
+async def remove_server(name: str, timeout: float = 120.0, interval: float = 2.0) -> None:
+    """Stop a server and delete it from the Hub, so it no longer counts toward
+    the Hub's limit of named servers. A server that does not exist is not an
+    error. Raises HubError when it is still listed after the wait."""
+    try:
+        await request("DELETE", f"/users/{await username()}/{server_path(name)}", json={"remove": True}, timeout=60)
+    except HubError as e:
+        if e.status != 404:
+            raise
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while await server(name) is not None:
+        if loop.time() > deadline:
+            raise HubError(f"the server '{name}' was still listed {int(timeout)} seconds after it was removed")
+        await asyncio.sleep(interval)
+
+
 async def wait_ready(name: str, timeout: float = 240.0, interval: float = 3.0) -> Dict[str, Any]:
     """Poll until the server is ready. Raises HubError when it stops or the wait runs out."""
     loop = asyncio.get_event_loop()

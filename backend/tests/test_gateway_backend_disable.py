@@ -34,9 +34,8 @@ def deployment(name):
 def manager():
     m = K8sServiceManager.__new__(K8sServiceManager)
     m.apps_v1 = MagicMock()
-    m.scale_deployment = MagicMock(return_value=(True, None))
+    m.scale_workload = MagicMock(return_value=(True, None))
     m.cleanup_stale_pods = MagicMock()
-    m.get_deployment_status = MagicMock(return_value={"replicas": 0})
     return m
 
 
@@ -61,10 +60,10 @@ def test_disable_scales_the_gateway_deployments_not_the_base(manager):
     ok, error = K8sServiceManager.disable_service(manager, gateway_service())
 
     assert (ok, error) == (True, None)
-    scaled = [c.args[1] for c in manager.scale_deployment.call_args_list]
+    scaled = [c.args[2] for c in manager.scale_workload.call_args_list]
     assert scaled == ["vllm-inference-tkamd2", "vllm-inference-tkspark"]
     assert "vllm-inference" not in scaled  # the resting base Deployment
-    assert all(c.args[2] == 0 for c in manager.scale_deployment.call_args_list)
+    assert all(c.kwargs["on"] is False for c in manager.scale_workload.call_args_list)
 
 
 def test_disable_selects_only_gateway_created_deployments(manager):
@@ -80,7 +79,7 @@ def test_disable_reports_failure_when_a_scale_fails(manager):
     manager.apps_v1.list_namespaced_deployment.return_value.items = [
         deployment("vllm-inference-tkamd2")
     ]
-    manager.scale_deployment.return_value = (False, "boom")
+    manager.scale_workload.return_value = (False, "boom")
 
     ok, error = K8sServiceManager.disable_service(manager, gateway_service())
 
@@ -91,13 +90,13 @@ def test_disable_reports_failure_when_a_scale_fails(manager):
 def test_ordinary_service_still_scales_its_own_deployment(manager):
     todo = Service(
         name="todo", type="user_app", namespace="todo",
-        resource_name="todo-backend", service_metadata={},
+        resource_type="deployment", resource_name="todo-backend", service_metadata={},
     )
     todo.is_enabled = True
 
     K8sServiceManager.disable_service(manager, todo)
 
-    scaled = [c.args[1] for c in manager.scale_deployment.call_args_list]
+    scaled = [c.args[2] for c in manager.scale_workload.call_args_list]
     assert scaled == ["todo-backend"]
     manager.apps_v1.list_namespaced_deployment.assert_not_called()
 
@@ -111,20 +110,19 @@ def test_enable_leaves_a_gateway_backend_at_rest(manager):
     ok, error = K8sServiceManager.enable_service(manager, service)
 
     assert (ok, error) == (True, None)
-    manager.scale_deployment.assert_not_called()
+    manager.scale_workload.assert_not_called()
 
 
 def test_enable_restores_an_ordinary_service(manager):
     todo = Service(
         name="todo", type="user_app", namespace="todo",
-        resource_name="todo-backend", service_metadata={},
+        resource_type="deployment", resource_name="todo-backend", service_metadata={},
     )
     todo.is_enabled = False
-    todo.original_replicas = 2
 
     K8sServiceManager.enable_service(manager, todo)
 
-    manager.scale_deployment.assert_called_once_with("todo", "todo-backend", 2)
+    manager.scale_workload.assert_called_once_with("todo", "deployment", "todo-backend", True)
 
 
 @pytest.mark.asyncio
