@@ -124,6 +124,18 @@ def _scale(apps, w: Dict[str, Any], replicas: int) -> None:
         apps.patch_namespaced_stateful_set(w["name"], w["namespace"], body)
 
 
+def _scale_to_zero(apps, w: Dict[str, Any]) -> bool:
+    """Scale one workload to 0. False when it no longer exists: one deleted
+    since it was listed has nothing left to stop."""
+    try:
+        _scale(apps, w, 0)
+    except ApiException as e:
+        if e.status == 404:
+            return False
+        raise
+    return True
+
+
 def _current_replicas(apps, w: Dict[str, Any]) -> Optional[int]:
     try:
         if w["kind"] == "deployment":
@@ -140,8 +152,9 @@ def _stop_all(apps, record: Dict[str, Any], core) -> List[str]:
     brings back or creates, until nothing outside the kept namespaces runs.
     Returns what is still running after the last round."""
     known = {(w["namespace"], w["kind"], w["name"]) for w in record["workloads"]}
-    for w in record["workloads"]:
-        _scale(apps, w, 0)
+    for w in list(record["workloads"]):
+        if not _scale_to_zero(apps, w):
+            record["workloads"].remove(w)
     left: List[Dict[str, Any]] = []
     for _ in range(SETTLE_ROUNDS):
         time.sleep(SETTLE_SECONDS)
@@ -150,10 +163,11 @@ def _stop_all(apps, record: Dict[str, Any], core) -> List[str]:
             return []
         for w in left:
             key = (w["namespace"], w["kind"], w["name"])
-            if key not in known:
+            if key not in known and _scale_to_zero(apps, w):
                 record["workloads"].append(w)
                 known.add(key)
-            _scale(apps, w, 0)
+            elif key in known:
+                _scale_to_zero(apps, w)
         _write_record(core, record, create=False)
     return [f"{w['kind']} {w['namespace']}/{w['name']}" for w in left]
 
@@ -262,14 +276,17 @@ async def turn_on(node: str, reason: str) -> Dict[str, Any]:
         raise TrainingModeError(f"node {node} cannot be read: {e.reason}")
 
     models = await _loaded_models()
-    workloads = await asyncio.to_thread(_scalable, apps)
-    record = {"node": node, "reason": reason, "started": _now(), "models": models, "workloads": workloads}
+    record = {"node": node, "reason": reason, "started": _now(), "models": models, "workloads": []}
     # The record is written before anything is stopped, so a failure part way
     # leaves what is needed to turn training mode off again.
     await asyncio.to_thread(_write_record, core, record, True)
 
     await asyncio.to_thread(_taint, core, node, True)
+    # Unloading takes down each model's serving Deployment, so the workloads
+    # are listed after it.
     refused = await _unload(models)
+    record["workloads"] = await asyncio.to_thread(_scalable, apps)
+    await asyncio.to_thread(_write_record, core, record, False)
     still_running = await asyncio.to_thread(_stop_all, apps, record, core)
     moved = await asyncio.to_thread(_move_kept_pods, core, node)
     logger.info("training mode on %s: %d models unloaded, %d workloads stopped, moved %s",

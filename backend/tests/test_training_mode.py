@@ -108,3 +108,23 @@ def test_turning_off_restores_the_record_and_leaves_what_changed(monkeypatch):
         "deployment gone/app: no longer exists",
     ]
     core.delete_namespaced_config_map.assert_called_once_with(tm.RECORD_NAME, tm.RECORD_NAMESPACE)
+
+
+def test_a_workload_deleted_since_it_was_listed_leaves_the_record(monkeypatch):
+    from kubernetes.client.rest import ApiException
+
+    monkeypatch.setattr(tm.time, "sleep", lambda s: None)
+    monkeypatch.setattr(tm, "_scalable", lambda apps: [])
+    monkeypatch.setattr(tm, "_write_record", lambda core, record, create: None)
+    apps = MagicMock()
+
+    def patch(name, ns, body):
+        if name == "gone":
+            raise ApiException(status=404)
+
+    apps.patch_namespaced_deployment.side_effect = patch
+    record = {"workloads": [{"namespace": "vllm", "kind": "deployment", "name": "gone", "replicas": 1},
+                            {"namespace": "dentalpin", "kind": "deployment", "name": "backend", "replicas": 1}]}
+
+    assert tm._stop_all(apps, record, MagicMock()) == []
+    assert [w["name"] for w in record["workloads"]] == ["backend"]
