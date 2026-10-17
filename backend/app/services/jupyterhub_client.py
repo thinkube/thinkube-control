@@ -71,13 +71,18 @@ async def username() -> str:
     return name
 
 
-async def user() -> Dict[str, Any]:
+async def user(include_stopped: bool = False) -> Dict[str, Any]:
     """The notebook user's Hub model. The Hub creates a user at its first
     sign-in; when the realm user has not signed in yet, it is created here so
-    servers can start without a Hub login first."""
+    servers can start without a Hub login first.
+
+    The Hub lists only running and starting servers unless asked for the
+    stopped ones too (include_stopped_servers); a stopped named server still
+    counts toward the Hub's limit of named servers."""
     name = await username()
+    query = "?include_stopped_servers=true" if include_stopped else ""
     try:
-        _, model = await request("GET", f"/users/{name}")
+        _, model = await request("GET", f"/users/{name}{query}")
     except HubError as e:
         if e.status != 404:
             raise
@@ -92,9 +97,10 @@ def server_path(name: str) -> str:
     return f"servers/{name}"
 
 
-async def server(name: str) -> Optional[Dict[str, Any]]:
-    """The Hub's model of one server, or None when it does not exist."""
-    return (await user()).get("servers", {}).get(name)
+async def server(name: str, include_stopped: bool = False) -> Optional[Dict[str, Any]]:
+    """The Hub's model of one server, or None when it is not listed: when it
+    does not exist, or, without include_stopped, when it is stopped."""
+    return (await user(include_stopped)).get("servers", {}).get(name)
 
 
 async def start_server(name: str, user_options: Dict[str, Any]) -> int:
@@ -124,7 +130,7 @@ async def remove_server(name: str, timeout: float = 120.0, interval: float = 2.0
             raise
     loop = asyncio.get_event_loop()
     deadline = loop.time() + timeout
-    while await server(name) is not None:
+    while await server(name, include_stopped=True) is not None:
         if loop.time() > deadline:
             raise HubError(f"the server '{name}' was still listed {int(timeout)} seconds after it was removed")
         await asyncio.sleep(interval)

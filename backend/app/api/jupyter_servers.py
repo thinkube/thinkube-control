@@ -423,7 +423,7 @@ async def _remove_leftover_job_servers() -> None:
         }
     finally:
         db.close()
-    for name in (await hub.user()).get("servers", {}):
+    for name in (await hub.user(include_stopped=True)).get("servers", {}):
         if name.startswith(JOB_SERVER_PREFIX) and name not in open_servers:
             await hub.remove_server(name)
             logger.info("removed the leftover job server %s", name)
