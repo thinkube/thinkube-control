@@ -50,7 +50,7 @@ def test_a_workload_a_controller_brings_back_is_stopped_again_and_recorded(monke
 
     assert left == []
     assert [w["name"] for w in record["workloads"]] == ["repo", "app-00002"]
-    scaled = [c.args for c in apps.patch_namespaced_deployment_scale.call_args_list]
+    scaled = [c.args for c in apps.patch_namespaced_deployment.call_args_list]
     assert scaled.count(("repo", "argocd", {"spec": {"replicas": 0}})) == 2
 
 
@@ -95,9 +95,13 @@ def test_turning_off_restores_the_record_and_leaves_what_changed(monkeypatch):
     now = {"backend": 0, "gitea": 3, "app": None}
     monkeypatch.setattr(tm, "_current_replicas", lambda a, w: now[w["name"]])
 
+    async def no_loads(models):
+        return None
+
+    monkeypatch.setattr(tm, "_load_one_after_another", no_loads)
     report = asyncio.run(tm.turn_off())
 
-    apps.patch_namespaced_deployment_scale.assert_called_once_with("backend", "dentalpin", {"spec": {"replicas": 2}})
+    apps.patch_namespaced_deployment.assert_called_once_with("backend", "dentalpin", {"spec": {"replicas": 2}})
     assert report["restored"] == ["deployment dentalpin/backend"]
     assert report["not_restored"] == [
         "statefulset gitea/gitea: has 3 replicas, not restored to 1",

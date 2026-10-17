@@ -119,9 +119,9 @@ def _scalable(apps) -> List[Dict[str, Any]]:
 def _scale(apps, w: Dict[str, Any], replicas: int) -> None:
     body = {"spec": {"replicas": replicas}}
     if w["kind"] == "deployment":
-        apps.patch_namespaced_deployment_scale(w["name"], w["namespace"], body)
+        apps.patch_namespaced_deployment(w["name"], w["namespace"], body)
     else:
-        apps.patch_namespaced_stateful_set_scale(w["name"], w["namespace"], body)
+        apps.patch_namespaced_stateful_set(w["name"], w["namespace"], body)
 
 
 def _current_replicas(apps, w: Dict[str, Any]) -> Optional[int]:
@@ -208,15 +208,37 @@ async def _unload(models: List[Dict[str, str]]) -> List[str]:
     return refused
 
 
-async def _load(models: List[Dict[str, str]]) -> List[str]:
-    from app.services.llm_lifecycle import llm_lifecycle
+# A model load takes minutes; a node starts one model at a time.
+LOAD_SECONDS = 30 * 60
+LOAD_POLL_SECONDS = 10
 
-    refused = []
+
+async def _load_one_after_another(models: List[Dict[str, str]]) -> None:
+    """Load the models again in order, each once the one before it is
+    available or has failed: a node refuses a load while another starts."""
+    from app.services.llm_lifecycle import llm_lifecycle
+    from app.services.llm_model_registry import llm_model_registry
+
     for m in models:
         r = await llm_lifecycle.load_model(m["model_id"], node=m["node"])
         if r.state.value != "loading":
-            refused.append(f"{m['model_id']} on {m['node']}: {r.state.value} — {r.message}")
-    return refused
+            logger.error("training mode off: %s on %s was not loaded: %s — %s",
+                         m["model_id"], m["node"], r.state.value, r.message)
+            continue
+        waited = 0
+        while waited < LOAD_SECONDS:
+            await asyncio.sleep(LOAD_POLL_SECONDS)
+            waited += LOAD_POLL_SECONDS
+            entry = llm_model_registry.get_model(m["model_id"])
+            if entry.state.value == "available":
+                logger.info("training mode off: %s is available on %s", m["model_id"], m["node"])
+                break
+            if entry.state.value == "deployable":
+                logger.error("training mode off: the load of %s on %s failed", m["model_id"], m["node"])
+                break
+        else:
+            logger.error("training mode off: %s on %s was not available after %d s",
+                         m["model_id"], m["node"], LOAD_SECONDS)
 
 
 # ----------------------------------------------------------------- public API
@@ -283,12 +305,11 @@ async def turn_off() -> Dict[str, Any]:
         return {"restored": restored, "left": left}
 
     result = await asyncio.to_thread(restore)
-    refused = await _load(record["models"])
     await asyncio.to_thread(core.delete_namespaced_config_map, RECORD_NAME, RECORD_NAMESPACE)
+    # The loads run on after this answers; get_llm_model_status follows each.
+    asyncio.create_task(_load_one_after_another(record["models"]))
     report = {"node": record["node"], "started": record["started"], "ended": _now(),
               "restored": result["restored"], "not_restored": result["left"],
-              "models_loading": [m for m in record["models"]
-                                 if not any(r.startswith(m["model_id"] + " ") for r in refused)],
-              "models_refused": refused}
+              "models_loading": record["models"]}
     logger.info("training mode off: %s", report)
     return report
