@@ -227,11 +227,40 @@ LOAD_SECONDS = 30 * 60
 LOAD_POLL_SECONDS = 10
 
 
-async def _load_one_after_another(models: List[Dict[str, str]]) -> None:
+# How long the restored workloads may take to be ready before the models load.
+READY_SECONDS = 15 * 60
+
+
+def _not_ready(apps, workloads: List[Dict[str, Any]]) -> List[str]:
+    waiting = []
+    for w in workloads:
+        try:
+            obj = (apps.read_namespaced_deployment if w["kind"] == "deployment"
+                   else apps.read_namespaced_stateful_set)(w["name"], w["namespace"])
+        except ApiException as e:
+            if e.status == 404:
+                continue
+            raise
+        if (obj.status.ready_replicas or 0) < (obj.spec.replicas or 0):
+            waiting.append(f"{w['kind']} {w['namespace']}/{w['name']}")
+    return waiting
+
+
+async def _load_one_after_another(apps, restored: List[Dict[str, Any]], models: List[Dict[str, str]]) -> None:
     """Load the models again in order, each once the one before it is
-    available or has failed: a node refuses a load while another starts."""
+    available or has failed: a node refuses a load while another starts.
+    The loads begin once the restored workloads are ready: a serving pod
+    looks its model up in MLflow when it starts."""
     from app.services.llm_lifecycle import llm_lifecycle
     from app.services.llm_model_registry import llm_model_registry
+
+    waited, waiting = 0, await asyncio.to_thread(_not_ready, apps, restored)
+    while waiting and waited < READY_SECONDS:
+        await asyncio.sleep(LOAD_POLL_SECONDS)
+        waited += LOAD_POLL_SECONDS
+        waiting = await asyncio.to_thread(_not_ready, apps, restored)
+    if waiting:
+        logger.error("training mode off: not ready after %d s, the models load anyway: %s", READY_SECONDS, waiting)
 
     for m in models:
         r = await llm_lifecycle.load_model(m["model_id"], node=m["node"])
@@ -307,7 +336,7 @@ async def turn_off() -> Dict[str, Any]:
         raise TrainingModeError("training mode is not on")
 
     def restore() -> Dict[str, List[str]]:
-        restored, left = [], []
+        restored, left, back = [], [], []
         for w in record["workloads"]:
             now = _current_replicas(apps, w)
             label = f"{w['kind']} {w['namespace']}/{w['name']}"
@@ -318,13 +347,14 @@ async def turn_off() -> Dict[str, Any]:
             else:
                 _scale(apps, w, w["replicas"])
                 restored.append(label)
+                back.append(w)
         _taint(core, record["node"], False)
-        return {"restored": restored, "left": left}
+        return {"restored": restored, "left": left, "back": back}
 
     result = await asyncio.to_thread(restore)
     await asyncio.to_thread(core.delete_namespaced_config_map, RECORD_NAME, RECORD_NAMESPACE)
     # The loads run on after this answers; get_llm_model_status follows each.
-    asyncio.create_task(_load_one_after_another(record["models"]))
+    asyncio.create_task(_load_one_after_another(apps, result["back"], record["models"]))
     report = {"node": record["node"], "started": record["started"], "ended": _now(),
               "restored": result["restored"], "not_restored": result["left"],
               "models_loading": record["models"]}

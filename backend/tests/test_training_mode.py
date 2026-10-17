@@ -95,7 +95,7 @@ def test_turning_off_restores_the_record_and_leaves_what_changed(monkeypatch):
     now = {"backend": 0, "gitea": 3, "app": None}
     monkeypatch.setattr(tm, "_current_replicas", lambda a, w: now[w["name"]])
 
-    async def no_loads(models):
+    async def no_loads(apps, restored, models):
         return None
 
     monkeypatch.setattr(tm, "_load_one_after_another", no_loads)
