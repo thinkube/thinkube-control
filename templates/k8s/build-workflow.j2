@@ -27,6 +27,15 @@
   'xlarge': {'memory': '16Gi', 'cpu': '8', 'memory_request': '8Gi',   'cpu_request': '4'},
 } %}
 # Cache: the layer cache lives in Harbor, in <image>/cache.
+#
+# Training mode (Thinkube Control) taints its node thinkube.io/training and
+# labels it thinkube.io/training. A build pod tolerates the taint, so builds go
+# on beside a training, and its anti-affinity uses that label as topology: on
+# the labelled node at most one build pod runs at a time; nodes without the
+# label have no such limit. A build whose buildSize is xlarge does not tolerate
+# the taint, and a check before it refuses it with an error when every node it
+# may run on is the training node.
+{% set training_toleration = '[{"key": "thinkube.io/training", "operator": "Exists", "effect": "NoSchedule"}]' %}
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: WorkflowTemplate
@@ -80,6 +89,7 @@ spec:
       dag:
         tasks:
 {% for container in thinkube_spec.spec.containers %}
+{% set xlarge = (container.buildSize | default('small')) == 'xlarge' %}
         # {{ container.name }} test (conditional)
         - name: test-{{ container.name }}
           template: execute-container-test
@@ -108,8 +118,21 @@ spec:
 {% if build_architectures is defined %}
         # Per-architecture builds for {{ container.name }}
 {% for arch in build_architectures %}
-        - name: build-{{ container.name }}-{{ arch }}
+{% if xlarge %}
+        - name: check-training-{{ container.name }}-{{ arch }}
           dependencies: [test-{{ container.name }}]
+          template: check-training-node
+          arguments:
+            parameters:
+              - name: container_name
+                value: "{{ container.name }}"
+              - name: node_selector
+                value: "kubernetes.io/arch={{ arch }}"
+              - name: build_memory
+                value: "{{ build_memory['xlarge'] }}"
+{% endif %}
+        - name: build-{{ container.name }}-{{ arch }}
+          dependencies: [{{ 'check-training-' ~ container.name ~ '-' ~ arch if xlarge else 'test-' ~ container.name }}]
           template: buildah-build-on-arch
           arguments:
             parameters:
@@ -121,6 +144,8 @@ spec:
                 value: "{{ container.build | replace('./', '') }}"
               - name: build_memory
                 value: "{{ build_memory[container.buildSize | default('small')] }}"
+              - name: build_tolerations
+                value: '{{ '[]' if xlarge else training_toleration }}'
               - name: target_arch
                 value: "{{ arch }}"
 {% endfor %}
@@ -138,8 +163,21 @@ spec:
                 value: "{{ container.name }}"
 {% else %}
         # Single-architecture build for {{ container.name }}
-        - name: build-{{ container.name }}
+{% if xlarge %}
+        - name: check-training-{{ container.name }}
           dependencies: [test-{{ container.name }}]
+          template: check-training-node
+          arguments:
+            parameters:
+              - name: container_name
+                value: "{{ container.name }}"
+              - name: node_selector
+                value: "kubernetes.io/hostname={{ master_node_name }}"
+              - name: build_memory
+                value: "{{ build_memory['xlarge'] }}"
+{% endif %}
+        - name: build-{{ container.name }}
+          dependencies: [{{ 'check-training-' ~ container.name if xlarge else 'test-' ~ container.name }}]
           template: buildah-build
           arguments:
             parameters:
@@ -151,6 +189,8 @@ spec:
                 value: "{{ container.build | replace('./', '') }}"
               - name: build_memory
                 value: "{{ build_memory[container.buildSize | default('small')] }}"
+              - name: build_tolerations
+                value: '{{ '[]' if xlarge else training_toleration }}'
 {% endif %}
 {% endfor %}
 
@@ -291,12 +331,26 @@ spec:
           - name: dockerfile_path
           - name: context_path
           - name: build_memory
+          - name: build_tolerations
       # The build pod's memory limit, from the container's buildSize. A limit
       # under container.resources must be a literal quantity when the
       # WorkflowTemplate is created, so the parameter goes in podSpecPatch,
       # which Argo fills in for each pod and merges over the 4Gi above.
+      # build_tolerations is the training taint's toleration, or none for an
+      # xlarge build.
       podSpecPatch: |
-        {"containers": [{"name": "main", "resources": {"limits": {"memory": "{{ "{{" }}inputs.parameters.build_memory{{ "}}" }}"}}}]}
+        {"containers": [{"name": "main", "resources": {"limits": {"memory": "{{ "{{" }}inputs.parameters.build_memory{{ "}}" }}"}}}], "tolerations": {{ "{{" }}inputs.parameters.build_tolerations{{ "}}" }}}
+      # At most one build pod at a time on the node training mode labels.
+      metadata:
+        labels:
+          thinkube.io/build-pod: "true"
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  thinkube.io/build-pod: "true"
+              topologyKey: thinkube.io/training
       container:
         image: {{ container_registry }}/library/buildah:v1.43.4
         command: ["/bin/bash", "-c"]
@@ -364,6 +418,7 @@ spec:
           - name: dockerfile_path
           - name: context_path
           - name: build_memory
+          - name: build_tolerations
           - name: target_arch
       initContainers:
         - name: git-clone
@@ -404,8 +459,21 @@ spec:
       # under container.resources must be a literal quantity when the
       # WorkflowTemplate is created, so the parameter goes in podSpecPatch,
       # which Argo fills in for each pod and merges over the 4Gi above.
+      # build_tolerations is the training taint's toleration, or none for an
+      # xlarge build.
       podSpecPatch: |
-        {"containers": [{"name": "main", "resources": {"limits": {"memory": "{{ "{{" }}inputs.parameters.build_memory{{ "}}" }}"}}}]}
+        {"containers": [{"name": "main", "resources": {"limits": {"memory": "{{ "{{" }}inputs.parameters.build_memory{{ "}}" }}"}}}], "tolerations": {{ "{{" }}inputs.parameters.build_tolerations{{ "}}" }}}
+      # At most one build pod at a time on the node training mode labels.
+      metadata:
+        labels:
+          thinkube.io/build-pod: "true"
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  thinkube.io/build-pod: "true"
+              topologyKey: thinkube.io/training
       container:
         image: {{ container_registry }}/library/buildah:v1.43.4
         command: ["/bin/bash", "-c"]
@@ -506,6 +574,39 @@ spec:
           - name: docker-config
             mountPath: /registry-auth
 {% endif %}
+
+    # Refuses an xlarge build while every node it may run on is the training
+    # node. It runs on any node without the training taint and reads the
+    # nodes with the image-builder ServiceAccount.
+    - name: check-training-node
+      inputs:
+        parameters:
+          - name: container_name
+          - name: node_selector
+          - name: build_memory
+      script:
+        image: {{ container_registry }}/library/ci-utils:latest
+        command: [bash]
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "1"
+        source: |
+          set -euo pipefail
+          SA=/var/run/secrets/kubernetes.io/serviceaccount
+          SELECTOR="{{ "{{" }}inputs.parameters.node_selector{{ "}}" }}"
+          NODES=$(curl -sS --fail --cacert "$SA/ca.crt" -H "Authorization: Bearer $(cat "$SA/token")" \
+            --get --data-urlencode "labelSelector=$SELECTOR" "https://kubernetes.default.svc/api/v1/nodes")
+          FREE=$(echo "$NODES" | jq '[.items[] | select(all(.spec.taints[]?; .key != "thinkube.io/training"))] | length')
+          TRAINING=$(echo "$NODES" | jq -r '[.items[] | select(any(.spec.taints[]?; .key == "thinkube.io/training")) | .metadata.name] | join(", ")')
+          if [ "$FREE" = 0 ]; then
+            echo "Build of {{ "{{" }}inputs.parameters.container_name{{ "}}" }} refused: its buildSize is xlarge ({{ "{{" }}inputs.parameters.build_memory{{ "}}" }}), and an xlarge build does not run on the training node while training mode is on. The nodes it may run on ($SELECTOR) are all in training mode: ${TRAINING:-none found}. Turn training mode off, or lower buildSize in thinkube.yaml, and build again."
+            exit 1
+          fi
+          echo "xlarge build of {{ "{{" }}inputs.parameters.container_name{{ "}}" }}: $FREE node(s) with $SELECTOR are not in training mode"
 
     # Helper template to check conditions
     - name: check-condition

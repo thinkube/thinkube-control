@@ -101,7 +101,7 @@ def test_the_build_pod_limit_is_the_build_memory_parameter(architectures, templa
     build = templates(workflow)[template]
     assert {p["name"] for p in build["inputs"]["parameters"]} >= {"build_memory"}
     assert build["container"]["resources"]["limits"]["memory"] == "4Gi"
-    patch = json.loads(build["podSpecPatch"])
+    patch = json.loads(build["podSpecPatch"].replace("{{inputs.parameters.build_tolerations}}", "[]"))
     [main] = patch["containers"]
     assert main["name"] == "main"
     assert main["resources"]["limits"]["memory"] == "{{inputs.parameters.build_memory}}"
@@ -185,3 +185,71 @@ def test_an_unknown_test_size_is_refused_with_the_allowed_values():
 def test_known_and_absent_test_sizes_pass():
     config = {"spec": {"containers": [{**BACKEND, "test": {"size": "large"}}, {**FRONTEND}, {**BACKEND, "test": None}]}}
     assert validate_test_size(config) == []
+
+
+# ---- builds beside a training -------------------------------------------------
+
+BIG = {"name": "big", "build": "./big", "port": 8000, "health": "/", "buildSize": "xlarge"}
+TOLERATION = [{"key": "thinkube.io/training", "operator": "Exists", "effect": "NoSchedule"}]
+
+
+def dag(workflow):
+    tasks = templates(workflow)["ci-cd-pipeline"]["dag"]["tasks"]
+    return {t["name"]: t for t in tasks}
+
+
+def params(task):
+    return {p["name"]: p["value"] for p in task["arguments"]["parameters"]}
+
+
+@pytest.mark.parametrize("architectures,template", [
+    (None, "buildah-build"), (["amd64", "arm64"], "buildah-build-on-arch"),
+])
+def test_a_build_pod_takes_its_tolerations_from_the_parameter_and_is_one_per_training_node(architectures, template):
+    build = templates(render([BACKEND], architectures))[template]
+    assert "build_tolerations" in {p["name"] for p in build["inputs"]["parameters"]}
+    patch = json.loads(build["podSpecPatch"].replace("{{inputs.parameters.build_tolerations}}", json.dumps(TOLERATION)))
+    assert patch["tolerations"] == TOLERATION
+    assert build["metadata"]["labels"] == {"thinkube.io/build-pod": "true"}
+    [term] = build["affinity"]["podAntiAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]
+    assert term == {"labelSelector": {"matchLabels": {"thinkube.io/build-pod": "true"}}, "topologyKey": "thinkube.io/training"}
+
+
+def test_every_build_but_an_xlarge_one_tolerates_training_mode():
+    tasks = dag(render([BACKEND, FRONTEND], ["amd64", "arm64"]))
+    for name in ("build-backend-arm64", "build-frontend-arm64", "build-backend-amd64"):
+        assert json.loads(params(tasks[name])["build_tolerations"]) == TOLERATION
+        assert tasks[name]["dependencies"] == [f"test-{name.split('-')[1]}"]
+    assert not [n for n in tasks if n.startswith("check-training-")]
+
+
+def test_an_xlarge_build_does_not_tolerate_training_mode_and_is_checked_first():
+    tasks = dag(render([BIG], ["amd64", "arm64"]))
+    for arch in ("amd64", "arm64"):
+        build = tasks[f"build-big-{arch}"]
+        assert json.loads(params(build)["build_tolerations"]) == []
+        assert build["dependencies"] == [f"check-training-big-{arch}"]
+        check = tasks[f"check-training-big-{arch}"]
+        assert check["template"] == "check-training-node"
+        assert check["dependencies"] == ["test-big"]
+        assert params(check)["node_selector"] == f"kubernetes.io/arch={arch}"
+        assert params(check)["build_memory"] == "32Gi"
+
+
+def test_a_single_architecture_xlarge_build_checks_the_control_plane():
+    tasks = dag(render([BIG]))
+    assert params(tasks["check-training-big"])["node_selector"] == "kubernetes.io/hostname=tkamd1"
+    assert tasks["build-big"]["dependencies"] == ["check-training-big"]
+
+
+def test_the_check_refuses_with_a_sentence_that_says_why():
+    source = templates(render([BIG], ["arm64"]))["check-training-node"]["script"]["source"]
+    assert "refused: its buildSize is xlarge" in source
+    assert "does not run on the training node while training mode is on" in source
+    assert "exit 1" in source
+
+
+def test_the_image_builder_may_read_the_nodes():
+    rules = [d for d in yaml.safe_load_all((REPO / "k8s/image-builder-setup.yaml").read_text())
+             if d and d["kind"] == "ClusterRole"][0]["rules"]
+    assert {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list"]} in rules
