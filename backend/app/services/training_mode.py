@@ -1,19 +1,26 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Training mode: the whole cluster reserved for one training.
+"""Training mode: one node reserved for one training.
 
-Turning it on unloads every served model, scales to 0 every Deployment and
-StatefulSet outside the namespaces a training needs (KEEP_NAMESPACES), marks
-the training node so no new pod is placed there, and moves the pods of kept
-Deployments off that node. Data stays where it is: a workload at 0 replicas
-keeps its volumes.
+Turning it on unloads the served models allocated on the training node,
+scales to 0 the Deployments and StatefulSets outside the namespaces a
+training needs (KEEP_NAMESPACES) that have a pod on that node, marks the node
+so no new pod is placed there, and moves the pods of kept Deployments off it.
+Workloads and models on the other nodes keep running. Data stays where it is:
+a workload at 0 replicas keeps its volumes.
+
+A workload is on the node when one of its pods is bound there, found by the
+pod's nodeName and its owner chain (Pod -> ReplicaSet -> Deployment, or
+Pod -> StatefulSet). A workload whose pods run on several nodes is scaled to
+0 when one of them is on the training node; the record names every node its
+pods were on.
 
 What is stopped is found when training mode is turned on, not listed in
 advance, and kept in one record (a ConfigMap of thinkube-control): the
-models that were loaded and on which node, and every workload with its
-replica count. Turning training mode off restores exactly that record and
-nothing else.
+models that were loaded on the node, and every workload with its replica
+count. Turning training mode off restores exactly that record and nothing
+else.
 """
 
 import asyncio
@@ -34,6 +41,10 @@ RECORD_NAME = "training-mode"
 # The taint that keeps new pods off the training node; the training job's
 # pod is already there when training mode is turned on.
 TRAINING_TAINT = "thinkube.io/training"
+# The label on the training node while training mode is on. The build
+# workflow's build pods use it as the topology of their anti-affinity, which
+# allows one build pod at a time on the node that carries it.
+TRAINING_LABEL = "thinkube.io/training"
 
 # What a training needs, by namespace:
 KEEP_NAMESPACES = frozenset({
@@ -100,19 +111,51 @@ def _write_record(core, record: Dict[str, Any], create: bool) -> None:
 
 # ------------------------------------------------------------------ workloads
 
-def _scalable(apps) -> List[Dict[str, Any]]:
-    """Every Deployment and StatefulSet outside KEEP_NAMESPACES with replicas above 0."""
+def _workload_of(pod, replica_sets: Dict[tuple, Any]) -> Optional[tuple]:
+    """(namespace, kind, name) of the Deployment or StatefulSet that owns a pod."""
+    ns = pod.metadata.namespace
+    for o in pod.metadata.owner_references or []:
+        if o.kind == "StatefulSet":
+            return (ns, "statefulset", o.name)
+        if o.kind == "ReplicaSet":
+            rs = replica_sets.get((ns, o.name))
+            for ro in (rs.metadata.owner_references or []) if rs else []:
+                if ro.kind == "Deployment":
+                    return (ns, "deployment", ro.name)
+    return None
+
+
+def _scalable(core, apps, node: str) -> List[Dict[str, Any]]:
+    """Every Deployment and StatefulSet outside KEEP_NAMESPACES with replicas
+    above 0 that has a pod bound to the node, with the nodes its pods are on."""
+    replica_sets = {
+        (rs.metadata.namespace, rs.metadata.name): rs
+        for rs in apps.list_replica_set_for_all_namespaces().items
+        if rs.metadata.namespace not in KEEP_NAMESPACES
+    }
+    nodes_of: Dict[tuple, set] = {}
+    for p in core.list_pod_for_all_namespaces().items:
+        if p.metadata.namespace in KEEP_NAMESPACES or not p.spec.node_name:
+            continue
+        if p.status.phase in ("Succeeded", "Failed"):
+            continue
+        key = _workload_of(p, replica_sets)
+        if key:
+            nodes_of.setdefault(key, set()).add(p.spec.node_name)
+
     found = []
     for kind, items in (
         ("deployment", apps.list_deployment_for_all_namespaces().items),
         ("statefulset", apps.list_stateful_set_for_all_namespaces().items),
     ):
         for w in items:
-            if w.metadata.namespace in KEEP_NAMESPACES:
+            if w.metadata.namespace in KEEP_NAMESPACES or (w.spec.replicas or 0) == 0:
                 continue
-            if (w.spec.replicas or 0) > 0:
+            on = nodes_of.get((w.metadata.namespace, kind, w.metadata.name), set())
+            if node in on:
                 found.append({"namespace": w.metadata.namespace, "kind": kind,
-                              "name": w.metadata.name, "replicas": w.spec.replicas})
+                              "name": w.metadata.name, "replicas": w.spec.replicas,
+                              "nodes": sorted(on)})
     return found
 
 
@@ -149,8 +192,8 @@ def _current_replicas(apps, w: Dict[str, Any]) -> Optional[int]:
 
 def _stop_all(apps, record: Dict[str, Any], core) -> List[str]:
     """Scale every recorded workload to 0, then again whatever a controller
-    brings back or creates, until nothing outside the kept namespaces runs.
-    Returns what is still running after the last round."""
+    brings back or creates, until nothing outside the kept namespaces runs on
+    the training node. Returns what is still running there after the last round."""
     known = {(w["namespace"], w["kind"], w["name"]) for w in record["workloads"]}
     for w in list(record["workloads"]):
         if not _scale_to_zero(apps, w):
@@ -158,7 +201,7 @@ def _stop_all(apps, record: Dict[str, Any], core) -> List[str]:
     left: List[Dict[str, Any]] = []
     for _ in range(SETTLE_ROUNDS):
         time.sleep(SETTLE_SECONDS)
-        left = _scalable(apps)
+        left = _scalable(core, apps, record["node"])
         if not left:
             return []
         for w in left:
@@ -175,11 +218,15 @@ def _stop_all(apps, record: Dict[str, Any], core) -> List[str]:
 # ----------------------------------------------------------------------- node
 
 def _taint(core, node: str, on: bool) -> None:
+    """Put the training taint and label on the node, or take them off."""
     n = core.read_node(node)
     taints = [t for t in (n.spec.taints or []) if t.key != TRAINING_TAINT]
     if on:
         taints.append(client.V1Taint(key=TRAINING_TAINT, value="true", effect="NoSchedule"))
-    core.patch_node(node, {"spec": {"taints": [t.to_dict() for t in taints] or None}})
+    core.patch_node(node, {
+        "metadata": {"labels": {TRAINING_LABEL: "true" if on else None}},
+        "spec": {"taints": [t.to_dict() for t in taints] or None},
+    })
 
 
 def _move_kept_pods(core, node: str) -> List[str]:
@@ -204,11 +251,12 @@ def _move_kept_pods(core, node: str) -> List[str]:
 
 # --------------------------------------------------------------------- models
 
-async def _loaded_models() -> List[Dict[str, str]]:
+async def _loaded_models(node: str) -> List[Dict[str, str]]:
+    """The served models allocated on the node."""
     from app.services.llm_gpu_tracker import llm_gpu_tracker
 
     status = await llm_gpu_tracker.get_status()
-    return [{"model_id": a.model_id, "node": n.name} for n in status.nodes for a in n.allocations]
+    return [{"model_id": a.model_id, "node": n.name} for n in status.nodes if n.name == node for a in n.allocations]
 
 
 async def _unload(models: List[Dict[str, str]]) -> List[str]:
@@ -304,7 +352,7 @@ async def turn_on(node: str, reason: str) -> Dict[str, Any]:
     except ApiException as e:
         raise TrainingModeError(f"node {node} cannot be read: {e.reason}")
 
-    models = await _loaded_models()
+    models = await _loaded_models(node)
     record = {"node": node, "reason": reason, "started": _now(), "models": models, "workloads": []}
     # The record is written before anything is stopped, so a failure part way
     # leaves what is needed to turn training mode off again.
@@ -314,7 +362,7 @@ async def turn_on(node: str, reason: str) -> Dict[str, Any]:
     # Unloading takes down each model's serving Deployment, so the workloads
     # are listed after it.
     refused = await _unload(models)
-    record["workloads"] = await asyncio.to_thread(_scalable, apps)
+    record["workloads"] = await asyncio.to_thread(_scalable, core, apps, node)
     await asyncio.to_thread(_write_record, core, record, False)
     still_running = await asyncio.to_thread(_stop_all, apps, record, core)
     moved = await asyncio.to_thread(_move_kept_pods, core, node)

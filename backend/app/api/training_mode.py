@@ -1,7 +1,7 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Training mode: the whole cluster reserved for one training."""
+"""Training mode: one node reserved for one training."""
 
 from typing import Any, Dict, Optional
 
@@ -22,7 +22,8 @@ class TrainingModeOnRequest(BaseModel):
 @router.get("/training-mode", operation_id="get_training_mode")
 async def get_training_mode(current_user: dict = Depends(get_current_user_dual_auth)) -> Dict[str, Any]:
     """Whether training mode is on, and its record: the node, the reason, when it started, the models it
-    unloaded and every workload it scaled to 0 with the replicas it had."""
+    unloaded from that node and every workload it scaled to 0 with the replicas it had and the nodes its pods
+    were on."""
     record: Optional[Dict[str, Any]] = await training_mode.status()
     return {"on": record is not None, "record": record}
 
@@ -31,11 +32,13 @@ async def get_training_mode(current_user: dict = Depends(get_current_user_dual_a
 async def training_mode_on(
     request: TrainingModeOnRequest, current_user: dict = Depends(get_current_user_dual_auth)
 ) -> Dict[str, Any]:
-    """Reserve the whole cluster for a training on one node: unload every served model, scale to 0 every
-    Deployment and StatefulSet outside the namespaces a training needs (cluster, storage, JupyterHub,
-    Thinkube Control, PostgreSQL, Keycloak, Harbor, gateways, Tailscale, code-server, scoring), keep new
-    pods off the node and move the pods of kept Deployments off it. Data stays where it is. Takes about a
-    minute. Refused while training mode is already on."""
+    """Reserve one node for a training: unload the served models allocated on that node, scale to 0 the
+    Deployments and StatefulSets that have a pod on that node, outside the namespaces a training needs
+    (cluster, storage, JupyterHub, Thinkube Control, PostgreSQL, Keycloak, Harbor, gateways, Tailscale,
+    code-server, scoring), keep new pods off the node and move the pods of kept Deployments off it. A
+    workload with pods on several nodes is scaled to 0 when one of them is on the training node. Models and
+    workloads on the other nodes keep running. Data stays where it is. Takes about a minute. Refused while
+    training mode is already on."""
     try:
         return await training_mode.turn_on(request.node, request.reason)
     except training_mode.TrainingModeError as e:
