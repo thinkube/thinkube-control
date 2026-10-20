@@ -117,8 +117,11 @@ def _workflow_to_pipeline(wf: dict) -> dict:
     }
 
 
+# The handlers below make blocking Kubernetes calls and await nothing: as
+# plain functions FastAPI runs them in its thread pool, so a slow call never
+# holds the event loop that answers /health and every other request.
 @router.get("/health")
-async def cicd_health():
+def cicd_health():
     """Health check for CI/CD API."""
     try:
         custom_api, _, _ = _get_k8s_clients()
@@ -137,7 +140,7 @@ async def cicd_health():
 
 
 @router.get("/pipelines")
-async def list_pipelines(
+def list_pipelines(
     app_name: Optional[str] = Query(None, description="Filter by app name"),
     status: Optional[str] = Query(None, description="Filter by status (Succeeded, Failed, Running)"),
     limit: int = Query(20, ge=1, le=100, description="Max results"),
@@ -346,7 +349,7 @@ def _get_argocd_deploy_stages(
 
 
 @router.get("/pipelines/{workflow_name}")
-async def get_pipeline(
+def get_pipeline(
     workflow_name: str,
     current_user: dict = Depends(get_current_user_dual_auth),
 ):
@@ -426,7 +429,7 @@ def _resolve_pod_name(core_v1, pod_name_or_node_id: str, workflow_name: str) -> 
 
 
 @router.get("/pipelines/{workflow_name}/logs/{pod_name}")
-async def get_step_logs(
+def get_step_logs(
     workflow_name: str,
     pod_name: str,
     namespace: Optional[str] = Query(None, description="Pod namespace (defaults to argo)"),
