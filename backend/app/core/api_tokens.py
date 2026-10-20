@@ -4,6 +4,7 @@
 # app/core/api_tokens.py
 """API Token authentication for programmatic access."""
 
+import asyncio
 from typing import Optional, Dict, List
 from datetime import datetime, timedelta
 import secrets
@@ -135,28 +136,29 @@ async def verify_api_token(
     if not token.startswith("tk_"):
         return None
 
-    token_hash = hash_token(token)
+    # The lookup is blocking database I/O. In a worker thread, a wait for a
+    # pooled connection never holds the event loop, which must keep running
+    # to finish the requests that give their connections back.
+    return await asyncio.to_thread(_lookup_api_token, hash_token(token), db)
 
-    # Look up token
+
+def _lookup_api_token(token_hash: str, db) -> Optional[Dict]:
+    """The user of an active, unexpired API token, recording its use.
+
+    Every path ends the session's transaction, so the request holds no
+    database connection after authentication."""
     db_token = (
         db.query(APIToken)
         .filter(APIToken.token_hash == token_hash, APIToken.is_active == True)
         .first()
     )
 
-    if not db_token:
+    if not db_token or (db_token.expires_at and datetime.utcnow() > db_token.expires_at):
+        db.rollback()
         return None
 
-    # Check expiration
-    if db_token.expires_at and datetime.utcnow() > db_token.expires_at:
-        return None
-
-    # Update last used
-    db_token.last_used = datetime.utcnow()
-    db.commit()
-
-    # Return user info
-    return {
+    # Read before the commit: a read after it would open a new transaction.
+    user_info = {
         "sub": db_token.user_id,
         "preferred_username": db_token.username,
         "token_id": db_token.id,
@@ -164,6 +166,9 @@ async def verify_api_token(
         "scopes": db_token.scopes,
         "auth_method": "api_token",
     }
+    db_token.last_used = datetime.utcnow()
+    db.commit()
+    return user_info
 
 
 async def list_api_tokens(db, user_id: str) -> List[APITokenInfo]:

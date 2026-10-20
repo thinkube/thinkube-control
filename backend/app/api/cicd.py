@@ -189,6 +189,9 @@ def list_pipelines(
 
 # How long a pipelines list is reused for requests with the same filters.
 LIST_REUSE_SECONDS = 5
+# A read holds the lock the other list requests wait on, so each Kubernetes
+# call in it is bounded.
+LIST_READ_TIMEOUT_SECONDS = 20
 _list_lock = threading.Lock()
 _list_kept: Dict[tuple, tuple] = {}
 
@@ -207,6 +210,7 @@ def _read_pipelines(custom_api, label_selector: str, limit: int) -> dict:
         auth_settings=["BearerToken"],
         _return_http_data_only=True,
         _preload_content=False,
+        _request_timeout=LIST_READ_TIMEOUT_SECONDS,
     )
     metas = [
         m["metadata"]
@@ -225,6 +229,7 @@ def _read_pipelines(custom_api, label_selector: str, limit: int) -> dict:
                 namespace=ARGO_NAMESPACE,
                 plural="workflows",
                 name=m["name"],
+                _request_timeout=LIST_READ_TIMEOUT_SECONDS,
             ))
         except ApiException as e:
             # A workflow deleted between the list and the read is no longer a pipeline.

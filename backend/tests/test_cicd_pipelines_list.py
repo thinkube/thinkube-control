@@ -34,7 +34,7 @@ class _FakeCustomApi:
         self.read = []
         self.lock = threading.Lock()
 
-    def get_namespaced_custom_object(self, group, version, namespace, plural, name):
+    def get_namespaced_custom_object(self, group, version, namespace, plural, name, **kwargs):
         with self.lock:
             self.read.append(name)
         return {
