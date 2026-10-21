@@ -964,6 +964,57 @@ async def list_deployed_apps(
     return {"apps": apps}
 
 
+@router.delete("/apps/{app_name}", operation_id="delete_app")
+async def delete_app(
+    app_name: str,
+    delete_repository: bool = Query(False, description="Also delete the Gitea repository thinkube-deployments/<app>: its code, history and webhook"),
+    delete_databases: bool = Query(False, description="Also drop the PostgreSQL databases <app> and test_<app> (hyphens as underscores)"),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """
+    Delete a user application deployed from a template, and everything its deploy created.
+
+    Removes, in this order: the Argo CD Application (argocd/<app>); in namespace argo the
+    WorkflowTemplate <app>-build, the Secret <app>-build-credentials and the app's Workflows;
+    the Secret argocd/gitea-<app>-ssh; the namespace <app> (waits up to 3 minutes for it to
+    go); the PersistentVolumes <app>-<container>-mlflow-root; the Keycloak client <app>; the
+    Harbor repositories thinkube/<app>-<container> and their /cache; the objects under <app>/
+    in the bucket argo-artifacts; Thinkube Control's services row, deployment records and
+    logs, and secret usage of the app; the checkout /home/thinkube/apps/<app>.
+
+    Kept unless asked: the Gitea repository thinkube-deployments/<app> with the code and its
+    history (delete_repository=true removes it), and the PostgreSQL databases
+    (delete_databases=true drops them). The data in the shared MLflow volume is not touched.
+
+    Refused with 409: platform components, components deployed from a template (remove those
+    with uninstall_optional_component), names with no deployment record of a user app, and an
+    app whose deploy is queued or running.
+
+    Runs in the request and answers when it has ended. A failed step does not stop the next
+    ones: status is "deleted" when every step succeeded, otherwise "incomplete", and
+    not_removed names each step that failed with its reason. Every step is listed in steps
+    with its result: "removed: ...", "not found", "failed: <reason>" or "kept: <reason>".
+    Running it again finishes an incomplete delete.
+    """
+    from app.services.app_teardown import AppTeardown, refusal
+
+    reason = refusal(db, app_name)
+    if reason:
+        raise HTTPException(status_code=409, detail=reason)
+
+    try:
+        teardown = AppTeardown(db, settings.DOMAIN_NAME)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    logger.info(
+        f"{current_user.get('preferred_username')} deletes app {app_name} "
+        f"(repository: {delete_repository}, databases: {delete_databases})"
+    )
+    # The namespace wait blocks; it runs off the event loop.
+    return await asyncio.to_thread(teardown.remove_app, app_name, delete_repository, delete_databases)
+
+
 @router.post("/publish", operation_id="publish_template")
 async def publish_template(
     request: PublishTemplateRequest,

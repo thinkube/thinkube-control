@@ -460,6 +460,7 @@ MCP_OPERATIONS = [
     "redeploy_template",           # Tool
     "cancel_deployment",           # Tool
     "list_deployed_apps",          # Resource
+    "delete_app",                  # Tool
     "publish_template",            # Tool
     "get_commit_rollout",          # Resource
 

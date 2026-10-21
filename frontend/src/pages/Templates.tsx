@@ -5,13 +5,13 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Loader2, Upload, ExternalLink, Check } from 'lucide-react'
+import { Loader2, Upload, ExternalLink, Check, Trash2 } from 'lucide-react'
 import { TkButton } from 'thinkube-style/components/buttons-badges'
 import { TkCard, TkCardHeader, TkCardTitle, TkCardContent, TkCardFooter } from 'thinkube-style/components/cards-data'
-import { TkInput } from 'thinkube-style/components/forms-inputs'
-import { TkInfoAlert, TkErrorAlert, TkSuccessAlert } from 'thinkube-style/components/feedback'
+import { TkInput, TkCheckbox, TkLabel } from 'thinkube-style/components/forms-inputs'
+import { TkInfoAlert, TkErrorAlert, TkSuccessAlert, TkWarningAlert } from 'thinkube-style/components/feedback'
 import { TkPageWrapper } from 'thinkube-style/components/utilities'
-import { TkDialogRoot, TkDialogContent, TkDialogHeader, TkDialogTitle, TkDialogFooter } from 'thinkube-style/components/modals-overlays'
+import { TkDialogRoot, TkDialogContent, TkDialogHeader, TkDialogTitle, TkDialogFooter, TkTooltip } from 'thinkube-style/components/modals-overlays'
 import { TkBrandIcon } from 'thinkube-style/components/brand-icons'
 import { TemplateParameterForm } from '../components/TemplateParameterForm'
 import { PlaybookExecutor, type PlaybookExecutorHandle } from '../components/PlaybookExecutor'
@@ -58,6 +58,20 @@ interface TemplateMetadata {
 }
 
 type DeployConfig = Record<string, string | number | boolean>
+
+// The answer of DELETE /templates/apps/{name}: every step with its result
+// ("removed: ...", "not found", "failed: <reason>" or "kept: <reason>").
+interface DeleteAppReport {
+  app: string
+  status: 'deleted' | 'incomplete'
+  message: string
+  steps: Array<{ step: string; result: string }>
+  not_removed: string[]
+  kept: string[]
+}
+
+// Deleting an app waits for its namespace to go, which takes longer than the client's default timeout.
+const DELETE_APP_TIMEOUT_MS = 300000
 
 interface AvailableTemplate {
   name: string
@@ -109,6 +123,15 @@ export default function Templates() {
   const [publishPrivate, setPublishPrivate] = useState(true)
   const [isPublishing, setIsPublishing] = useState(false)
   const [publishResult, setPublishResult] = useState<{ status: string; repo_url?: string; message?: string } | null>(null)
+
+  // Delete app state
+  const [deleteApp, setDeleteApp] = useState<DeployedApp | null>(null)
+  const [deleteConfirmName, setDeleteConfirmName] = useState('')
+  const [deleteRepository, setDeleteRepository] = useState(false)
+  const [deleteDatabases, setDeleteDatabases] = useState(false)
+  const [isDeletingApp, setIsDeletingApp] = useState(false)
+  const [deleteReport, setDeleteReport] = useState<DeleteAppReport | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const playbookExecutorRef = useRef<PlaybookExecutorHandle>(null!)
   const isLoadingRef = useRef(false) // Prevent concurrent loads
@@ -236,25 +259,58 @@ export default function Templates() {
   }, [])
 
   // Fetch deployed apps
-  useEffect(() => {
-    const fetchDeployedApps = async () => {
-      setLoadingApps(true)
-      try {
-        const token = localStorage.getItem('access_token')
-        const response = await api.get('/templates/apps', {
-          headers: { Authorization: `Bearer ${token}` }
-        })
-        if (response.data?.apps) {
-          setDeployedApps(response.data.apps)
-        }
-      } catch (error) {
-        console.error('Failed to fetch deployed apps:', error)
-      } finally {
-        setLoadingApps(false)
+  const fetchDeployedApps = useCallback(async () => {
+    setLoadingApps(true)
+    try {
+      const token = localStorage.getItem('access_token')
+      const response = await api.get('/templates/apps', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (response.data?.apps) {
+        setDeployedApps(response.data.apps)
       }
+    } catch (error) {
+      console.error('Failed to fetch deployed apps:', error)
+    } finally {
+      setLoadingApps(false)
     }
-    fetchDeployedApps()
   }, [])
+
+  useEffect(() => {
+    fetchDeployedApps()
+  }, [fetchDeployedApps])
+
+  const openDeleteDialog = (app: DeployedApp) => {
+    setDeleteApp(app)
+    setDeleteConfirmName('')
+    setDeleteRepository(false)
+    setDeleteDatabases(false)
+    setDeleteReport(null)
+    setDeleteError(null)
+  }
+
+  const closeDeleteDialog = () => {
+    if (isDeletingApp) return
+    setDeleteApp(null)
+  }
+
+  const handleDeleteApp = async () => {
+    if (!deleteApp || deleteConfirmName !== deleteApp.name) return
+    setIsDeletingApp(true)
+    setDeleteError(null)
+    try {
+      const response = await api.delete(`/templates/apps/${encodeURIComponent(deleteApp.name)}`, {
+        params: { delete_repository: deleteRepository, delete_databases: deleteDatabases },
+        timeout: DELETE_APP_TIMEOUT_MS,
+      })
+      setDeleteReport(response.data)
+      fetchDeployedApps()
+    } catch (error: any) {
+      setDeleteError(error.response?.data?.detail || error.message)
+    } finally {
+      setIsDeletingApp(false)
+    }
+  }
 
   // Open publish dialog for an app
   const openPublishDialog = (app: DeployedApp) => {
@@ -593,11 +649,124 @@ export default function Templates() {
                     Publish as template
                   </TkButton>
                 }
+                corner={
+                  <TkTooltip content="Delete app">
+                    <TkButton
+                      intent="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      aria-label={`Delete ${app.name}`}
+                      onClick={() => openDeleteDialog(app)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </TkButton>
+                  </TkTooltip>
+                }
               />
             ))}
           </div>
         </div>
       )}
+
+      {/* Delete App Dialog */}
+      <TkDialogRoot open={!!deleteApp} onOpenChange={(open) => { if (!open) closeDeleteDialog() }}>
+        <TkDialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <TkDialogHeader>
+            <TkDialogTitle>Delete {deleteApp?.name}</TkDialogTitle>
+          </TkDialogHeader>
+
+          {deleteReport ? (
+            <div className="space-y-4 text-sm">
+              {deleteReport.status === 'deleted' ? (
+                <TkSuccessAlert title="Deleted">
+                  <p>{deleteReport.message}</p>
+                </TkSuccessAlert>
+              ) : (
+                <TkWarningAlert title="Not fully deleted">
+                  <p>Some parts could not be removed. Delete the app again to retry them.</p>
+                  <ul className="list-disc pl-5 mt-2">
+                    {deleteReport.not_removed.map((item) => <li key={item}>{item}</li>)}
+                  </ul>
+                </TkWarningAlert>
+              )}
+              <ul className="space-y-1">
+                {deleteReport.steps.map((s) => (
+                  <li key={s.step} className="flex flex-col">
+                    <span className="font-medium break-all">{s.step}</span>
+                    <span className={`break-all ${s.result.startsWith('failed') ? 'text-destructive' : 'text-muted-foreground'}`}>
+                      {s.result}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : deleteApp && (
+            <div className="space-y-4 text-sm">
+              <p>
+                This removes the app from the cluster: its Argo CD application, namespace, builds,
+                images in Harbor, Keycloak client, build artifacts, its records in Thinkube Control and
+                the checkout <span className="font-mono break-all">{deleteApp.path}</span>.
+              </p>
+              <div className="flex items-center gap-2">
+                <TkCheckbox
+                  id="delete-repository"
+                  checked={deleteRepository}
+                  onCheckedChange={(checked) => setDeleteRepository(checked === true)}
+                  disabled={isDeletingApp}
+                />
+                <TkLabel htmlFor="delete-repository" className="font-normal cursor-pointer">
+                  Also delete the Gitea repository (code and history)
+                </TkLabel>
+              </div>
+              <div className="flex items-center gap-2">
+                <TkCheckbox
+                  id="delete-databases"
+                  checked={deleteDatabases}
+                  onCheckedChange={(checked) => setDeleteDatabases(checked === true)}
+                  disabled={isDeletingApp}
+                />
+                <TkLabel htmlFor="delete-databases" className="font-normal cursor-pointer">
+                  Also delete the databases
+                </TkLabel>
+              </div>
+              <div className="space-y-2">
+                <TkLabel htmlFor="delete-confirm-name">
+                  Type <span className="font-mono">{deleteApp.name}</span> to confirm
+                </TkLabel>
+                <TkInput
+                  id="delete-confirm-name"
+                  value={deleteConfirmName}
+                  onChange={(e) => setDeleteConfirmName(e.target.value)}
+                  autoComplete="off"
+                  disabled={isDeletingApp}
+                />
+              </div>
+              {deleteError && (
+                <TkErrorAlert title="Delete refused">
+                  <p>{deleteError}</p>
+                </TkErrorAlert>
+              )}
+            </div>
+          )}
+
+          <TkDialogFooter>
+            <TkButton intent="ghost" onClick={closeDeleteDialog} disabled={isDeletingApp}>
+              {deleteReport ? 'Close' : 'Cancel'}
+            </TkButton>
+            {!deleteReport && (
+              <TkButton
+                intent="danger"
+                disabled={!deleteApp || deleteConfirmName !== deleteApp.name || isDeletingApp}
+                onClick={handleDeleteApp}
+                className="gap-2"
+              >
+                {isDeletingApp ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                {isDeletingApp ? 'Deleting...' : 'Delete'}
+              </TkButton>
+            )}
+          </TkDialogFooter>
+        </TkDialogContent>
+      </TkDialogRoot>
 
       {/* Publish Dialog */}
       <TkDialogRoot open={showPublishDialog} onOpenChange={setShowPublishDialog}>

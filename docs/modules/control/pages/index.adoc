@@ -36,11 +36,27 @@ Every card's *details* page shows the service's health status and the health his
 
 | LLM Gateway | The gateway endpoint, the GPU nodes with their slots and memory, the inference backends it has discovered, and every model in the registry with a *Load* and *Unload* control. xref:llm-serving.adoc[LLM serving and models] describes the mechanics.
 | AI Models | The model catalogue. Mirror a model from Hugging Face into Thinkube Storage; watch the mirror job; delete a mirrored model.
-| Templates | The template catalogue. Deploy a template by name or from a GitHub URL, follow a deployment's progress, and publish one of your applications as a template.
+| Templates | The template catalogue. Deploy a template by name or from a GitHub URL, follow a deployment's progress, publish one of your applications as a template, and delete one of your applications (see <<delete-app>>).
 | Harbor Images | Two tabs. *Mirrored Images*: the public images the platform mirrored into Thinkube Registry, with their mirror date and per-architecture tags, and a control to mirror one again. *Custom Images*: images you define from a build file and build here.
 | Optional Components | The catalogue of optional components with their requirements and whether each is installed. Install one; remove one. An installed component is switched off and on from its card's details page.
 | Cluster Nodes | Every node with its role, architecture, memory, GPUs and version. Add nodes and remove nodes; see xref:install:adding-nodes.adoc[Add more nodes].
 |===
+
+[[delete-app]]
+=== Deleting an application
+
+On the *Templates* page, under *Your Apps*, the bin icon of an app's card deletes the app. You type the app's name to confirm. The agent does the same with the `delete_app` operation.
+
+The delete removes what the deploy created: the Argo CD application, the app's namespace, its build template, builds and build secret, its MLflow volumes, its Keycloak client, its images in Thinkube Registry, its build logs and artifacts in Thinkube Storage, its records in Thinkube Control, and the checkout `/home/thinkube/apps/<app>`.
+
+Two things are kept unless you tick them, because nothing can rebuild them:
+
+* *Also delete the Gitea repository (code and history)*: the repository `thinkube-deployments/<app>`.
+* *Also delete the databases*: the PostgreSQL databases of the app, `<app>` and `test_<app>`, with hyphens written as underscores.
+
+When it ends, the dialog lists every step and its result. If a step failed, the other steps still ran, and the list says what is left. Delete the app again to retry what is left.
+
+Only your own applications can be deleted this way. Optional components are removed on the *Optional Components* page.
 
 === Configuration and security
 

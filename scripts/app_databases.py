@@ -39,3 +39,12 @@ def create_statement(name: str, owner: str, present: bool) -> Optional[str]:
     if present:
         return None
     return f"CREATE DATABASE {name} OWNER {owner};"
+
+
+def drop_statement(name: str) -> str:
+    """The statement that drops one of an app's databases when the app itself is deleted.
+
+    A deploy never runs it. FORCE ends the sessions still open on the database,
+    which DROP DATABASE otherwise refuses.
+    """
+    return f"DROP DATABASE IF EXISTS {name} WITH (FORCE);"

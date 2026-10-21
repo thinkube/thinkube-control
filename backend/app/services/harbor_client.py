@@ -8,12 +8,23 @@ import logging
 import base64
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+from urllib.parse import quote
 
 import httpx
 from httpx import HTTPStatusError, RequestError
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def repository_path(repository_name: str) -> str:
+    """A repository name as Harbor's v2 API takes it in a path.
+
+    The name is the part after the project (``app-web`` or ``app-web/cache``).
+    A slash in it is encoded twice: Harbor decodes the path once before it
+    routes, so a slash encoded once would split the name.
+    """
+    return quote(quote(repository_name, safe=""), safe="")
 
 
 class HarborClient:
@@ -169,8 +180,9 @@ class HarborClient:
         Returns:
             Repository details dictionary
         """
-        repo_path = f"{project_name}/{repository_name}"
-        response = self._request("GET", f"/repositories/{repo_path}")
+        response = self._request(
+            "GET", f"/projects/{project_name}/repositories/{repository_path(repository_name)}"
+        )
         return response.json()
 
     def delete_repository(self, project_name: str, repository_name: str) -> bool:
@@ -178,13 +190,17 @@ class HarborClient:
 
         Args:
             project_name: Name of the project
-            repository_name: Name of the repository
+            repository_name: Name of the repository within the project, such as app-web/cache
 
         Returns:
             True if successful
+
+        Raises:
+            HTTPStatusError: 404 when the repository does not exist
         """
-        repo_path = f"{project_name}/{repository_name}"
-        self._request("DELETE", f"/repositories/{repo_path}")
+        self._request(
+            "DELETE", f"/projects/{project_name}/repositories/{repository_path(repository_name)}"
+        )
         return True
 
     # Artifact (Image Tag) Management
@@ -199,8 +215,9 @@ class HarborClient:
         Returns:
             List of artifact dictionaries
         """
-        repo_path = f"{project_name}/{repository_name}"
-        response = self._request("GET", f"/projects/{project_name}/repositories/{repository_name}/artifacts")
+        response = self._request(
+            "GET", f"/projects/{project_name}/repositories/{repository_path(repository_name)}/artifacts"
+        )
         return response.json()
 
     def get_artifact(self, project_name: str, repository_name: str, reference: str) -> Dict[str, Any]:
@@ -216,7 +233,7 @@ class HarborClient:
         """
         response = self._request(
             "GET",
-            f"/projects/{project_name}/repositories/{repository_name}/artifacts/{reference}"
+            f"/projects/{project_name}/repositories/{repository_path(repository_name)}/artifacts/{reference}"
         )
         return response.json()
 
@@ -233,7 +250,7 @@ class HarborClient:
         """
         self._request(
             "DELETE",
-            f"/projects/{project_name}/repositories/{repository_name}/artifacts/{reference}"
+            f"/projects/{project_name}/repositories/{repository_path(repository_name)}/artifacts/{reference}"
         )
         return True
 
@@ -252,7 +269,7 @@ class HarborClient:
         """
         response = self._request(
             "POST",
-            f"/projects/{project_name}/repositories/{repository_name}/artifacts/{reference}/scan"
+            f"/projects/{project_name}/repositories/{repository_path(repository_name)}/artifacts/{reference}/scan"
         )
         return {"status": "scan_initiated", "reference": reference}
 
@@ -269,7 +286,7 @@ class HarborClient:
         """
         response = self._request(
             "GET",
-            f"/projects/{project_name}/repositories/{repository_name}/artifacts/{reference}/vulnerabilities"
+            f"/projects/{project_name}/repositories/{repository_path(repository_name)}/artifacts/{reference}/vulnerabilities"
         )
         return response.json()
 

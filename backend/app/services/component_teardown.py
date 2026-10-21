@@ -16,11 +16,13 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List
 
+import certifi
 import urllib3
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from app.models.services import Service as ServiceModel
+from app.services.deploy_identity import deploy_api_client
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +38,11 @@ class ComponentTeardown:
     def __init__(self, db, domain: str):
         self.db = db
         self.domain = domain
-        self.core_v1 = client.CoreV1Api()
-        self.custom = client.CustomObjectsApi()
+        # The backend's own service account only reads; the objects a deploy
+        # created are removed with the identity that created them.
+        api = deploy_api_client()
+        self.core_v1 = client.CoreV1Api(api)
+        self.custom = client.CustomObjectsApi(api)
 
     def remove(self, name: str, namespace: str) -> Dict[str, Any]:
         """Remove a component. Returns what was done and what failed."""
@@ -89,8 +94,7 @@ class ComponentTeardown:
         return base64.b64decode(secret.data["token"]).decode()
 
     def _delete_gitea_repo(self, name: str) -> bool:
-        http = urllib3.PoolManager(cert_reqs="CERT_NONE")
-        urllib3.disable_warnings()
+        http = urllib3.PoolManager(cert_reqs="CERT_REQUIRED", ca_certs=certifi.where())
         response = http.request(
             "DELETE",
             f"https://git.{self.domain}/api/v1/repos/{GITEA_ORG}/{name}",
