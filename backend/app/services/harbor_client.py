@@ -89,6 +89,11 @@ class HarborClient:
         headers = kwargs.pop("headers", {})
         headers.update(self.auth_header)
 
+        # Harbor answers with a session cookie. A request that sends it back
+        # is taken as a browser session and refused without a CSRF token, so
+        # every request authenticates with the Basic header alone.
+        self.client.cookies.clear()
+
         try:
             response = self.client.request(
                 method=method,

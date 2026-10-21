@@ -1048,12 +1048,15 @@ async def _add_nodes(progress: AddNodesJob, nodes: List[Dict[str, Any]], passwor
                 step_number=step,
                 limit=",".join(added_hostnames),
             )
+            # A node that cannot resolve the cluster's names fails later, at
+            # its first image pull or Gitea clone, far from this step.
             if not dns_ok:
-                logger.warning("DNS configuration failed on new nodes — continuing")
                 progress.send({
-                    "type": "warning",
-                    "message": "DNS configuration failed on new nodes — continuing",
+                    "type": "complete",
+                    "status": "failed",
+                    "message": "DNS configuration failed on new nodes",
                 })
+                return
             step += 1
 
             # Update code-server hostAliases so the new node hostname

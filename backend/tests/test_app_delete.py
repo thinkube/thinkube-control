@@ -259,6 +259,22 @@ def test_harbor_encodes_a_slash_in_a_repository_name_twice():
     ]
 
 
+def test_harbor_requests_do_not_send_back_its_session_cookie():
+    """A request with Harbor's session cookie needs a CSRF token; Basic auth alone does not."""
+    cookies_sent = []
+
+    def handler(request):
+        cookies_sent.append(request.headers.get("cookie"))
+        return httpx.Response(200, headers={"set-cookie": "sid=abc; Path=/"})
+
+    harbor = HarborClient(base_url="https://registry.example.com", username="admin", password="p")
+    harbor.client = httpx.Client(transport=httpx.MockTransport(handler))
+    harbor.delete_repository("thinkube", "notes-web/cache")
+    harbor.delete_repository("thinkube", "notes-web")
+
+    assert cookies_sent == [None, None]
+
+
 def test_harbor_repositories_are_the_image_and_cache_of_each_container(teardown, monkeypatch, tmp_path):
     (tmp_path / "notes").mkdir()
     (tmp_path / "notes" / "thinkube.yaml").write_text(
