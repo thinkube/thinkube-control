@@ -423,7 +423,11 @@ class LLMGPUTracker:
             pod_mem = int(round(max(target_gb, util * total_gb) + margin))
             tp = 1
             remaining = max(ai_budget - reserved_on_node, 0.0)
-            fits = (target_gb + margin) <= remaining and free_slots >= 1
+            # The memory quota of a GPU component's namespace is at most
+            # LLM_UMA_AI_BUDGET_GB (scripts/namespace_quota.py), whatever the
+            # node's planning budget; Kubernetes refuses a pod limit above it.
+            over_quota = pod_mem > UMA_AI_BUDGET_GB
+            fits = (target_gb + margin) <= remaining and free_slots >= 1 and not over_quota
         else:
             # Discrete VRAM: util is per-GPU; cgroup only needs host overhead.
             per_vram = node.per_gpu_vram_gb or (total_gb / max(node.gpu_count, 1))
@@ -454,6 +458,12 @@ class LLMGPUTracker:
 
         if fits:
             reason = "ok"
+        elif arch == "uma" and over_quota:
+            reason = (
+                f"the pod would need a {pod_mem} GiB memory limit for ~{target_gb:.1f} GB "
+                f"(engine share {util:.2f} of {total_gb:.0f} GB, +~{margin:.0f} GB margin) on "
+                f"{node_name}, above the {UMA_AI_BUDGET_GB:.0f} GB namespace quota (LLM_UMA_AI_BUDGET_GB)"
+            )
         elif free_slots < (1 if arch == "uma" else tp):
             reason = f"{node_name} has no free time-slice slot ({node.total_slots} in use)"
         else:

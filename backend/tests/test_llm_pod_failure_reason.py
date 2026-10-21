@@ -29,10 +29,15 @@ def crashed_pod(termination_message):
     return SimpleNamespace(status=SimpleNamespace(container_statuses=[status], phase="Running"))
 
 
+def deployment(failure):
+    conditions = [failure] if failure else []
+    return SimpleNamespace(status=SimpleNamespace(conditions=conditions))
+
+
 def status_of(monkeypatch, pod):
     monkeypatch.setattr(kubernetes.config, "load_incluster_config", lambda: None)
     monkeypatch.setattr(kubernetes.client, "AppsV1Api", lambda: SimpleNamespace(
-        read_namespaced_deployment=lambda name, ns: object()))
+        read_namespaced_deployment=lambda name, ns: deployment(None)))
     monkeypatch.setattr(kubernetes.client, "CoreV1Api", lambda: SimpleNamespace(
         list_namespaced_pod=lambda ns, label_selector: SimpleNamespace(items=[pod])))
     return LLMPodManager().check_pod_status("vllm", "tkamd2", MODEL)
@@ -46,3 +51,18 @@ def test_the_termination_message_is_the_reason(monkeypatch):
 def test_without_a_termination_message_the_back_off_message_is_kept(monkeypatch):
     assert status_of(monkeypatch, crashed_pod(None)) == (
         "failed", "CrashLoopBackOff: back-off 10s restarting failed container=vllm")
+
+
+def test_a_pod_kubernetes_refuses_to_create_is_failed_with_the_refusal(monkeypatch):
+    """A quota refusal leaves no pod; the Deployment's ReplicaFailure says why."""
+    refusal = SimpleNamespace(
+        type="ReplicaFailure", status="True", reason="FailedCreate",
+        message='pods "flare-x" is forbidden: exceeded quota: resource-budget')
+    monkeypatch.setattr(kubernetes.config, "load_incluster_config", lambda: None)
+    monkeypatch.setattr(kubernetes.client, "AppsV1Api", lambda: SimpleNamespace(
+        read_namespaced_deployment=lambda name, ns: deployment(refusal)))
+    monkeypatch.setattr(kubernetes.client, "CoreV1Api", lambda: SimpleNamespace(
+        list_namespaced_pod=lambda ns, label_selector: SimpleNamespace(items=[])))
+    status, detail = LLMPodManager().check_pod_status("vllm", "tkamd2", MODEL)
+    assert status == "failed"
+    assert detail.startswith("FailedCreate: ") and "exceeded quota" in detail

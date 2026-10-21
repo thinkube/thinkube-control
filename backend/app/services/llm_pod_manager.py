@@ -585,11 +585,17 @@ class LLMPodManager:
             deploy_name = self._make_deployment_name(backend_type, node_name, model_id)
 
             try:
-                apps_v1.read_namespaced_deployment(deploy_name, namespace)
+                deployment = apps_v1.read_namespaced_deployment(deploy_name, namespace)
             except client.rest.ApiException as e:
                 if e.status == 404:
                     return "absent", ""
                 raise
+
+            # Kubernetes refusing to create the pod (a quota, an admission
+            # rule) leaves no pod to inspect; the Deployment says why.
+            for condition in (deployment.status.conditions or []) if deployment.status else []:
+                if condition.type == "ReplicaFailure" and condition.status == "True":
+                    return "failed", f"{condition.reason}: {condition.message}"
 
             v1 = client.CoreV1Api()
             pods = v1.list_namespaced_pod(
