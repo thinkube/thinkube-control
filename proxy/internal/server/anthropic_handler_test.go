@@ -34,7 +34,7 @@ func controlPlane(t *testing.T, backendURL string, native bool) *httptest.Server
 
 func postMessages(t *testing.T, controlURL, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewAnthropicHandler(resolver.New(controlURL, nil), forwarder.New(5*time.Second), 1<<20)
+	h := NewAnthropicHandler(resolver.New(controlURL), forwarder.New(5*time.Second), 1<<20)
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
 	req.Header.Set("anthropic-version", "2023-06-01")
 	rec := httptest.NewRecorder()

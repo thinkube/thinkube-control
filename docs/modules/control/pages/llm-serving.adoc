@@ -20,13 +20,17 @@ Clients call one address, the gateway at `https://llm.<your domain>`: it checks 
 
 | `POST /v1/chat/completions` | OpenAI chat completions
 | `POST /v1/embeddings` | OpenAI embeddings
-| `GET /v1/models` | OpenAI model list; each alias is listed too, with `root` naming the model it points to
+| `GET /v1/models` | OpenAI model list; each alias is listed too, with `root` naming the model it points to, and every entry has a `thinkube` object for agent clients
 | `POST /v1/messages` | Anthropic Messages
 |===
 
 A client written for either API works unchanged with the base URL changed to the gateway.
 
 An alias such as `thinkube-fast` names a model, and the model it names can change. `GET /v1/models` lists each alias with `root`, the model it names now, so an app that keeps results can record which model made them, and can tell when an alias has moved to another model.
+
+Aliases are defined in the model catalog: a model's `aliases` list. An alias in your own metadata repository wins over the platform's. The gateway reads them when the catalog is read, so a changed alias works after `refresh_llm_registry`, with no deploy.
+
+The `thinkube` object of each entry in `GET /v1/models` gives what an agent client needs: `state`, `aliases`, `capabilities` (`agent`: fit to drive a coding or office agent; `vision`: it reads images), `default_agent`, `input`, `context_window` (the context its backend serves, when the backend reports it) and `max_output` (the answer budget agents reserve).
 
 === Authentication
 

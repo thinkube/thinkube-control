@@ -177,13 +177,16 @@ func (h *OpenAIHandler) forwardStream(r *http.Request, w http.ResponseWriter, ba
 }
 
 // ListModels answers the OpenAI model list from the backend's registry: the
-// models that are served or could be. Each alias whose model is in the list
-// is listed too, after the models and by name, with `root` naming the model
-// it points to now; a model's own `root` is its id. An app reads `root` to
-// know which model an alias names before it calls it. The backend route carries a trailing
-// slash; without it the backend redirects, and the forwarder does not follow
-// redirects, so the exact path matters. A backend answer that is not 200 or
-// not the expected shape is reported, never shown as an empty list.
+// models that are served or could be. Each catalog alias of a listed model is
+// listed too, after the models and by name, with `root` naming the model it
+// points to; a model's own `root` is its id. An app reads `root` to know which
+// model an alias names before it calls it. Every entry carries a `thinkube`
+// object: the model's state, aliases, capabilities ("agent", "vision"),
+// whether it is the agent default, its inputs, the context its backend serves
+// it with and the answer budget agents reserve. The backend route carries a
+// trailing slash; without it the backend redirects, and the forwarder does not
+// follow redirects, so the exact path matters. A backend answer that is not
+// 200 or not the expected shape is reported, never shown as an empty list.
 func (h *OpenAIHandler) ListModels(w http.ResponseWriter, r *http.Request) {
 	modelsURL := fmt.Sprintf("%s/api/v1/llm/models/", h.resolver.BackendURL())
 	resp, err := h.forwarder.ForwardGet(r.Context(), modelsURL)
@@ -201,10 +204,15 @@ func (h *OpenAIHandler) ListModels(w http.ResponseWriter, r *http.Request) {
 
 	var backendResp struct {
 		Models []struct {
-			ID         string   `json:"id"`
-			Name       string   `json:"name"`
-			ServerType []string `json:"server_type"`
-			State      string   `json:"state"`
+			ID                  string   `json:"id"`
+			Name                string   `json:"name"`
+			ServerType          []string `json:"server_type"`
+			State               string   `json:"state"`
+			Aliases             []string `json:"aliases"`
+			Capabilities        []string `json:"capabilities"`
+			DefaultAgent        bool     `json:"default_agent"`
+			MaxOutput           *int     `json:"max_output"`
+			ServedContextLength *int     `json:"served_context_length"`
 		} `json:"models"`
 	}
 
@@ -214,33 +222,59 @@ func (h *OpenAIHandler) ListModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	type thinkubeModel struct {
+		Name          string   `json:"name"`
+		State         string   `json:"state"`
+		Aliases       []string `json:"aliases"`
+		Capabilities  []string `json:"capabilities"`
+		DefaultAgent  bool     `json:"default_agent"`
+		Input         []string `json:"input"`
+		ContextWindow *int     `json:"context_window"`
+		MaxOutput     *int     `json:"max_output"`
+	}
 	type openAIModel struct {
-		ID      string `json:"id"`
-		Object  string `json:"object"`
-		Created int64  `json:"created"`
-		OwnedBy string `json:"owned_by"`
-		Root    string `json:"root"`
+		ID       string         `json:"id"`
+		Object   string         `json:"object"`
+		Created  int64          `json:"created"`
+		OwnedBy  string         `json:"owned_by"`
+		Root     string         `json:"root"`
+		Thinkube *thinkubeModel `json:"thinkube"`
 	}
 
 	now := time.Now().Unix()
 	models := []openAIModel{}
-	listed := map[string]bool{}
+	type aliasOf struct {
+		model string
+		info  *thinkubeModel
+	}
+	aliases := map[string]aliasOf{}
 	for _, m := range backendResp.Models {
-		if m.State == "available" || m.State == "deployable" {
-			models = append(models, openAIModel{ID: m.ID, Object: "model", Created: now, OwnedBy: "local", Root: m.ID})
-			listed[m.ID] = true
+		if m.State != "available" && m.State != "deployable" {
+			continue
+		}
+		input := []string{"text"}
+		for _, c := range m.Capabilities {
+			if c == "vision" {
+				input = append(input, "image")
+			}
+		}
+		info := &thinkubeModel{
+			Name: m.Name, State: m.State, Aliases: nonNil(m.Aliases), Capabilities: nonNil(m.Capabilities),
+			DefaultAgent: m.DefaultAgent, Input: input, ContextWindow: m.ServedContextLength, MaxOutput: m.MaxOutput,
+		}
+		models = append(models, openAIModel{ID: m.ID, Object: "model", Created: now, OwnedBy: "local", Root: m.ID, Thinkube: info})
+		for _, alias := range m.Aliases {
+			aliases[alias] = aliasOf{model: m.ID, info: info}
 		}
 	}
-	aliases := h.resolver.Aliases()
 	names := make([]string, 0, len(aliases))
 	for alias := range aliases {
 		names = append(names, alias)
 	}
 	sort.Strings(names)
 	for _, alias := range names {
-		if listed[aliases[alias]] {
-			models = append(models, openAIModel{ID: alias, Object: "model", Created: now, OwnedBy: "thinkube", Root: aliases[alias]})
-		}
+		a := aliases[alias]
+		models = append(models, openAIModel{ID: alias, Object: "model", Created: now, OwnedBy: "thinkube", Root: a.model, Thinkube: a.info})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -248,6 +282,14 @@ func (h *OpenAIHandler) ListModels(w http.ResponseWriter, r *http.Request) {
 		"object": "list",
 		"data":   models,
 	})
+}
+
+// nonNil gives an empty list for a missing one, so the answer has [] not null.
+func nonNil(items []string) []string {
+	if items == nil {
+		return []string{}
+	}
+	return items
 }
 
 type openAIEmbeddingRequest struct {

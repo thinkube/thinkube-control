@@ -198,10 +198,11 @@ class LLMBackendDiscovery:
             resp = await self._client.get(models_url)
             if resp.status_code == 200:
                 data = resp.json()
-                model_ids = [
-                    m.get("id", "") for m in data.get("data", []) if m.get("id")
-                ]
-                backend.models = model_ids
+                cards = [m for m in data.get("data", []) if m.get("id")]
+                backend.models = [m["id"] for m in cards]
+                backend.model_context = {
+                    m["id"]: m["max_model_len"] for m in cards if isinstance(m.get("max_model_len"), int)
+                }
             # Don't clear models on /v1/models failure — keep last known good list
         except Exception:
             pass  # Keep existing models list on models endpoint failure

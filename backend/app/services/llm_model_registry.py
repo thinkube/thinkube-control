@@ -105,6 +105,7 @@ class LLMModelRegistry:
                     model_state=ModelState.available,
                     tier=resolved_tier,
                     anthropic_messages=llm_backend_types.require(backend.type).anthropic_messages,
+                    aliases=entry.aliases,
                 )
 
         backends = [
@@ -147,6 +148,7 @@ class LLMModelRegistry:
             model_state=ModelState.available,
             tier=resolved_tier,
             anthropic_messages=llm_backend_types.require(backend.type).anthropic_messages,
+            aliases=entry.aliases,
         )
 
     def resolve_all(self) -> List[ModelResolveResponse]:
@@ -166,8 +168,14 @@ class LLMModelRegistry:
         return out
 
     def _resolve_alias(self, alias: str) -> Optional[ModelEntry]:
+        """The model a request names: its id, a catalog alias, its Ollama
+        name, its catalog name, or the last part of its id."""
         if alias in self._models:
             return self._models[alias]
+
+        for m in self._models.values():
+            if alias in m.aliases:
+                return m
 
         registry_id = self.resolve_ollama_alias(alias)
         if registry_id and registry_id in self._models:
@@ -177,9 +185,9 @@ class LLMModelRegistry:
         if len(matches) == 1:
             return matches[0]
 
-        for m in self._models.values():
-            if alias.lower() in m.id.lower().split("/")[-1].lower():
-                return m
+        matches = [m for m in self._models.values() if m.id.split("/")[-1].lower() == alias.lower()]
+        if len(matches) == 1:
+            return matches[0]
 
         return None
 
@@ -360,8 +368,12 @@ class LLMModelRegistry:
 
         composite_map: dict[str, tuple[str, str]] = {}
         raw_backend_models: dict[str, str] = {}
+        # (backend id, served model name) -> the context the backend serves it with.
+        served_context: dict[tuple[str, str], int] = {}
         for backend in llm_backend_discovery.list_backends():
             if backend.status == "healthy":
+                for model_name, length in backend.model_context.items():
+                    served_context[(backend.id, model_name)] = length
                 for model_name in backend.models:
                     raw_backend_models[model_name] = backend.id
                     base = model_name.split(":")[0]
@@ -381,6 +393,11 @@ class LLMModelRegistry:
                         _, matched_backend_id = composite_map[key]
                         matched_keys.add(key)
                         break
+
+            if matched_backend_id:
+                entry.served_context_length = served_context.get((matched_backend_id, entry.serving_name))
+            else:
+                entry.served_context_length = None
 
             if matched_backend_id and entry.state in (ModelState.loading, ModelState.deployable):
                 entry.state = ModelState.available
