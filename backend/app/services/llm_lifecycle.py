@@ -702,7 +702,7 @@ class LLMLifecycleManager:
         model_name = model_id.replace("/", "-")
 
         try:
-            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(
                     f"{mlflow_url}/api/2.0/mlflow/model-versions/search",
                     params={"filter": f"name='{model_name}'"},
@@ -741,7 +741,7 @@ class LLMLifecycleManager:
     async def _find_gguf_filename(self, run_id: str, token: str) -> Optional[str]:
         mlflow_url = os.getenv("MLFLOW_TRACKING_URI")
         try:
-            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(
                     f"{mlflow_url}/api/2.0/mlflow/artifacts/list",
                     params={"run_id": run_id, "path": "model"},
@@ -765,7 +765,7 @@ class LLMLifecycleManager:
         mlflow_url = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000")
         model_name = model_id.replace("/", "-")
         try:
-            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(
                     f"{mlflow_url}/api/2.0/mlflow/model-versions/search",
                     params={"filter": f"name='{model_name}'"},
@@ -825,7 +825,7 @@ class LLMLifecycleManager:
             "MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000"
         )
         try:
-            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(
                     f"{mlflow_url}/api/2.0/mlflow/runs/get",
                     params={"run_id": run_id},
@@ -909,7 +909,7 @@ class LLMLifecycleManager:
         mlflow_url = os.getenv("MLFLOW_TRACKING_URI")
         total = 0
         try:
-            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.get(
                     f"{mlflow_url}/api/2.0/mlflow/artifacts/list",
                     params={"run_id": run_id, "path": "model"},
@@ -958,7 +958,7 @@ class LLMLifecycleManager:
             return None
 
         try:
-            async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0) as client:
                 resp = await client.post(
                     token_url,
                     data={

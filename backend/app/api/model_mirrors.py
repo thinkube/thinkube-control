@@ -417,7 +417,6 @@ async def check_mlflow_status(
                 'username': username,
                 'password': password
             },
-            verify=False,
             timeout=5
         )
 

@@ -39,7 +39,7 @@ class LLMBackendDiscovery:
         )
         self._static_backends_raw = os.getenv("LLM_STATIC_BACKENDS", "")
         self._is_running = False
-        self._client = httpx.AsyncClient(timeout=10.0, verify=False)
+        self._client = httpx.AsyncClient(timeout=10.0)
 
     def list_backends(self) -> List[BackendEntry]:
         return list(self._backends.values())

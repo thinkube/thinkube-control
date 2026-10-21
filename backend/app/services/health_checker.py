@@ -189,7 +189,7 @@ class HealthCheckService:
                 health_url = endpoint.health_url
 
                 async with httpx.AsyncClient(
-                    verify=False, timeout=self.timeout
+                    timeout=self.timeout
                 ) as client:
                     response = await client.get(health_url)
                     response_time = int(

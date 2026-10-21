@@ -39,7 +39,7 @@ class OllamaClient:
                 pass
         if node_name not in self._clients:
             self._clients[node_name] = httpx.AsyncClient(
-                base_url=url, timeout=30.0, verify=False
+                base_url=url, timeout=30.0
             )
         logger.debug(f"Ollama node registered: {node_name} @ {url} (pod={pod_name})")
 
@@ -63,7 +63,7 @@ class OllamaClient:
             return next(iter(self._clients.values()))
         if "_default" not in self._clients:
             self._clients["_default"] = httpx.AsyncClient(
-                base_url=self._default_url, timeout=30.0, verify=False
+                base_url=self._default_url, timeout=30.0
             )
         return self._clients["_default"]
 

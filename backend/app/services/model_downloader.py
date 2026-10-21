@@ -85,7 +85,7 @@ async def mlflow_token() -> str:
     }
     token_url = _required_env("MLFLOW_KEYCLOAK_TOKEN_URL")
     try:
-        async with httpx.AsyncClient(verify=False, timeout=30.0) as http:
+        async with httpx.AsyncClient(timeout=30.0) as http:
             resp = await http.post(token_url, data=data)
     except httpx.HTTPError as e:
         raise MlflowDeleteError(f"Keycloak at {token_url} could not be reached: {e}") from e
@@ -245,7 +245,6 @@ def refresh_mlflow_token():
             'username': username,
             'password': password
         }},
-        verify=False  # Skip SSL verification for internal cluster communication
     )
     token_response.raise_for_status()
     os.environ['MLFLOW_TRACKING_TOKEN'] = token_response.json()['access_token']
@@ -835,7 +834,6 @@ token_response = requests.post(
         'username': username,
         'password': password,
     }},
-    verify=False,
 )
 token_response.raise_for_status()
 os.environ['MLFLOW_TRACKING_TOKEN'] = token_response.json()['access_token']

@@ -51,7 +51,6 @@
     method: GET
     headers:
       Authorization: "Basic {{ (harbor_api_user + ':' + harbor_api_password) | b64encode }}"
-    validate_certs: false
     status_code: [200, 404]
   register: image_check
   ignore_errors: true
