@@ -3,3 +3,5 @@
 #
 # Only list packages NOT in the base image here:
 ruamel.yaml>=0.18.0
+grpcio>=1.84.0
+grpcio-health-checking>=1.84.0

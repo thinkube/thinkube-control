@@ -6,13 +6,14 @@
 import logging
 from typing import Dict, Optional, List, Any
 from fastapi import FastAPI
+from fastapi.openapi.utils import get_openapi
 from fastapi_mcp import FastApiMCP
 import mcp.types as types
 
 from .classifier import EndpointClassifier
 from .resources import ResourceHandler
 from .prompts import PromptHandler
-from .schema import complete_union_types
+from .schema import complete_union_types, expose_optional_bodies
 from .types import ResourceMapping, PromptDefinition
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,13 @@ class ExtendedFastApiMCP(FastApiMCP):
             for prompt_def in self._prompt_definitions:
                 self.prompt_handler.add_prompt(prompt_def)
 
+        expose_optional_bodies(self.tools, get_openapi(
+            title=self.fastapi.title,
+            version=self.fastapi.version,
+            openapi_version=self.fastapi.openapi_version,
+            description=self.fastapi.description,
+            routes=self.fastapi.routes,
+        ))
         for tool in self.tools:
             complete_union_types(tool.inputSchema)
 

@@ -13,7 +13,7 @@ import logging
 from pydantic import BaseModel
 
 from app.core.api_tokens import get_current_user_dual_auth
-from app.services.model_downloader import ModelDownloaderService, catalog_entry
+from app.services.model_downloader import ModelDownloaderService, MlflowDeleteError, catalog_entry
 from app.db.session import get_db
 from app.models.model_mirrors import ModelMirrorJob
 from app.core.config import settings
@@ -251,14 +251,7 @@ async def list_mirror_jobs(
         for job in jobs:
             if job.status in ['pending', 'running'] and job.workflow_name:
                 try:
-                    workflow_status = service.get_download_status(job.workflow_name)
-                    # Update job if workflow status changed
-                    if workflow_status["status"] == "Succeeded" and job.status != "succeeded":
-                        job.status = "succeeded"
-                        job.error_message = None
-                    elif workflow_status["status"] in ["Failed", "Error"] and job.status != "failed":
-                        job.status = "failed"
-                        job.error_message = workflow_status.get("message", "Workflow failed")
+                    service.sync_mirror_job(job)
                 except Exception as e:
                     logger.warning(f"Could not sync job {job.id} with workflow: {e}")
 
@@ -560,37 +553,24 @@ async def delete_model(
     This removes the model and all its versions from MLflow, allowing it to be re-downloaded.
     Useful for cleaning up failed or incomplete downloads.
     """
+    service = ModelDownloaderService()
     try:
-        service = ModelDownloaderService()
-        success = service.delete_model(model_id)
-
-        if success:
-            # Also clean up any associated mirror jobs
-            job = db.query(ModelMirrorJob).filter(
-                ModelMirrorJob.model_id == model_id
-            ).first()
-
-            if job:
-                db.delete(job)
-                db.commit()
-                logger.info(f"Deleted mirror job for {model_id}")
-
-            return {
-                "model_id": model_id,
-                "status": "deleted",
-                "message": f"Model {model_id} deleted successfully"
-            }
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to delete model {model_id}"
-            )
-
-    except HTTPException:
-        raise
-    except Exception as e:
+        await service.delete_model(model_id)
+    except MlflowDeleteError as e:
         logger.error(f"Failed to delete model {model_id}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to delete model: {str(e)}"
-        )
+        raise HTTPException(status_code=502, detail=str(e))
+
+    # The mirror job record goes only once MLflow no longer has the model.
+    job = db.query(ModelMirrorJob).filter(
+        ModelMirrorJob.model_id == model_id
+    ).first()
+    if job:
+        db.delete(job)
+        db.commit()
+        logger.info(f"Deleted mirror job for {model_id}")
+
+    return {
+        "model_id": model_id,
+        "status": "deleted",
+        "message": f"Model {model_id} deleted successfully"
+    }

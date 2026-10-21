@@ -13,6 +13,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Body
 from fastapi.responses import JSONResponse
+from kubernetes import client as k8s_client, config as k8s_config
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, and_, cast, func
 from sqlalchemy.dialects.postgresql import JSONB
@@ -434,12 +435,44 @@ def delete_image(
             detail=f"{image.category.capitalize()} images cannot be deleted"
         )
 
-    # TODO: Check if image is in use by any deployments
+    users = pods_using(image.destination_url)
+    if users:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{image.destination_url} is used by running pods: {', '.join(users)}",
+        )
 
     db.delete(image)
     db.commit()
 
-    return {"message": f"Image {image.name}:{image.tag} deleted successfully"}
+    return {
+        "message": (
+            f"Image {image.name}:{image.tag} removed from Thinkube Control. "
+            f"The image itself stays in Harbor at {image.destination_url}."
+        )
+    }
+
+
+def _image_names(ref: str) -> set:
+    """The names a pod may give ref with: a reference without a tag means :latest."""
+    names = {ref}
+    if ref.endswith(":latest"):
+        names.add(ref[: -len(":latest")])
+    return names
+
+
+def pods_using(image_ref: str) -> List[str]:
+    """namespace/name of every pod not yet finished with a container that runs image_ref."""
+    k8s_config.load_incluster_config()
+    names = _image_names(image_ref)
+    users = []
+    for pod in k8s_client.CoreV1Api().list_pod_for_all_namespaces().items:
+        if pod.status.phase in ("Succeeded", "Failed"):
+            continue
+        containers = (pod.spec.containers or []) + (pod.spec.init_containers or [])
+        if any(c.image in names for c in containers):
+            users.append(f"{pod.metadata.namespace}/{pod.metadata.name}")
+    return users
 
 
 # Image Mirroring Operations
@@ -574,30 +607,6 @@ async def trigger_mirror_job(
         "message": f"Started mirroring {len(jobs)} images",
         "jobs": [job.to_dict() for job in jobs]
     }
-
-
-@router.post("/images/build")
-async def trigger_build_job(
-    build_request: Dict[str, Any] = Body(...),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_user_dual_auth)
-):
-    """Trigger a custom image build job
-
-    Expected body:
-    {
-        "dockerfile_content": "FROM python:3.12...",
-        "image_name": "custom-app",
-        "tag": "latest",
-        "description": "Custom application image"
-    }
-    """
-    # TODO: Implement custom build functionality
-    raise HTTPException(
-        status_code=501,
-        detail="Custom image building not yet implemented"
-    )
 
 
 # Image Discovery and Sync

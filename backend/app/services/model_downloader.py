@@ -19,8 +19,7 @@ import aiohttp
 from hera.workflows import Workflow, Container, models as hera_models, WorkflowsService
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
-from mlflow.tracking import MlflowClient
-from mlflow.exceptions import RestException
+import httpx
 
 from app.services.metadata_fetcher import fetch_merged_catalog
 from app.core.config import settings
@@ -59,6 +58,42 @@ def catalog_entry(model_id: str) -> Dict:
     if not model_info:
         raise ValueError(f"Model '{model_id}' not found in catalog")
     return model_info
+
+
+class MlflowDeleteError(Exception):
+    """MLflow refused a delete, or could not be asked."""
+
+
+def _required_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise MlflowDeleteError(
+            f"{name} is not set; the thinkube-control backend Deployment provides it"
+        )
+    return value
+
+
+async def mlflow_token() -> str:
+    """A Keycloak access token for the MLflow service user."""
+    data = {
+        "grant_type": "password",
+        "client_id": _required_env("MLFLOW_KEYCLOAK_CLIENT_ID"),
+        "client_secret": _required_env("MLFLOW_CLIENT_SECRET"),
+        "username": _required_env("MLFLOW_AUTH_USERNAME"),
+        "password": _required_env("MLFLOW_AUTH_PASSWORD"),
+        "scope": "openid",
+    }
+    token_url = _required_env("MLFLOW_KEYCLOAK_TOKEN_URL")
+    try:
+        async with httpx.AsyncClient(verify=False, timeout=30.0) as http:
+            resp = await http.post(token_url, data=data)
+    except httpx.HTTPError as e:
+        raise MlflowDeleteError(f"Keycloak at {token_url} could not be reached: {e}") from e
+    if resp.status_code != 200:
+        raise MlflowDeleteError(
+            f"Keycloak refused the MLflow token: HTTP {resp.status_code}: {resp.text}"
+        )
+    return resp.json()["access_token"]
 
 
 class ModelDownloaderService:
@@ -1091,6 +1126,26 @@ print(f'  - Registered in MLflow (metadata-only)', flush=True)
             logger.error(f"Failed to list workflows: {e}")
             return []
 
+    def sync_mirror_job(self, job) -> None:
+        """Set a pending or running mirror job's status from its Argo workflow.
+
+        A workflow that no longer exists fails the job: its result cannot be
+        known. Raises when Argo cannot be read; the caller keeps the status.
+        """
+        wf_status = self.get_download_status(job.workflow_name)
+        if wf_status["status"] == "Succeeded":
+            job.status = "succeeded"
+            job.error_message = None
+        elif wf_status["status"] in ("Failed", "Error"):
+            job.status = "failed"
+            job.error_message = wf_status.get("message") or "Workflow failed"
+        elif wf_status["status"] == "NotFound":
+            job.status = "failed"
+            job.error_message = (
+                f"Workflow {job.workflow_name} no longer exists, so its result is "
+                "unknown. Submit the mirror again."
+            )
+
     def check_all_models_exist(self) -> Dict[str, bool]:
         """
         Check which models have been successfully downloaded by querying the database.
@@ -1111,15 +1166,13 @@ print(f'  - Registered in MLflow (metadata-only)', flush=True)
             for job in running_jobs:
                 if job.workflow_name:
                     try:
-                        wf_status = self.get_download_status(job.workflow_name)
-                        if wf_status["status"] == "Succeeded":
-                            job.status = "succeeded"
-                            job.error_message = None
-                        elif wf_status["status"] in ("Failed", "Error"):
-                            job.status = "failed"
-                            job.error_message = wf_status.get("message", "Workflow failed")
-                    except Exception:
-                        pass
+                        self.sync_mirror_job(job)
+                    except Exception as e:
+                        # The job keeps its status; the next check asks Argo again.
+                        logger.warning(
+                            f"Could not read workflow {job.workflow_name} of mirror job "
+                            f"{job.model_id}: {e}"
+                        )
             if running_jobs:
                 db.commit()
 
@@ -1194,36 +1247,36 @@ print(f'  - Registered in MLflow (metadata-only)', flush=True)
             logger.error(f"Failed to cancel workflow {workflow_name}: {e}")
             return False
 
-    def delete_model(self, model_id: str) -> bool:
+    async def delete_model(self, model_id: str) -> None:
         """
         Delete a model from MLflow registry
+
+        Deletes the registered model and all its versions, as the MLflow
+        service user. A model MLflow does not have counts as deleted.
 
         Args:
             model_id: Model identifier (e.g., "nvidia/Llama-3.1-8B-Instruct-FP8")
 
-        Returns:
-            bool: True if deleted successfully, False otherwise
+        Raises:
+            MlflowDeleteError: MLflow refused the delete or could not be reached.
         """
-        try:
-            # Convert model_id to MLflow model name format
-            model_name = model_id.replace('/', '-')
+        model_name = model_id.replace('/', '-')
+        mlflow_uri = _required_env("MLFLOW_TRACKING_URI")
+        token = await mlflow_token()
 
-            # Get MLflow tracking URI
-            mlflow_uri = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000")
-            mlflow_client = MlflowClient(tracking_uri=mlflow_uri)
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            resp = await http.request(
+                "DELETE",
+                f"{mlflow_uri}/api/2.0/mlflow/registered-models/delete",
+                json={"name": model_name},
+                headers={"Authorization": f"Bearer {token}"},
+            )
 
-            # Delete the registered model (this deletes all versions)
-            mlflow_client.delete_registered_model(model_name)
-
-            logger.info(f"Successfully deleted model {model_id} ({model_name}) from MLflow")
-            return True
-
-        except RestException as e:
-            if "RESOURCE_DOES_NOT_EXIST" in str(e):
-                logger.warning(f"Model {model_id} not found in MLflow registry")
-                return True  # Already deleted, consider it success
-            logger.error(f"Failed to delete model {model_id}: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Failed to delete model {model_id}: {e}")
-            return False
+        if resp.status_code == 404 and "RESOURCE_DOES_NOT_EXIST" in resp.text:
+            logger.warning(f"Model {model_id} ({model_name}) is not in the MLflow registry")
+            return
+        if resp.status_code != 200:
+            raise MlflowDeleteError(
+                f"MLflow refused to delete {model_name}: HTTP {resp.status_code}: {resp.text}"
+            )
+        logger.info(f"Deleted model {model_id} ({model_name}) from MLflow")

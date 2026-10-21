@@ -10,6 +10,8 @@ from typing import Dict, Any, Optional, List
 from uuid import uuid4
 import httpx
 import asyncpg
+import grpc
+from grpc_health.v1 import health_pb2, health_pb2_grpc
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, select
 
@@ -18,6 +20,56 @@ from app.db.session import SessionLocal
 
 
 logger = logging.getLogger(__name__)
+
+# A gRPC server that answers with a status is up, even when it does not offer
+# the standard health service (Argo Workflows: UNIMPLEMENTED) or asks for
+# credentials first (Argo CD: UNAUTHENTICATED). Only these codes mean that no
+# gRPC server answered.
+GRPC_DOWN_CODES = {grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.DEADLINE_EXCEEDED}
+
+
+def grpc_target(url: str) -> str:
+    """host:port of a gRPC endpoint URL; without a port, 443, gRPC's TLS port."""
+    host_port = url.split("://", 1)[-1].split("/", 1)[0]
+    return host_port if ":" in host_port else f"{host_port}:443"
+
+
+async def check_grpc(url: str) -> Dict[str, Any]:
+    """Ask a gRPC endpoint behind the gateway's HTTPS listener for its health."""
+    target = grpc_target(url)
+    start_time = datetime.utcnow()
+
+    def elapsed() -> int:
+        return int((datetime.utcnow() - start_time).total_seconds() * 1000)
+
+    async with grpc.aio.secure_channel(target, grpc.ssl_channel_credentials()) as channel:
+        try:
+            reply = await health_pb2_grpc.HealthStub(channel).Check(
+                health_pb2.HealthCheckRequest(service=""), timeout=10
+            )
+        except grpc.aio.AioRpcError as e:
+            if e.code() in GRPC_DOWN_CODES:
+                return {
+                    "status": "unhealthy",
+                    "error": f"{target}: {e.code().name}: {e.details()}",
+                    "response_time": elapsed(),
+                }
+            return {
+                "status": "healthy",
+                "response_time": elapsed(),
+                "details": {"check_type": "grpc_answer", "target": target,
+                            "code": e.code().name},
+            }
+
+    serving = health_pb2.HealthCheckResponse.ServingStatus.Name(reply.status)
+    if reply.status != health_pb2.HealthCheckResponse.SERVING:
+        return {"status": "unhealthy", "error": f"{target}: {serving}",
+                "response_time": elapsed()}
+    return {
+        "status": "healthy",
+        "response_time": elapsed(),
+        "details": {"check_type": "grpc_health", "target": target, "status": serving},
+    }
 
 
 class HealthCheckService:
@@ -305,11 +357,7 @@ class HealthCheckService:
                         writer.close()
 
             elif endpoint.type == "grpc":
-                # TODO: Implement gRPC health check
-                return {
-                    "status": "unknown",
-                    "reason": "gRPC health check not implemented",
-                }
+                return await check_grpc(endpoint.health_url or endpoint.url)
 
             else:
                 # Other endpoint types
