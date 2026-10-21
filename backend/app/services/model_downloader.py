@@ -174,6 +174,12 @@ class ModelDownloaderService:
         safe_model_id = model_id.replace("'", "\\'")
         safe_model_task = model_task.replace("'", "\\'")
         allow_patterns = model_info.get("allow_patterns", None)
+        # A prepared runtime package lives on a hardware branch of its repository.
+        revision = model_info.get("revision")
+        # A signed package names the publisher whose key must sign it.
+        publisher = model_info.get("publisher")
+        # A package that is not a transformers checkpoint names its format.
+        package_format = model_info.get("format")
 
         # Create Hera workflow
         with Workflow(
@@ -268,12 +274,40 @@ staging_model_path = f'{{staging_base}}/{{model_name}}'
 print(f'Downloading model from HuggingFace to staging: {{staging_model_path}}', flush=True)
 
 allow_patterns = {repr(allow_patterns)}
+revision = {repr(revision)}
 snapshot_download(
     repo_id=model_id,
     local_dir=staging_model_path,
-    **({{'allow_patterns': allow_patterns}} if allow_patterns else {{}})
+    **({{'allow_patterns': allow_patterns}} if allow_patterns else {{}}),
+    **({{'revision': revision}} if revision else {{}})
 )
-print(f'✓ Model downloaded to staging area', flush=True)
+print(f'✓ Model downloaded to staging area' + (f' (revision {{revision}})' if revision else ''), flush=True)
+
+# ============================================================
+# PHASE 1a: The publisher's key of a signed package
+# ============================================================
+# The publisher keeps publisher.json on the repository's default branch. The
+# catalog names the publisher and the SHA-256 of its key; a file that does not
+# list that key under that namespace stops the mirror.
+publisher = {repr(publisher)}
+if publisher:
+    import hashlib
+    hf_hub_download(repo_id=model_id, filename='publisher.json', local_dir=staging_model_path)
+    with open(os.path.join(staging_model_path, 'publisher.json')) as _f:
+        profiles = _json.load(_f)
+    listed = [
+        p for p in profiles
+        if p.get('namespace') == publisher['namespace']
+        and hashlib.sha256(bytes(p.get('public_key', []))).hexdigest() == publisher['key_sha256']
+    ]
+    if not listed:
+        print(
+            f"✗ publisher.json of {{model_id}} does not list the key {{publisher['key_sha256']}} "
+            f"under the namespace {{publisher['namespace']}}; the catalog entry and the repository disagree",
+            flush=True,
+        )
+        sys.exit(1)
+    print(f"✓ publisher.json lists the key of {{publisher['namespace']}}", flush=True)
 
 # ============================================================
 # PHASE 1b: Localize external custom code referenced by auto_map
@@ -436,8 +470,34 @@ try:
         # Create and upload MLflow metadata
         print(f'Creating MLflow metadata...', flush=True)
         is_gguf = any(f.endswith('.gguf') for f in os.listdir(staging_model_path) if os.path.isfile(os.path.join(staging_model_path, f)))
+        package_format = {repr(package_format)}
 
-        if is_gguf:
+        if package_format:
+            # A prepared package (such as a Flare runtime package) is served as
+            # its files; its metadata names the format and lists them.
+            import yaml
+            package_files = sorted(
+                os.path.relpath(os.path.join(r, f), staging_model_path)
+                for r, _, fs in os.walk(staging_model_path) for f in fs
+            )
+            mlmodel_content = {{
+                'flavors': {{
+                    package_format: {{
+                        'model_files': package_files,
+                        'format': package_format,
+                        'task': model_task,
+                        **({{'revision': revision}} if revision else {{}}),
+                    }}
+                }},
+                'model_id': model_id,
+            }}
+            s3_client.put_object(
+                Bucket=s3_bucket,
+                Key=f'{{s3_artifact_prefix}}/MLmodel',
+                Body=yaml.dump(mlmodel_content, default_flow_style=False).encode()
+            )
+            print(f'✓ Uploaded {{package_format}} package metadata ({{len(package_files)}} files)', flush=True)
+        elif is_gguf:
             # GGUF models are standalone binaries — generate minimal metadata
             import yaml
             gguf_files = [f for f in os.listdir(staging_model_path) if f.endswith('.gguf')]

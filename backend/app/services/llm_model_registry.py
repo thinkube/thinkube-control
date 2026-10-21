@@ -231,6 +231,7 @@ class LLMModelRegistry:
                 weight_bytes=entry.get("weight_bytes") or (existing.weight_bytes if existing else None),
                 calibration=entry.get("calibration"),
                 enforce_eager=entry.get("enforce_eager", False),
+                publisher=entry.get("publisher"),
                 tool_use=entry.get("tool_use", False),
                 stop_tokens=entry.get("stop_tokens", []),
                 license=entry.get("license"),

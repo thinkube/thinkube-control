@@ -115,20 +115,6 @@ class LLMLifecycleManager:
             return ModelLoadResponse(model_id=model_id, state=entry.state, message=refusal)
         node = node or backend_node
 
-        # Without a node, the GPU node with the most AI memory left takes it.
-        if not node:
-            node = await self._pick_node()
-            if not node:
-                return ModelLoadResponse(
-                    model_id=model_id, state=entry.state,
-                    message="No GPU node is known; a target node is required to load a model",
-                )
-
-        # The serving context when the caller does not say: the largest of
-        # 32k, 16k, 8k that the model allows and the node has memory for.
-        if max_context_length is None:
-            max_context_length = await self._default_context(entry, node)
-
         # Without a backend, the model's first installed backend type of the
         # requested tier; with no tier, performance when the model has one.
         if not resolved_backend:
@@ -150,8 +136,27 @@ class LLMLifecycleManager:
                     f"its backend types are {', '.join(entry.server_type)}"
                 ),
             )
+        backend_type = llm_backend_types.require(resolved_backend)
 
-        driver = llm_backend_types.require(resolved_backend).driver
+        # Without a node, the GPU node with the most AI memory left whose GPU
+        # the backend runs on takes it.
+        if not node:
+            node = await self._pick_node(backend_type)
+            if not node:
+                return ModelLoadResponse(
+                    model_id=model_id, state=entry.state,
+                    message=f"No GPU node is known that {backend_type.display_name} runs on; a target node is required",
+                )
+        refusal = self._gpu_refusal(backend_type, node)
+        if refusal:
+            return ModelLoadResponse(model_id=model_id, state=entry.state, message=refusal)
+
+        # The serving context when the caller does not say: the largest of
+        # 32k, 16k, 8k that the model allows and the node has memory for.
+        if max_context_length is None:
+            max_context_length = await self._default_context(entry, node)
+
+        driver = backend_type.driver
         if driver == DRIVER_OLLAMA:
             return await self._load_ollama(model_id, resolved_backend, keep_alive, node, max_context_length=max_context_length)
         return await self._load_performance(model_id, backend=resolved_backend, node=node, max_context_length=max_context_length, num_speculative_tokens=num_speculative_tokens)
@@ -183,12 +188,25 @@ class LLMLifecycleManager:
             f"nor a backend type on a GPU node ({', '.join(forms) or 'no GPU nodes known yet'})"
         )
 
-    async def _pick_node(self) -> Optional[str]:
+    def _gpu_refusal(self, backend_type, node: str) -> Optional[str]:
+        """Why the backend cannot run on the node's GPU, or None when it can."""
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+
+        found = llm_gpu_tracker.get_node(node)
+        if found is None or backend_type.runs_on(found.compute_capability):
+            return None
+        return (
+            f"{backend_type.display_name} runs on GPUs of compute capability "
+            f"{', '.join(backend_type.gpu_compute_capabilities)}; {node} has "
+            f"{found.compute_capability or 'an unknown one'} ({found.gpu_product or 'GPU'})"
+        )
+
+    async def _pick_node(self, backend_type) -> Optional[str]:
         """The GPU node with the most AI memory left and a free slot, else the most memory."""
         from app.services.llm_gpu_tracker import llm_gpu_tracker
 
         status = await llm_gpu_tracker.get_status()
-        nodes = list(status.nodes)
+        nodes = [n for n in status.nodes if backend_type.runs_on(n.compute_capability)]
         if not nodes:
             return None
         free = [n for n in nodes if n.available_slots > 0]
@@ -549,6 +567,8 @@ class LLMLifecycleManager:
             payload["speculative_config"] = spec_cfg
         if getattr(entry, "enforce_eager", False):
             payload["enforce_eager"] = True
+        if getattr(entry, "publisher", None):
+            payload["publisher"] = entry.publisher
         if max_context_length:
             payload["max_context_length"] = max_context_length
         if sizing.get("gpu_memory_utilization") is not None:
@@ -602,6 +622,9 @@ class LLMLifecycleManager:
                 model_env["SPECULATIVE_CONFIG"] = payload["speculative_config"]
             if payload.get("enforce_eager"):
                 model_env["ENFORCE_EAGER"] = "true"
+            if payload.get("publisher"):
+                model_env["PACKAGE_PUBLISHER"] = payload["publisher"]["namespace"]
+                model_env["PACKAGE_PUBLISHER_KEY"] = payload["publisher"]["key_sha256"]
             if payload.get("gpu_memory_utilization") is not None:
                 model_env["VLLM_GPU_MEMORY_UTILIZATION"] = str(
                     payload["gpu_memory_utilization"]

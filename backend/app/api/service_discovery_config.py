@@ -58,6 +58,8 @@ class LLMBackend(BaseModel):
     tier: str
     # The OpenAI API root, as the OpenAI API specification places it.
     api_path: str = "/v1"
+    # CUDA compute capabilities ("12.1") the server runs on; empty is any GPU.
+    gpu_compute_capabilities: List[str] = []
 
 
 def llm_backend_descriptor(
@@ -83,6 +85,7 @@ def llm_backend_descriptor(
         "port": container.port,
         "api_path": backend.api_path,
         "health_path": container.health or DEFAULT_HEALTH_PATH,
+        "gpu_compute_capabilities": backend.gpu_compute_capabilities,
     }
 
 
