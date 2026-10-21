@@ -138,7 +138,7 @@ func TestThinkingOffContentIsKept(t *testing.T) {
 func TestReasoningEffortNoneIsThinkingOff(t *testing.T) {
 	backend := chatBackend(t, `{"choices":[{"index":0,"message":{"role":"assistant","content":"","reasoning":"Hello there."}}]}`, false, nil)
 	defer backend.Close()
-	msg := message(t, chat(t, backend.URL, nil,
+	msg := message(t, chat(t, backend.URL,
 		`{"model":"Qwen/Qwen3.6-35B-A3B","messages":[],"reasoning_effort":"none"}`))
 	if msg["content"] != "Hello there." {
 		t.Errorf("content is %v, want the answer", msg["content"])
