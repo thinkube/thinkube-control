@@ -95,13 +95,14 @@ def _b64(data: Dict[str, str], key: str, namespace: str, name: str) -> str:
     return base64.b64decode(data[key]).decode()
 
 
-def _juicefs(fs: Dict[str, Any], *args: str, meta: bool = False, timeout: int = 120) -> str:
-    """Runs the juicefs tool; `meta` puts the file system's metadata URL after
-    the subcommand. The password goes in META_PASSWORD, not on the command line."""
-    argv = [JUICEFS, args[0]]
-    if meta:
-        argv.append(fs["meta"])
-    argv += list(args[1:])
+# Stands for the file system's metadata URL in the arguments of _juicefs.
+META = object()
+
+
+def _juicefs(fs: Dict[str, Any], *args: Any, timeout: int = 120) -> str:
+    """Runs the juicefs tool. The password goes in META_PASSWORD, not on the
+    command line."""
+    argv = [JUICEFS] + [fs["meta"] if a is META else a for a in args]
     env = {**os.environ, "META_PASSWORD": fs["password"]}
     try:
         done = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=env)
@@ -124,7 +125,7 @@ def _size(text: str) -> int:
 
 def _quotas(fs: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     """The folder quotas of a file system by folder path (without the leading /)."""
-    out = _juicefs(fs, "quota", "list", meta=True)
+    out = _juicefs(fs, "quota", "list", META)
     quotas = {}
     for line in out.splitlines():
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
@@ -135,7 +136,7 @@ def _quotas(fs: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 
 
 def _trash_days(fs: Dict[str, Any]) -> int:
-    status = json.loads(_juicefs(fs, "status", meta=True))
+    status = json.loads(_juicefs(fs, "status", META))
     return int(status["Setting"].get("TrashDays", 0))
 
 
@@ -172,7 +173,7 @@ def _inside(fs: Dict[str, Any], rel: str) -> Path:
 def _juicefs_volumes(core: client.CoreV1Api, filesystems: Dict[str, Dict[str, Any]]):
     """The JuiceFS PVs by (file system, folder): each with its claim and,
     for a dynamically provisioned one, the capacity the driver turns into the
-    folder quota."""
+    folder quota. A PV without a subPath mounts the root, folder ""."""
     by_secret = {fs["secret"]: name for name, fs in filesystems.items()}
     volumes: Dict[tuple, List[Dict[str, Any]]] = {}
     for pv in core.list_persistent_volume().items:
@@ -181,9 +182,7 @@ def _juicefs_volumes(core: client.CoreV1Api, filesystems: Dict[str, Dict[str, An
             continue
         ref = csi.node_publish_secret_ref
         attrs = csi.volume_attributes or {}
-        folder = attrs.get("subPath")
-        if not folder:
-            continue
+        folder = attrs.get("subPath", "")
         fs_name = by_secret.get(f"{ref.namespace}/{ref.name}")
         if fs_name is None:
             # A per-volume secret in kube-system names its file system in "name".
@@ -264,7 +263,9 @@ def shared() -> Dict[str, Any]:
                 "quota_at_next_mount_bytes": next_quota[0] if next_quota else None,
             })
         folders.sort(key=lambda f: f["bytes"], reverse=True)
+        root = volumes.get((name, ""), [])
         result.append({"name": name, "used_bytes": sum(f["bytes"] for f in folders),
+                       "root_claims": sorted({v["claim"] for v in root if v["claim"]}),
                        "trash_days": _trash_days(fs), "folders": folders})
     return {"filesystems": result, "disks": _disk_under(core)}
 
@@ -312,7 +313,7 @@ def set_quota(filesystem: str, folder_name: str, size_gib: int) -> Dict[str, Any
         if v["sets_quota"]:
             core.patch_persistent_volume(v["volume"], {"spec": {"capacity": {"storage": f"{size_gib}Gi"}}})
             patched.append(v["volume"])
-    _juicefs(fs, "quota", "set", "--path", f"/{name}", "--capacity", str(size_gib), meta=True)
+    _juicefs(fs, "quota", "set", META, "--path", f"/{name}", "--capacity", str(size_gib))
     return {"filesystem": filesystem, "folder": name, "quota_bytes": _quotas(fs)[name]["quota_bytes"],
             "used_bytes": used, "volumes_patched": patched}
 
@@ -378,8 +379,9 @@ def claims() -> Dict[str, Any]:
     errors = []
     for node in core.list_node().items:
         try:
-            raw = core.connect_get_node_proxy_with_path(node.metadata.name, "stats/summary")
-            summary = json.loads(raw) if isinstance(raw, str) else raw
+            raw = core.connect_get_node_proxy_with_path(node.metadata.name, "stats/summary",
+                                                        _preload_content=False)
+            summary = json.loads(raw.data)
         except (ApiException, ValueError) as e:
             errors.append(f"{node.metadata.name}: kubelet stats not read: {e}")
             continue

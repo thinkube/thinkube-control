@@ -43,6 +43,7 @@ interface FileSystem {
   name: string;
   used_bytes: number;
   trash_days: number;
+  root_claims: string[];
   folders: SharedFolder[];
 }
 
@@ -336,6 +337,11 @@ export default function StoragePage() {
                 <h3 className="font-semibold">{fs.name}</h3>
                 <TkBadge appearance="outlined">deleted files kept {fs.trash_days} day(s) in trash</TkBadge>
               </div>
+              {fs.root_claims.length > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Mounted whole by {fs.root_claims.join(', ')}.
+                </p>
+              )}
               <div className="overflow-x-auto rounded-lg border">
                 <TkTable>
                   <TkTableHeader>

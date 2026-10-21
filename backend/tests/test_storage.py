@@ -83,7 +83,7 @@ def test_a_quota_is_set_on_the_folder_and_on_the_pv_the_driver_reads(monkeypatch
 
     core.patch_persistent_volume.assert_called_once_with(
         "pvc-models", {"spec": {"capacity": {"storage": "600Gi"}}})
-    assert ("quota", "set", "--path", "/pvc-models", "--capacity", "600") in calls
+    assert ("quota", "set", st.META, "--path", "/pvc-models", "--capacity", "600") in calls
     assert result["volumes_patched"] == ["pvc-models"]
 
 
