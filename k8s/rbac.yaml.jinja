@@ -36,6 +36,18 @@ rules:
     - pods/eviction
   verbs: ["create"]
 
+# Storage: a quota change sets the capacity of the folder's PV, which the
+# JuiceFS driver applies as the quota at every mount; the volume claims'
+# usage comes from each node's kubelet stats.
+- apiGroups: [""]
+  resources:
+    - persistentvolumes
+  verbs: ["patch"]
+- apiGroups: [""]
+  resources:
+    - nodes/proxy
+  verbs: ["get"]
+
 # Pod exec (LLM model creation via Ollama CLI)
 - apiGroups: [""]
   resources:

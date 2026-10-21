@@ -7,7 +7,7 @@ import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { TkAppLayout, type TkNavItem } from 'thinkube-style';
-import { LayoutDashboard, Boxes, Layers, Container, Puzzle, Shield, Sliders, Lock, Key, Star, Grid2X2, Server, Code, BarChart3, Database, Cpu, FileText, Box, Zap, Radio, Bell } from 'lucide-react';
+import { LayoutDashboard, Boxes, Layers, Container, Puzzle, Shield, Sliders, Lock, Key, Star, Grid2X2, Server, Code, BarChart3, Database, Cpu, FileText, Box, Zap, Radio, Bell, HardDrive } from 'lucide-react';
 import { Toaster } from 'sonner';
 import './globals.css';
 import 'thinkube-style/styles.css';
@@ -40,6 +40,7 @@ import { HarborImages } from './pages/HarborImages';
 import { ImageMirrorDeployment } from './pages/ImageMirrorDeployment';
 import KnativeServicesPage from './pages/KnativeServicesPage';
 import NodesPage from './pages/NodesPage';
+import StoragePage from './pages/StoragePage';
 import LLMGatewayPage from './pages/LLMGatewayPage';
 import NewsAndFixesPage from './pages/NewsAndFixesPage';
 
@@ -82,6 +83,7 @@ const baseNavigationItems: TkNavItem[] = [
       { id: "harbor-images", label: "Harbor Images", lucideIcon: Container, href: "/harbor-images" },
       { id: "optional-components", label: "Optional Components", lucideIcon: Puzzle, href: "/optional-components" },
       { id: "nodes", label: "Cluster Nodes", lucideIcon: Server, href: "/nodes" },
+      { id: "storage", label: "Storage", lucideIcon: HardDrive, href: "/storage" },
     ],
   },
   {
@@ -148,6 +150,7 @@ function AppContent() {
       'harbor-images': '/harbor-images',
       'optional-components': '/optional-components',
       'nodes': '/nodes',
+      storage: '/storage',
       'jupyter-kernels': '/jupyter-kernels',
       'jupyterhub-config': '/jupyterhub-config',
       secrets: '/secrets',
@@ -182,6 +185,7 @@ function AppContent() {
     if (path.startsWith('/harbor-images')) return 'harbor-images';
     if (path.startsWith('/optional-components')) return 'optional-components';
     if (path.startsWith('/nodes')) return 'nodes';
+    if (path.startsWith('/storage')) return 'storage';
     if (path.startsWith('/jupyter-kernels')) return 'jupyter-kernels';
     if (path.startsWith('/jupyterhub-config')) return 'jupyterhub-config';
     if (path.startsWith('/secrets')) return 'secrets';
@@ -210,6 +214,7 @@ function AppContent() {
     if (path.startsWith('/harbor-images')) return 'Harbor Images';
     if (path.startsWith('/optional-components')) return 'Optional Components';
     if (path.startsWith('/nodes')) return 'Cluster Nodes';
+    if (path.startsWith('/storage')) return 'Storage';
     if (path.startsWith('/jupyter-kernels')) return 'Jupyter Kernels';
     if (path.startsWith('/jupyterhub-config')) return 'JupyterHub Config';
     if (path.startsWith('/secrets')) return 'Secrets';
@@ -252,6 +257,7 @@ function AppContent() {
         <Route path="/templates" element={<Templates />} />
         <Route path="/knative-services" element={<KnativeServicesPage />} />
         <Route path="/nodes" element={<NodesPage />} />
+        <Route path="/storage" element={<StoragePage />} />
         <Route path="/news" element={<NewsAndFixesPage />} />
         <Route path="/harbor-images" element={<HarborImages />} />
         <Route path="/image-mirror/:source" element={<ImageMirrorDeployment />} />

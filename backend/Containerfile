@@ -4,7 +4,13 @@
 # Use optimized base image with common dependencies from library
 # Cache bust: 2025-11-30 - force pull new base image with thinkube user
 ARG REGISTRY
+# The JuiceFS CSI driver the platform installs (juicefs_csi_version in the
+# juicefs playbook); its juicefs tool reads and changes the shared folders.
+FROM ${REGISTRY}/library/juicefs-csi-driver:v0.30.0 AS juicefs
+
 FROM ${REGISTRY}/library/python-base:3.12-slim
+
+COPY --from=juicefs /usr/local/bin/juicefs /usr/local/bin/juicefs
 
 WORKDIR /app
 

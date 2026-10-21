@@ -576,6 +576,14 @@ MCP_OPERATIONS = [
     "training_mode_on",            # Tool
     "training_mode_off",           # Tool
 
+    # === Storage (shared folders, quotas, node disks, volume claims) ===
+    "get_storage",                 # Resource
+    "list_storage_folder",         # Resource
+    "get_storage_nodes",           # Resource
+    "get_storage_claims",          # Resource
+    "set_storage_quota",           # Tool
+    "delete_storage_path",         # Tool
+
     # === Notebooks (forwarded to tk-notebook-mcp in the server) ===
     "jupyter_list_notebooks",      # Resource
     "jupyter_list_cells",          # Resource
