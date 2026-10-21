@@ -185,6 +185,32 @@ import sys
 import tempfile
 import shutil
 from pathlib import Path
+
+# Xet is off for mirrors (HF_HUB_DISABLE_XET in the workflow), but Hugging Face
+# serves a file over 50 GB only through Xet. A download that holds such a file
+# turns Xet on, in its normal mode, before huggingface_hub reads the setting.
+import fnmatch
+import requests as _requests
+
+def _files_to_download(repo_id, revision, patterns):
+    url = f"https://huggingface.co/api/models/{{repo_id}}/tree/{{revision or 'main'}}?recursive=true"
+    headers = {{'Authorization': f"Bearer {{os.environ['HF_TOKEN']}}"}} if os.environ.get('HF_TOKEN') else {{}}
+    files = []
+    while url:
+        resp = _requests.get(url, headers=headers, timeout=60)
+        resp.raise_for_status()
+        files += [f for f in resp.json() if f.get('type') == 'file']
+        url = resp.links.get('next', {{}}).get('url')
+    if patterns:
+        files = [f for f in files if any(fnmatch.fnmatch(f['path'], p) for p in patterns)]
+    return files
+
+_HTTP_LIMIT = 50 * 1000 ** 3
+_large = [f['path'] for f in _files_to_download({repr(model_id)}, {repr(revision)}, {repr(allow_patterns)}) if f.get('size', 0) > _HTTP_LIMIT]
+if _large:
+    os.environ['HF_HUB_DISABLE_XET'] = '0'
+    print(f'Xet download for files over 50 GB: {{_large}}', flush=True)
+
 from huggingface_hub import snapshot_download, list_repo_files, hf_hub_download
 import json as _json
 import mlflow
