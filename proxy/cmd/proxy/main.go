@@ -38,7 +38,6 @@ func main() {
 		"keycloak_realm", cfg.KeycloakRealm,
 		"log_level", cfg.LogLevel,
 		"listen_addr", cfg.ListenAddr,
-		"model_aliases", cfg.ModelAliases,
 	)
 
 	srv := server.New(cfg, logger)

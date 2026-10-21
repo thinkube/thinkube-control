@@ -16,7 +16,7 @@ import (
 )
 
 func newTestResolver(url string) *Resolver {
-	r := New(url, nil)
+	r := New(url)
 	r.retryDelay = 0 // no backoff in tests
 	return r
 }
@@ -225,7 +225,7 @@ func TestResolveNotLoadedIsDefinitive(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	r := New(srv.URL, map[string]string{"fast": "org/m"})
+	r := New(srv.URL)
 	r.retryDelay = 0
 	_, err := r.Resolve(context.Background(), "fast", "")
 	if !errors.Is(err, ErrModelNotLoaded) {

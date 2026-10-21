@@ -58,6 +58,8 @@ type ResolveResult struct {
 
 	// The backend serves the Anthropic Messages API itself, at APIPath/messages.
 	AnthropicMessages bool `json:"anthropic_messages"`
+	// The model's catalog aliases, which resolve to it like its id.
+	Aliases []string `json:"aliases"`
 }
 
 type cacheEntry struct {
@@ -67,7 +69,6 @@ type cacheEntry struct {
 
 type Resolver struct {
 	backendURL  string
-	aliases     map[string]string
 	client      *http.Client
 	cache       sync.Map // cacheKey -> *cacheEntry (fresh, short TTL)
 	lastGood    sync.Map // cacheKey -> *cacheEntry (last successful, longer TTL)
@@ -83,10 +84,9 @@ type Resolver struct {
 	syncInterval time.Duration
 }
 
-func New(backendURL string, aliases map[string]string) *Resolver {
+func New(backendURL string) *Resolver {
 	return &Resolver{
 		backendURL: backendURL,
-		aliases:    aliases,
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
@@ -109,26 +109,13 @@ func (r *Resolver) BackendURL() string {
 	return r.backendURL
 }
 
-// Aliases gives a copy of the alias table, alias -> model id.
-func (r *Resolver) Aliases() map[string]string {
-	out := make(map[string]string, len(r.aliases))
-	for alias, model := range r.aliases {
-		out[alias] = model
-	}
-	return out
-}
-
-// Resolve maps a model alias/id to a backend. On a transient backend failure it
+// Resolve maps a model id, or a catalog alias, to a backend; the control plane
+// knows the aliases, and the snapshot holds them beside the ids. On a transient backend failure it
 // retries once and, failing that, serves the last-known-good resolution within
 // lastGoodTTL — so a momentary backend stall/flap does not surface as a 404.
 // Only a definitive failure (ErrModelNotFound, ErrModelNotLoaded) is returned
 // without retry or fallback.
 func (r *Resolver) Resolve(ctx context.Context, model string, tier string) (*ResolveResult, error) {
-	if alias, ok := r.aliases[model]; ok {
-		slog.Debug("model alias resolved", "from", model, "to", alias)
-		model = alias
-	}
-
 	// Snapshot-first: serve tier-agnostic requests from the locally-synced
 	// table with no control-plane call. Tier-specific requests skip the snapshot
 	// (it holds each model's default-tier resolution) and take the live path,
@@ -241,7 +228,11 @@ func (r *Resolver) fetch(ctx context.Context, model, tier string) (*ResolveResul
 	}
 
 	if result.BackendURL == "" {
-		return nil, &ModelError{Model: model, Err: ErrModelNotLoaded} // definitive
+		named := model
+		if result.ModelID != "" {
+			named = result.ModelID
+		}
+		return nil, &ModelError{Model: named, Err: ErrModelNotLoaded} // definitive
 	}
 
 	return &result, nil
@@ -272,7 +263,7 @@ func (r *Resolver) StartSnapshotSync(ctx context.Context) {
 }
 
 // loadSnapshot fetches the control plane's full resolution table once and
-// atomically swaps it in, keyed by both model id and serving name.
+// atomically swaps it in, keyed by model id, serving name and each alias.
 func (r *Resolver) loadSnapshot(ctx context.Context) error {
 	reqURL := r.backendURL + "/api/v1/llm/models/resolve-all"
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
@@ -303,6 +294,9 @@ func (r *Resolver) loadSnapshot(ctx context.Context) error {
 		}
 		if res.ServingName != "" {
 			m[res.ServingName] = res
+		}
+		for _, alias := range res.Aliases {
+			m[alias] = res
 		}
 	}
 	r.snapshot.Store(&m)

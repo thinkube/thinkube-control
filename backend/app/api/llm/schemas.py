@@ -68,6 +68,8 @@ class ModelEntry(BaseModel):
     default_agent: bool = False
     # The answer budget agents reserve inside the context.
     max_output: Optional[int] = None
+    # The context the serving backend reports for the model (max_model_len).
+    served_context_length: Optional[int] = None
     # Gateway role. "primary" = a normally loadable/servable model; "drafter" =
     # an auxiliary speculative-decoding drafter (e.g. DFlash) that only runs
     # inside a target model's vLLM via --speculative-config, never served or
@@ -111,6 +113,8 @@ class BackendEntry(BaseModel):
     api_path: str = "/v1"
     status: str = "unknown"
     models: List[str] = Field(default_factory=list)
+    # Served model -> the context it is served with (max_model_len), when reported.
+    model_context: Dict[str, int] = Field(default_factory=dict)
     last_probe: Optional[str] = None
     node: Optional[str] = None
 
@@ -144,6 +148,8 @@ class ModelResolveResponse(BaseModel):
     tier: ModelTier
     # The backend answers the Anthropic Messages API at <api_path>/messages.
     anthropic_messages: bool = False
+    # The catalog aliases of the model, which the gateway also answers as it.
+    aliases: List[str] = Field(default_factory=list)
     error: Optional[str] = None
 
 
