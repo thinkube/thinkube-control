@@ -27,7 +27,9 @@ from thinkube_yaml_validator import (
     validate_knative_constraints as _validate_knative_constraints,
     validate_component_constraints as _validate_component_constraints,
     validate_replicas as _validate_replicas,
+    validate_build_size as _validate_build_size,
 )
+from thinkube_yaml_placeholders import substitute as _substitute_placeholders
 from manifest_plan import kustomization_content as _kustomization_content, kustomization_resources as _kustomization_resources
 from platform_credentials import (
     RETIRED_MANIFESTS as _RETIRED_MANIFESTS,
@@ -40,8 +42,16 @@ from manifest_parameters import (
     declared_parameter_names as _declared_parameter_names,
     recorded_values as _recorded_parameter_values,
 )
+import spec_env as _spec_env
 from dependency_resolution import knative_url, knative_view, service_url, service_view
-from namespace_quota import NON_GPU_QUOTA as _NON_GPU_QUOTA, memory_quota as _memory_quota, node_view as _node_view
+from build_architectures import (
+    app_architectures as _app_architectures,
+    cluster_architectures as _cluster_architectures,
+    declared_architectures as _declared_architectures,
+    node_label_architecture as _node_label_architecture,
+    render_vars as _architecture_render_vars,
+)
+from namespace_quota import namespace_quota as _namespace_quota, node_view as _node_view
 from app_secrets import (
     declared_secrets as _declared_secrets_of,
     env_from as _env_from,
@@ -65,16 +75,19 @@ def _get_k8s_client():
     return client.CoreV1Api()
 
 
-def _gpu_namespace_quota(has_gpu):
-    """(requests.memory, limits.memory) for a namespace. See scripts/namespace_quota.py."""
-    if not has_gpu:
-        return _NON_GPU_QUOTA
-    config.load_incluster_config()
-    nodes = [
-        _node_view(n.metadata.name, n.status.allocatable, n.metadata.labels)
-        for n in client.CoreV1Api().list_node().items
-    ]
-    return _memory_quota(True, nodes, os.environ)
+def _gpu_namespace_quota(has_gpu, containers):
+    """(requests.memory, limits.memory, requests.cpu, limits.cpu) for a namespace.
+
+    See scripts/namespace_quota.py.
+    """
+    nodes = []
+    if has_gpu:
+        config.load_incluster_config()
+        nodes = [
+            _node_view(n.metadata.name, n.status.allocatable, n.metadata.labels)
+            for n in client.CoreV1Api().list_node().items
+        ]
+    return _namespace_quota(has_gpu, nodes, os.environ, containers)
 
 
 def _get_custom_objects_client():
@@ -236,7 +249,7 @@ class ManifestGenerator:
 
         # Parse thinkube.yaml
         with open(thinkube_path, 'r') as f:
-            self.thinkube_config = yaml.safe_load(f)
+            self.thinkube_config = _substitute_placeholders(yaml.safe_load(f), self.app_name, self.domain)
 
         # Inject metadata.name
         if 'metadata' not in self.thinkube_config:
@@ -247,6 +260,7 @@ class ManifestGenerator:
         violations = _validate_knative_constraints(self.thinkube_config)
         violations.extend(_validate_component_constraints(self.thinkube_config))
         violations.extend(_validate_replicas(self.thinkube_config))
+        violations.extend(_validate_build_size(self.thinkube_config))
         if violations:
             msg = "thinkube.yaml validation failed:\n" + "\n".join(f"  - {v}" for v in violations)
             raise ValueError(msg)
@@ -277,6 +291,7 @@ class ManifestGenerator:
 
         # The declared parameters, with the values the app was deployed with
         manifest_params = self._read_manifest_params(app_path)
+        spec_env = self._read_spec_env()
 
         # Setup Jinja2
         templates_dir = TEMPLATES_DIR
@@ -301,6 +316,7 @@ class ManifestGenerator:
             'admin_username': self.secrets['admin_username'],
             'thinkube_spec': self.thinkube_config,
             'manifest_params': manifest_params,
+            'spec_env': spec_env,
             'seaweedfs_endpoint': self.secrets['seaweedfs_endpoint'],
             'deployment_env_from': _env_from(self.app_name, self.declared_secrets),
         }
@@ -318,7 +334,7 @@ class ManifestGenerator:
         services = self.thinkube_config.get('spec', {}).get('services', [])
         has_workflows = 'workflows' in services
         has_gpu = any(c.get('gpu', {}).get('count') for c in containers)
-        quota_req_mem, quota_lim_mem = _gpu_namespace_quota(has_gpu)
+        quota_req_mem, quota_lim_mem, quota_req_cpu, quota_lim_cpu = _gpu_namespace_quota(has_gpu, containers)
         needs_storage = (
             'storage' in services or
             has_gpu or
@@ -360,8 +376,8 @@ spec:
   hard:
     requests.memory: "{quota_req_mem}"
     limits.memory: "{quota_lim_mem}"
-    requests.cpu: "4"
-    limits.cpu: "8"
+    requests.cpu: "{quota_req_cpu}"
+    limits.cpu: "{quota_lim_cpu}"
 """
 
         # 2. Files an earlier generator wrote with credentials in them
@@ -380,6 +396,7 @@ data:
   containers: |
     {containers_json}
   {_PARAMETERS_KEY}: {json.dumps(_encode_parameters(manifest_params))}
+  {_spec_env.ENV_KEY}: {json.dumps(_spec_env.encode(self.spec_env_given))}
 """
 
         if is_knative:
@@ -403,7 +420,27 @@ data:
             raise ValueError("SYSTEM_USERNAME env var not set")
         if not master_node_name:
             raise ValueError("MASTER_NODE_NAME env var not set")
-        workflow_vars = {**template_vars, 'system_username': system_username, 'master_node_name': master_node_name}
+        # The cluster's architectures, or those of them thinkube.yaml declares
+        # (scripts/build_architectures.py); a Knative app cannot declare them.
+        declared = _declared_architectures(self.thinkube_config.get('spec', {}))
+        if declared is not None and is_knative:
+            raise ValueError(
+                "spec.architectures needs deployment type app: Knative on this platform "
+                "does not allow node selection"
+            )
+        nodes = self.core_v1.list_node().items
+        architectures = _app_architectures(
+            _cluster_architectures(n.metadata.labels for n in nodes), declared
+        )
+        control_plane_architecture = _node_label_architecture(
+            ((n.metadata.name, n.metadata.labels) for n in nodes), master_node_name
+        )
+        workflow_vars = {
+            **template_vars,
+            'system_username': system_username,
+            'master_node_name': master_node_name,
+            **_architecture_render_vars(architectures, control_plane_architecture),
+        }
         generated_files['build-workflow.yaml'] = env.get_template('build-workflow.j2').render(**workflow_vars)
 
         # kustomization.yaml
@@ -429,8 +466,43 @@ data:
         for filename, content in generated_files.items():
             (k8s_dir / filename).write_text(content)
 
+        self._apply_build_template(generated_files['build-workflow.yaml'])
+
         logger.info(f"Regenerated {len(generated_files)} manifest files for {self.app_name}")
         return generated_files
+
+    def _apply_build_template(self, content: str):
+        """Make the cluster's build WorkflowTemplate the one just written to k8s/.
+
+        ArgoCD does not sync it, and the build a push starts runs from the
+        template already in the cluster. The commit that regenerated k8s/
+        is pushed after this, so its build already builds every container
+        thinkube.yaml declares.
+        """
+        from app.services.deploy_identity import deploy_api_client
+
+        [body] = [d for d in yaml.safe_load_all(content) if d and d.get('kind') == 'WorkflowTemplate']
+        name = body['metadata']['name']
+        namespace = body['metadata']['namespace']
+        writer = client.CustomObjectsApi(deploy_api_client())
+        args = dict(group='argoproj.io', version='v1alpha1', namespace=namespace, plural='workflowtemplates')
+        try:
+            existing = writer.get_namespaced_custom_object(name=name, **args)
+        except ApiException as e:
+            if e.status != 404:
+                raise RuntimeError(f"Cannot read WorkflowTemplate {namespace}/{name}: {e.reason}") from e
+            try:
+                writer.create_namespaced_custom_object(body=body, **args)
+            except ApiException as create_error:
+                raise RuntimeError(
+                    f"Cannot create WorkflowTemplate {namespace}/{name}: {create_error.reason}"
+                ) from create_error
+            return
+        body['metadata']['resourceVersion'] = existing['metadata']['resourceVersion']
+        try:
+            writer.replace_namespaced_custom_object(name=name, body=body, **args)
+        except ApiException as e:
+            raise RuntimeError(f"Cannot update WorkflowTemplate {namespace}/{name}: {e.reason}") from e
 
     @staticmethod
     def _declared_secrets(app_path: Path):
@@ -543,3 +615,24 @@ data:
                 f"parameters {self.app_name} was deployed with: {e.reason}"
             ) from e
         return _recorded_parameter_values(names, cm.data or {}, self.app_name, self._container_env())
+
+    def _read_spec_env(self) -> Dict[str, str]:
+        """The spec.env variables' values: as given at the last deploy, else their defaults.
+
+        The values given at deploy are in the app-metadata ConfigMap. A
+        variable without a default that the ConfigMap does not record stops
+        the regeneration, naming it.
+        """
+        if not _spec_env.declared(self.thinkube_config):
+            self.spec_env_given = {}
+            return {}
+        name = f'{self.app_name}-metadata'
+        try:
+            cm = self.core_v1.read_namespaced_config_map(name, self.namespace)
+        except ApiException as e:
+            raise RuntimeError(
+                f"Cannot read ConfigMap {self.namespace}/{name}, which holds the "
+                f"spec.env values {self.app_name} was deployed with: {e.reason}"
+            ) from e
+        self.spec_env_given = _spec_env.recorded(cm.data or {})
+        return _spec_env.resolve(self.thinkube_config, self.spec_env_given, self.app_name)

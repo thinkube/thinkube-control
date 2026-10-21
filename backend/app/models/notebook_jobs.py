@@ -5,7 +5,7 @@
 
 import uuid
 
-from sqlalchemy import Column, DateTime, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Integer, JSON, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
@@ -32,6 +32,12 @@ class NotebookJob(Base):
     memory_gb = Column(Integer, nullable=True)
     gpus = Column(Integer, nullable=False, default=0)
 
+    # How the run was asked for, kept so a run can be continued on its
+    # server after a restart of thinkube-control.
+    stop_on_error = Column(Boolean, nullable=True)
+    cell_timeout_seconds = Column(Integer, nullable=True)
+    training = Column(Boolean, nullable=True)
+
     status = Column(String(32), nullable=False, default="starting")
     execution_id = Column(String(64), nullable=True)
     total_cells = Column(Integer, nullable=True)
@@ -53,6 +59,9 @@ class NotebookJob(Base):
             "cpu_cores": self.cpu_cores,
             "memory_gb": self.memory_gb,
             "gpus": self.gpus,
+            "stop_on_error": self.stop_on_error,
+            "cell_timeout_seconds": self.cell_timeout_seconds,
+            "training": self.training,
             "status": self.status,
             "execution_id": self.execution_id,
             "total_cells": self.total_cells,

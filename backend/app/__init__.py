@@ -106,6 +106,21 @@ async def app_lifespan(app: FastAPI):
             conn.commit()
             logger.info("Added feed_commit column to fix_feed table")
 
+    # notebook_jobs tables made before a run's options were kept have none of
+    # these columns.
+    with get_engine().connect() as conn:
+        for column, kind in (("stop_on_error", "BOOLEAN"), ("cell_timeout_seconds", "INTEGER"), ("training", "BOOLEAN")):
+            if not conn.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='notebook_jobs' AND column_name=:column"
+                ),
+                {"column": column},
+            ).fetchone():
+                conn.execute(text(f"ALTER TABLE notebook_jobs ADD COLUMN {column} {kind}"))
+                conn.commit()
+                logger.info("Added %s column to notebook_jobs table", column)
+
     # Initialize services in database
     try:
         from app.db.init_services import init_services
@@ -555,6 +570,19 @@ MCP_OPERATIONS = [
     "notebook_job_status",         # Resource
     "list_notebook_jobs",          # Resource
     "cancel_notebook_job",         # Tool
+
+    # === Training mode (one node reserved for one training) ===
+    "get_training_mode",           # Resource
+    "training_mode_on",            # Tool
+    "training_mode_off",           # Tool
+
+    # === Storage (shared folders, quotas, node disks, volume claims) ===
+    "get_storage",                 # Resource
+    "list_storage_folder",         # Resource
+    "get_storage_nodes",           # Resource
+    "get_storage_claims",          # Resource
+    "set_storage_quota",           # Tool
+    "delete_storage_path",         # Tool
 
     # === Notebooks (forwarded to tk-notebook-mcp in the server) ===
     "jupyter_list_notebooks",      # Resource

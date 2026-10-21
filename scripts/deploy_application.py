@@ -28,10 +28,18 @@ from kubernetes_asyncio.client.rest import ApiException
 from kubernetes_asyncio.stream import WsApiClient
 
 from app_databases import create_statement, database_names, exists, exists_query
+from build_architectures import (
+    app_architectures,
+    cluster_architectures,
+    declared_architectures,
+    node_label_architecture,
+    render_vars as architecture_render_vars,
+)
 from checkout_state import STATUS_COMMAND, UNPUSHED_COMMAND, changed_files
 from checkout_state import refusal as checkout_refusal
 from component_checkout import check_declared_type, checkout_path, developer_commits, parse_log, refusal
-from template_version import github_git_env, latest_release_tag
+from template_version import github_git_env, template_ref
+from thinkube_yaml_placeholders import substitute as substitute_placeholders
 from deploy_log import format_line
 
 
@@ -96,9 +104,12 @@ class ApplicationDeployer:
         # Will be populated during deployment
         self.secrets = {}
         self.thinkube_config = {}
-        self.template_version = None  # Set by run_copier: the template release tag used
+        self.template_version = None  # Set by run_copier: the template ref used (release tag or commit)
         self.k8s_core = None
         self.k8s_custom = None
+        self.build_architectures = None  # Set in phase 2 from the cluster's nodes and thinkube.yaml
+        self.cluster_architectures = None
+        self.control_plane_architecture = None
 
     async def initialize_k8s_clients(self):
         """Initialize Kubernetes async clients."""
@@ -287,12 +298,14 @@ git fetch origin main
     async def run_copier(self):
         """Run Copier to process the template (in thread pool to keep event loop responsive).
 
-        The application is generated from the template's newest release tag,
-        which Copier records in the application's .copier-answers.yml.
+        The application is generated from the template's ref (template_ref in
+        scripts/template_version.py: its release tag, or on a cluster that
+        develops the platform the head commit of the branch it follows), which
+        Copier records in the application's .copier-answers.yml.
         """
-        self.template_version = await asyncio.to_thread(latest_release_tag, self.template_url)
+        self.template_version = await asyncio.to_thread(template_ref, self.template_url)
         DeploymentLogger.log(
-            f"Copying template {self.template_url} (release {self.template_version}) over "
+            f"Copying template {self.template_url} (ref {self.template_version}) over "
             f"{self.local_repo_path} with copier copy --force"
         )
 
@@ -361,6 +374,7 @@ git fetch origin main
             self.get_argocd_credentials(),
             self.get_gitea_token(),
             self.parse_thinkube_yaml(),
+            self.get_build_architectures(),
             return_exceptions=True
         )
 
@@ -370,7 +384,39 @@ git fetch origin main
                 DeploymentLogger.error(f"Resource gathering failed: {result}")
                 raise result
 
+        self.choose_build_architectures()
+
         DeploymentLogger.success("Phase 2 complete - all resources gathered")
+
+    async def get_build_architectures(self):
+        """The cluster's architectures and the control plane's. See scripts/build_architectures.py."""
+        master_node_name = os.environ.get('MASTER_NODE_NAME')
+        if not master_node_name:
+            raise ValueError("MASTER_NODE_NAME env var not set")
+        nodes = await self.k8s_core.list_node()
+        self.cluster_architectures = cluster_architectures(n.metadata.labels for n in nodes.items)
+        self.control_plane_architecture = node_label_architecture(
+            ((n.metadata.name, n.metadata.labels) for n in nodes.items), master_node_name
+        )
+        DeploymentLogger.log(f"Cluster architectures: {self.cluster_architectures}")
+
+    def choose_build_architectures(self):
+        """The architectures the app's images are built for: the cluster's, or the declared ones.
+
+        spec.architectures keeps the pods to nodes of those architectures, which a
+        Deployment does with node affinity; Knative here does not allow node
+        selection (kubernetes.podspec-affinity is disabled), so a Knative app
+        cannot declare it.
+        """
+        spec = self.thinkube_config.get('spec', {})
+        declared = declared_architectures(spec)
+        if declared is not None and self._is_knative():
+            raise ValueError(
+                "spec.architectures needs deployment type app: Knative on this platform "
+                "does not allow node selection"
+            )
+        self.build_architectures = app_architectures(self.cluster_architectures, declared)
+        DeploymentLogger.log(f"Build architectures: {self.build_architectures}")
 
     async def get_wildcard_cert(self):
         """Fetch wildcard TLS certificate."""
@@ -457,6 +503,7 @@ git fetch origin main
         """Read the secrets manifest.yaml declares and check the store holds them."""
         from app_secrets import declared_secrets, env_from, refusal
         from manifest_parameters import declared_parameter_names, deployed_values
+        import spec_env
 
         manifest_path = Path(self.local_repo_path) / 'manifest.yaml'
         if not manifest_path.exists():
@@ -467,6 +514,10 @@ git fetch origin main
         self.declared_secrets = declared_secrets(manifest)
         self.deployment_env_from = env_from(self.app_name, self.declared_secrets)
         self.manifest_params = deployed_values(declared_parameter_names(manifest), self.params)
+        self.spec_env_given = spec_env.kept(
+            self.thinkube_config, await self._recorded_spec_env(), spec_env.given_values(self.thinkube_config, self.params)
+        )
+        self.spec_env = spec_env.resolve(self.thinkube_config, self.spec_env_given, self.app_name)
         if not self.declared_secrets:
             return
 
@@ -475,6 +526,22 @@ git fetch origin main
         if problems:
             raise ValueError("Secrets cannot be delivered:\n" + "\n".join(f"  - {p}" for p in problems))
         DeploymentLogger.log(f"Secrets declared: {', '.join(s.name for s in self.declared_secrets)}")
+
+    async def _recorded_spec_env(self) -> Dict[str, str]:
+        """The spec.env values the app's last deploy recorded; a first deploy has no metadata ConfigMap yet."""
+        import spec_env
+
+        name = f'{self.app_name}-metadata'
+        try:
+            cm = await self.k8s_core.read_namespaced_config_map(name, self.namespace)
+        except ApiException as e:
+            if e.status == 404:
+                return {}
+            raise RuntimeError(
+                f"Cannot read ConfigMap {self.namespace}/{name}, which holds the "
+                f"spec.env values {self.app_name} was deployed with: {e.reason}"
+            ) from e
+        return spec_env.recorded(cm.data or {})
 
     async def apply_app_secrets(self):
         """Make <app>-secrets hold the declared secrets the store holds, and record the usage.
@@ -587,12 +654,15 @@ git fetch origin main
 
     async def parse_thinkube_yaml(self):
         """Parse and validate thinkube.yaml configuration."""
-        from thinkube_yaml_validator import validate_knative_constraints, validate_component_constraints, validate_replicas
+        from thinkube_yaml_validator import (
+            validate_knative_constraints, validate_component_constraints, validate_replicas, validate_build_size,
+            validate_test_size,
+        )
 
         config_path = Path(self.local_repo_path) / "thinkube.yaml"
         try:
             with open(config_path, 'r') as f:
-                self.thinkube_config = yaml.safe_load(f)
+                self.thinkube_config = substitute_placeholders(yaml.safe_load(f), self.app_name, self.domain)
             # Inject metadata.name from deploy-time app name
             # thinkube.yaml doesn't contain the name — the platform provides it
             if 'metadata' not in self.thinkube_config:
@@ -602,6 +672,8 @@ git fetch origin main
             violations = validate_knative_constraints(self.thinkube_config)
             violations.extend(validate_component_constraints(self.thinkube_config))
             violations.extend(validate_replicas(self.thinkube_config))
+            violations.extend(validate_build_size(self.thinkube_config))
+            violations.extend(validate_test_size(self.thinkube_config))
             if violations:
                 msg = "thinkube.yaml validation failed:\n" + "\n".join(f"  - {v}" for v in violations)
                 DeploymentLogger.error(msg)
@@ -792,6 +864,7 @@ git fetch origin main
     async def create_app_metadata(self):
         """Create or replace the application metadata ConfigMap."""
         from manifest_parameters import PARAMETERS_KEY, encode
+        import spec_env
 
         metadata = client.V1ConfigMap(
             metadata=client.V1ObjectMeta(name=f'{self.app_name}-metadata', namespace=self.namespace),
@@ -801,6 +874,7 @@ git fetch origin main
                 'namespace': self.namespace,
                 'config': yaml.dump(self.thinkube_config),
                 PARAMETERS_KEY: encode(self.manifest_params),
+                spec_env.ENV_KEY: spec_env.encode(self.spec_env_given),
             }
         )
         try:
@@ -978,14 +1052,6 @@ git fetch origin main
         if not master_node_name:
             raise ValueError("MASTER_NODE_NAME env var not set")
 
-        # Detect unique architectures across cluster nodes
-        nodes = await self.k8s_core.list_node()
-        architectures = sorted({
-            n.metadata.labels['kubernetes.io/arch']
-            for n in nodes.items
-        })
-        DeploymentLogger.log(f"Cluster architectures: {architectures}")
-
         render_vars = dict(
             project_name=self.app_name,
             k8s_namespace=self.namespace,
@@ -997,8 +1063,7 @@ git fetch origin main
             thinkube_spec=self.thinkube_config,
             gitea_org="thinkube-deployments",
         )
-        if len(architectures) > 1:
-            render_vars['build_architectures'] = architectures
+        render_vars.update(architecture_render_vars(self.build_architectures, self.control_plane_architecture))
 
         rendered = template.render(**render_vars)
 
@@ -1059,18 +1124,21 @@ git fetch origin main
                     f"Deploy it first, then retry."
                 )
 
-    async def _compute_gpu_namespace_quota(self, has_gpu):
-        """(requests.memory, limits.memory) for the namespace. See scripts/namespace_quota.py."""
-        from namespace_quota import NON_GPU_QUOTA, memory_quota, node_view
+    async def _compute_gpu_namespace_quota(self, has_gpu, containers):
+        """(requests.memory, limits.memory, requests.cpu, limits.cpu) for the namespace.
 
-        if not has_gpu:
-            return NON_GPU_QUOTA
-        listed = await self.k8s_core.list_node()
-        nodes = [
-            node_view(n.metadata.name, n.status.allocatable, n.metadata.labels)
-            for n in listed.items
-        ]
-        return memory_quota(True, nodes, os.environ)
+        See scripts/namespace_quota.py.
+        """
+        from namespace_quota import namespace_quota, node_view
+
+        nodes = []
+        if has_gpu:
+            listed = await self.k8s_core.list_node()
+            nodes = [
+                node_view(n.metadata.name, n.status.allocatable, n.metadata.labels)
+                for n in listed.items
+            ]
+        return namespace_quota(has_gpu, nodes, os.environ, containers)
 
     def generate_k8s_manifests(self):
         """Generate all Kubernetes manifests from thinkube.yaml specification.
@@ -1099,7 +1167,7 @@ git fetch origin main
             thinkube_path = Path(self.local_repo_path) / 'thinkube.yaml'
             if thinkube_path.exists():
                 with open(thinkube_path, 'r') as f:
-                    self.thinkube_config = yaml.safe_load(f)
+                    self.thinkube_config = substitute_placeholders(yaml.safe_load(f), self.app_name, self.domain)
 
         # Setup Jinja2 environment
         template_dir = Path("/home/thinkube/thinkube-control/templates/k8s")
@@ -1128,6 +1196,7 @@ git fetch origin main
             'admin_username': self.admin_username,
             'thinkube_spec': self.thinkube_config,
             'manifest_params': manifest_params,
+            'spec_env': self.spec_env,
             'seaweedfs_endpoint': seaweedfs_endpoint,
             'deployment_env_from': self.deployment_env_from,
         }
@@ -1144,7 +1213,7 @@ metadata:
         write('namespace.yaml', namespace_content)
 
         # 1b. Generate resource-policies.yaml (LimitRange + ResourceQuota for namespace)
-        quota_req_mem, quota_lim_mem = getattr(self, '_gpu_quota', ('8Gi', '16Gi'))
+        quota_req_mem, quota_lim_mem, quota_req_cpu, quota_lim_cpu = self._gpu_quota
         resource_policies_content = f"""apiVersion: v1
 kind: LimitRange
 metadata:
@@ -1169,8 +1238,8 @@ spec:
   hard:
     requests.memory: "{quota_req_mem}"
     limits.memory: "{quota_lim_mem}"
-    requests.cpu: "4"
-    limits.cpu: "8"
+    requests.cpu: "{quota_req_cpu}"
+    limits.cpu: "{quota_lim_cpu}"
 """
         write('resource-policies.yaml', resource_policies_content)
 
@@ -1181,6 +1250,7 @@ spec:
 
         # 3. Generate app-metadata.yaml
         from manifest_parameters import PARAMETERS_KEY, encode
+        import spec_env
         containers_json = json.dumps(self.thinkube_config.get('spec', {}).get('containers', []))
         app_metadata_content = f"""apiVersion: v1
 kind: ConfigMap
@@ -1192,6 +1262,7 @@ data:
   containers: |
     {containers_json}
   {PARAMETERS_KEY}: {json.dumps(encode(self.manifest_params))}
+  {spec_env.ENV_KEY}: {json.dumps(spec_env.encode(self.spec_env_given))}
 """
         write('app-metadata.yaml', app_metadata_content)
 
@@ -1259,7 +1330,12 @@ data:
         master_node_name = os.environ.get('MASTER_NODE_NAME')
         if not master_node_name:
             raise ValueError("MASTER_NODE_NAME env var not set")
-        workflow_vars = {**template_vars, 'system_username': system_username, 'master_node_name': master_node_name}
+        workflow_vars = {
+            **template_vars,
+            'system_username': system_username,
+            'master_node_name': master_node_name,
+            **architecture_render_vars(self.build_architectures, self.control_plane_architecture),
+        }
         workflow_content = workflow_template.render(**workflow_vars)
         write('build-workflow.yaml', workflow_content)
 
@@ -1367,6 +1443,11 @@ spec:
                     body=workflow_spec
                 )
                 DeploymentLogger.log(f"Updated workflow template: {template_name}")
+            else:
+                raise RuntimeError(
+                    f"The API server refused workflow template {template_name}: "
+                    f"HTTP {e.status} {e.reason}: {e.body}"
+                ) from e
 
     # ==================== PHASE 4: Git Operations ====================
 
@@ -1385,7 +1466,7 @@ spec:
         # GPU nodes before the (sync) manifest generation reads it.
         _containers = self.thinkube_config.get('spec', {}).get('containers', [])
         _has_gpu = any(c.get('gpu', {}).get('count') for c in _containers)
-        self._gpu_quota = await self._compute_gpu_namespace_quota(_has_gpu)
+        self._gpu_quota = await self._compute_gpu_namespace_quota(_has_gpu, _containers)
         # Dependencies are resolved before the manifests that inject them are rendered.
         await self._resolve_dependencies()
 

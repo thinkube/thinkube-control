@@ -14,17 +14,16 @@ import (
 	"strings"
 )
 
-func rewriteModelField(body []byte, servingName string) []byte {
-	var req map[string]any
-	if err := json.Unmarshal(body, &req); err != nil {
-		return body
-	}
-	req["model"] = servingName
-	out, err := json.Marshal(req)
+// rewriteModelField sets the request's model to the backend's serving name.
+// Every other field keeps its bytes and its place, the key order of a JSON
+// schema in response_format or tools included.
+func rewriteModelField(body []byte, servingName string) ([]byte, error) {
+	req, err := decodeObject(body)
 	if err != nil {
-		return body
+		return nil, err
 	}
-	return out
+	name, _ := json.Marshal(servingName) // a string always encodes
+	return req.set("model", name).encode(), nil
 }
 
 // reasoningFields are the names backends give the reasoning text: vLLM and

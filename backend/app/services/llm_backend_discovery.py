@@ -73,6 +73,9 @@ class LLMBackendDiscovery:
                 return
             for entry in entries:
                 bid = entry.get("name", entry.get("url", "unknown"))
+                existing = self._backends.get(bid)
+                if existing is not None and existing.url == entry["url"]:
+                    continue
                 self._backends[bid] = BackendEntry(
                     id=bid,
                     name=entry.get("name", bid),
@@ -91,7 +94,7 @@ class LLMBackendDiscovery:
         label. Registers Ollama pods with the Ollama client for per-node routing.
         """
         from app.services.llm_ollama_client import ollama_client
-        from app.services.llm_pod_manager import GATEWAY_LABEL, GATEWAY_LABEL_VALUE, BACKEND_NAMESPACES
+        from app.services.llm_pod_manager import GATEWAY_LABEL, GATEWAY_LABEL_VALUE, BACKEND_NAMESPACES, MODEL_LABEL
 
         try:
             from kubernetes import client, config as k8s_config
@@ -134,7 +137,11 @@ class LLMBackendDiscovery:
 
                     pod_ip = pod.status.pod_ip
                     pod_name = pod.metadata.name
-                    backend_id = f"{backend_type}-{node_name}"
+                    # A one-model backend's pod carries its model; several of
+                    # them can share a node, so the model is part of the id.
+                    slug = (pod.metadata.labels or {}).get(MODEL_LABEL)
+                    backend_id = f"{backend_type}-{node_name}/{slug}" if slug else f"{backend_type}-{node_name}"
+                    where = f"{node_name}, {slug}" if slug else node_name
                     discovered.add(backend_id)
 
                     api_path = "/v1"
@@ -144,17 +151,26 @@ class LLMBackendDiscovery:
                         ollama_client.register_node(node_name, pod_ip, pod_name)
                     elif backend_type == "vllm":
                         url = f"http://{pod_ip}:{port}"
-                        display = f"vLLM ({node_name})"
+                        display = f"vLLM ({where})"
                     elif backend_type == "tensorrt-llm":
                         url = f"http://{pod_ip}:{port}"
-                        display = f"TRT-LLM ({node_name})"
+                        display = f"TRT-LLM ({where})"
                     elif backend_type == "text-embeddings":
                         url = f"http://{pod_ip}:{port}"
-                        display = f"TEI ({node_name})"
+                        display = f"TEI ({where})"
                     else:
                         url = f"http://{pod_ip}:{port}"
-                        display = f"{backend_type} ({node_name})"
+                        display = f"{backend_type} ({where})"
 
+                    # The same pod keeps its entry, with the status and models
+                    # its probes found; rebuilding it on every pass would show
+                    # it as unknown and empty until the next probe. A new pod,
+                    # or a pod at a new address, starts from unknown.
+                    existing = self._backends.get(backend_id)
+                    if existing is not None and existing.url == url:
+                        existing.name = display
+                        existing.node = node_name
+                        continue
                     self._backends[backend_id] = BackendEntry(
                         id=backend_id,
                         name=display,
@@ -164,6 +180,7 @@ class LLMBackendDiscovery:
                         status="unknown",
                         node=node_name,
                     )
+                    self._probe_failures.pop(backend_id, None)
 
             stale = [
                 bid for bid in list(self._backends)

@@ -23,6 +23,10 @@ spec:
     spec:
       containerConcurrency: {{ deployment.containerConcurrency | default(0) }}
       timeoutSeconds: {{ deployment.timeoutSeconds | default(300) }}
+      # Knative ends a request whose first response byte takes longer than
+      # responseStartTimeoutSeconds, 300s by default, whatever timeoutSeconds
+      # allows; a service that answers only when its work is done needs both.
+      responseStartTimeoutSeconds: {{ deployment.timeoutSeconds | default(300) }}
       imagePullSecrets:
         - name: app-pull-secret
       containers:
@@ -93,20 +97,16 @@ spec:
             {% endif %}
             {% endfor %}
             {% endif %}
-            # User-configurable environment variables
-            {% if thinkube_spec.spec.env is defined %}
-            {% for env_var in thinkube_spec.spec.env %}
-            {% if env_var.default is defined %}
-            - name: {{ env_var.name }}
-              value: "{{ env_var.default }}"
-            {% endif %}
+            # spec.env: the value given at deploy, else the default
+            {% for name, value in spec_env.items() %}
+            - name: {{ name }}
+              value: {{ value | string | to_json }}
             {% endfor %}
-            {% endif %}
             # Manifest parameters (from deploy-time input, e.g. model_id)
             {% if manifest_params is defined %}
             {% for param_name, param_value in manifest_params.items() %}
             - name: {{ param_name | upper }}
-              value: "{{ param_value }}"
+              value: {{ param_value | string | to_json }}
             {% endfor %}
             {% endif %}
             # Names the container may show the browser (thinkube.yaml publicEnv).
@@ -255,3 +255,24 @@ spec:
   traffic:
     - latestRevision: true
       percent: 100
+---
+# Knative creates the service's two routes, public and in-cluster, and
+# leaves them without a timeout, so Envoy's default of 15s ends any longer
+# request although the service allows timeoutSeconds. Knative rewrites its
+# routes, so the timeout is set beside them, on the routes by name.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: {{ project_name }}-request-timeout
+  namespace: {{ k8s_namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: {{ project_name }}.{{ domain_name }}
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: {{ project_name }}.{{ k8s_namespace }}.svc.cluster.local
+  timeout:
+    http:
+      requestTimeout: {{ deployment.timeoutSeconds | default(300) }}s

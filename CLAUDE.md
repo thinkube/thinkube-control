@@ -12,7 +12,7 @@ The pipeline is the build: the deploy below builds the backend and frontend imag
 
 ### Tests
 
-The tests need the backend's dependencies, which the IDE does not have, and the image does not carry `tests/`. The deployed backend pod has the dependencies and mounts the IDE's home at `/home/thinkube`, so the tests run there, from this checkout:
+Tests live in `backend/tests/`. Do not run them: a change to Thinkube Control is checked by deploying it (below) and using the deployed app, and the deploy does not run them either. When someone asks for a test run, it runs in the deployed backend pod, which has the backend's dependencies and mounts this checkout at `/home/thinkube`:
 
 ```bash
 POD=$(kubectl get pods -n thinkube-control -o name | grep backend | head -1 | cut -d/ -f2)
@@ -31,7 +31,7 @@ Changes must follow this exact sequence:
 
 Copier syncs from GitHub to the runtime location (`/home/thinkube/thinkube-control/`), then a webhook triggers the Argo Workflow build and ArgoCD deploys automatically. Do not manually copy files to the runtime location or edit files there directly.
 
-Thinkube 0.1 is released, so a change is also a fix to publish, by `thinkube-release/VERSIONING.md` and the README of `thinkube-fixes`: the commit goes to `release-0.1` as well as `main` (the same until work on 0.2 starts), this repository gets the tag `v0.1.N`, `ansible/40_thinkube/core/thinkube-control/VERSION` in the `thinkube` repository is raised to `0.1.N` on `release-0.1`, and an entry goes into `releases/0.1.json` of `thinkube-fixes`, checked with its `scripts/check_feed.py`.
+A change is finished when it is pushed to `main`, deployed with `12_deploy_dev.yaml` and seen working. Publishing it as a fix to `release-0.1` (tag, `VERSION` in `thinkube`, the `thinkube-fixes` entry) is the separate release process in `thinkube-release/VERSIONING.md`, done only when someone asks for a release.
 
 ## Architecture
 
@@ -101,7 +101,3 @@ This repo is a Copier template (`copier.yaml`). Variables like `domain_name`, `n
 - **Background tasks**: Lifespan-managed background tasks for health checks (every service, periodic) and service discovery (every 5 minutes).
 - **MLflow injection**: All deployed applications automatically receive MLflow auth credentials as environment variables.
 - **Base images**: `backend/Containerfile` starts from `python-base:3.12-slim` and `frontend/Containerfile` from `node-base:22-alpine`, both from the cluster registry; each then installs its own dependencies (`pip install -r requirements.txt`, `npm ci`).
-
-@../thinkube-metadata/plugins/tandem-methodology/methodology.md
-
-

@@ -7,6 +7,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -34,7 +35,7 @@ func (m *Middleware) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := extractToken(r)
 		if token == "" {
-			writeAuthError(w, r, http.StatusUnauthorized, "Missing authentication token")
+			writeAuthError(w, r, http.StatusUnauthorized, "authentication_error", "Missing authentication token")
 			return
 		}
 
@@ -47,9 +48,17 @@ func (m *Middleware) Wrap(next http.Handler) http.Handler {
 			claims, err = m.jwt.Validate(token)
 		}
 
+		// A token that could not be checked is a 503, which clients retry; a 401
+		// tells them the token is wrong and to stop.
+		if errors.Is(err, ErrAuthUnavailable) {
+			slog.Warn("auth unavailable", "error", err)
+			writeAuthError(w, r, http.StatusServiceUnavailable, "service_unavailable",
+				"Authentication service unavailable, please retry")
+			return
+		}
 		if err != nil {
 			slog.Debug("auth failed", "error", err)
-			writeAuthError(w, r, http.StatusUnauthorized, "Invalid authentication token")
+			writeAuthError(w, r, http.StatusUnauthorized, "authentication_error", "Invalid authentication token")
 			return
 		}
 
@@ -75,13 +84,17 @@ func extractToken(r *http.Request) string {
 	return parts[1]
 }
 
-func writeAuthError(w http.ResponseWriter, r *http.Request, status int, message string) {
+func writeAuthError(w http.ResponseWriter, r *http.Request, status int, errorType, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 
+	code := "invalid_token"
+	if status == http.StatusServiceUnavailable {
+		code = "auth_unavailable"
+	}
 	if strings.Contains(r.URL.Path, "/v1/messages") {
-		w.Write([]byte(`{"type":"error","error":{"type":"authentication_error","message":"` + message + `"}}`))
+		w.Write([]byte(`{"type":"error","error":{"type":"` + errorType + `","message":"` + message + `"}}`))
 	} else {
-		w.Write([]byte(`{"error":{"message":"` + message + `","type":"authentication_error","code":"invalid_token"}}`))
+		w.Write([]byte(`{"error":{"message":"` + message + `","type":"` + errorType + `","code":"` + code + `"}}`))
 	}
 }

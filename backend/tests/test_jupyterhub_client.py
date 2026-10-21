@@ -71,3 +71,35 @@ def test_other_hub_errors_are_not_hidden(monkeypatch):
     monkeypatch.setenv("JUPYTERHUB_USERNAME", "thinkube")
     with pytest.raises(hub.HubError, match="500"):
         asyncio.run(hub.user())
+
+
+def test_removing_a_server_waits_until_even_a_stopped_one_is_gone(monkeypatch):
+    """A stopped named server still counts toward the Hub's limit, and the Hub
+    lists it only when asked for stopped servers."""
+    listed = {"job-1": {"ready": False, "pending": None}}
+    calls = []
+
+    async def fake(method, path, json=None, timeout=30.0):
+        calls.append((method, path, json))
+        if method == "DELETE":
+            return 204, None
+        if path == "/users/thinkube?include_stopped_servers=true":
+            servers = dict(listed)
+            listed.clear()  # the Hub has removed it by the next look
+            return 200, {"name": "thinkube", "servers": servers}
+        if path == "/users/thinkube":
+            return 200, {"name": "thinkube", "servers": {}}
+        raise AssertionError(f"unexpected call {method} {path}")
+
+    async def no_wait(_):
+        return None
+
+    monkeypatch.setattr(hub, "request", fake)
+    monkeypatch.setattr(hub.asyncio, "sleep", no_wait)
+    monkeypatch.setenv("JUPYTERHUB_USERNAME", "thinkube")
+
+    asyncio.run(hub.remove_server("job-1"))
+
+    assert calls[0] == ("DELETE", "/users/thinkube/servers/job-1", {"remove": True})
+    looks = [c[1] for c in calls if c[0] == "GET"]
+    assert looks == ["/users/thinkube?include_stopped_servers=true"] * 2

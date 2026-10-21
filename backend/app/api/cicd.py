@@ -7,6 +7,8 @@
 import base64
 import json
 import sys
+import threading
+import time
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Query, Depends
@@ -117,8 +119,11 @@ def _workflow_to_pipeline(wf: dict) -> dict:
     }
 
 
+# The handlers below make blocking Kubernetes calls and await nothing: as
+# plain functions FastAPI runs them in its thread pool, so a slow call never
+# holds the event loop that answers /health and every other request.
 @router.get("/health")
-async def cicd_health():
+def cicd_health():
     """Health check for CI/CD API."""
     try:
         custom_api, _, _ = _get_k8s_clients()
@@ -137,7 +142,7 @@ async def cicd_health():
 
 
 @router.get("/pipelines")
-async def list_pipelines(
+def list_pipelines(
     app_name: Optional[str] = Query(None, description="Filter by app name"),
     status: Optional[str] = Query(None, description="Filter by status (Succeeded, Failed, Running)"),
     limit: int = Query(20, ge=1, le=100, description="Max results"),
@@ -160,39 +165,19 @@ async def list_pipelines(
 
         label_selector = ",".join(selectors)
 
-        result = custom_api.list_namespaced_custom_object(
-            group="argoproj.io",
-            version="v1alpha1",
-            namespace=ARGO_NAMESPACE,
-            plural="workflows",
-            label_selector=label_selector,
-        )
-
-        workflows = result.get("items", [])
-
-        # Sort by creation timestamp descending (most recent first)
-        workflows.sort(
-            key=lambda w: w.get("metadata", {}).get("creationTimestamp", ""),
-            reverse=True,
-        )
-
-        # Apply limit
-        workflows = workflows[:limit]
-
-        # Map to pipeline format (lightweight - skip full node details for list)
-        pipelines = []
-        for wf in workflows:
-            p = _workflow_to_pipeline(wf)
-            # For list view, don't include full stage details to keep response small
-            p["stages"] = []
-            pipelines.append(p)
-
-        return {
-            "pipelines": pipelines,
-            "total": len(pipelines),
-            "limit": limit,
-            "offset": 0,
-        }
+        # Requests that arrive together share one read: the IDE's monitors
+        # poll this every few seconds and a burst of parallel reads saturates
+        # the container's CPU limit, which starves the event loop that answers
+        # /health. One read runs at a time; a result is reused for
+        # LIST_REUSE_SECONDS.
+        key = (label_selector, limit)
+        with _list_lock:
+            kept = _list_kept.get(key)
+            if kept and time.monotonic() - kept[0] < LIST_REUSE_SECONDS:
+                return kept[1]
+            result = _read_pipelines(custom_api, label_selector, limit)
+            _list_kept[key] = (time.monotonic(), result)
+            return result
 
     except ApiException as e:
         logger.error(f"K8s API error listing workflows: {e}")
@@ -200,6 +185,71 @@ async def list_pipelines(
     except Exception as e:
         logger.error(f"Error listing pipelines: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# How long a pipelines list is reused for requests with the same filters.
+LIST_REUSE_SECONDS = 5
+# A read holds the lock the other list requests wait on, so each Kubernetes
+# call in it is bounded.
+LIST_READ_TIMEOUT_SECONDS = 20
+_list_lock = threading.Lock()
+_list_kept: Dict[tuple, tuple] = {}
+
+
+def _read_pipelines(custom_api, label_selector: str, limit: int) -> dict:
+    """The newest `limit` build workflows matching the label selector, as pipelines."""
+    # Only the metadata of every workflow is listed: the full list carries
+    # each workflow's status and is megabytes, and parsing it holds the
+    # GIL long enough to stall the event loop that answers /health. The
+    # newest `limit` workflows are then read one by one.
+    response = custom_api.api_client.call_api(
+        f"/apis/argoproj.io/v1alpha1/namespaces/{ARGO_NAMESPACE}/workflows",
+        "GET",
+        query_params=[("labelSelector", label_selector)],
+        header_params={"Accept": "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1"},
+        auth_settings=["BearerToken"],
+        _return_http_data_only=True,
+        _preload_content=False,
+        _request_timeout=LIST_READ_TIMEOUT_SECONDS,
+    )
+    metas = [
+        m["metadata"]
+        for m in json.loads(response.data).get("items", [])
+    ]
+
+    # Most recent first
+    metas.sort(key=lambda m: m.get("creationTimestamp", ""), reverse=True)
+
+    workflows = []
+    for m in metas[:limit]:
+        try:
+            workflows.append(custom_api.get_namespaced_custom_object(
+                group="argoproj.io",
+                version="v1alpha1",
+                namespace=ARGO_NAMESPACE,
+                plural="workflows",
+                name=m["name"],
+                _request_timeout=LIST_READ_TIMEOUT_SECONDS,
+            ))
+        except ApiException as e:
+            # A workflow deleted between the list and the read is no longer a pipeline.
+            if e.status != 404:
+                raise
+
+    # Map to pipeline format (lightweight - skip full node details for list)
+    pipelines = []
+    for wf in workflows:
+        p = _workflow_to_pipeline(wf)
+        # For list view, don't include full stage details to keep response small
+        p["stages"] = []
+        pipelines.append(p)
+
+    return {
+        "pipelines": pipelines,
+        "total": len(pipelines),
+        "limit": limit,
+        "offset": 0,
+    }
 
 
 def _get_argocd_deploy_stages(
@@ -346,7 +396,7 @@ def _get_argocd_deploy_stages(
 
 
 @router.get("/pipelines/{workflow_name}")
-async def get_pipeline(
+def get_pipeline(
     workflow_name: str,
     current_user: dict = Depends(get_current_user_dual_auth),
 ):
@@ -426,7 +476,7 @@ def _resolve_pod_name(core_v1, pod_name_or_node_id: str, workflow_name: str) -> 
 
 
 @router.get("/pipelines/{workflow_name}/logs/{pod_name}")
-async def get_step_logs(
+def get_step_logs(
     workflow_name: str,
     pod_name: str,
     namespace: Optional[str] = Query(None, description="Pod namespace (defaults to argo)"),

@@ -20,11 +20,13 @@ Clients call one address, the gateway at `https://llm.<your domain>`: it checks 
 
 | `POST /v1/chat/completions` | OpenAI chat completions
 | `POST /v1/embeddings` | OpenAI embeddings
-| `GET /v1/models` | OpenAI model list
+| `GET /v1/models` | OpenAI model list; each alias is listed too, with `root` naming the model it points to
 | `POST /v1/messages` | Anthropic Messages
 |===
 
 A client written for either API works unchanged with the base URL changed to the gateway.
+
+An alias such as `thinkube-fast` names a model, and the model it names can change. `GET /v1/models` lists each alias with `root`, the model it names now, so an app that keeps results can record which model made them, and can tell when an alias has moved to another model.
 
 === Authentication
 

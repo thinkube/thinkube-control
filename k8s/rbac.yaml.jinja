@@ -29,6 +29,25 @@ rules:
     - serviceaccounts
   verbs: ["get", "list", "watch"]
 
+# Training mode moves the pods of kept services off the training node by
+# eviction, so they are placed again on another node.
+- apiGroups: [""]
+  resources:
+    - pods/eviction
+  verbs: ["create"]
+
+# Storage: a quota change sets the capacity of the folder's PV, which the
+# JuiceFS driver applies as the quota at every mount; the volume claims'
+# usage comes from each node's kubelet stats.
+- apiGroups: [""]
+  resources:
+    - persistentvolumes
+  verbs: ["patch"]
+- apiGroups: [""]
+  resources:
+    - nodes/proxy
+  verbs: ["get"]
+
 # Pod exec (LLM model creation via Ollama CLI)
 - apiGroups: [""]
   resources:
@@ -49,6 +68,14 @@ rules:
     - daemonsets
     - replicasets
   verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+
+# ClickHouse runs under the Altinity operator: a service toggle stops and
+# starts it through its ClickHouseInstallation (spec.stop), because the
+# operator undoes any scaling of the StatefulSet it owns.
+- apiGroups: ["clickhouse.altinity.com"]
+  resources:
+    - clickhouseinstallations
+  verbs: ["get", "patch"]
 
 # Batch resources
 - apiGroups: ["batch"]
@@ -135,3 +162,30 @@ subjects:
 - kind: ServiceAccount
   name: {{ namespace }}
   namespace: argo
+---
+# Training mode keeps its record (what it stopped, to restore it) in a
+# ConfigMap of this namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ namespace }}-training-mode
+  namespace: {{ namespace }}
+rules:
+- apiGroups: [""]
+  resources:
+    - configmaps
+  verbs: ["get", "create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ namespace }}-training-mode
+  namespace: {{ namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ namespace }}-training-mode
+subjects:
+- kind: ServiceAccount
+  name: {{ namespace }}
+  namespace: {{ namespace }}

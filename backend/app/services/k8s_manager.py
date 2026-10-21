@@ -16,6 +16,12 @@ from app.models.service_schemas import ServiceType
 
 logger = logging.getLogger(__name__)
 
+# The replica count a workload had when its service was turned off, kept on
+# the workload so turning the service on restores it.
+REPLICAS_BEFORE_DISABLE = "thinkube.io/replicas-before-disable"
+
+CHI_GROUP, CHI_VERSION, CHI_PLURAL = "clickhouse.altinity.com", "v1", "clickhouseinstallations"
+
 
 class K8sServiceManager:
     """Manage Kubernetes deployments and services"""
@@ -40,50 +46,85 @@ class K8sServiceManager:
         self.core_v1 = client.CoreV1Api()
         self.apps_v1 = client.AppsV1Api()
 
-    def scale_deployment(
-        self, namespace: str, name: str, replicas: int
-    ) -> Tuple[bool, Optional[str]]:
-        """Scale a deployment to specified replicas
+    def _read_workload(self, namespace: str, kind: str, name: str):
+        if kind == "deployment":
+            return self.apps_v1.read_namespaced_deployment(name, namespace)
+        if kind == "statefulset":
+            return self.apps_v1.read_namespaced_stateful_set(name, namespace)
+        raise ValueError(f"cannot scale a {kind}; deployments and statefulsets can be scaled")
 
-        Args:
-            namespace: Kubernetes namespace
-            name: Deployment name
-            replicas: Target replica count
+    def _patch_workload(self, namespace: str, kind: str, name: str, body: Dict[str, Any]) -> None:
+        if kind == "deployment":
+            self.apps_v1.patch_namespaced_deployment(name, namespace, body)
+        else:
+            self.apps_v1.patch_namespaced_stateful_set(name, namespace, body)
 
-        Returns:
-            Tuple of (success, error_message)
+    def _stop_clickhouse(self, namespace: str, name: str, stop: bool) -> Tuple[bool, Optional[str]]:
+        """Stop or start a ClickHouseInstallation through its spec.stop.
+
+        The Altinity operator owns the installation's StatefulSets and puts
+        back any replica count set on them, so it is the operator that stops
+        and starts the pods.
         """
         try:
-            # Find the deployment
-            deployments = self.apps_v1.list_namespaced_deployment(namespace)
-            deployment = None
+            client.CustomObjectsApi().patch_namespaced_custom_object(
+                CHI_GROUP, CHI_VERSION, namespace, CHI_PLURAL, name,
+                {"spec": {"stop": "yes" if stop else "no"}},
+            )
+        except ApiException as e:
+            return False, f"could not {'stop' if stop else 'start'} ClickHouseInstallation {name} in {namespace}: {e.reason}"
+        logger.info(f"ClickHouseInstallation {name} in {namespace}: stop={'yes' if stop else 'no'}")
+        return True, None
 
-            for d in deployments.items:
-                if d.metadata.name == name or name in d.metadata.name:
-                    deployment = d
-                    break
+    def scale_workload(
+        self, namespace: str, kind: str, name: str, on: bool
+    ) -> Tuple[bool, Optional[str]]:
+        """Turn one workload off (0 replicas) or back on.
 
-            if not deployment:
+        Turning off records the replica count on the workload itself
+        (REPLICAS_BEFORE_DISABLE), and turning on restores that count. A
+        workload owned by a controller is stopped through that controller,
+        when it is one this knows; scaling it directly would be undone.
+        """
+        try:
+            obj = self._read_workload(namespace, kind, name)
+        except ApiException as e:
+            if e.status == 404:
+                return False, f"{kind} {name} not found in namespace {namespace}"
+            return False, f"could not read {kind} {name} in {namespace}: {e.reason}"
+
+        owner = next((o for o in obj.metadata.owner_references or [] if o.controller), None)
+        if owner is not None:
+            if owner.kind == "ClickHouseInstallation":
+                return self._stop_clickhouse(namespace, owner.name, stop=not on)
+            return (
+                False,
+                f"{kind} {name} in {namespace} is managed by {owner.kind} {owner.name}; "
+                "scaling it directly would be undone",
+            )
+
+        current = obj.spec.replicas or 0
+        if not on:
+            if current == 0:
+                return True, None
+            body = {"metadata": {"annotations": {REPLICAS_BEFORE_DISABLE: str(current)}}, "spec": {"replicas": 0}}
+        else:
+            if current > 0:
+                return True, None
+            recorded = (obj.metadata.annotations or {}).get(REPLICAS_BEFORE_DISABLE)
+            if recorded is None:
                 return (
                     False,
-                    f"Deployment not found for service {name} in namespace {namespace}",
+                    f"{kind} {name} in {namespace} has no replica count recorded from when it was "
+                    f"turned off (annotation {REPLICAS_BEFORE_DISABLE}); scale it by hand",
                 )
-
-            # Scale the deployment
-            deployment.spec.replicas = replicas
-            self.apps_v1.patch_namespaced_deployment(
-                name=deployment.metadata.name, namespace=namespace, body=deployment
-            )
-
-            logger.info(
-                f"Scaled deployment {deployment.metadata.name} in namespace {namespace} to {replicas} replicas"
-            )
-            return True, None
-
+            body = {"metadata": {"annotations": {REPLICAS_BEFORE_DISABLE: None}}, "spec": {"replicas": int(recorded)}}
+        try:
+            self._patch_workload(namespace, kind, name, body)
         except ApiException as e:
-            error_msg = f"Failed to scale deployment: {e.reason}"
-            logger.error(error_msg)
-            return False, error_msg
+            return False, f"could not scale {kind} {name} in {namespace}: {e.reason}"
+        logger.info(f"{kind} {name} in {namespace}: {'on' if on else 'off'}")
+        return True, None
 
     def get_namespace_gpu_usage(self, namespace: str) -> Optional[Dict[str, Any]]:
         """Get GPU usage for all pods in a namespace
@@ -543,31 +584,46 @@ class K8sServiceManager:
             return 0
 
     @staticmethod
-    def _target_deployment(service: ServiceModel) -> str:
-        """Name of the deployment that carries the service's replicas.
+    def _workloads(service: ServiceModel) -> List[Tuple[str, str]]:
+        """The workloads that carry the service's replicas, as (kind, name).
 
-        A service is rarely named after its deployment - todo runs
-        todo-backend, vllm runs vllm-inference - so scaling by service name
-        addresses a workload that does not exist and reports success.
+        A service is rarely named after its workloads (todo runs todo-backend)
+        and may have several (a backend and a frontend); discovery records
+        every one its ConfigMap declares.
         """
-        return service.resource_name or service.name
+        resources = (service.service_metadata or {}).get("resources") or [
+            {"resource_type": service.resource_type, "resource_name": service.resource_name}
+        ]
+        found = []
+        for r in resources:
+            kind, name = r.get("resource_type"), r.get("resource_name")
+            if kind not in ("deployment", "statefulset") or not name:
+                raise ValueError(
+                    f"service {service.name} declares the workload {kind}/{name}, which cannot be "
+                    "scaled; deployments and statefulsets can"
+                )
+            found.append((kind, name))
+        return found
+
+    def _scale_service(self, service: ServiceModel, on: bool) -> Tuple[bool, Optional[str]]:
+        try:
+            workloads = self._workloads(service)
+        except ValueError as e:
+            return False, str(e)
+        for kind, name in workloads:
+            ok, error = self.scale_workload(service.namespace, kind, name, on)
+            if not ok:
+                return False, error
+        return True, None
 
     def enable_service(self, service: ServiceModel) -> Tuple[bool, Optional[str]]:
-        """Enable a service by scaling to original replicas
-
-        Args:
-            service: ServiceModel model instance
-
-        Returns:
-            Tuple of (success, error_message)
-        """
+        """Turn a service on: every workload back to the replicas it had."""
         if not service.can_be_disabled:
             return False, "Core services cannot be disabled"
 
         if service.is_enabled:
-            return True, None  # Already enabled
+            return True, None
 
-        # Clean up any stale pods before enabling
         self.cleanup_stale_pods(service.namespace)
 
         # A gateway-managed backend has no replicas of its own to restore: its
@@ -577,31 +633,15 @@ class K8sServiceManager:
         if (service.service_metadata or {}).get("gateway_managed"):
             return True, None
 
-        # Scale to original replica count
-        return self.scale_deployment(
-            service.namespace, self._target_deployment(service), service.original_replicas
-        )
+        return self._scale_service(service, on=True)
 
     def disable_service(self, service: ServiceModel) -> Tuple[bool, Optional[str]]:
-        """Disable a service by scaling to 0
-
-        Args:
-            service: ServiceModel model instance
-
-        Returns:
-            Tuple of (success, error_message)
-        """
+        """Turn a service off: every workload to zero replicas."""
         if not service.can_be_disabled:
             return False, "Core services cannot be disabled"
 
         if not service.is_enabled:
-            return True, None  # Already disabled
-
-        # Get current replica count before disabling
-        target = self._target_deployment(service)
-        status = self.get_deployment_status(service.namespace, target)
-        if status and status["replicas"] > 0:
-            service.original_replicas = status["replicas"]
+            return True, None
 
         # A gateway-managed backend rests at zero replicas and does its serving
         # from per-node Deployments the gateway creates, so scaling the base
@@ -613,13 +653,9 @@ class K8sServiceManager:
             self.cleanup_stale_pods(service.namespace)
             return True, None
 
-        # Scale to 0
-        result = self.scale_deployment(service.namespace, target, 0)
-
-        # Clean up any stale pods after disabling
-        if result[0]:  # If scaling was successful
+        result = self._scale_service(service, on=False)
+        if result[0]:
             self.cleanup_stale_pods(service.namespace)
-
         return result
 
     def _scale_down_gateway_deployments(
@@ -637,8 +673,8 @@ class K8sServiceManager:
             return False, f"Could not list gateway deployments: {e}"
 
         for deployment in deployments.items:
-            ok, error = self.scale_deployment(
-                namespace, deployment.metadata.name, 0
+            ok, error = self.scale_workload(
+                namespace, "deployment", deployment.metadata.name, on=False
             )
             if not ok:
                 return False, error

@@ -36,9 +36,21 @@ spec:
       # submit workflows into this namespace.
       serviceAccountName: {{ project_name }}-workflows
 {% endif %}
-{% if container.gpu is defined and container.gpu.memory is defined %}
+{% set gpu_affinity = container.gpu is defined and container.gpu.memory is defined %}
+{% set arch_affinity = thinkube_spec.spec.architectures is defined %}
+{% if gpu_affinity or arch_affinity %}
       affinity:
         nodeAffinity:
+{% if arch_affinity %}
+          # spec.architectures: the image is built for these architectures only.
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/arch
+                    operator: In
+                    values: [{% for arch in thinkube_spec.spec.architectures %}"{{ arch }}"{% if not loop.last %}, {% endif %}{% endfor %}]
+{% endif %}
+{% if gpu_affinity %}
           # Use preferred instead of required to support both discrete GPUs and unified memory systems
           preferredDuringSchedulingIgnoredDuringExecution:
           - weight: 100
@@ -49,6 +61,7 @@ spec:
                 # Convert memory string to MB for comparison (e.g., "20Gi" -> 20480)
                 {% set memory_value = container.gpu.memory.replace('Gi', '') | int * 1024 %}
                 values: ["{{ memory_value }}"]
+{% endif %}
 {% endif %}
       containers:
         - name: {{ container.name }}
@@ -136,20 +149,16 @@ spec:
             {% endif %}
             {% endfor %}
             {% endif %}
-            # User-configurable environment variables
-            {% if thinkube_spec.spec.env is defined %}
-            {% for env_var in thinkube_spec.spec.env %}
-            {% if env_var.default is defined %}
-            - name: {{ env_var.name }}
-              value: "{{ env_var.default }}"
-            {% endif %}
+            # spec.env: the value given at deploy, else the default
+            {% for name, value in spec_env.items() %}
+            - name: {{ name }}
+              value: {{ value | string | to_json }}
             {% endfor %}
-            {% endif %}
             # Manifest parameters (from deploy-time input, e.g. model_id)
             {% if manifest_params is defined %}
             {% for param_name, param_value in manifest_params.items() %}
             - name: {{ param_name | upper }}
-              value: "{{ param_value }}"
+              value: {{ param_value | string | to_json }}
             {% endfor %}
             {% endif %}
             # Names the container may show the browser (thinkube.yaml publicEnv).

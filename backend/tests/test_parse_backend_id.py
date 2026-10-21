@@ -33,6 +33,9 @@ def test_text_embeddings_is_a_known_prefix():
         ("vllm-tkspark", ("vllm", "tkspark")),
         ("ollama-tkspark", ("ollama", "tkspark")),
         ("vllm", ("vllm", None)),
+        # A one-model backend's id carries its model after a slash.
+        ("vllm-tkspark/qwen-qwen3-8b", ("vllm", "tkspark")),
+        ("text-embeddings-tkamd2/qwen-qwen3-embedding-0-6b", ("text-embeddings", "tkamd2")),
     ],
 )
 def test_parse_backend_id(backend_id, expected):

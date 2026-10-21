@@ -11,6 +11,7 @@ import json as json_mod
 import httpx
 
 from app.api.llm.schemas import ModelLoadResponse, ModelState, ModelTier, model_id_to_ollama_name
+from app.services.llm_pod_manager import SHARED_BACKENDS, model_slug
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +21,15 @@ KNOWN_BACKEND_TYPES = ("tensorrt-llm", "text-embeddings", "ollama", "vllm")
 
 
 def parse_backend_id(backend_id: str) -> tuple[str, Optional[str]]:
-    """Parse 'backend_type-node_name' into (backend_type, node_name).
+    """Parse a backend id into (backend_type, node_name).
 
-    Handles compound types like 'tensorrt-llm'.
+    Ids are 'backend_type-node_name' for Ollama, which hosts many models per
+    node, and 'backend_type-node_name/model' for one-model backends. Handles
+    compound types like 'tensorrt-llm'.
     """
     if not backend_id:
         return backend_id, None
+    backend_id = backend_id.split("/", 1)[0]
     for prefix in KNOWN_BACKEND_TYPES:
         if backend_id == prefix:
             return prefix, None
@@ -42,6 +46,8 @@ class LLMLifecycleManager:
     def __init__(self):
         self._load_timeout = int(os.getenv("LLM_MODEL_LOAD_TIMEOUT_SECONDS", "300"))
         self._loading_locks: dict[str, asyncio.Event] = {}
+        # Node memory planned for each calibrated model at its last load, in GiB.
+        self._planned_gb: dict[str, float] = {}
 
     LOADABLE_TYPES = {"ollama", "vllm", "tensorrt-llm", "text-embeddings"}
 
@@ -145,32 +151,28 @@ class LLMLifecycleManager:
     BACKEND_TYPES = ("vllm", "tensorrt-llm", "text-embeddings", "ollama")
     CONTEXT_CHOICES = (32768, 16384, 8192)
 
-    def _model_on_backend(self, backend_id: str, except_model: Optional[str] = None):
-        """The model loaded or loading on a one-model backend, if any other than ``except_model``."""
-        from app.services.llm_model_registry import llm_model_registry
-
-        for other in llm_model_registry.list_models():
-            if other.id == except_model:
-                continue
-            if other.backend_id == backend_id and other.state in (ModelState.available, ModelState.loading, ModelState.unloading):
-                return other
-        return None
-
     def _resolve_backend_arg(self, backend: Optional[str]):
         """``(backend_type, node, refusal)`` for the caller's ``backend`` argument."""
         from app.services.llm_backend_discovery import llm_backend_discovery
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
 
         if not backend:
             return None, None, None
         if backend in self.BACKEND_TYPES:
             return backend, None, None
+        # '<type>-<node>' names a backend type on a GPU node; the load creates
+        # the pod there, so no pod has to be running. A full backend id
+        # ('vllm-tkspark/<model>') names the same type and node.
+        backend_type, node = parse_backend_id(backend)
+        if backend_type in self.BACKEND_TYPES and node and llm_gpu_tracker.get_node(node) is not None:
+            return backend_type, node, None
         found = llm_backend_discovery.get_backend(backend)
         if found is not None:
             return found.type, found.node, None
-        known = sorted(b.id for b in llm_backend_discovery.list_backends())
+        forms = sorted({f"{t}-{n}" for t in self.BACKEND_TYPES for n in llm_gpu_tracker.node_names()})
         return None, None, (
             f"backend '{backend}' is neither a backend type ({', '.join(self.BACKEND_TYPES)}) "
-            f"nor a known backend id ({', '.join(known) or 'none discovered yet'})"
+            f"nor a backend type on a GPU node ({', '.join(forms) or 'no GPU nodes known yet'})"
         )
 
     async def _pick_node(self) -> Optional[str]:
@@ -193,13 +195,56 @@ class LLMLifecycleManager:
         choices = [c for c in self.CONTEXT_CHOICES if c <= cap] or [min(cap, self.CONTEXT_CHOICES[-1])]
         weight = self._weight_gb(entry) or 0.0
         for context in choices:
-            estimated = self._estimate_memory(entry, context)
+            share, estimated = self._memory_plan(entry, context, node)
             sizing = await llm_gpu_tracker.plan_sizing(
-                node, estimated, self._gpus_needed(estimated, node), weight_gb=weight
+                node, estimated, self._gpus_needed(estimated, node), weight_gb=weight,
+                share_gb=share,
             )
             if sizing.get("fits"):
                 return context
         return choices[-1]
+
+    def _calibrated_memory(self, entry, context: int, node: str) -> Optional[tuple[float, float]]:
+        """``(vLLM share, node memory)`` in GiB from the model's calibration.
+
+        The calibration (models.json, written by thinkube-metadata's
+        scripts/calibrate_models.py) holds, per memory type, what vLLM measured
+        when the model ran alone: weights, KV cache bytes per token, the
+        overhead inside its memory share, and the node memory the load took.
+        The share is weights + overhead + context x KV bytes per token. On
+        unified memory the process's memory outside the share comes from the
+        same pool, so the node needs that too. None when the model has no
+        calibration for the node's memory type.
+        """
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+
+        memory_type = llm_gpu_tracker.memory_type(node)
+        cal = (entry.calibration or {}).get(memory_type)
+        if not cal:
+            return None
+        gib = 1024 ** 3
+        fixed = cal["weight_bytes"] + cal["overhead_bytes"]
+        share = fixed + context * cal["kv_bytes_per_token"]
+        node_bytes = share
+        if memory_type == "uma":
+            measured_share = fixed + cal["measured_with"]["kv_tokens"] * cal["kv_bytes_per_token"]
+            node_bytes += cal["node_delta_bytes"] - measured_share
+        return round(share / gib, 2), round(node_bytes / gib, 2)
+
+    def _memory_plan(self, entry, context: Optional[int], node: str) -> tuple[Optional[float], float]:
+        """``(vLLM share or None, node memory)`` in GiB for a load of the model.
+
+        Calibrated models are sized from their calibration; a model without
+        one for the node's memory type keeps the estimate from its size.
+        """
+        calibrated = self._calibrated_memory(entry, context, node) if context else None
+        if calibrated:
+            return calibrated
+        return None, self._estimate_memory(entry, context)
+
+    def planned_memory_gb(self, model_id: str) -> Optional[float]:
+        """The node memory planned for the model's last load, when it was calibrated."""
+        return self._planned_gb.get(model_id)
 
     def _gpus_needed(self, estimated_memory_gb: float, node_name: str) -> int:
         import math
@@ -389,16 +434,31 @@ class LLMLifecycleManager:
                 message=f"No performance backend type found for {entry.server_type}"
             )
 
-        # A vLLM, TensorRT-LLM or embeddings pod serves one model. A second
-        # model asked for on the same type and node would neither load nor be
-        # refused: the existing pod is returned as it is. Refuse it here.
-        occupant = self._model_on_backend(f"{perf_type}-{node}", except_model=model_id)
-        if occupant is not None:
-            message = (
-                f"{perf_type}-{node} already serves {occupant.id} ({occupant.state.value}); "
-                f"unload it, or choose another node"
+        # A vLLM, TensorRT-LLM or embeddings pod serves one model, and each
+        # model gets its own Deployment on the node. Whether a second model
+        # fits beside the first is the memory plan's decision below.
+        #
+        # Engines on one node start one at a time: an engine sizes its cache
+        # from the memory it sees used while it starts, and counts what
+        # another engine allocates in the same moment as its own.
+        starting = next(
+            (
+                m.id for m in llm_model_registry.list_models()
+                if m.id != model_id
+                and m.state == ModelState.loading
+                and parse_backend_id(m.backend_id or "")[1] == node
+                and parse_backend_id(m.backend_id or "")[0] not in SHARED_BACKENDS
+            ),
+            None,
+        )
+        if starting:
+            return ModelLoadResponse(
+                model_id=model_id, state=ModelState.deployable,
+                message=(
+                    f"'{starting}' is starting on {node}; load this model "
+                    f"when that one is available or has failed"
+                ),
             )
-            return ModelLoadResponse(model_id=model_id, state=entry.state, message=message)
 
         # Measure the real checkpoint size (cached on the entry) before sizing,
         # so multimodal/mixed-precision weights aren't under-counted and the
@@ -420,9 +480,15 @@ class LLMLifecycleManager:
             )
         drafter_gb = (self._weight_gb(drafter_entry) or 0.0) if drafter_entry else 0.0
 
-        estimated_memory = self._estimate_memory(
-            entry, max_context_length, extra_weight_gb=drafter_gb
-        )
+        # A calibration measured the model as it is served, drafter included.
+        calibrated = self._calibrated_memory(entry, max_context_length, node)
+        if calibrated:
+            share_gb, estimated_memory = calibrated
+        else:
+            share_gb = None
+            estimated_memory = self._estimate_memory(
+                entry, max_context_length, extra_weight_gb=drafter_gb
+            )
         gpu_count = self._gpus_needed(estimated_memory, node)
 
         # Architecture-aware sizing: translate the footprint into vLLM/pod knobs
@@ -432,6 +498,7 @@ class LLMLifecycleManager:
         sizing = await llm_gpu_tracker.plan_sizing(
             node, estimated_memory, gpu_count,
             weight_gb=(self._weight_gb(entry) or 0.0) + drafter_gb,
+            share_gb=share_gb,
         )
 
         # Node-safety rail: if it won't fit the operator-chosen node, refuse here
@@ -488,8 +555,13 @@ class LLMLifecycleManager:
         if sizing.get("tensor_parallel_size"):
             payload["tensor_parallel_size"] = sizing["tensor_parallel_size"]
 
-        backend_id = f"{perf_type}-{node}"
+        backend_id = f"{perf_type}-{node}/{model_slug(model_id)}"
         llm_model_registry.update_model_state(model_id, ModelState.loading, backend_id)
+        if calibrated:
+            from app.services.llm_gpu_tracker import CALIBRATED_MARGIN_GB
+            self._planned_gb[model_id] = round(estimated_memory + CALIBRATED_MARGIN_GB, 2)
+        else:
+            self._planned_gb.pop(model_id, None)
 
         asyncio.create_task(
             self._load_performance_background(
@@ -536,6 +608,7 @@ class LLMLifecycleManager:
 
             success, _ = await llm_pod_manager.ensure_pod(
                 perf_type, node, gpu_count=gpu_count, model_env=model_env,
+                model_id=model_id,
                 mem_limit_gb=payload.get("pod_mem_limit_gb"),
                 wait_ready=False,
             )
@@ -555,16 +628,6 @@ class LLMLifecycleManager:
             llm_model_registry.update_model_state(
                 model_id, ModelState.deployable, error=str(e)
             )
-
-    async def _cleanup_empty_pod(self, gpu_tracker, pod_manager, perf_type: str, node: str):
-        """Delete a pod only if no models are allocated on this backend type + node."""
-        node_allocs = gpu_tracker._allocations.get(node, [])
-        backend_allocs = [a for a in node_allocs if perf_type in a.backend_id]
-        if not backend_allocs:
-            logger.info(f"No models on {perf_type}/{node}, deleting pod")
-            await pod_manager.delete_pod(perf_type, node)
-        else:
-            logger.info(f"Pod {perf_type}/{node} still has {len(backend_allocs)} model(s), keeping it")
 
     async def unload_model(self, model_id: str, force: bool = False) -> ModelLoadResponse:
         from app.services.llm_model_registry import llm_model_registry
@@ -618,7 +681,9 @@ class LLMLifecycleManager:
             ]
             if not remaining:
                 logger.info(f"No models left on {backend_id}, deleting pod")
-                await llm_pod_manager.delete_pod(backend_type, node)
+                await llm_pod_manager.delete_pod(
+                    backend_type, node, None if backend_type in SHARED_BACKENDS else model_id
+                )
 
         return ModelLoadResponse(
             model_id=model_id, state=ModelState.deployable,

@@ -50,11 +50,12 @@ spec:
             apt-get update -qq && apt-get install -y -qq util-linux > /dev/null 2>&1
             python3 -u << 'PYTHON_EOF'
             import os
-            from http.server import BaseHTTPRequestHandler, HTTPServer
+            from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
             import json
             import subprocess
 
             NODE_NAME = os.environ.get("NODE_NAME", "unknown")
+            TRAINING_PATH = "/var/lib/thinkube-training"
 
             class MetricsHandler(BaseHTTPRequestHandler):
                 def do_GET(self):
@@ -65,6 +66,18 @@ spec:
                             self.send_header("Content-type", "application/json")
                             self.end_headers()
                             self.wfile.write(json.dumps(metrics).encode())
+                        except Exception as e:
+                            self.send_response(500)
+                            self.send_header("Content-type", "application/json")
+                            self.end_headers()
+                            self.wfile.write(json.dumps({"error": str(e)}).encode())
+                    elif self.path == "/storage":
+                        try:
+                            storage = self._collect_storage()
+                            self.send_response(200)
+                            self.send_header("Content-type", "application/json")
+                            self.end_headers()
+                            self.wfile.write(json.dumps(storage).encode())
                         except Exception as e:
                             self.send_response(500)
                             self.send_header("Content-type", "application/json")
@@ -195,10 +208,63 @@ spec:
                         "gpu_allocatable_bytes": gpu_allocatable_bytes,
                     }
 
+                def _collect_storage(self):
+                    # The host's own disks, read in the host's mount namespace;
+                    # the volumes mounted for pods and the system's memory file
+                    # systems are not disks of the node.
+                    result = subprocess.run(
+                        ["nsenter", "-t", "1", "-m", "df", "-B1",
+                         "--output=source,fstype,size,used,avail,target",
+                         "-x", "tmpfs", "-x", "devtmpfs", "-x", "overlay", "-x", "squashfs",
+                         "-x", "efivarfs", "-x", "fuse", "-x", "fuse.juicefs", "-x", "nfs", "-x", "nfs4"],
+                        capture_output=True, text=True, timeout=20
+                    )
+                    disks = {}
+                    for line in result.stdout.strip().split("\n")[1:]:
+                        fields = line.split(None, 5)
+                        if len(fields) != 6:
+                            continue
+                        source, fstype, size, used, avail, target = fields
+                        if target.startswith(("/var/lib/kubelet/", "/run/", "/snap/", "/var/snap/")):
+                            continue
+                        disk = {"source": source, "fstype": fstype, "mount": target,
+                                "total_bytes": int(size), "used_bytes": int(used), "free_bytes": int(avail)}
+                        if source not in disks or len(target) < len(disks[source]["mount"]):
+                            disks[source] = disk
+                    if not disks:
+                        raise RuntimeError(f"df found no disk: {result.stderr.strip() or 'no output'}")
+
+                    # The training folder JupyterHub mounts in training jobs.
+                    training = {"path": TRAINING_PATH, "exists": False}
+                    if subprocess.run(["nsenter", "-t", "1", "-m", "test", "-d", TRAINING_PATH]).returncode == 0:
+                        du = subprocess.run(
+                            ["nsenter", "-t", "1", "-m", "du", "-x", "-B1", "--max-depth=2", TRAINING_PATH],
+                            capture_output=True, text=True, timeout=100
+                        )
+                        entries = []
+                        total = None
+                        for line in du.stdout.strip().split("\n"):
+                            if "\t" not in line:
+                                continue
+                            size, path = line.split("\t", 1)
+                            if path == TRAINING_PATH:
+                                total = int(size)
+                            else:
+                                entries.append({"path": path[len(TRAINING_PATH) + 1:], "bytes": int(size)})
+                        entries.sort(key=lambda e: e["path"])
+                        training = {"path": TRAINING_PATH, "exists": True, "bytes": total, "entries": entries,
+                                    "error": du.stderr.strip() if du.returncode != 0 else None}
+
+                    return {"disks": sorted(disks.values(), key=lambda d: d["mount"]),
+                            "df_error": result.stderr.strip() if result.returncode != 0 else None,
+                            "training": training}
+
                 def log_message(self, format, *args):
                     pass
 
-            server = HTTPServer(("0.0.0.0", 9100), MetricsHandler)
+            # Threads: a slow /storage (du of a training folder) must not
+            # hold back /metrics.
+            server = ThreadingHTTPServer(("0.0.0.0", 9100), MetricsHandler)
             print(f"Node metrics server started on port 9100 (node={NODE_NAME})")
             server.serve_forever()
             PYTHON_EOF

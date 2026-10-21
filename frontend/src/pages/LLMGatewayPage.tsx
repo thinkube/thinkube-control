@@ -485,9 +485,10 @@ export default function LLMGatewayPage() {
                     <TkTableCell>
                       {model.backend_id ? (
                         <TkBadge appearance="muted">
+                          {/* A one-model backend's id ends in /<model>; the row already names the model. */}
                           {model.backend_id.startsWith('ollama-')
                             ? model.backend_id.replace('ollama-', '')
-                            : model.backend_id}
+                            : model.backend_id.split('/')[0]}
                         </TkBadge>
                       ) : (
                         <span className="text-muted-foreground">-</span>

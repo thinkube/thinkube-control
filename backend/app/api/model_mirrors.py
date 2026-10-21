@@ -13,7 +13,7 @@ import logging
 from pydantic import BaseModel
 
 from app.core.api_tokens import get_current_user_dual_auth
-from app.services.model_downloader import ModelDownloaderService
+from app.services.model_downloader import ModelDownloaderService, catalog_entry
 from app.db.session import get_db
 from app.models.model_mirrors import ModelMirrorJob
 from app.core.config import settings
@@ -161,6 +161,10 @@ async def submit_model_mirror(
     from HuggingFace to MLflow. Returns immediately with job_id - mirroring happens in background.
     """
     try:
+        # A model outside the catalog is refused before a job record exists,
+        # so a refusal leaves nothing that blocks a later submission.
+        catalog_entry(request.model_id)
+
         # Check for existing active mirror job for this model
         existing_job = db.query(ModelMirrorJob).filter(
             ModelMirrorJob.model_id == request.model_id

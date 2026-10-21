@@ -210,6 +210,7 @@ def base_vars(spec, **extra):
         "admin_password": "x",
         "thinkube_spec": spec,
         "manifest_params": {},
+        "spec_env": {},
         "mlflow_keycloak_token_url": "",
         "mlflow_keycloak_client_id": "",
         "mlflow_client_secret": "",
@@ -243,7 +244,7 @@ DECLARED = [DeclaredSecret("WF_CHECK_TOKEN")]
 def containers_of(rendered):
     out = []
     for doc in yaml.safe_load_all(rendered):
-        if not doc:
+        if not doc or "template" not in doc.get("spec", {}):
             continue
         pod = doc["spec"]["template"]["spec"]
         out.extend(pod["containers"])

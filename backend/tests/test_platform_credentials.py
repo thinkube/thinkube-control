@@ -95,11 +95,14 @@ def render(template, **extra):
     variables = dict(
         project_name="wf-check", k8s_namespace="wf-check", domain_name="thinkube.com",
         container_registry="registry.thinkube.com", admin_username="tkadmin",
-        thinkube_spec=spec, manifest_params={}, seaweedfs_endpoint="http://seaweedfs:8333",
+        thinkube_spec=spec, manifest_params={}, spec_env={}, seaweedfs_endpoint="http://seaweedfs:8333",
         deployment_env_from=[], system_username="thinkube", master_node_name="tkamd1",
         gitea_org="thinkube-deployments", build_architectures=["amd64", "arm64"],
     )
     variables.update(extra)
+    # A variable given as None is left out, as scripts/build_architectures.py leaves
+    # build_architectures out when the control plane builds the one architecture.
+    variables = {k: v for k, v in variables.items() if v is not None}
     return env.get_template(template).render(**variables)
 
 
@@ -157,7 +160,7 @@ def test_every_architecture_builds_with_buildah_under_the_task_names_the_webhook
 
 
 def test_one_architecture_builds_with_buildah_and_pushes_latest():
-    text = render("build-workflow.j2", build_architectures=["amd64"])
+    text = render("build-workflow.j2", build_architectures=None)
     workflow, templates, tasks = _build_pods(text)
 
     assert "kaniko" not in text.lower()

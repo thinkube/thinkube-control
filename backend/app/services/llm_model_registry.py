@@ -233,6 +233,7 @@ class LLMModelRegistry:
                 tool_call_parser=entry.get("tool_call_parser"),
                 speculative_config=entry.get("speculative_config"),
                 weight_bytes=entry.get("weight_bytes") or (existing.weight_bytes if existing else None),
+                calibration=entry.get("calibration"),
                 enforce_eager=entry.get("enforce_eager", False),
                 tool_use=entry.get("tool_use", False),
                 stop_tokens=entry.get("stop_tokens", []),
@@ -244,7 +245,14 @@ class LLMModelRegistry:
                 state=initial_state,
                 backend_id=existing.backend_id if existing else None,
                 tier=existing.tier if existing else None,
+                # Why the last load failed stays until the next load or unload sets it.
+                last_error=existing.last_error if existing else None,
             )
+            # The load deadline and the availability grace period run across
+            # refreshes; a new entry without them would restart both each time.
+            if existing:
+                model._loading_since = getattr(existing, "_loading_since", None)
+                model._last_available_at = getattr(existing, "_last_available_at", None)
             updated[model_id] = model
 
         catalog_serving = set()
@@ -340,21 +348,11 @@ class LLMModelRegistry:
     def stop(self):
         self._is_running = False
 
-    def _others_on_backend(self, backend_id: Optional[str], model_id: str) -> bool:
-        """Whether a model other than ``model_id`` is available on ``backend_id``."""
-        if not backend_id:
-            return False
-        return any(
-            other.backend_id == backend_id and other.state == ModelState.available
-            for mid, other in self._models.items()
-            if mid != model_id
-        )
-
     def _reconcile_states(self):
         from app.services.llm_backend_discovery import llm_backend_discovery
         from app.services.llm_gpu_tracker import llm_gpu_tracker
         from app.services.llm_lifecycle import llm_lifecycle, parse_backend_id
-        from app.services.llm_pod_manager import llm_pod_manager
+        from app.services.llm_pod_manager import SHARED_BACKENDS, llm_pod_manager
 
         composite_map: dict[str, tuple[str, str]] = {}
         raw_backend_models: dict[str, str] = {}
@@ -405,15 +403,30 @@ class LLMModelRegistry:
                     entry._last_available_at = datetime.utcnow()
                 elif datetime.utcnow() - last_avail > timedelta(seconds=120):
                     backend_type, node = parse_backend_id(entry.backend_id or "")
+                    # Discovery alone does not take a one-model pod down: the
+                    # pod is asked first. A pod that is still ready, or whose
+                    # state cannot be read, keeps the model and is checked again
+                    # after another grace period; a dead engine makes the pod
+                    # not ready through its /health probe.
+                    if backend_type and backend_type not in SHARED_BACKENDS and node:
+                        pod_status, pod_detail = llm_pod_manager.check_pod_status(
+                            backend_type, node, model_id
+                        )
+                        if pod_status in ("ready", "unknown"):
+                            entry._last_available_at = None
+                            logger.warning(
+                                f"Model {model_id} not seen by discovery for 120s, but its pod "
+                                f"is {pod_status} {pod_detail}; kept available"
+                            )
+                            continue
                     entry.state = ModelState.deployable
                     entry.backend_id = None
                     entry._last_available_at = None
                     llm_gpu_tracker.release_allocation(model_id)
-                    # Reclaim the (now model-less) deployment to free its slot.
-                    # Not Ollama: its one pod hosts many models. And never while
-                    # another model is served by the same deployment.
-                    if backend_type and backend_type != "ollama" and node and not self._others_on_backend(entry.backend_id, model_id):
-                        llm_pod_manager.scale_to_zero(backend_type, node)
+                    # Reclaim this model's deployment to free its slot. Not
+                    # Ollama: its one pod hosts many models.
+                    if backend_type and backend_type not in SHARED_BACKENDS and node:
+                        llm_pod_manager.scale_to_zero(backend_type, node, model_id)
                     logger.info(f"Model {model_id} downgraded to deployable after 120s grace period")
             elif (
                 matched_backend_id is None
@@ -431,7 +444,10 @@ class LLMModelRegistry:
                     if getattr(entry, "_loading_since", None) is None:
                         entry._loading_since = datetime.utcnow()
                     pod_status, pod_detail = (
-                        llm_pod_manager.check_pod_status(backend_type, node)
+                        llm_pod_manager.check_pod_status(
+                            backend_type, node,
+                            None if backend_type in SHARED_BACKENDS else model_id,
+                        )
                         if node else ("absent", None)
                     )
                     timed_out = (
@@ -458,11 +474,10 @@ class LLMModelRegistry:
                         entry.last_error = fail_reason
                         entry._loading_since = None
                         llm_gpu_tracker.release_allocation(model_id)
-                        # Reclaim the failed deployment to 0 so it stops holding a
-                        # slot/budget (the dead-pod bug). Not Ollama (shared pod),
-                        # and never while another model is served by it.
-                        if backend_type != "ollama" and node and not self._others_on_backend(f"{backend_type}-{node}", model_id):
-                            llm_pod_manager.scale_to_zero(backend_type, node)
+                        # Reclaim this model's failed deployment to 0 so it stops
+                        # holding a slot/budget. Not Ollama: its pod is shared.
+                        if backend_type not in SHARED_BACKENDS and node:
+                            llm_pod_manager.scale_to_zero(backend_type, node, model_id)
                         logger.warning(f"Load failed for {model_id}: {fail_reason}")
 
         # Register unmatched backend models (e.g. manually loaded Ollama models)
@@ -496,7 +511,9 @@ class LLMModelRegistry:
         if any(a.model_id == model_id for a in existing):
             return
         entry = self._models.get(model_id)
-        estimated = lifecycle._estimate_memory(entry) if entry else 4.0
+        estimated = lifecycle.planned_memory_gb(model_id)
+        if estimated is None:
+            estimated = lifecycle._estimate_memory(entry) if entry else 4.0
         _, node_name = parse_backend_id(backend_id)
         gpu_tracker.record_allocation(model_id, backend_id, estimated, node_name=node_name)
 

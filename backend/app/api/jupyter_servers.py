@@ -41,6 +41,7 @@ from app.core.config import settings
 from app.db.session import SessionLocal, get_db
 from app.models.notebook_jobs import NotebookJob
 from app.services import jupyterhub_client as hub
+from app.services import training_mode
 from app.services import notebook_resources as res
 
 logger = logging.getLogger(__name__)
@@ -66,10 +67,19 @@ class Placement(BaseModel):
     cpu_cores: int
     memory_gb: int
     gpus: int
+    # The spawner requests a quarter of memory_gb, so a server can be placed
+    # where memory is short and still grow to its limit. A run that must not
+    # be killed for memory asks the node to reserve all of it.
+    reserve_memory: bool = False
+    # Training mode keeps new pods off its node; a job for that node is the
+    # training's own and is let through.
+    training_node: bool = False
 
     def user_options(self) -> Dict[str, str]:
         return {
             "profile": PROFILE,
+            "reserve_memory": "yes" if self.reserve_memory else "no",
+            "training_node": "yes" if self.training_node else "no",
             "node": self.node,
             "cpu": str(self.cpu_cores),
             "memory": f"{self.memory_gb}G",
@@ -351,6 +361,22 @@ class RunNotebookJobRequest(BaseModel):
     gpus: Union[int, str, None] = Field(None, description="GPUs to reserve for the run, 0 for none.")
     stop_on_error: Union[bool, str, None] = Field(True, description="Stop at the first cell that raises (default true).")
     cell_timeout_seconds: Union[int, str, None] = Field(None, description="Seconds allowed per cell; default 3600.")
+    reserve_memory: Union[bool, str, None] = Field(
+        False,
+        description=(
+            "Reserve all of memory_gb on the node (default false: a quarter is reserved and the rest is "
+            "used when free). For a long run that must not be killed for memory, such as a training."
+        ),
+    )
+    training: Union[bool, str, None] = Field(
+        False,
+        description=(
+            "The run is a training (default false): it gets the node's training folder at "
+            "/home/thinkube/training, kept across runs, and is let onto the node training mode keeps free. "
+            "Training mode must be on for this node; when it is off, or on for another node, the run is "
+            "refused. A run for the node training mode is on gets the same without asking."
+        ),
+    )
 
 
 class JobResponse(BaseModel):
@@ -387,74 +413,148 @@ def _read_job(job_id: uuid.UUID) -> Optional[Dict[str, Any]]:
         db.close()
 
 
-async def _stop_job_server(server_name: str) -> None:
+async def _remove_job_server(job_id: uuid.UUID, server_name: str) -> None:
+    """Remove a finished job's server from the Hub. A server left behind keeps
+    counting toward the Hub's limit of named servers, so a failure is written
+    on the job, where the person reading it sees what is left."""
     try:
-        await hub.stop_server(server_name)
-        await hub.wait_stopped(server_name)
+        await hub.remove_server(server_name)
     except hub.HubError as e:
-        logger.warning("could not stop job server %s: %s", server_name, e)
+        logger.error("could not remove job server %s: %s", server_name, e)
+        current = _read_job(job_id) or {}
+        said = f"the job's server {server_name} was not removed: {e}"
+        _update_job(job_id, error=f"{current['error']}; {said}" if current.get("error") else said)
+
+
+async def _remove_leftover_job_servers() -> None:
+    """Remove job servers that belong to no open job: a job that ended while
+    thinkube-control could not remove its server leaves one behind."""
+    db = _job_session()
+    try:
+        open_servers = {
+            j.server_name
+            for j in db.query(NotebookJob).filter(NotebookJob.status.in_(["starting", "running"])).all()
+        }
+    finally:
+        db.close()
+    for name in (await hub.user(include_stopped=True)).get("servers", {}):
+        if name.startswith(JOB_SERVER_PREFIX) and name not in open_servers:
+            await hub.remove_server(name)
+            logger.info("removed the leftover job server %s", name)
+
+
+def _end_job_on_error(job_id: uuid.UUID, e: Exception) -> None:
+    if isinstance(e, HTTPException):
+        logger.error("notebook job %s failed: %s", job_id, e.detail)
+        _update_job(job_id, status="error", error=str(e.detail))
+    elif isinstance(e, hub.HubError):
+        logger.error("notebook job %s failed: %s", job_id, e)
+        _update_job(job_id, status="error", error=str(e))
+    else:
+        logger.error("notebook job %s failed: %s", job_id, e, exc_info=True)
+        _update_job(job_id, status="error", error=f"{type(e).__name__}: {e}")
 
 
 async def _run_job(job_id: uuid.UUID, server_name: str, placement: Placement, notebook_path: str, kernel_name: Optional[str], stop_on_error: bool, cell_timeout: Optional[int]) -> None:
     try:
+        await _remove_leftover_job_servers()
         await hub.start_server(server_name, placement.user_options())
         await hub.wait_ready(server_name)
-        health = None
-        for _ in range(30):
-            try:
-                health = await jupyter_notebooks.extension_health(server_name)
-            except HTTPException:
-                health = None
-            if health and health.get("status") == "ok":
-                break
-            await asyncio.sleep(3)
-        if not health or health.get("status") != "ok":
-            raise RuntimeError("the job's server started but tk-notebook-mcp did not answer")
-
-        use_args: Dict[str, Any] = {"notebook_path": notebook_path, "needs_gpu": placement.gpus > 0}
-        if kernel_name:
-            use_args["kernel_name"] = kernel_name
-        opened = await jupyter_notebooks.call_tool("use_notebook", use_args, timeout=jupyter_notebooks.OPEN_TIMEOUT, server_name=server_name)
-        if not opened.get("success"):
-            raise RuntimeError(opened.get("error") or "use_notebook failed")
-
-        run_args: Dict[str, Any] = {"notebook_path": notebook_path, "stop_on_error": stop_on_error}
-        if cell_timeout is not None:
-            run_args["cell_timeout_seconds"] = cell_timeout
-        started = await jupyter_notebooks.call_tool("execute_all_cells", run_args, server_name=server_name)
-        if not started.get("success"):
-            raise RuntimeError(started.get("error") or "execute_all_cells failed")
-        _update_job(job_id, status="running", execution_id=started["execution_id"], total_cells=started.get("total_cells"), kernel_name=opened.get("kernel_name"))
-
-        await _poll_job(job_id, server_name, started["execution_id"])
-    except HTTPException as e:
-        logger.error("notebook job %s failed: %s", job_id, e.detail)
-        _update_job(job_id, status="error", error=str(e.detail))
+        await _open_and_run(job_id, server_name, notebook_path, kernel_name, placement.gpus > 0, stop_on_error, cell_timeout)
     except Exception as e:
-        logger.error("notebook job %s failed: %s", job_id, e, exc_info=True)
-        _update_job(job_id, status="error", error=f"{type(e).__name__}: {e}")
+        _end_job_on_error(job_id, e)
     finally:
-        await _stop_job_server(server_name)
-        _job_tasks.pop(str(job_id), None)
+        await _release_job(job_id, server_name)
+
+
+async def _release_job(job_id: uuid.UUID, server_name: str) -> None:
+    """Remove the server of a job that has ended. A job still open keeps its
+    server: its task ends with the thinkube-control process, and
+    resume_notebook_jobs follows the run again on that server."""
+    _job_tasks.pop(str(job_id), None)
+    current = _read_job(job_id) or {}
+    if current.get("status") not in ("starting", "running"):
+        await _remove_job_server(job_id, server_name)
+
+
+async def _open_and_run(job_id: uuid.UUID, server_name: str, notebook_path: str, kernel_name: Optional[str], needs_gpu: bool, stop_on_error: bool, cell_timeout: Optional[int]) -> None:
+    """On the job's ready server: open the notebook, start the run of all its cells, and follow it to its end."""
+    health = None
+    for _ in range(30):
+        try:
+            health = await jupyter_notebooks.extension_health(server_name)
+        except HTTPException:
+            health = None
+        if health and health.get("status") == "ok":
+            break
+        await asyncio.sleep(3)
+    if not health or health.get("status") != "ok":
+        raise RuntimeError("the job's server started but tk-notebook-mcp did not answer")
+
+    use_args: Dict[str, Any] = {"notebook_path": notebook_path, "needs_gpu": needs_gpu}
+    if kernel_name:
+        use_args["kernel_name"] = kernel_name
+    opened = await jupyter_notebooks.call_tool("use_notebook", use_args, timeout=jupyter_notebooks.OPEN_TIMEOUT, server_name=server_name)
+    if not opened.get("success"):
+        raise RuntimeError(opened.get("error") or "use_notebook failed")
+
+    run_args: Dict[str, Any] = {"notebook_path": notebook_path, "stop_on_error": stop_on_error}
+    if cell_timeout is not None:
+        run_args["cell_timeout_seconds"] = cell_timeout
+    started = await jupyter_notebooks.call_tool("execute_all_cells", run_args, server_name=server_name)
+    if not started.get("success"):
+        raise RuntimeError(started.get("error") or "execute_all_cells failed")
+    _update_job(job_id, status="running", execution_id=started["execution_id"], total_cells=started.get("total_cells"), kernel_name=opened.get("kernel_name"))
+
+    await _poll_job(job_id, server_name, started["execution_id"])
+
+
+# The statuses tk-notebook-mcp gives a run that has ended.
+FINAL_RUN_STATES = ("completed", "error", "lost")
+
+
+async def _server_gone(server_name: str) -> bool:
+    """True when the Hub no longer lists the job's server. A Hub that does not
+    answer says nothing about the server, so that is not taken as gone."""
+    try:
+        return await hub.server(server_name) is None
+    except hub.HubError as e:
+        logger.warning("could not ask the Hub about job server %s: %s", server_name, e)
+        return False
 
 
 async def _poll_job(job_id: uuid.UUID, server_name: str, execution_id: str) -> None:
+    """Follow a run until tk-notebook-mcp gives it a final status, or the Hub
+    no longer lists its server. A status call that fails or is slow is not an
+    end: the next poll asks again."""
     while True:
         await asyncio.sleep(JOB_POLL_SECONDS)
         current = _read_job(job_id)
         if current is None or current["status"] == "cancelled":
             return
-        state = await jupyter_notebooks.call_tool("check_all_cells_status", {"execution_id": execution_id}, server_name=server_name)
+        try:
+            state = await jupyter_notebooks.call_tool("check_all_cells_status", {"execution_id": execution_id}, server_name=server_name)
+        except HTTPException as e:
+            if await _server_gone(server_name):
+                _update_job(job_id, status="lost", error=f"the job's server {server_name} is gone; the Hub no longer lists it (last status call: {e.detail})")
+                return
+            logger.warning("notebook job %s: the status call failed, asking again in %d s: %s", job_id, JOB_POLL_SECONDS, e.detail)
+            continue
         fields = {
             "completed_cells": state.get("completed_cells"),
             "total_cells": state.get("total_cells"),
             "failed_cell_index": state.get("failed_cell_index"),
             "results": state.get("results"),
         }
-        if state.get("status") == "running":
+        status = state.get("status")
+        if status == "running":
             _update_job(job_id, **fields)
             continue
-        final = "completed" if state.get("status") == "completed" else "error"
+        if status not in FINAL_RUN_STATES:
+            logger.warning("notebook job %s: the status answer has no final status, asking again in %d s: %s",
+                           job_id, JOB_POLL_SECONDS, state.get("error") or state)
+            continue
+        final = "completed" if status == "completed" else "error"
         _update_job(job_id, status=final, error=state.get("error"), **fields)
         return
 
@@ -465,7 +565,19 @@ async def run_notebook_job(
     current_user: dict = Depends(get_current_user_dual_auth),
     db: Session = Depends(get_db),
 ):
-    """Run a whole notebook unattended on its own server: started on the node with the GPUs asked for (the node's defaults fill the rest), run top to bottom, stopped when done. Returns a job_id at once; poll notebook_job_status. The notebook file keeps the outputs."""
+    """Run a whole notebook unattended on its own server: started on the node with the GPUs asked for (the node's defaults fill the rest), run top to bottom, stopped when done. Returns a job_id at once; poll notebook_job_status. The notebook file keeps the outputs. A training sets training true and runs on the node training mode is on."""
+    is_training = jupyter_notebooks._bool(request.training, False)
+    training = await training_mode.status()
+    if is_training and training is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"training is true but training mode is off; turn training mode on for {request.node} first (training_mode_on with node '{request.node}'), then run the job",
+        )
+    if is_training and training["node"] != request.node:
+        raise HTTPException(
+            status_code=409,
+            detail=f"training is true but training mode is on for {training['node']}, not {request.node}; a training runs on the node training mode is on",
+        )
     placement = await resolve_placement(
         db,
         request.node,
@@ -473,6 +585,10 @@ async def run_notebook_job(
         jupyter_notebooks._opt_int(request.memory_gb, "memory_gb"),
         jupyter_notebooks._opt_int(request.gpus, "gpus"),
     )
+    placement.reserve_memory = jupyter_notebooks._bool(request.reserve_memory, False)
+    placement.training_node = training is not None and training["node"] == placement.node
+    stop_on_error = jupyter_notebooks._bool(request.stop_on_error, True)
+    cell_timeout = jupyter_notebooks._opt_int(request.cell_timeout_seconds, "cell_timeout_seconds")
     job = NotebookJob(
         server_name=f"{JOB_SERVER_PREFIX}{uuid.uuid4().hex[:8]}",
         notebook_path=request.notebook_path,
@@ -481,6 +597,9 @@ async def run_notebook_job(
         cpu_cores=placement.cpu_cores,
         memory_gb=placement.memory_gb,
         gpus=placement.gpus,
+        stop_on_error=stop_on_error,
+        cell_timeout_seconds=cell_timeout,
+        training=placement.training_node,
         status="starting",
     )
     db.add(job)
@@ -493,8 +612,8 @@ async def run_notebook_job(
             placement,
             request.notebook_path,
             request.kernel_name,
-            jupyter_notebooks._bool(request.stop_on_error, True),
-            jupyter_notebooks._opt_int(request.cell_timeout_seconds, "cell_timeout_seconds"),
+            stop_on_error,
+            cell_timeout,
         )
     )
     _job_tasks[str(job.id)] = task
@@ -529,12 +648,18 @@ async def cancel_notebook_job(job_id: uuid.UUID, current_user: dict = Depends(ge
     task = _job_tasks.pop(str(job_id), None)
     if task:
         task.cancel()
-    await _stop_job_server(job["server_name"])
-    return JobResponse(job=updated or job)
+    await _remove_job_server(job_id, job["server_name"])
+    return JobResponse(job=_read_job(job_id) or updated or job)
+
+
+# How often, JOB_POLL_SECONDS apart, a resumed job asks the Hub whether its server exists.
+RESUME_TRIES = 20
 
 
 async def resume_notebook_jobs() -> None:
-    """After a restart of thinkube-control: pick polling up again for runs still on a server, mark the rest lost."""
+    """After a restart of thinkube-control: every open run whose server the Hub
+    still lists is followed again, whatever its recorded status; a run whose
+    server is gone is marked lost. Each job is resumed in its own task."""
     db = _job_session()
     try:
         open_jobs = db.query(NotebookJob).filter(NotebookJob.status.in_(["starting", "running"])).all()
@@ -542,21 +667,46 @@ async def resume_notebook_jobs() -> None:
     finally:
         db.close()
     for record in records:
-        job_id = uuid.UUID(record["job_id"])
-        server_name = record["server_name"]
-        execution_id = record.get("execution_id")
-        try:
-            model = await hub.server(server_name)
-        except hub.HubError:
-            model = None
-        if record["status"] == "running" and execution_id and model and model.get("ready"):
-            async def resume(job_id=job_id, server_name=server_name, execution_id=execution_id):
-                try:
-                    await _poll_job(job_id, server_name, execution_id)
-                finally:
-                    await _stop_job_server(server_name)
-            _job_tasks[str(job_id)] = asyncio.create_task(resume())
-            logger.info("resumed polling notebook job %s on %s", job_id, server_name)
-        else:
-            _update_job(job_id, status="lost", error="thinkube-control restarted while the run was starting")
-            await _stop_job_server(server_name)
+        _job_tasks[record["job_id"]] = asyncio.create_task(_resume_job(record))
+
+
+async def _resume_job(record: Dict[str, Any]) -> None:
+    job_id = uuid.UUID(record["job_id"])
+    server_name = record["server_name"]
+    try:
+        model, said = None, None
+        for attempt in range(RESUME_TRIES):
+            try:
+                model = await hub.server(server_name)
+                said = None
+                break
+            except hub.HubError as e:
+                said = e
+                logger.warning("notebook job %s: the Hub did not say whether %s exists (try %d of %d): %s",
+                               job_id, server_name, attempt + 1, RESUME_TRIES, e)
+                await asyncio.sleep(JOB_POLL_SECONDS)
+        if said is not None:
+            _update_job(job_id, status="error",
+                        error=f"after a restart of thinkube-control the Hub did not say whether the job's server {server_name} exists: {said}")
+            return
+        if model is None:
+            _update_job(job_id, status="lost",
+                        error=f"the job's server {server_name} was gone when thinkube-control restarted")
+            return
+        if not model.get("ready"):
+            await hub.wait_ready(server_name)
+        logger.info("resumed notebook job %s on %s", job_id, server_name)
+        if record.get("execution_id"):
+            await _poll_job(job_id, server_name, record["execution_id"])
+            return
+        # The run was not started yet, or was started in the moment before its
+        # execution id was recorded; in that case the kernel is held by the run
+        # and execute_all_cells answers that it is busy.
+        if record.get("stop_on_error") is None:
+            raise RuntimeError("the job was recorded without stop_on_error, so its run cannot be started again after the restart")
+        await _open_and_run(job_id, server_name, record["notebook_path"], record.get("kernel_name"),
+                            (record.get("gpus") or 0) > 0, record["stop_on_error"], record.get("cell_timeout_seconds"))
+    except Exception as e:
+        _end_job_on_error(job_id, e)
+    finally:
+        await _release_job(job_id, server_name)

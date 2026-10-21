@@ -14,13 +14,16 @@ import json
 from pathlib import Path
 
 import jinja2
+import sys
 import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 TEMPLATES = REPO / "templates/k8s"
+sys.path.insert(0, str(REPO / "scripts"))
+import spec_env  # noqa: E402
 
 
-def render(spec):
+def render(spec, given=None):
     env = jinja2.Environment(
         loader=jinja2.FileSystemLoader(str(TEMPLATES)),
         undefined=jinja2.StrictUndefined,
@@ -38,6 +41,7 @@ def render(spec):
         admin_password="x",
         thinkube_spec=spec,
         manifest_params={},
+        spec_env=spec_env.resolve(spec, given or {}, "knative-demo"),
         mlflow_keycloak_token_url="",
         mlflow_keycloak_client_id="",
         mlflow_client_secret="",
@@ -56,7 +60,7 @@ SPEC = {"spec": {
 
 
 def containers(rendered):
-    [service] = [d for d in yaml.safe_load_all(rendered) if d]
+    [service] = [d for d in yaml.safe_load_all(rendered) if d and d["kind"] == "Service"]
     return service["spec"]["template"]["spec"]["containers"]
 
 
@@ -65,3 +69,47 @@ def test_no_container_carries_resize_policy():
     for container in containers(render(SPEC)):
         assert "resizePolicy" not in container
         assert container["readinessProbe"]["httpGet"]["path"] == "/health"
+
+
+def test_env_defaults_render_as_yaml_strings_whatever_they_hold():
+    """A default holding quotes, braces or colons (a JSON object, a URL) or a
+    number reaches the container as exactly that string."""
+    spec = {"spec": {
+        **SPEC["spec"],
+        "env": [
+            {"name": "EXTRA_BODY", "default": '{"chat_template_kwargs": {"enable_thinking": false}}'},
+            {"name": "BASE_URL", "default": "https://llm.thinkube.com/v1"},
+            {"name": "WORKERS", "default": 4},
+        ],
+    }}
+    [container] = containers(render(spec))
+    env = {e["name"]: e.get("value") for e in container["env"]}
+    assert env["EXTRA_BODY"] == '{"chat_template_kwargs": {"enable_thinking": false}}'
+    assert env["BASE_URL"] == "https://llm.thinkube.com/v1"
+    assert env["WORKERS"] == "4"
+
+
+def test_a_value_given_at_deploy_reaches_the_container():
+    """A variable without a default is rendered with the value the deploy gave it."""
+    spec = {"spec": {**SPEC["spec"], "env": [{"name": "GATEWAY_URL"}, {"name": "MODE", "default": "fast"}]}}
+    [container] = containers(render(spec, {"GATEWAY_URL": "https://storage.thinkube.com", "MODE": "slow"}))
+    env = {e["name"]: e.get("value") for e in container["env"]}
+    assert env["GATEWAY_URL"] == "https://storage.thinkube.com"
+    assert env["MODE"] == "slow"
+
+
+def test_both_routes_allow_the_services_own_timeout():
+    """Knative's routes get Envoy's 15s unless a policy names them; the policy carries timeoutSeconds."""
+    spec = {"spec": {**SPEC["spec"], "deployment": {"type": "knative", "timeoutSeconds": 600}}}
+    [policy] = [d for d in yaml.safe_load_all(render(spec)) if d and d["kind"] == "BackendTrafficPolicy"]
+    assert [r["name"] for r in policy["spec"]["targetRefs"]] == [
+        "knative-demo.thinkube.com", "knative-demo.knative-demo.svc.cluster.local",
+    ]
+    assert policy["spec"]["timeout"]["http"]["requestTimeout"] == "600s"
+
+
+def test_a_response_may_start_as_late_as_the_service_allows():
+    """Knative's own limit on the first response byte is 300s; it follows timeoutSeconds."""
+    spec = {"spec": {**SPEC["spec"], "deployment": {"type": "knative", "timeoutSeconds": 900}}}
+    [service] = [d for d in yaml.safe_load_all(render(spec)) if d and d["kind"] == "Service"]
+    assert service["spec"]["template"]["spec"]["responseStartTimeoutSeconds"] == 900

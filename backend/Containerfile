@@ -6,6 +6,13 @@
 ARG REGISTRY
 FROM ${REGISTRY}/library/python-base:3.12-slim
 
+# The juicefs tool reads and changes the shared folders: the release of the
+# client the platform's CSI driver v0.30.0 mounts with (ce-v1.3.0), statically
+# linked, checked against the release's checksums.
+COPY backend/scripts/install_juicefs.py /tmp/install_juicefs.py
+RUN python /tmp/install_juicefs.py && rm /tmp/install_juicefs.py
+RUN /usr/local/bin/juicefs version
+
 WORKDIR /app
 
 # All dependencies pre-installed in base image (python-base:3.12-slim)

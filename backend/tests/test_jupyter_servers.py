@@ -63,7 +63,7 @@ def nodes(monkeypatch):
 def test_node_defaults_fill_what_was_not_said():
     db = FakeDB(node_rows=[JupyterHubNodeDefaults(node="tkspark", cpu_cores=8, memory_gb=32, gpus=1)])
     placement = asyncio.run(js.resolve_placement(db, "tkspark", None, None, None))
-    assert placement.user_options() == {"profile": "thinkube-notebooks", "node": "tkspark", "cpu": "8", "memory": "32G", "enable_gpu": "1"}
+    assert placement.user_options() == {"profile": "thinkube-notebooks", "reserve_memory": "no", "training_node": "no", "node": "tkspark", "cpu": "8", "memory": "32G", "enable_gpu": "1"}
 
 
 def test_a_node_without_its_own_defaults_starts_from_the_fallback():
@@ -221,7 +221,7 @@ def start(monkeypatch, fake_hub, node="tkamd1"):
 def test_a_start_answers_once_the_hub_has_it(monkeypatch):
     fake_hub = FakeHub()
     assert start(monkeypatch, fake_hub) == "tkamd1"
-    assert fake_hub.started == [("tkamd1", {"profile": "thinkube-notebooks", "node": "tkamd1", "cpu": "4", "memory": "8G", "enable_gpu": "0"})]
+    assert fake_hub.started == [("tkamd1", {"profile": "thinkube-notebooks", "reserve_memory": "no", "training_node": "no", "node": "tkamd1", "cpu": "4", "memory": "8G", "enable_gpu": "0"})]
     assert "tkamd1" not in js._start_failures
 
 
