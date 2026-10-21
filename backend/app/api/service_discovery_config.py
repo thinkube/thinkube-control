@@ -60,6 +60,8 @@ class LLMBackend(BaseModel):
     api_path: str = "/v1"
     # CUDA compute capabilities ("12.1") the server runs on; empty is any GPU.
     gpu_compute_capabilities: List[str] = []
+    # The server answers the Anthropic Messages API at <api_path>/messages.
+    anthropic_messages: bool = False
 
 
 def llm_backend_descriptor(
@@ -86,6 +88,7 @@ def llm_backend_descriptor(
         "api_path": backend.api_path,
         "health_path": container.health or DEFAULT_HEALTH_PATH,
         "gpu_compute_capabilities": backend.gpu_compute_capabilities,
+        "anthropic_messages": backend.anthropic_messages,
     }
 
 

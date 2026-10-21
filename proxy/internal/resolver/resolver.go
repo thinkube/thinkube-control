@@ -55,6 +55,9 @@ type ResolveResult struct {
 	ModelState  string `json:"model_state"`
 	Tier        string `json:"tier"`
 	Error       string `json:"error,omitempty"`
+
+	// The backend serves the Anthropic Messages API itself, at APIPath/messages.
+	AnthropicMessages bool `json:"anthropic_messages"`
 }
 
 type cacheEntry struct {

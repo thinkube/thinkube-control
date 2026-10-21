@@ -63,6 +63,7 @@ def test_the_descriptor_names_the_base_deployment_port_and_health_path():
         "api_path": "/v1",
         "health_path": "/health",
         "gpu_compute_capabilities": [],
+        "anthropic_messages": False,
     }
 
 

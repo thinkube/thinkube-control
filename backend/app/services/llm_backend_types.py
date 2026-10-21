@@ -46,6 +46,9 @@ class BackendType:
     tier: str
     # CUDA compute capabilities ("12.1") the backend runs on; empty is any GPU.
     gpu_compute_capabilities: Tuple[str, ...] = ()
+    # The server answers the Anthropic Messages API at <api_path>/messages, so
+    # the gateway forwards Anthropic requests to it instead of translating them.
+    anthropic_messages: bool = False
 
     def runs_on(self, compute_capability: Optional[str]) -> bool:
         return not self.gpu_compute_capabilities or compute_capability in self.gpu_compute_capabilities
@@ -74,6 +77,7 @@ def parse_descriptor(namespace: str, descriptor: dict) -> BackendType:
         namespace=namespace,
         port=int(descriptor["port"]),
         gpu_compute_capabilities=tuple(str(c) for c in descriptor.get("gpu_compute_capabilities") or ()),
+        anthropic_messages=descriptor.get("anthropic_messages") is True,
         **{f: str(descriptor[f]) for f in _FIELDS if f != "port"},
     )
 

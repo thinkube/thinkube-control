@@ -132,6 +132,8 @@ class ModelResolveResponse(BaseModel):
     serving_name: str = ""
     model_state: ModelState
     tier: ModelTier
+    # The backend answers the Anthropic Messages API at <api_path>/messages.
+    anthropic_messages: bool = False
     error: Optional[str] = None
 
 
