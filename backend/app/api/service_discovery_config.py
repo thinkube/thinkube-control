@@ -22,10 +22,16 @@ router = APIRouter(tags=["service-discovery-config"])
 DEFAULT_HEALTH_PATH = "/health"
 
 
+# The startup window of a GPU container without containers[].startupSeconds,
+# as the thinkube.yaml specification defines it.
+DEFAULT_STARTUP_SECONDS = 600
+
+
 class Container(BaseModel):
     name: str
     health: Optional[str] = None
     port: Optional[int] = None
+    startupSeconds: Optional[int] = None
 
 
 class Route(BaseModel):
@@ -89,6 +95,7 @@ def llm_backend_descriptor(
         "health_path": container.health or DEFAULT_HEALTH_PATH,
         "gpu_compute_capabilities": backend.gpu_compute_capabilities,
         "anthropic_messages": backend.anthropic_messages,
+        "startup_seconds": container.startupSeconds or DEFAULT_STARTUP_SECONDS,
     }
 
 
