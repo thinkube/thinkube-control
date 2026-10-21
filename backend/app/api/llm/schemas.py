@@ -60,7 +60,14 @@ class ModelEntry(BaseModel):
     stop_tokens: List[str] = Field(default_factory=list)
     license: Optional[str] = None
     gated: bool = False
+    # What the model is fit for: "agent" (Tandem offers it), "vision" (images).
     capabilities: List[str] = Field(default_factory=list)
+    # Gateway names that answer as this model, such as thinkube-fast.
+    aliases: List[str] = Field(default_factory=list)
+    # The model a new Tandem chat starts with.
+    default_agent: bool = False
+    # The answer budget agents reserve inside the context.
+    max_output: Optional[int] = None
     # Gateway role. "primary" = a normally loadable/servable model; "drafter" =
     # an auxiliary speculative-decoding drafter (e.g. DFlash) that only runs
     # inside a target model's vLLM via --speculative-config, never served or
