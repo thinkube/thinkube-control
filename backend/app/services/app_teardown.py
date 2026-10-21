@@ -158,9 +158,7 @@ class AppTeardown(ComponentTeardown):
             (f"Harbor repositories {HARBOR_PROJECT}/{name}-<container>", lambda: self._harbor_repositories(name)),
             (f"Objects under {name}/ in bucket {ARTIFACT_BUCKET}", lambda: self._artifacts(name)),
             (f"Thinkube Control services row {name}", lambda: self._service_row(name)),
-            (f"Thinkube Control deployment records of {name}", lambda: self._deployment_records(name)),
             (f"Thinkube Control secret usage of {name}", lambda: self._secret_usage(name)),
-            (f"Checkout {APPS_DIR}/{name}", lambda: self._app_checkout(name)),
         ]
         database_names = self._database_names(name)
         if delete_databases:
@@ -169,6 +167,13 @@ class AppTeardown(ComponentTeardown):
         repository = f"Gitea repository {GITEA_ORG}/{name}"
         if delete_repository:
             steps.append((repository, lambda: [f"{GITEA_ORG}/{name}"] if self._delete_gitea_repo(name) else []))
+        # A second run needs the deployment record (it is what makes the name
+        # an app) and the checkout (its thinkube.yaml names the containers), so
+        # these go only once every other step has succeeded.
+        final_steps: List[Tuple[str, Callable[[], List[str]]]] = [
+            (f"Thinkube Control deployment records of {name}", lambda: self._deployment_records(name)),
+            (f"Checkout {APPS_DIR}/{name}", lambda: self._app_checkout(name)),
+        ]
 
         report = []
         for label, step in steps:
@@ -179,6 +184,19 @@ class AppTeardown(ComponentTeardown):
                 logger.error(f"Deleting app {name} failed at {label}: {e}")
                 result = f"failed: {_reason(e)}"
             report.append({"step": label, "result": result})
+
+        if any(s["result"].startswith("failed: ") for s in report):
+            report += [{"step": label, "result": "kept: a step above failed; run delete_app again to finish"}
+                       for label, _ in final_steps]
+        else:
+            for label, step in final_steps:
+                try:
+                    removed = step()
+                    result = ("removed: " + ", ".join(removed)) if removed else "not found"
+                except Exception as e:
+                    logger.error(f"Deleting app {name} failed at {label}: {e}")
+                    result = f"failed: {_reason(e)}"
+                report.append({"step": label, "result": result})
 
         kept = []
         if not delete_databases:

@@ -995,7 +995,8 @@ async def delete_app(
     ones: status is "deleted" when every step succeeded, otherwise "incomplete", and
     not_removed names each step that failed with its reason. Every step is listed in steps
     with its result: "removed: ...", "not found", "failed: <reason>" or "kept: <reason>".
-    Running it again finishes an incomplete delete.
+    Running it again finishes an incomplete delete: the deployment record and the
+    checkout are removed last, only when every other step has succeeded.
     """
     from app.services.app_teardown import AppTeardown, refusal
 

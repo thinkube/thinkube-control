@@ -182,8 +182,14 @@ def test_a_failed_step_does_not_stop_the_next_ones(teardown, monkeypatch):
     assert results(report)["Keycloak client notes in realm thinkube"] == (
         "failed: Keycloak refused the admin token: HTTP 401"
     )
-    for later in ("_harbor_repositories", "_artifacts", "_service_row", "_deployment_records", "_app_checkout"):
+    for later in ("_harbor_repositories", "_artifacts", "_service_row"):
         assert later in teardown.calls
+    # The record and the checkout stay, so a second run is accepted and
+    # finds the containers to remove.
+    for kept in ("_deployment_records", "_app_checkout"):
+        assert kept not in teardown.calls
+    assert results(report)["Thinkube Control deployment records of notes"].startswith("kept: ")
+    assert results(report)["Checkout /home/thinkube/apps/notes"].startswith("kept: ")
     assert report["status"] == "incomplete"
     assert report["not_removed"] == [
         "Keycloak client notes in realm thinkube: Keycloak refused the admin token: HTTP 401"
