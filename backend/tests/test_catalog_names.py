@@ -20,10 +20,13 @@ def model(model_id, source="platform", **fields):
     return {"id": model_id, "_source": source, **fields}
 
 
+AGENT = {"capabilities": ["agent"], "context_length": 262144, "max_output": 32768}
+
+
 def test_a_catalog_with_one_owner_per_name_is_kept():
     entries = [
-        model("a/fast", aliases=["thinkube-fast"], capabilities=["agent"], default_agent=True),
-        model("a/deep", aliases=["thinkube-deep"], capabilities=["agent"]),
+        model("a/fast", aliases=["thinkube-fast"], default_agent=True, **AGENT),
+        model("a/deep", aliases=["thinkube-deep"], **AGENT),
     ]
     assert resolve_names(entries) == entries
 
@@ -48,8 +51,8 @@ def test_an_alias_that_is_a_model_id_is_refused():
 
 
 def test_the_users_default_wins_over_the_platforms():
-    platform = model("a/fast", capabilities=["agent"], default_agent=True)
-    user = model("u/mine", "user", capabilities=["agent"], default_agent=True)
+    platform = model("a/fast", default_agent=True, **AGENT)
+    user = model("u/mine", "user", default_agent=True, **AGENT)
     resolved = {e["id"]: e for e in resolve_names([platform, user])}
     assert resolved["a/fast"]["default_agent"] is False
     assert resolved["u/mine"]["default_agent"] is True
@@ -58,11 +61,16 @@ def test_the_users_default_wins_over_the_platforms():
 def test_two_defaults_from_one_source_are_refused():
     with pytest.raises(CatalogUnavailableError, match="a/one, a/two"):
         resolve_names([
-            model("a/one", capabilities=["agent"], default_agent=True),
-            model("a/two", capabilities=["agent"], default_agent=True),
+            model("a/one", default_agent=True, **AGENT),
+            model("a/two", default_agent=True, **AGENT),
         ])
 
 
 def test_the_default_must_be_an_agent_model():
     with pytest.raises(CatalogUnavailableError, match="not marked agent"):
         resolve_names([model("a/one", default_agent=True)])
+
+
+def test_an_agent_model_needs_its_context_and_answer_budget():
+    with pytest.raises(CatalogUnavailableError, match="no context_length or max_output"):
+        resolve_names([model("a/one", capabilities=["agent"])])
