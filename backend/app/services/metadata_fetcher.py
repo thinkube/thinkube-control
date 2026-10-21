@@ -14,6 +14,11 @@ Merges the results and keeps them in memory for five minutes. When a fetch
 fails and no fresh copy is in memory, CatalogUnavailableError is raised with
 the URL and the failure.
 
+invalidate_catalogs() forgets the copies in memory. For one cache period
+after it, catalogs are read through the GitHub contents API, which answers
+from the repository itself: raw.githubusercontent.com is served from a CDN
+that can lag a push by minutes.
+
 The user metadata repository is created on the first template publish and
 holds only the files that have entries, so HTTP 404 for a user catalog file
 means the user has no entries in that catalog.
@@ -37,6 +42,29 @@ _CACHE_TTL: float = 300  # 5 minutes
 # Per-catalog memory cache: {catalog_name: {"data": ..., "time": float}}
 _memory_cache: Dict[str, Dict[str, Any]] = {}
 
+# When the catalogs were last invalidated, and until when they are read
+# through the GitHub contents API.
+_invalidated_at: float = 0.0
+_direct_until: float = 0.0
+
+
+def invalidate_catalogs() -> None:
+    """Forget every catalog in memory; the next reads come from the repositories themselves."""
+    global _invalidated_at, _direct_until
+    _memory_cache.clear()
+    _invalidated_at = time.time()
+    _direct_until = _invalidated_at + _CACHE_TTL
+
+
+def invalidated_at() -> float:
+    """When invalidate_catalogs last ran; a copy kept elsewhere from before is stale."""
+    return _invalidated_at
+
+
+def reads_direct() -> bool:
+    """Whether catalogs are read through the GitHub contents API now."""
+    return time.time() < _direct_until
+
 
 class CatalogUnavailableError(Exception):
     """A metadata catalog could not be fetched or read."""
@@ -57,6 +85,14 @@ def _github_raw_url(org: str, repo: str, ref: str, filename: str) -> str:
     return f"https://raw.githubusercontent.com/{org}/{repo}/{ref}/{filename}"
 
 
+def _github_api_url(org: str, repo: str, ref: str, filename: str) -> str:
+    return f"https://api.github.com/repos/{org}/{repo}/contents/{filename}?ref={ref}"
+
+
+def _github_url(org: str, repo: str, ref: str, filename: str, direct: bool) -> str:
+    return (_github_api_url if direct else _github_raw_url)(org, repo, ref, filename)
+
+
 def platform_metadata_url(filename: str) -> str:
     """The address of a thinkube-metadata file at the platform's release ref."""
     return _github_raw_url(_PLATFORM_ORG, _PLATFORM_METADATA_REPO, platform_ref(), filename)
@@ -71,6 +107,9 @@ def _fetch_json(url: str, token: Optional[str] = None, timeout: int = 10) -> dic
     headers = {"User-Agent": "thinkube-control"}
     if token:
         headers["Authorization"] = f"token {token}"
+    if url.startswith("https://api.github.com/"):
+        # The file itself, not its JSON description.
+        headers["Accept"] = "application/vnd.github.raw+json"
     req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -169,11 +208,12 @@ def fetch_merged_catalog(
         return cache_entry["data"]
 
     github_username, github_token = _get_github_config()
+    direct = reads_direct()
 
-    # Platform catalog (public, no auth)
-    platform_url = platform_metadata_url(file_name)
+    # Platform catalog (public; through the API, the token raises its rate limit)
+    platform_url = _github_url(_PLATFORM_ORG, _PLATFORM_METADATA_REPO, platform_ref(), file_name, direct)
     try:
-        platform_data = _fetch_json(platform_url)
+        platform_data = _fetch_json(platform_url, token=github_token if direct else None)
     except urllib.error.HTTPError as e:
         raise CatalogUnavailableError(
             f"Cannot fetch catalog {platform_url}: HTTP {e.code} {e.reason}"
@@ -187,7 +227,7 @@ def fetch_merged_catalog(
     # User catalog (private, with auth)
     if github_username and github_token:
         user_repo = f"{github_username}-metadata"
-        user_url = _github_raw_url(github_username, user_repo, _USER_METADATA_REF, file_name)
+        user_url = _github_url(github_username, user_repo, _USER_METADATA_REF, file_name, direct)
         user_items = None
         try:
             user_data = _fetch_json(user_url, token=github_token)

@@ -53,6 +53,9 @@ class ModelEntry(BaseModel):
     # A signed runtime package (a Flare package): the publisher namespace and
     # the SHA-256 of its key, which the mirror checks and the pod approves.
     publisher: Optional[Dict[str, str]] = None
+    # Command-line arguments the backend's server adds for this model, such as
+    # what its publisher recommends for a GPU; passed to the pod as SERVER_ARGS.
+    server_args: List[str] = Field(default_factory=list)
     tool_use: bool = False
     stop_tokens: List[str] = Field(default_factory=list)
     license: Optional[str] = None

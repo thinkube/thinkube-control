@@ -569,6 +569,8 @@ class LLMLifecycleManager:
             payload["enforce_eager"] = True
         if getattr(entry, "publisher", None):
             payload["publisher"] = entry.publisher
+        if getattr(entry, "server_args", None):
+            payload["server_args"] = entry.server_args
         if max_context_length:
             payload["max_context_length"] = max_context_length
         if sizing.get("gpu_memory_utilization") is not None:
@@ -625,6 +627,8 @@ class LLMLifecycleManager:
             if payload.get("publisher"):
                 model_env["PACKAGE_PUBLISHER"] = payload["publisher"]["namespace"]
                 model_env["PACKAGE_PUBLISHER_KEY"] = payload["publisher"]["key_sha256"]
+            if payload.get("server_args"):
+                model_env["SERVER_ARGS"] = json_mod.dumps(payload["server_args"])
             if payload.get("gpu_memory_utilization") is not None:
                 model_env["VLLM_GPU_MEMORY_UTILIZATION"] = str(
                     payload["gpu_memory_utilization"]

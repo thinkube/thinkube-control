@@ -52,8 +52,8 @@ def catalog_entry(model_id: str) -> Dict:
     """
     model_info = next((m for m in get_model_catalog() if m["id"] == model_id), None)
     if not model_info:
-        from app.services.metadata_fetcher import _memory_cache
-        _memory_cache.pop("models", None)
+        from app.services.metadata_fetcher import invalidate_catalogs
+        invalidate_catalogs()
         model_info = next((m for m in get_model_catalog() if m["id"] == model_id), None)
     if not model_info:
         raise ValueError(f"Model '{model_id}' not found in catalog")
