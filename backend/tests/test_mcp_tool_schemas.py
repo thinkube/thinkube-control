@@ -7,7 +7,7 @@
 chat) refuse a server whose tool has an array with no items. A tool offers
 the fields of its operation's request body, also when the body is optional."""
 
-from typing import Optional
+from typing import Optional, Union
 
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
@@ -61,12 +61,15 @@ def test_nested_schemas_are_completed():
 class StartRequest(BaseModel):
     cpu_cores: Optional[int] = None
     gpus: Optional[int] = None
+    memory_gb: Union[int, str, None] = None
 
 
 def tools_of(app):
     openapi = get_openapi(title="t", version="1", routes=app.routes)
     tools, _ = convert_openapi_to_mcp_tools(openapi)
     expose_optional_bodies(tools, openapi)
+    for tool in tools:
+        complete_union_types(tool.inputSchema)
     return {t.name: t.inputSchema for t in tools}
 
 
@@ -78,9 +81,11 @@ def test_an_optional_body_offers_its_fields_as_optional_arguments():
         return {}
 
     schema = tools_of(app)["start_server"]
-    assert set(schema["properties"]) == {"node", "cpu_cores", "gpus"}
+    assert set(schema["properties"]) == {"node", "cpu_cores", "gpus", "memory_gb"}
     assert schema["required"] == ["node"]
     assert schema["properties"]["gpus"]["type"] == "integer"
+    # A field that takes an integer or a string accepts both.
+    assert schema["properties"]["memory_gb"]["type"] == ["integer", "string"]
 
 
 def test_a_required_body_is_left_as_fastapi_mcp_made_it():
@@ -90,4 +95,6 @@ def test_a_required_body_is_left_as_fastapi_mcp_made_it():
     def create(request: StartRequest):
         return {}
 
-    assert set(tools_of(app)["create"]["properties"]) == {"cpu_cores", "gpus"}
+    schema = tools_of(app)["create"]
+    assert set(schema["properties"]) == {"cpu_cores", "gpus", "memory_gb"}
+    assert schema["properties"]["memory_gb"]["type"] == ["integer", "string"]

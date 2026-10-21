@@ -17,16 +17,24 @@ from fastapi_mcp.openapi.utils import get_single_param_type_from_schema, resolve
 
 def complete_union_types(schema: Any) -> Any:
     """Give every node that has both ``type`` and ``anyOf`` the keywords of
-    its ``anyOf`` branch of that type it lacks, such as ``items``. Changes
-    ``schema`` in place and returns it."""
+    its ``anyOf`` branch of that type it lacks, such as ``items``; a node
+    whose branches have several types gets all of them as its ``type``.
+    Changes ``schema`` in place and returns it."""
     if isinstance(schema, dict):
         branch_type = schema.get("type")
         branches = schema.get("anyOf")
         if isinstance(branch_type, str) and isinstance(branches, list):
-            branch = next((b for b in branches if isinstance(b, dict) and b.get("type") == branch_type), None)
-            if branch is not None:
-                for key, value in branch.items():
-                    schema.setdefault(key, value)
+            types = [b["type"] for b in branches
+                     if isinstance(b, dict) and b.get("type") not in (None, "null")]
+            if len(set(types)) > 1:
+                # type is checked together with anyOf: a field that takes an
+                # integer or a string must name both, or 1 is refused.
+                schema["type"] = list(dict.fromkeys(types))
+            else:
+                branch = next((b for b in branches if isinstance(b, dict) and b.get("type") == branch_type), None)
+                if branch is not None:
+                    for key, value in branch.items():
+                        schema.setdefault(key, value)
         for value in schema.values():
             complete_union_types(value)
     elif isinstance(schema, list):
@@ -76,3 +84,4 @@ def expose_optional_bodies(tools: List[Any], openapi_schema: Dict[str, Any]) -> 
             if "type" not in field:
                 field["type"] = get_single_param_type_from_schema(field)
             properties[name] = field
+
