@@ -22,7 +22,7 @@ from kubernetes.client.rest import ApiException
 from mlflow.tracking import MlflowClient
 from mlflow.exceptions import RestException
 
-from app.services.metadata_fetcher import fetch_merged_catalog
+from app.services.metadata_fetcher import CatalogUnavailableError, fetch_merged_catalog
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -31,15 +31,74 @@ def get_model_catalog() -> List[Dict]:
     """
     Get the model catalog from platform + user metadata repos.
 
-    Raises CatalogUnavailableError when the catalog cannot be fetched.
+    Raises CatalogUnavailableError when the catalog cannot be fetched, or
+    when its aliases or its agent default break the rules of resolve_names.
     """
-    return fetch_merged_catalog(
+    return resolve_names(fetch_merged_catalog(
         catalog_name="models",
         file_name="models.json",
         extract_key="models",
         merge_strategy="list",
         dedup_key="id",
-    )
+    ))
+
+
+def resolve_names(entries: List[Dict]) -> List[Dict]:
+    """The catalog with each alias, and the agent default, owned by one model.
+
+    An alias names one model and is never a model id. One model at most is
+    the agent default (default_agent), and it is marked agent. A claim in
+    the user's metadata repository wins over the platform's: the platform
+    entry loses that alias, or its default. Two claims from the same source
+    make the catalog unavailable, with both entries named.
+    """
+    ids = {e["id"] for e in entries}
+    owners: Dict[str, List[Dict]] = {}
+    for entry in entries:
+        for alias in entry.get("aliases") or []:
+            if alias in ids:
+                raise CatalogUnavailableError(
+                    f"Model catalog: alias '{alias}' of {entry['id']} is the id of another model"
+                )
+            owners.setdefault(alias, []).append(entry)
+
+    dropped_aliases: Dict[str, set] = {}
+    for alias, claimants in owners.items():
+        user = [e for e in claimants if e.get("_source") == "user"]
+        winners = user or claimants
+        if len(winners) > 1:
+            raise CatalogUnavailableError(
+                f"Model catalog: alias '{alias}' is claimed by {', '.join(e['id'] for e in winners)}"
+            )
+        for entry in claimants:
+            if entry is not winners[0]:
+                dropped_aliases.setdefault(entry["id"], set()).add(alias)
+
+    defaults = [e for e in entries if e.get("default_agent")]
+    user_defaults = [e for e in defaults if e.get("_source") == "user"]
+    winning_defaults = user_defaults or defaults
+    if len(winning_defaults) > 1:
+        raise CatalogUnavailableError(
+            "Model catalog: the agent default (default_agent) is claimed by "
+            + ", ".join(e["id"] for e in winning_defaults)
+        )
+    if winning_defaults and "agent" not in (winning_defaults[0].get("capabilities") or []):
+        raise CatalogUnavailableError(
+            f"Model catalog: {winning_defaults[0]['id']} is the agent default but not marked agent in capabilities"
+        )
+
+    resolved = []
+    for entry in entries:
+        lost = dropped_aliases.get(entry["id"])
+        loses_default = entry.get("default_agent") and winning_defaults and entry is not winning_defaults[0]
+        if lost or loses_default:
+            entry = dict(entry)
+            if lost:
+                entry["aliases"] = [a for a in entry["aliases"] if a not in lost]
+            if loses_default:
+                entry["default_agent"] = False
+        resolved.append(entry)
+    return resolved
 
 
 def catalog_entry(model_id: str) -> Dict:
