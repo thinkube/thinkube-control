@@ -602,10 +602,7 @@ class LLMPodManager:
         try:
             from kubernetes import client, config as k8s_config
 
-            try:
-                k8s_config.load_incluster_config()
-            except k8s_config.ConfigException:
-                k8s_config.load_kube_config()
+            k8s_config.load_incluster_config()
 
             apps_v1 = client.AppsV1Api()
             namespace = self._get_namespace(backend_type)
@@ -633,14 +630,18 @@ class LLMPodManager:
                         reason = cs.state.waiting.reason or ""
                         message = cs.state.waiting.message or ""
                         if reason in ("CrashLoopBackOff", "ErrImagePull", "ImagePullBackOff", "CreateContainerError"):
-                            detail = reason
-                            if message:
+                            # A crashed container's own termination message says
+                            # why it stopped; the back-off message only says that
+                            # it is restarted.
+                            t = cs.last_state.terminated if cs.last_state else None
+                            if t and t.message:
+                                detail = f"{reason}: {t.message.strip()}"
+                            elif message:
                                 detail = f"{reason}: {message}"
-                            elif cs.last_state and cs.last_state.terminated:
-                                t = cs.last_state.terminated
+                            elif t:
                                 detail = f"{reason} (exit {t.exit_code})"
-                                if t.message:
-                                    detail = f"{reason}: {t.message}"
+                            else:
+                                detail = reason
                             return "failed", detail
 
                 if pod.status.phase == "Running":
