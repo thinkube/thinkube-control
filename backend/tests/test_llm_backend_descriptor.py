@@ -62,7 +62,13 @@ def test_the_descriptor_names_the_base_deployment_port_and_health_path():
         "port": 7860,
         "api_path": "/v1",
         "health_path": "/health",
+        "gpu_compute_capabilities": [],
     }
+
+
+def test_the_descriptor_carries_the_gpus_the_server_runs_on():
+    backend = {**BACKEND, "gpu_compute_capabilities": ["12.0", "12.1"]}
+    assert _service(llm_backend=backend)["llm_backend"]["gpu_compute_capabilities"] == ["12.0", "12.1"]
 
 
 def test_a_service_without_the_block_has_no_descriptor():
@@ -109,6 +115,11 @@ def test_an_app_cannot_be_a_backend():
 def test_a_wrong_field_is_named(field, value, expected):
     [error] = validate_llm_backend(_config(backend={**BACKEND, field: value}))
     assert expected in error
+
+
+def test_a_compute_capability_is_major_dot_minor():
+    [error] = validate_llm_backend(_config(backend={**BACKEND, "gpu_compute_capabilities": ["sm_121"]}))
+    assert "'sm_121'" in error
 
 
 def test_the_serving_container_must_have_a_port():

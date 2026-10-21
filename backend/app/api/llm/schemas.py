@@ -50,6 +50,9 @@ class ModelEntry(BaseModel):
     # capture. Keeps the init memory peak ≈ weights (small, predictable) at a
     # small decode cost on bandwidth-bound models.
     enforce_eager: bool = False
+    # A signed runtime package (a Flare package): the publisher namespace and
+    # the SHA-256 of its key, which the mirror checks and the pod approves.
+    publisher: Optional[Dict[str, str]] = None
     tool_use: bool = False
     stop_tokens: List[str] = Field(default_factory=list)
     license: Optional[str] = None
@@ -165,6 +168,8 @@ class GPUNode(BaseModel):
     is_uma: bool = False
     arch: str = "uma"  # "uma" (GPU mem = host RAM, quota-charged) | "discrete"
     role: str = "platform-shared"  # "platform-shared" | "ai-dedicated"
+    # CUDA compute capability of the node's GPUs, "major.minor" (e.g. "12.1").
+    compute_capability: Optional[str] = None
     per_gpu_vram_gb: float = 0.0  # discrete: VRAM per physical GPU
     platform_reserved_gb: float = 0.0  # UMA shared: host RAM held by non-AI pods
     ai_budget_gb: float = 0.0  # memory the gateway may plan against on this node

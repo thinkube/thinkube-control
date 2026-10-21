@@ -174,6 +174,13 @@ def validate_llm_backend(config: Dict[str, Any]) -> List[str]:
             f"is not one of {', '.join(LLM_BACKEND_TIERS)}."
         )
 
+    for cc in backend.get('gpu_compute_capabilities') or []:
+        if not re.match(r'^\d+\.\d+$', str(cc)):
+            errors.append(
+                f"spec.llm_backend.gpu_compute_capabilities: '{cc}' is not a CUDA compute "
+                "capability written as major.minor, such as '12.1'."
+            )
+
     container_name = backend.get('container')
     container = next(
         (c for c in spec.get('containers', []) if c.get('name') == container_name), None
@@ -186,6 +193,28 @@ def validate_llm_backend(config: Dict[str, Any]) -> List[str]:
         errors.append(
             f"Container '{container_name}' serves the LLM backend and must declare a port."
         )
+    return errors
+
+
+def validate_startup_seconds(config: Dict[str, Any]) -> List[str]:
+    """Return a list of constraint violations for containers' startupSeconds.
+
+    startupSeconds is how long a GPU container may take to answer its health
+    path when it starts; it sets the startup probe, so it needs both.
+    """
+    errors = []
+    for c in config.get('spec', {}).get('containers', []):
+        if 'startupSeconds' not in c:
+            continue
+        name = c.get('name', 'unnamed')
+        value = c['startupSeconds']
+        if not isinstance(value, int) or isinstance(value, bool) or value < 10:
+            errors.append(f"Container '{name}': startupSeconds must be an integer of at least 10, got: {value}")
+        if not c.get('gpu') or not c.get('health'):
+            errors.append(
+                f"Container '{name}': startupSeconds sets the startup probe of a GPU container; "
+                "it needs gpu and health."
+            )
     return errors
 
 

@@ -163,6 +163,9 @@ class LLMGPUTracker:
                 gpu_replicas = int(labels.get("nvidia.com/gpu.replicas", "1"))
                 gpu_memory_mb = labels.get("nvidia.com/gpu.memory", "")
                 sharing = labels.get("nvidia.com/gpu.sharing-strategy", "none")
+                cc_major = labels.get("nvidia.com/gpu.compute.major")
+                cc_minor = labels.get("nvidia.com/gpu.compute.minor")
+                compute_capability = f"{cc_major}.{cc_minor}" if cc_major and cc_minor else None
 
                 if gpu_memory_mb and gpu_memory_mb != "0":
                     per_gpu_memory = float(gpu_memory_mb) / 1024.0
@@ -195,6 +198,7 @@ class LLMGPUTracker:
                     per_gpu_vram_gb=per_gpu_memory,
                     arch=arch,
                     role=role,
+                    compute_capability=compute_capability,
                     used_memory_gb=0.0,
                     shared_memory=(sharing == "time-slicing"),
                     allocations=[],

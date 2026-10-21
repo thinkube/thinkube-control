@@ -55,6 +55,7 @@ vLLM:: Full-precision text generation, one pod per model.
 TensorRT-LLM:: NVIDIA's inference engine, one pod per model; the catalogue entries built for it carry NVFP4 quantisation for Blackwell.
 Ollama:: Quantised GGUF models; one pod hosts several models.
 text-embeddings:: Text Embeddings Inference, for embedding models.
+Flare:: NVIDIA's inference server for Blackwell GPUs (DGX Spark, RTX PRO 6000), one pod per model. It serves signed runtime packages prepared for one GPU type; a catalogue entry names the package's hardware revision and the publisher whose key the mirror checks. Models load only on nodes whose GPU it runs on.
 
 Each backend declares itself in its component's `thinkube.yaml` with `spec.llm_backend`: its type, its driver and its tier. Thinkube Control reads the installed backend types from the components' service ConfigMaps; `get_llm_backend_types` lists them. A model's `server_type` in the catalogue names the backend types it runs on. A new inference server is added as a template that declares `spec.llm_backend`, with no change to Thinkube Control. See the `thinkube.yaml` reference for the fields.
 

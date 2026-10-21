@@ -339,7 +339,8 @@ spec:
             initialDelaySeconds: 30  # Give container time to start web server
             periodSeconds: 10        # Check every 10 seconds
             timeoutSeconds: 10
-            failureThreshold: 60      # 60 * 10 = 600 seconds (10 minutes) max for initial startup
+            # containers[].startupSeconds, else 600 seconds (10 minutes), for the initial startup
+            failureThreshold: {{ ((container.startupSeconds | default(600)) / 10) | round(0, 'ceil') | int }}
             successThreshold: 1
 
           # Liveness probe starts after startup probe succeeds

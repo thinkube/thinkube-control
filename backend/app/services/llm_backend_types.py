@@ -13,7 +13,7 @@ its tier. Thinkube Control names no backend type itself.
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import yaml
 
@@ -44,6 +44,11 @@ class BackendType:
     health_path: str
     driver: str
     tier: str
+    # CUDA compute capabilities ("12.1") the backend runs on; empty is any GPU.
+    gpu_compute_capabilities: Tuple[str, ...] = ()
+
+    def runs_on(self, compute_capability: Optional[str]) -> bool:
+        return not self.gpu_compute_capabilities or compute_capability in self.gpu_compute_capabilities
 
     @property
     def shared(self) -> bool:
@@ -68,6 +73,7 @@ def parse_descriptor(namespace: str, descriptor: dict) -> BackendType:
     return BackendType(
         namespace=namespace,
         port=int(descriptor["port"]),
+        gpu_compute_capabilities=tuple(str(c) for c in descriptor.get("gpu_compute_capabilities") or ()),
         **{f: str(descriptor[f]) for f in _FIELDS if f != "port"},
     )
 
