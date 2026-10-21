@@ -4,9 +4,9 @@
 """
 LLM Backend Discovery
 
-Discovers model-serving backends via Kubernetes pods and ConfigMaps.
-Periodically probes backend health and served models.
-Discovers gateway-managed pods (created by llm_pod_manager) for all backend types.
+Discovers the gateway-managed pods (created by llm_pod_manager) of every
+installed backend type (llm_backend_types) and periodically probes their
+health and served models.
 """
 
 import asyncio
@@ -15,9 +15,9 @@ import os
 from typing import Dict, List, Optional
 
 import httpx
-import yaml
 
 from app.api.llm.schemas import BackendEntry
+from app.services.llm_backend_types import DRIVER_OLLAMA, llm_backend_types
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +34,6 @@ class LLMBackendDiscovery:
         self._probe_interval = int(
             os.getenv("LLM_BACKEND_PROBE_INTERVAL_SECONDS", "30")
         )
-        self._ollama_url = os.getenv(
-            "LLM_OLLAMA_URL", "http://ollama.ollama.svc.cluster.local:11434"
-        )
-        self._static_backends_raw = os.getenv("LLM_STATIC_BACKENDS", "")
         self._is_running = False
         self._client = httpx.AsyncClient(timeout=10.0, verify=False)
 
@@ -59,42 +55,19 @@ class LLMBackendDiscovery:
         return len(self._backends)
 
     async def _discover_all(self):
-        self._discover_static()
+        llm_backend_types.refresh()
         await self._discover_gateway_pods()
-        await self._discover_from_configmaps()
         await self._probe_all()
-
-    def _discover_static(self):
-        if not self._static_backends_raw:
-            return
-        try:
-            entries = yaml.safe_load(self._static_backends_raw)
-            if not isinstance(entries, list):
-                return
-            for entry in entries:
-                bid = entry.get("name", entry.get("url", "unknown"))
-                existing = self._backends.get(bid)
-                if existing is not None and existing.url == entry["url"]:
-                    continue
-                self._backends[bid] = BackendEntry(
-                    id=bid,
-                    name=entry.get("name", bid),
-                    url=entry["url"],
-                    type=entry.get("type", "unknown"),
-                    api_path=entry.get("api_path", "/v1"),
-                    status="unknown",
-                )
-        except Exception as e:
-            logger.warning(f"Failed to parse LLM_STATIC_BACKENDS: {e}")
 
     async def _discover_gateway_pods(self):
         """Discover pods created by the LLM Gateway pod manager.
 
-        Scans all backend namespaces for Running pods with the gateway-managed
-        label. Registers Ollama pods with the Ollama client for per-node routing.
+        Scans the namespace of every backend type for Running pods with the
+        gateway-managed label. Registers Ollama pods with the Ollama client for
+        per-node routing.
         """
         from app.services.llm_ollama_client import ollama_client
-        from app.services.llm_pod_manager import GATEWAY_LABEL, GATEWAY_LABEL_VALUE, BACKEND_NAMESPACES, MODEL_LABEL
+        from app.services.llm_pod_manager import GATEWAY_LABEL, GATEWAY_LABEL_VALUE, MODEL_LABEL
 
         try:
             from kubernetes import client, config as k8s_config
@@ -107,26 +80,14 @@ class LLMBackendDiscovery:
             v1 = client.CoreV1Api()
             discovered = set()
 
-            for backend_type, default_ns in BACKEND_NAMESPACES.items():
-                namespace = os.getenv(
-                    {
-                        "ollama": "LLM_OLLAMA_NAMESPACE",
-                        "vllm": "LLM_VLLM_NAMESPACE",
-                        "tensorrt-llm": "LLM_TENSORRT_NAMESPACE",
-                        "text-embeddings": "LLM_TEI_NAMESPACE",
-                    }.get(backend_type, ""),
-                    default_ns,
-                )
-
+            for backend_type in llm_backend_types.list():
                 try:
                     pods = v1.list_namespaced_pod(
-                        namespace,
+                        backend_type.namespace,
                         label_selector=f"{GATEWAY_LABEL}={GATEWAY_LABEL_VALUE}",
                     )
                 except Exception:
                     continue
-
-                port = self._get_backend_port(backend_type)
 
                 for pod in pods.items:
                     if pod.status.phase != "Running" or not pod.status.pod_ip:
@@ -140,27 +101,15 @@ class LLMBackendDiscovery:
                     # A one-model backend's pod carries its model; several of
                     # them can share a node, so the model is part of the id.
                     slug = (pod.metadata.labels or {}).get(MODEL_LABEL)
-                    backend_id = f"{backend_type}-{node_name}/{slug}" if slug else f"{backend_type}-{node_name}"
+                    prefix = f"{backend_type.type}-{node_name}"
+                    backend_id = f"{prefix}/{slug}" if slug else prefix
                     where = f"{node_name}, {slug}" if slug else node_name
                     discovered.add(backend_id)
 
-                    api_path = "/v1"
-                    if backend_type == "ollama":
-                        url = f"http://{pod_ip}:11434"
-                        display = f"Ollama ({node_name})"
-                        ollama_client.register_node(node_name, pod_ip, pod_name)
-                    elif backend_type == "vllm":
-                        url = f"http://{pod_ip}:{port}"
-                        display = f"vLLM ({where})"
-                    elif backend_type == "tensorrt-llm":
-                        url = f"http://{pod_ip}:{port}"
-                        display = f"TRT-LLM ({where})"
-                    elif backend_type == "text-embeddings":
-                        url = f"http://{pod_ip}:{port}"
-                        display = f"TEI ({where})"
-                    else:
-                        url = f"http://{pod_ip}:{port}"
-                        display = f"{backend_type} ({where})"
+                    url = f"http://{pod_ip}:{backend_type.port}"
+                    display = f"{backend_type.display_name} ({where})"
+                    if backend_type.driver == DRIVER_OLLAMA:
+                        ollama_client.register_node(node_name, url, pod_name, backend_type.namespace)
 
                     # The same pod keeps its entry, with the status and models
                     # its probes found; rebuilding it on every pass would show
@@ -175,89 +124,23 @@ class LLMBackendDiscovery:
                         id=backend_id,
                         name=display,
                         url=url,
-                        type=backend_type,
-                        api_path=api_path,
+                        type=backend_type.type,
+                        api_path=backend_type.api_path,
                         status="unknown",
                         node=node_name,
                     )
                     self._probe_failures.pop(backend_id, None)
 
-            stale = [
-                bid for bid in list(self._backends)
-                if any(bid.startswith(f"{bt}-") for bt in BACKEND_NAMESPACES)
-                and bid not in discovered
-                and self._backends[bid].node
-            ]
+            stale = [bid for bid in list(self._backends) if bid not in discovered]
             for bid in stale:
                 backend = self._backends[bid]
-                if backend.type == "ollama" and backend.node:
+                described = llm_backend_types.get(backend.type)
+                if described is not None and described.driver == DRIVER_OLLAMA and backend.node:
                     ollama_client.unregister_node(backend.node)
                 del self._backends[bid]
 
         except Exception as e:
             logger.warning(f"Gateway pod discovery failed: {e}")
-
-    def _get_backend_port(self, backend_type: str) -> int:
-        ports = {"ollama": 11434, "vllm": 7860, "tensorrt-llm": 7860, "text-embeddings": 7860}
-        return ports.get(backend_type, 8080)
-
-    async def _discover_from_configmaps(self):
-        try:
-            from kubernetes import client, config as k8s_config
-
-            try:
-                k8s_config.load_incluster_config()
-            except k8s_config.ConfigException:
-                k8s_config.load_kube_config()
-
-            v1 = client.CoreV1Api()
-            cms = v1.list_config_map_for_all_namespaces(
-                label_selector="thinkube.io/managed=true"
-            )
-
-            for cm in cms.items:
-                if cm.metadata.name != "thinkube-service-config":
-                    continue
-                if not cm.data or "service.yaml" not in cm.data:
-                    continue
-
-                svc_data = yaml.safe_load(cm.data["service.yaml"])
-                namespace = cm.metadata.namespace
-
-                endpoints = svc_data.get("endpoints", {})
-                for ep_name, ep_data in endpoints.items():
-                    url = ep_data.get("internal_url") or ep_data.get("url", "")
-                    if not url:
-                        continue
-
-                    server_type = self._detect_server_type(svc_data, namespace)
-                    if server_type:
-                        bid = f"{namespace}-{ep_name}"
-                        if bid not in self._backends:
-                            self._backends[bid] = BackendEntry(
-                                id=bid,
-                                name=f"{namespace}/{ep_name}",
-                                url=url,
-                                type=server_type,
-                                api_path="/v1",
-                                status="unknown",
-                            )
-        except Exception as e:
-            logger.warning(f"ConfigMap discovery failed: {e}")
-
-    def _detect_server_type(self, svc_data: dict, namespace: str) -> Optional[str]:
-        template_type = svc_data.get("template_type", "")
-        ns_lower = namespace.lower()
-
-        if "vllm" in template_type or "vllm" in ns_lower:
-            return "vllm"
-        if "tensorrt" in template_type or "trtllm" in ns_lower:
-            return "tensorrt-llm"
-        if "ollama" in template_type or "ollama" in ns_lower:
-            return "ollama"
-        if "text-embeddings" in template_type or "text-embeddings" in ns_lower or "tei" in ns_lower:
-            return "text-embeddings"
-        return None
 
     async def _probe_all(self):
         tasks = [self._probe_backend(b) for b in list(self._backends.values())]
@@ -266,10 +149,11 @@ class LLMBackendDiscovery:
     async def _probe_backend(self, backend: BackendEntry):
         from datetime import datetime
         try:
-            if backend.type == "ollama":
+            backend_type = llm_backend_types.require(backend.type)
+            if backend_type.driver == DRIVER_OLLAMA:
                 await self._probe_ollama(backend)
             else:
-                await self._probe_openai_compatible(backend)
+                await self._probe_openai_compatible(backend, backend_type.health_path)
             # Probe succeeded — reset failure counter
             self._probe_failures[backend.id] = 0
         except Exception as e:
@@ -303,21 +187,22 @@ class LLMBackendDiscovery:
         backend.status = "healthy"
         backend.models = running
 
-    async def _probe_openai_compatible(self, backend: BackendEntry):
-        health_url = f"{backend.url}/health"
+    async def _probe_openai_compatible(self, backend: BackendEntry, health_path: str):
+        health_url = f"{backend.url}{health_path}"
         resp = await self._client.get(health_url)
         if resp.status_code != 200:
             raise RuntimeError(f"Health check returned {resp.status_code}")
 
-        models_url = f"{backend.url}/v1/models"
+        models_url = f"{backend.url}{backend.api_path}/models"
         try:
             resp = await self._client.get(models_url)
             if resp.status_code == 200:
                 data = resp.json()
-                model_ids = [
-                    m.get("id", "") for m in data.get("data", []) if m.get("id")
-                ]
-                backend.models = model_ids
+                cards = [m for m in data.get("data", []) if m.get("id")]
+                backend.models = [m["id"] for m in cards]
+                backend.model_context = {
+                    m["id"]: m["max_model_len"] for m in cards if isinstance(m.get("max_model_len"), int)
+                }
             # Don't clear models on /v1/models failure — keep last known good list
         except Exception:
             pass  # Keep existing models list on models endpoint failure

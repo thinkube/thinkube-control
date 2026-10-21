@@ -7,6 +7,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -33,12 +34,7 @@ func modelBackend(t *testing.T, models string) *httptest.Server {
 
 func listModels(t *testing.T, backendURL string) (int, map[string]any) {
 	t.Helper()
-	return listModelsWithAliases(t, backendURL, nil)
-}
-
-func listModelsWithAliases(t *testing.T, backendURL string, aliases map[string]string) (int, map[string]any) {
-	t.Helper()
-	h := NewOpenAIHandler(resolver.New(backendURL, aliases), forwarder.New(5*time.Second), 1<<20)
+	h := NewOpenAIHandler(resolver.New(backendURL), forwarder.New(5*time.Second), 1<<20)
 	rec := httptest.NewRecorder()
 	h.ListModels(rec, httptest.NewRequest("GET", "/v1/models", nil))
 	var body map[string]any
@@ -71,20 +67,16 @@ func TestListModelsReturnsServedAndDeployableModels(t *testing.T) {
 	}
 }
 
-// An alias is listed after the models, with root naming the model it points
-// to, so an app knows which model it names before calling it. A model's root
-// is its own id. An alias to a model the list does not hold is left out.
+// A catalog alias is listed after the models, with root naming the model it
+// points to, so an app knows which model it names before calling it. A
+// model's root is its own id. A model not served or deployable lists no alias.
 func TestListModelsListsAliasesWithTheirRoot(t *testing.T) {
 	backend := modelBackend(t, `{"models":[
-		{"id":"nvidia/Qwen3.6-35B-A3B-NVFP4","state":"available","server_type":["vllm"]},
-		{"id":"Qwen/Qwen3-32B","state":"registered","server_type":["vllm"]}]}`)
+		{"id":"nvidia/Qwen3.6-35B-A3B-NVFP4","state":"available","server_type":["vllm"],"aliases":["thinkube-fast","thinkube-agent"]},
+		{"id":"Qwen/Qwen3-32B","state":"registered","server_type":["vllm"],"aliases":["thinkube-big"]}]}`)
 	defer backend.Close()
 
-	_, body := listModelsWithAliases(t, backend.URL, map[string]string{
-		"thinkube-fast":  "nvidia/Qwen3.6-35B-A3B-NVFP4",
-		"thinkube-big":   "Qwen/Qwen3-32B",
-		"thinkube-agent": "nvidia/Qwen3.6-35B-A3B-NVFP4",
-	})
+	_, body := listModels(t, backend.URL)
 	data := body["data"].([]any)
 	got := []string{}
 	for _, d := range data {
@@ -103,6 +95,42 @@ func TestListModelsListsAliasesWithTheirRoot(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("got %v, want %v", got, want)
 		}
+	}
+}
+
+// Each entry says what an agent client needs: the model's state, aliases,
+// capabilities, whether it is the agent default, its inputs, the context its
+// backend serves and the answer budget.
+func TestListModelsDescribesEachModelForAgents(t *testing.T) {
+	backend := modelBackend(t, `{"models":[
+		{"id":"org/flash","name":"Flash","state":"available","aliases":["thinkube-flash"],
+		 "capabilities":["agent","vision"],"default_agent":true,"max_output":32768,"served_context_length":262144,
+		 "context_length":262144,"reasoning_format":"qwen3"},
+		{"id":"org/embed","name":"Embed","state":"deployable"}]}`)
+	defer backend.Close()
+
+	_, body := listModels(t, backend.URL)
+	byID := map[string]map[string]any{}
+	for _, d := range body["data"].([]any) {
+		m := d.(map[string]any)
+		byID[m["id"].(string)] = m["thinkube"].(map[string]any)
+	}
+	flash := byID["org/flash"]
+	if flash["state"] != "available" || flash["default_agent"] != true || flash["context_window"] != 262144.0 || flash["max_output"] != 32768.0 {
+		t.Fatalf("flash: %v", flash)
+	}
+	if flash["reasoning_format"] != "qwen3" || flash["context_length"] != 262144.0 {
+		t.Fatalf("flash reasoning or length: %v", flash)
+	}
+	if fmt.Sprint(flash["input"]) != "[text image]" || fmt.Sprint(flash["capabilities"]) != "[agent vision]" {
+		t.Fatalf("flash inputs or capabilities: %v", flash)
+	}
+	if fmt.Sprint(byID["thinkube-flash"]) != fmt.Sprint(flash) {
+		t.Fatalf("the alias does not describe its model: %v", byID["thinkube-flash"])
+	}
+	embed := byID["org/embed"]
+	if fmt.Sprint(embed["capabilities"]) != "[]" || embed["context_window"] != nil || embed["reasoning_format"] != nil || fmt.Sprint(embed["input"]) != "[text]" {
+		t.Fatalf("embed: %v", embed)
 	}
 }
 

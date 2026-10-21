@@ -5,21 +5,35 @@
 
 """Regression tests for parse_backend_id (backend_id -> (backend_type, node)).
 
-The text-embeddings cases guard SP-tgjiw3: 'text-embeddings' is a compound
-(hyphenated) backend type, so it must be matched as a known prefix. If it is
-missing from KNOWN_BACKEND_TYPES the generic first-hyphen fallback splits
-'text-embeddings-tkspark' into ('text', 'embeddings-tkspark'), which makes the
-reconciler look for a deployment on a node 'embeddings-tkspark' that does not
-exist -> "Deployment disappeared" -> the model never reaches `available`.
+Backend types and node names both contain hyphens, so the type is matched
+against the installed backend types (the conftest fixture installs the four
+the platform ships). Split on the first hyphen, 'text-embeddings-tkspark'
+would name a node 'embeddings-tkspark' that does not exist, and the model
+would never reach `available`.
 """
 
 import pytest
 
-from app.services.llm_lifecycle import parse_backend_id, KNOWN_BACKEND_TYPES
+from app.services.llm_lifecycle import is_shared_backend_id, parse_backend_id
 
 
-def test_text_embeddings_is_a_known_prefix():
-    assert "text-embeddings" in KNOWN_BACKEND_TYPES
+def test_an_id_of_no_installed_type_is_returned_whole():
+    assert parse_backend_id("flare-tkspark/m") == ("flare-tkspark", None)
+
+
+def test_the_longest_installed_type_wins(llm_backend_types_installed):
+    from app.services.llm_backend_types import BackendType
+
+    vllm = llm_backend_types_installed["vllm"]
+    llm_backend_types_installed["vllm-omni"] = BackendType(**{**vllm.__dict__, "type": "vllm-omni"})
+    assert parse_backend_id("vllm-omni-tkspark/m") == ("vllm-omni", "tkspark")
+    assert parse_backend_id("vllm-tkspark/m") == ("vllm", "tkspark")
+
+
+def test_only_a_shared_backend_id_is_shared():
+    assert is_shared_backend_id("ollama-tkamd2")
+    assert not is_shared_backend_id("vllm-tkamd2/m")
+    assert not is_shared_backend_id("flare-tkamd2/m")
 
 
 @pytest.mark.parametrize(

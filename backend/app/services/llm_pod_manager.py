@@ -5,18 +5,19 @@
 LLM Pod Manager
 
 Creates and deletes per-node Deployments for gateway-managed inference backends.
-Each backend (Ollama, vLLM, TRT-LLM) is deployed with replicas: 0. When a user
-loads a model, this manager creates a single-replica Deployment targeting the
-chosen node and GPU. Unloading the last model on a pod deletes that Deployment.
+Each backend type (llm_backend_types) has a base Deployment at replicas: 0. When
+a user loads a model, this manager creates a single-replica Deployment targeting
+the chosen node and GPU. Unloading the last model on a pod deletes that Deployment.
 """
 
 import asyncio
 import hashlib
 import logging
-import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
+
+from app.services.llm_backend_types import llm_backend_types
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +29,9 @@ BACKEND_TYPE_LABEL = "thinkube.io/backend-type"
 TARGET_NODE_LABEL = "thinkube.io/target-node"
 MODEL_LABEL = "thinkube.io/model"
 
-# Ollama hosts many models in one pod per node. Every other backend runs one
-# model per pod, so it gets one Deployment per model on a node, and the
-# model is part of that Deployment's name, labels and selector.
-SHARED_BACKENDS = {"ollama"}
+# A shared backend (Ollama) hosts many models in one pod per node. Every other
+# backend runs one model per pod, so it gets one Deployment per model on a
+# node, and the model is part of that Deployment's name, labels and selector.
 
 _SLUG_MAX = 40
 
@@ -73,31 +73,13 @@ class ManagedPod:
         self.ready = ready
 
 
-# Backend type → namespace mapping
-BACKEND_NAMESPACES = {
-    "ollama": "ollama",
-    "vllm": "vllm",
-    "tensorrt-llm": "tensorrt",
-    "text-embeddings": "text-embeddings",
-}
-
-
 class LLMPodManager:
     def __init__(self):
         self._managed: Dict[str, ManagedPod] = {}
         self._creating: Dict[str, asyncio.Event] = {}
 
     def _get_namespace(self, backend_type: str) -> str:
-        ns_env = {
-            "ollama": "LLM_OLLAMA_NAMESPACE",
-            "vllm": "LLM_VLLM_NAMESPACE",
-            "tensorrt-llm": "LLM_TENSORRT_NAMESPACE",
-            "text-embeddings": "LLM_TEI_NAMESPACE",
-        }
-        env_key = ns_env.get(backend_type)
-        if env_key:
-            return os.getenv(env_key, BACKEND_NAMESPACES.get(backend_type, backend_type))
-        return BACKEND_NAMESPACES.get(backend_type, backend_type)
+        return llm_backend_types.require(backend_type).namespace
 
     def _is_disabled(self, backend_type: str) -> bool:
         """Whether the operator has turned this backend off in the services view.
@@ -124,17 +106,11 @@ class LLMPodManager:
             return False
 
     def _get_base_deployment_name(self, backend_type: str) -> str:
-        names = {
-            "ollama": "ollama",
-            "vllm": "vllm-inference",
-            "tensorrt-llm": "tensorrt-inference",
-            "text-embeddings": "text-embeddings-inference",
-        }
-        return names.get(backend_type, backend_type)
+        return llm_backend_types.require(backend_type).deployment
 
     def _slug_for(self, backend_type: str, model_id: Optional[str]) -> Optional[str]:
         """The model part of a backend's identity; none for a shared backend."""
-        if backend_type in SHARED_BACKENDS:
+        if llm_backend_types.is_shared(backend_type):
             return None
         if not model_id:
             raise ValueError(f"A {backend_type} pod serves one model; the model is required")
@@ -211,7 +187,7 @@ class LLMPodManager:
                 # more model must not restart it for a newer image. It takes
                 # the image when it is next created.
                 restarted = False
-                if backend_type not in SHARED_BACKENDS:
+                if not llm_backend_types.is_shared(backend_type):
                     restarted = await loop.run_in_executor(
                         _k8s_executor,
                         self._check_and_sync_image,
@@ -602,21 +578,24 @@ class LLMPodManager:
         try:
             from kubernetes import client, config as k8s_config
 
-            try:
-                k8s_config.load_incluster_config()
-            except k8s_config.ConfigException:
-                k8s_config.load_kube_config()
+            k8s_config.load_incluster_config()
 
             apps_v1 = client.AppsV1Api()
             namespace = self._get_namespace(backend_type)
             deploy_name = self._make_deployment_name(backend_type, node_name, model_id)
 
             try:
-                apps_v1.read_namespaced_deployment(deploy_name, namespace)
+                deployment = apps_v1.read_namespaced_deployment(deploy_name, namespace)
             except client.rest.ApiException as e:
                 if e.status == 404:
                     return "absent", ""
                 raise
+
+            # Kubernetes refusing to create the pod (a quota, an admission
+            # rule) leaves no pod to inspect; the Deployment says why.
+            for condition in (deployment.status.conditions or []) if deployment.status else []:
+                if condition.type == "ReplicaFailure" and condition.status == "True":
+                    return "failed", f"{condition.reason}: {condition.message}"
 
             v1 = client.CoreV1Api()
             pods = v1.list_namespaced_pod(
@@ -633,14 +612,18 @@ class LLMPodManager:
                         reason = cs.state.waiting.reason or ""
                         message = cs.state.waiting.message or ""
                         if reason in ("CrashLoopBackOff", "ErrImagePull", "ImagePullBackOff", "CreateContainerError"):
-                            detail = reason
-                            if message:
+                            # A crashed container's own termination message says
+                            # why it stopped; the back-off message only says that
+                            # it is restarted.
+                            t = cs.last_state.terminated if cs.last_state else None
+                            if t and t.message:
+                                detail = f"{reason}: {t.message.strip()}"
+                            elif message:
                                 detail = f"{reason}: {message}"
-                            elif cs.last_state and cs.last_state.terminated:
-                                t = cs.last_state.terminated
+                            elif t:
                                 detail = f"{reason} (exit {t.exit_code})"
-                                if t.message:
-                                    detail = f"{reason}: {t.message}"
+                            else:
+                                detail = reason
                             return "failed", detail
 
                 if pod.status.phase == "Running":
@@ -769,8 +752,8 @@ class LLMPodManager:
             # Running pods keep their image: a newer backend image reaches a
             # deployment at its next load (_create_node_deployment), so a
             # restart of Thinkube Control never restarts the loaded models.
-            for backend_type in BACKEND_NAMESPACES:
-                ns = self._get_namespace(backend_type)
+            for backend in llm_backend_types.list():
+                backend_type, ns = backend.type, backend.namespace
                 try:
                     deploys = apps_v1.list_namespaced_deployment(
                         ns, label_selector=f"{GATEWAY_LABEL}={GATEWAY_LABEL_VALUE}"

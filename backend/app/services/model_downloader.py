@@ -22,7 +22,7 @@ from kubernetes.client.rest import ApiException
 from mlflow.tracking import MlflowClient
 from mlflow.exceptions import RestException
 
-from app.services.metadata_fetcher import fetch_merged_catalog
+from app.services.metadata_fetcher import CatalogUnavailableError, fetch_merged_catalog
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -31,15 +31,84 @@ def get_model_catalog() -> List[Dict]:
     """
     Get the model catalog from platform + user metadata repos.
 
-    Raises CatalogUnavailableError when the catalog cannot be fetched.
+    Raises CatalogUnavailableError when the catalog cannot be fetched, or
+    when its aliases or its agent default break the rules of resolve_names.
     """
-    return fetch_merged_catalog(
+    return resolve_names(fetch_merged_catalog(
         catalog_name="models",
         file_name="models.json",
         extract_key="models",
         merge_strategy="list",
         dedup_key="id",
-    )
+    ))
+
+
+def resolve_names(entries: List[Dict]) -> List[Dict]:
+    """The catalog with each alias, and the agent default, owned by one model.
+
+    An alias names one model and is never a model id. One model at most is
+    the agent default (default_agent), and it is marked agent. A model marked
+    agent has a context_length and a max_output, which agent clients need. A claim in
+    the user's metadata repository wins over the platform's: the platform
+    entry loses that alias, or its default. Two claims from the same source
+    make the catalog unavailable, with both entries named.
+    """
+    ids = {e["id"] for e in entries}
+    owners: Dict[str, List[Dict]] = {}
+    for entry in entries:
+        for alias in entry.get("aliases") or []:
+            if alias in ids:
+                raise CatalogUnavailableError(
+                    f"Model catalog: alias '{alias}' of {entry['id']} is the id of another model"
+                )
+            owners.setdefault(alias, []).append(entry)
+
+    dropped_aliases: Dict[str, set] = {}
+    for alias, claimants in owners.items():
+        user = [e for e in claimants if e.get("_source") == "user"]
+        winners = user or claimants
+        if len(winners) > 1:
+            raise CatalogUnavailableError(
+                f"Model catalog: alias '{alias}' is claimed by {', '.join(e['id'] for e in winners)}"
+            )
+        for entry in claimants:
+            if entry is not winners[0]:
+                dropped_aliases.setdefault(entry["id"], set()).add(alias)
+
+    for entry in entries:
+        if "agent" in (entry.get("capabilities") or []):
+            missing = [f for f in ("context_length", "max_output") if not entry.get(f)]
+            if missing:
+                raise CatalogUnavailableError(
+                    f"Model catalog: {entry['id']} is marked agent but has no {' or '.join(missing)}; "
+                    "an agent client needs both"
+                )
+
+    defaults = [e for e in entries if e.get("default_agent")]
+    user_defaults = [e for e in defaults if e.get("_source") == "user"]
+    winning_defaults = user_defaults or defaults
+    if len(winning_defaults) > 1:
+        raise CatalogUnavailableError(
+            "Model catalog: the agent default (default_agent) is claimed by "
+            + ", ".join(e["id"] for e in winning_defaults)
+        )
+    if winning_defaults and "agent" not in (winning_defaults[0].get("capabilities") or []):
+        raise CatalogUnavailableError(
+            f"Model catalog: {winning_defaults[0]['id']} is the agent default but not marked agent in capabilities"
+        )
+
+    resolved = []
+    for entry in entries:
+        lost = dropped_aliases.get(entry["id"])
+        loses_default = entry.get("default_agent") and winning_defaults and entry is not winning_defaults[0]
+        if lost or loses_default:
+            entry = dict(entry)
+            if lost:
+                entry["aliases"] = [a for a in entry["aliases"] if a not in lost]
+            if loses_default:
+                entry["default_agent"] = False
+        resolved.append(entry)
+    return resolved
 
 
 def catalog_entry(model_id: str) -> Dict:
@@ -53,8 +122,8 @@ def catalog_entry(model_id: str) -> Dict:
     """
     model_info = next((m for m in get_model_catalog() if m["id"] == model_id), None)
     if not model_info:
-        from app.services.metadata_fetcher import _memory_cache
-        _memory_cache.pop("models", None)
+        from app.services.metadata_fetcher import invalidate_catalogs
+        invalidate_catalogs()
         model_info = next((m for m in get_model_catalog() if m["id"] == model_id), None)
     if not model_info:
         raise ValueError(f"Model '{model_id}' not found in catalog")
@@ -139,6 +208,12 @@ class ModelDownloaderService:
         safe_model_id = model_id.replace("'", "\\'")
         safe_model_task = model_task.replace("'", "\\'")
         allow_patterns = model_info.get("allow_patterns", None)
+        # A prepared runtime package lives on a hardware branch of its repository.
+        revision = model_info.get("revision")
+        # A signed package names the publisher whose key must sign it.
+        publisher = model_info.get("publisher")
+        # A package that is not a transformers checkpoint names its format.
+        package_format = model_info.get("format")
 
         # Create Hera workflow
         with Workflow(
@@ -179,6 +254,32 @@ import sys
 import tempfile
 import shutil
 from pathlib import Path
+
+# Xet is off for mirrors (HF_HUB_DISABLE_XET in the workflow), but Hugging Face
+# serves a file over 50 GB only through Xet. A download that holds such a file
+# turns Xet on, in its normal mode, before huggingface_hub reads the setting.
+import fnmatch
+import requests as _requests
+
+def _files_to_download(repo_id, revision, patterns):
+    url = f"https://huggingface.co/api/models/{{repo_id}}/tree/{{revision or 'main'}}?recursive=true"
+    headers = {{'Authorization': f"Bearer {{os.environ['HF_TOKEN']}}"}} if os.environ.get('HF_TOKEN') else {{}}
+    files = []
+    while url:
+        resp = _requests.get(url, headers=headers, timeout=60)
+        resp.raise_for_status()
+        files += [f for f in resp.json() if f.get('type') == 'file']
+        url = resp.links.get('next', {{}}).get('url')
+    if patterns:
+        files = [f for f in files if any(fnmatch.fnmatch(f['path'], p) for p in patterns)]
+    return files
+
+_HTTP_LIMIT = 50 * 1000 ** 3
+_large = [f['path'] for f in _files_to_download({repr(model_id)}, {repr(revision)}, {repr(allow_patterns)}) if f.get('size', 0) > _HTTP_LIMIT]
+if _large:
+    os.environ['HF_HUB_DISABLE_XET'] = '0'
+    print(f'Xet download for files over 50 GB: {{_large}}', flush=True)
+
 from huggingface_hub import snapshot_download, list_repo_files, hf_hub_download
 import json as _json
 import mlflow
@@ -234,12 +335,40 @@ staging_model_path = f'{{staging_base}}/{{model_name}}'
 print(f'Downloading model from HuggingFace to staging: {{staging_model_path}}', flush=True)
 
 allow_patterns = {repr(allow_patterns)}
+revision = {repr(revision)}
 snapshot_download(
     repo_id=model_id,
     local_dir=staging_model_path,
-    **({{'allow_patterns': allow_patterns}} if allow_patterns else {{}})
+    **({{'allow_patterns': allow_patterns}} if allow_patterns else {{}}),
+    **({{'revision': revision}} if revision else {{}})
 )
-print(f'✓ Model downloaded to staging area', flush=True)
+print(f'✓ Model downloaded to staging area' + (f' (revision {{revision}})' if revision else ''), flush=True)
+
+# ============================================================
+# PHASE 1a: The publisher's key of a signed package
+# ============================================================
+# The publisher keeps publisher.json on the repository's default branch. The
+# catalog names the publisher and the SHA-256 of its key; a file that does not
+# list that key under that namespace stops the mirror.
+publisher = {repr(publisher)}
+if publisher:
+    import hashlib
+    hf_hub_download(repo_id=model_id, filename='publisher.json', local_dir=staging_model_path)
+    with open(os.path.join(staging_model_path, 'publisher.json')) as _f:
+        profiles = _json.load(_f)
+    listed = [
+        p for p in profiles
+        if p.get('namespace') == publisher['namespace']
+        and hashlib.sha256(bytes(p.get('public_key', []))).hexdigest() == publisher['key_sha256']
+    ]
+    if not listed:
+        print(
+            f"✗ publisher.json of {{model_id}} does not list the key {{publisher['key_sha256']}} "
+            f"under the namespace {{publisher['namespace']}}; the catalog entry and the repository disagree",
+            flush=True,
+        )
+        sys.exit(1)
+    print(f"✓ publisher.json lists the key of {{publisher['namespace']}}", flush=True)
 
 # ============================================================
 # PHASE 1b: Localize external custom code referenced by auto_map
@@ -402,8 +531,34 @@ try:
         # Create and upload MLflow metadata
         print(f'Creating MLflow metadata...', flush=True)
         is_gguf = any(f.endswith('.gguf') for f in os.listdir(staging_model_path) if os.path.isfile(os.path.join(staging_model_path, f)))
+        package_format = {repr(package_format)}
 
-        if is_gguf:
+        if package_format:
+            # A prepared package (such as a Flare runtime package) is served as
+            # its files; its metadata names the format and lists them.
+            import yaml
+            package_files = sorted(
+                os.path.relpath(os.path.join(r, f), staging_model_path)
+                for r, _, fs in os.walk(staging_model_path) for f in fs
+            )
+            mlmodel_content = {{
+                'flavors': {{
+                    package_format: {{
+                        'model_files': package_files,
+                        'format': package_format,
+                        'task': model_task,
+                        **({{'revision': revision}} if revision else {{}}),
+                    }}
+                }},
+                'model_id': model_id,
+            }}
+            s3_client.put_object(
+                Bucket=s3_bucket,
+                Key=f'{{s3_artifact_prefix}}/MLmodel',
+                Body=yaml.dump(mlmodel_content, default_flow_style=False).encode()
+            )
+            print(f'✓ Uploaded {{package_format}} package metadata ({{len(package_files)}} files)', flush=True)
+        elif is_gguf:
             # GGUF models are standalone binaries — generate minimal metadata
             import yaml
             gguf_files = [f for f in os.listdir(staging_model_path) if f.endswith('.gguf')]

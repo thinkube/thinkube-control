@@ -11,35 +11,39 @@ import json as json_mod
 import httpx
 
 from app.api.llm.schemas import ModelLoadResponse, ModelState, ModelTier, model_id_to_ollama_name
-from app.services.llm_pod_manager import SHARED_BACKENDS, model_slug
+from app.services.llm_backend_types import DRIVER_OLLAMA, llm_backend_types
+from app.services.llm_pod_manager import model_slug
 
 logger = logging.getLogger(__name__)
 
 MLFLOW_ARTIFACT_BASE = "/mlflow-models/artifacts"
 
-KNOWN_BACKEND_TYPES = ("tensorrt-llm", "text-embeddings", "ollama", "vllm")
-
 
 def parse_backend_id(backend_id: str) -> tuple[str, Optional[str]]:
     """Parse a backend id into (backend_type, node_name).
 
-    Ids are 'backend_type-node_name' for Ollama, which hosts many models per
-    node, and 'backend_type-node_name/model' for one-model backends. Handles
-    compound types like 'tensorrt-llm'.
+    Ids are 'backend_type-node_name' for a shared backend (Ollama), which
+    hosts many models per node, and 'backend_type-node_name/model' for
+    one-model backends. Types and node names both contain hyphens, so the
+    type is matched against the installed backend types, longest first.
+    An id of no installed type is returned whole, with no node.
     """
     if not backend_id:
         return backend_id, None
     backend_id = backend_id.split("/", 1)[0]
-    for prefix in KNOWN_BACKEND_TYPES:
+    for prefix in sorted(llm_backend_types.names(), key=len, reverse=True):
         if backend_id == prefix:
             return prefix, None
         if backend_id.startswith(prefix + "-"):
             node = backend_id[len(prefix) + 1:]
             return prefix, node if node else None
-    if "-" in backend_id:
-        parts = backend_id.split("-", 1)
-        return parts[0], parts[1]
     return backend_id, None
+
+
+def is_shared_backend_id(backend_id: str) -> bool:
+    """Whether the backend id names a pod that hosts many models."""
+    backend = llm_backend_types.get(parse_backend_id(backend_id or "")[0])
+    return backend is not None and backend.shared
 
 
 class LLMLifecycleManager:
@@ -48,8 +52,6 @@ class LLMLifecycleManager:
         self._loading_locks: dict[str, asyncio.Event] = {}
         # Node memory planned for each calibrated model at its last load, in GiB.
         self._planned_gb: dict[str, float] = {}
-
-    LOADABLE_TYPES = {"ollama", "vllm", "tensorrt-llm", "text-embeddings"}
 
     # Default serving context when the caller doesn't specify one. Keeps every
     # caller (UI and MCP/API) consistent and avoids deploying at the model's full
@@ -84,10 +86,14 @@ class LLMLifecycleManager:
                 message=f"Model '{model_id}' is an auxiliary {entry.role} model and cannot be loaded standalone"
             )
 
-        if not any(st in self.LOADABLE_TYPES for st in entry.server_type):
+        installed = [t for t in entry.server_type if llm_backend_types.get(t) is not None]
+        if not installed:
             return ModelLoadResponse(
                 model_id=model_id, state=entry.state,
-                message=f"Model type {entry.server_type} cannot be loaded dynamically"
+                message=(
+                    f"None of the model's backend types ({', '.join(entry.server_type) or 'none'}) "
+                    f"is installed; installed: {', '.join(llm_backend_types.names()) or 'none'}"
+                ),
             )
 
         if entry.state == ModelState.available:
@@ -109,46 +115,52 @@ class LLMLifecycleManager:
             return ModelLoadResponse(model_id=model_id, state=entry.state, message=refusal)
         node = node or backend_node
 
-        # Without a node, the GPU node with the most AI memory left takes it.
+        # Without a backend, the model's first installed backend type of the
+        # requested tier; with no tier, performance when the model has one.
+        if not resolved_backend:
+            resolved_tier = tier or (
+                ModelTier.performance
+                if any(llm_backend_types.require(t).performance for t in installed)
+                else ModelTier.flexible
+            )
+            resolved_backend = next(
+                (t for t in installed if llm_backend_types.require(t).tier == resolved_tier.value),
+                installed[0],
+            )
+
+        if resolved_backend not in entry.server_type:
+            return ModelLoadResponse(
+                model_id=model_id, state=entry.state,
+                message=(
+                    f"Model '{model_id}' does not run on {resolved_backend}; "
+                    f"its backend types are {', '.join(entry.server_type)}"
+                ),
+            )
+        backend_type = llm_backend_types.require(resolved_backend)
+
+        # Without a node, the GPU node with the most AI memory left whose GPU
+        # the backend runs on takes it.
         if not node:
-            node = await self._pick_node()
+            node = await self._pick_node(backend_type)
             if not node:
                 return ModelLoadResponse(
                     model_id=model_id, state=entry.state,
-                    message="No GPU node is known; a target node is required to load a model",
+                    message=f"No GPU node is known that {backend_type.display_name} runs on; a target node is required",
                 )
+        refusal = self._gpu_refusal(backend_type, node)
+        if refusal:
+            return ModelLoadResponse(model_id=model_id, state=entry.state, message=refusal)
 
         # The serving context when the caller does not say: the largest of
         # 32k, 16k, 8k that the model allows and the node has memory for.
         if max_context_length is None:
             max_context_length = await self._default_context(entry, node)
 
-        if not resolved_backend:
-            resolved_tier = tier or (
-                ModelTier.performance if any(t in ("vllm", "tensorrt-llm") for t in entry.server_type)
-                else ModelTier.flexible
-            )
-            if "text-embeddings" in entry.server_type:
-                resolved_backend = "text-embeddings"
-            elif resolved_tier == ModelTier.flexible and "ollama" in entry.server_type:
-                resolved_backend = "ollama"
-            elif resolved_tier == ModelTier.performance:
-                return await self._load_performance(model_id, backend=backend, node=node, max_context_length=max_context_length, num_speculative_tokens=num_speculative_tokens)
-            elif "ollama" in entry.server_type:
-                resolved_backend = "ollama"
+        driver = backend_type.driver
+        if driver == DRIVER_OLLAMA:
+            return await self._load_ollama(model_id, resolved_backend, keep_alive, node, max_context_length=max_context_length)
+        return await self._load_performance(model_id, backend=resolved_backend, node=node, max_context_length=max_context_length, num_speculative_tokens=num_speculative_tokens)
 
-        if resolved_backend == "ollama":
-            return await self._load_ollama(model_id, keep_alive, node, max_context_length=max_context_length)
-
-        if resolved_backend in ("vllm", "tensorrt-llm", "text-embeddings"):
-            return await self._load_performance(model_id, backend=resolved_backend, node=node, max_context_length=max_context_length, num_speculative_tokens=num_speculative_tokens)
-
-        return ModelLoadResponse(
-            model_id=model_id, state=entry.state,
-            message=f"No supported backend for model '{model_id}' with server_type={entry.server_type}"
-        )
-
-    BACKEND_TYPES = ("vllm", "tensorrt-llm", "text-embeddings", "ollama")
     CONTEXT_CHOICES = (32768, 16384, 8192)
 
     def _resolve_backend_arg(self, backend: Optional[str]):
@@ -158,29 +170,43 @@ class LLMLifecycleManager:
 
         if not backend:
             return None, None, None
-        if backend in self.BACKEND_TYPES:
+        types = llm_backend_types.names()
+        if backend in types:
             return backend, None, None
         # '<type>-<node>' names a backend type on a GPU node; the load creates
         # the pod there, so no pod has to be running. A full backend id
         # ('vllm-tkspark/<model>') names the same type and node.
         backend_type, node = parse_backend_id(backend)
-        if backend_type in self.BACKEND_TYPES and node and llm_gpu_tracker.get_node(node) is not None:
+        if backend_type in types and node and llm_gpu_tracker.get_node(node) is not None:
             return backend_type, node, None
         found = llm_backend_discovery.get_backend(backend)
         if found is not None:
             return found.type, found.node, None
-        forms = sorted({f"{t}-{n}" for t in self.BACKEND_TYPES for n in llm_gpu_tracker.node_names()})
+        forms = sorted({f"{t}-{n}" for t in types for n in llm_gpu_tracker.node_names()})
         return None, None, (
-            f"backend '{backend}' is neither a backend type ({', '.join(self.BACKEND_TYPES)}) "
+            f"backend '{backend}' is neither an installed backend type ({', '.join(types) or 'none'}) "
             f"nor a backend type on a GPU node ({', '.join(forms) or 'no GPU nodes known yet'})"
         )
 
-    async def _pick_node(self) -> Optional[str]:
+    def _gpu_refusal(self, backend_type, node: str) -> Optional[str]:
+        """Why the backend cannot run on the node's GPU, or None when it can."""
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+
+        found = llm_gpu_tracker.get_node(node)
+        if found is None or backend_type.runs_on(found.compute_capability):
+            return None
+        return (
+            f"{backend_type.display_name} runs on GPUs of compute capability "
+            f"{', '.join(backend_type.gpu_compute_capabilities)}; {node} has "
+            f"{found.compute_capability or 'an unknown one'} ({found.gpu_product or 'GPU'})"
+        )
+
+    async def _pick_node(self, backend_type) -> Optional[str]:
         """The GPU node with the most AI memory left and a free slot, else the most memory."""
         from app.services.llm_gpu_tracker import llm_gpu_tracker
 
         status = await llm_gpu_tracker.get_status()
-        nodes = list(status.nodes)
+        nodes = [n for n in status.nodes if backend_type.runs_on(n.compute_capability)]
         if not nodes:
             return None
         free = [n for n in nodes if n.available_slots > 0]
@@ -261,8 +287,8 @@ class LLMLifecycleManager:
         return math.ceil(estimated_memory_gb / (per_gpu * llm_gpu_tracker._memory_threshold))
 
     async def _load_ollama(
-        self, model_id: str, keep_alive: Optional[str] = None, node: Optional[str] = None,
-        max_context_length: Optional[int] = None,
+        self, model_id: str, backend_type: str, keep_alive: Optional[str] = None,
+        node: Optional[str] = None, max_context_length: Optional[int] = None,
     ) -> ModelLoadResponse:
         from app.services.llm_model_registry import llm_model_registry
 
@@ -275,12 +301,13 @@ class LLMLifecycleManager:
         entry = llm_model_registry.get_model(model_id)
         estimated_memory = self._estimate_memory(entry, max_context_length)
 
-        backend_id = f"ollama-{node}"
+        backend_id = f"{backend_type}-{node}"
         llm_model_registry.update_model_state(model_id, ModelState.loading, backend_id)
 
         asyncio.create_task(
             self._load_ollama_background(
-                model_id, keep_alive, node, backend_id, estimated_memory, max_context_length
+                model_id, backend_type, keep_alive, node, backend_id, estimated_memory,
+                max_context_length,
             )
         )
 
@@ -290,7 +317,7 @@ class LLMLifecycleManager:
         )
 
     async def _load_ollama_background(
-        self, model_id: str, keep_alive: Optional[str],
+        self, model_id: str, backend_type: str, keep_alive: Optional[str],
         target_node: Optional[str], backend_id: str, estimated_memory: float,
         max_context_length: Optional[int] = None,
     ):
@@ -304,14 +331,20 @@ class LLMLifecycleManager:
 
         try:
             gpu_count = self._gpus_needed(estimated_memory, target_node)
-            success, managed_pod = await llm_pod_manager.ensure_pod("ollama", target_node, gpu_count=gpu_count)
-            if not success:
+            success, managed_pod = await llm_pod_manager.ensure_pod(backend_type, target_node, gpu_count=gpu_count)
+            if not success or managed_pod is None:
                 llm_model_registry.update_model_state(
                     model_id, ModelState.deployable,
                     error=f"Failed to start Ollama pod on {target_node}",
                 )
                 logger.error(f"Failed to start Ollama pod on {target_node}")
                 return
+            # The pod is known now; discovery registers it only on its next pass.
+            port = llm_backend_types.require(backend_type).port
+            ollama_client.register_node(
+                target_node, f"http://{managed_pod.pod_ip}:{port}",
+                managed_pod.pod_name, managed_pod.namespace,
+            )
 
             if not await ollama_client.is_available(target_node):
                 llm_model_registry.update_model_state(
@@ -420,23 +453,11 @@ class LLMLifecycleManager:
                 message="A target node is required to load a model"
             )
 
-        perf_type = None
-        for st in entry.server_type:
-            if st in ("vllm", "tensorrt-llm", "text-embeddings"):
-                perf_type = st
-                break
-        if backend and backend in ("vllm", "tensorrt-llm", "text-embeddings"):
-            perf_type = backend
+        perf_type = backend
 
-        if not perf_type:
-            return ModelLoadResponse(
-                model_id=model_id, state=ModelState.deployable,
-                message=f"No performance backend type found for {entry.server_type}"
-            )
-
-        # A vLLM, TensorRT-LLM or embeddings pod serves one model, and each
-        # model gets its own Deployment on the node. Whether a second model
-        # fits beside the first is the memory plan's decision below.
+        # A one-model backend's pod serves one model, and each model gets its
+        # own Deployment on the node. Whether a second model fits beside the
+        # first is the memory plan's decision below.
         #
         # Engines on one node start one at a time: an engine sizes its cache
         # from the memory it sees used while it starts, and counts what
@@ -447,7 +468,7 @@ class LLMLifecycleManager:
                 if m.id != model_id
                 and m.state == ModelState.loading
                 and parse_backend_id(m.backend_id or "")[1] == node
-                and parse_backend_id(m.backend_id or "")[0] not in SHARED_BACKENDS
+                and not is_shared_backend_id(m.backend_id)
             ),
             None,
         )
@@ -546,6 +567,10 @@ class LLMLifecycleManager:
             payload["speculative_config"] = spec_cfg
         if getattr(entry, "enforce_eager", False):
             payload["enforce_eager"] = True
+        if getattr(entry, "publisher", None):
+            payload["publisher"] = entry.publisher
+        if getattr(entry, "server_args", None):
+            payload["server_args"] = entry.server_args
         if max_context_length:
             payload["max_context_length"] = max_context_length
         if sizing.get("gpu_memory_utilization") is not None:
@@ -599,6 +624,11 @@ class LLMLifecycleManager:
                 model_env["SPECULATIVE_CONFIG"] = payload["speculative_config"]
             if payload.get("enforce_eager"):
                 model_env["ENFORCE_EAGER"] = "true"
+            if payload.get("publisher"):
+                model_env["PACKAGE_PUBLISHER"] = payload["publisher"]["namespace"]
+                model_env["PACKAGE_PUBLISHER_KEY"] = payload["publisher"]["key_sha256"]
+            if payload.get("server_args"):
+                model_env["SERVER_ARGS"] = json_mod.dumps(payload["server_args"])
             if payload.get("gpu_memory_utilization") is not None:
                 model_env["VLLM_GPU_MEMORY_UTILIZATION"] = str(
                     payload["gpu_memory_utilization"]
@@ -653,7 +683,8 @@ class LLMLifecycleManager:
 
         llm_model_registry.update_model_state(model_id, ModelState.unloading, backend_id)
 
-        if backend_type == "ollama" and node:
+        described = llm_backend_types.get(backend_type)
+        if described is not None and described.driver == DRIVER_OLLAMA and node:
             models = await ollama_client.list_models(node=node)
             model_names = [m.get("name", "") for m in models]
             ollama_name = self._find_ollama_name(model_id, model_names)
@@ -673,7 +704,8 @@ class LLMLifecycleManager:
         llm_model_registry.update_model_state(model_id, ModelState.deployable)
         llm_gpu_tracker.release_allocation(model_id)
 
-        if node:
+        # A backend type no longer installed has no Deployment left to delete.
+        if node and described is not None:
             remaining = [
                 a for allocs in llm_gpu_tracker._allocations.values()
                 for a in allocs
@@ -682,7 +714,7 @@ class LLMLifecycleManager:
             if not remaining:
                 logger.info(f"No models left on {backend_id}, deleting pod")
                 await llm_pod_manager.delete_pod(
-                    backend_type, node, None if backend_type in SHARED_BACKENDS else model_id
+                    backend_type, node, None if described.shared else model_id
                 )
 
         return ModelLoadResponse(
@@ -1115,10 +1147,10 @@ class LLMLifecycleManager:
         if target_node:
             flexible = [
                 c for c in candidates
-                if c.backend_id.startswith("ollama") and c.node_name == target_node
+                if is_shared_backend_id(c.backend_id) and c.node_name == target_node
             ]
         else:
-            flexible = [c for c in candidates if c.backend_id.startswith("ollama")]
+            flexible = [c for c in candidates if is_shared_backend_id(c.backend_id)]
         if flexible:
             return flexible[0].model_id
         return None

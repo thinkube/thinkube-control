@@ -50,11 +50,26 @@ class ModelEntry(BaseModel):
     # capture. Keeps the init memory peak ≈ weights (small, predictable) at a
     # small decode cost on bandwidth-bound models.
     enforce_eager: bool = False
+    # A signed runtime package (a Flare package): the publisher namespace and
+    # the SHA-256 of its key, which the mirror checks and the pod approves.
+    publisher: Optional[Dict[str, str]] = None
+    # Command-line arguments the backend's server adds for this model, such as
+    # what its publisher recommends for a GPU; passed to the pod as SERVER_ARGS.
+    server_args: List[str] = Field(default_factory=list)
     tool_use: bool = False
     stop_tokens: List[str] = Field(default_factory=list)
     license: Optional[str] = None
     gated: bool = False
+    # What the model is fit for: "agent" (Tandem offers it), "vision" (images).
     capabilities: List[str] = Field(default_factory=list)
+    # Gateway names that answer as this model, such as thinkube-fast.
+    aliases: List[str] = Field(default_factory=list)
+    # The model a new Tandem chat starts with.
+    default_agent: bool = False
+    # The answer budget agents reserve inside the context.
+    max_output: Optional[int] = None
+    # The context the serving backend reports for the model (max_model_len).
+    served_context_length: Optional[int] = None
     # Gateway role. "primary" = a normally loadable/servable model; "drafter" =
     # an auxiliary speculative-decoding drafter (e.g. DFlash) that only runs
     # inside a target model's vLLM via --speculative-config, never served or
@@ -98,8 +113,24 @@ class BackendEntry(BaseModel):
     api_path: str = "/v1"
     status: str = "unknown"
     models: List[str] = Field(default_factory=list)
+    # Served model -> the context it is served with (max_model_len), when reported.
+    model_context: Dict[str, int] = Field(default_factory=dict)
     last_probe: Optional[str] = None
     node: Optional[str] = None
+
+
+class BackendTypeEntry(BaseModel):
+    """An installed backend type, as its component declares it."""
+
+    type: str
+    display_name: str
+    namespace: str
+    driver: str
+    tier: str
+
+
+class BackendTypesListResponse(BaseModel):
+    backend_types: List[BackendTypeEntry]
 
 
 class BackendsListResponse(BaseModel):
@@ -115,6 +146,10 @@ class ModelResolveResponse(BaseModel):
     serving_name: str = ""
     model_state: ModelState
     tier: ModelTier
+    # The backend answers the Anthropic Messages API at <api_path>/messages.
+    anthropic_messages: bool = False
+    # The catalog aliases of the model, which the gateway also answers as it.
+    aliases: List[str] = Field(default_factory=list)
     error: Optional[str] = None
 
 
@@ -151,6 +186,8 @@ class GPUNode(BaseModel):
     is_uma: bool = False
     arch: str = "uma"  # "uma" (GPU mem = host RAM, quota-charged) | "discrete"
     role: str = "platform-shared"  # "platform-shared" | "ai-dedicated"
+    # CUDA compute capability of the node's GPUs, "major.minor" (e.g. "12.1").
+    compute_capability: Optional[str] = None
     per_gpu_vram_gb: float = 0.0  # discrete: VRAM per physical GPU
     platform_reserved_gb: float = 0.0  # UMA shared: host RAM held by non-AI pods
     ai_budget_gb: float = 0.0  # memory the gateway may plan against on this node

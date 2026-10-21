@@ -5,57 +5,17 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from kubernetes import client, config
-from kubernetes.client.rest import ApiException
-
 from app.api.llm.schemas import (
     ModelState,
     ModelsListResponse,
     ModelResolveResponse,
     ModelStatusResponse,
 )
+from app.services.llm_backend_types import llm_backend_types
 from app.services.llm_model_registry import llm_model_registry
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-BACKEND_TYPE_NAMESPACES = {
-    "ollama": "ollama",
-    "vllm": "vllm",
-    "tensorrt-llm": "tensorrt",
-    "text-embeddings": "text-embeddings",
-}
-
-_k8s_core_v1 = None
-
-
-def _get_k8s_client():
-    global _k8s_core_v1
-    if _k8s_core_v1 is None:
-        try:
-            config.load_incluster_config()
-        except config.ConfigException:
-            config.load_kube_config()
-        _k8s_core_v1 = client.CoreV1Api()
-    return _k8s_core_v1
-
-
-def _get_installed_backend_types() -> list[str]:
-    try:
-        v1 = _get_k8s_client()
-        installed = []
-        for backend_type, namespace in BACKEND_TYPE_NAMESPACES.items():
-            try:
-                v1.read_namespaced_config_map(
-                    name="thinkube-service-config", namespace=namespace
-                )
-                installed.append(backend_type)
-            except ApiException:
-                pass
-        return installed
-    except Exception as e:
-        logger.warning(f"Could not check installed backend types: {e}")
-        return []
 
 
 @router.get(
@@ -72,8 +32,9 @@ async def list_models(
 
     A model appears here once mirrored into MLflow (see get_model_catalog for
     the whole catalog and submit_model_mirror). Its server_type names the
-    backend it runs on: vllm, tensorrt-llm and text-embeddings pods serve one
-    model per node and are created by the load; ollama serves several.
+    backend types it runs on (get_llm_backend_types lists the installed ones):
+    a per-model-pod backend gets one pod per model, created by the load; an
+    ollama backend serves several models in one pod per node.
     installed_backend_types lists the backend types installed as components.
     """
     models = llm_model_registry.list_models()
@@ -90,7 +51,7 @@ async def list_models(
     if task:
         models = [m for m in models if m.task == task]
 
-    installed = _get_installed_backend_types()
+    installed = llm_backend_types.names()
 
     return ModelsListResponse(
         models=models,

@@ -20,13 +20,17 @@ Clients call one address, the gateway at `https://llm.<your domain>`: it checks 
 
 | `POST /v1/chat/completions` | OpenAI chat completions
 | `POST /v1/embeddings` | OpenAI embeddings
-| `GET /v1/models` | OpenAI model list; each alias is listed too, with `root` naming the model it points to
+| `GET /v1/models` | OpenAI model list; each alias is listed too, with `root` naming the model it points to, and every entry has a `thinkube` object for agent clients
 | `POST /v1/messages` | Anthropic Messages
 |===
 
 A client written for either API works unchanged with the base URL changed to the gateway.
 
 An alias such as `thinkube-fast` names a model, and the model it names can change. `GET /v1/models` lists each alias with `root`, the model it names now, so an app that keeps results can record which model made them, and can tell when an alias has moved to another model.
+
+Aliases are defined in the model catalog: a model's `aliases` list. An alias in your own metadata repository wins over the platform's. The gateway reads them when the catalog is read, so a changed alias works after `refresh_llm_registry`, with no deploy.
+
+The `thinkube` object of each entry in `GET /v1/models` gives what an agent client needs: `state`, `aliases`, `capabilities` (`agent`: fit to drive a coding or office agent; `vision`: it reads images), `default_agent`, `input`, `context_window` (the context its backend serves, when the backend reports it) and `max_output` (the answer budget agents reserve).
 
 === Authentication
 
@@ -55,6 +59,9 @@ vLLM:: Full-precision text generation, one pod per model.
 TensorRT-LLM:: NVIDIA's inference engine, one pod per model; the catalogue entries built for it carry NVFP4 quantisation for Blackwell.
 Ollama:: Quantised GGUF models; one pod hosts several models.
 text-embeddings:: Text Embeddings Inference, for embedding models.
+Flare:: NVIDIA's inference server for Blackwell GPUs (DGX Spark, RTX PRO 6000), one pod per model. It serves signed runtime packages prepared for one GPU type; a catalogue entry names the package's hardware revision and the publisher whose key the mirror checks. Models load only on nodes whose GPU it runs on. It answers Anthropic requests itself, so the gateway forwards them to it without translating them.
+
+Each backend declares itself in its component's `thinkube.yaml` with `spec.llm_backend`: its type, its driver and its tier. Thinkube Control reads the installed backend types from the components' service ConfigMaps; `get_llm_backend_types` lists them. A model's `server_type` in the catalogue names the backend types it runs on. A new inference server is added as a template that declares `spec.llm_backend`, with no change to Thinkube Control. See the `thinkube.yaml` reference for the fields.
 
 == Mirroring
 
@@ -66,7 +73,7 @@ Load from the *Load* dialog on the LLM Gateway page or with `load_llm_model`. Th
 
 [horizontal]
 node:: The GPU node. Without it, the node with the most AI memory left and a free slot takes the model.
-tier:: `flexible` loads through Ollama when the model has a GGUF entry: quick, quantised, smaller. `performance` loads through vLLM or TensorRT-LLM.
+tier:: `flexible` loads through a flexible backend (Ollama) when the model has one: quick, quantised, smaller. `performance` loads through a performance backend, such as vLLM or TensorRT-LLM. Without a tier, a performance backend is used when the model has one.
 backend:: A backend type instead of a tier, or a backend by id as `get_llm_load_options` lists them, such as `vllm-tkspark`; an id names its node too. Other values are refused, and the error lists the accepted forms.
 max_context_length:: Caps the context window. The KV cache grows with it, so a serving-sized value such as 8k to 32k uses far less memory than the model's full window. Without it, Thinkube Control picks the largest of 32k, 16k or 8k that the model supports and the node has memory for. The answer names the node and the context chosen.
 keep_alive:: Ollama only: how long the model stays loaded after its last request.

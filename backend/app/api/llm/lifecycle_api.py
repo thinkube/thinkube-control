@@ -33,9 +33,9 @@ async def get_load_options(model_id: str):
     of 32768, 16384 and 8192 the model allows) and a slot is free.
 
     compatible_backends lists only the backend pods running now whose type the
-    model supports. It is not the list of nodes that can serve the model: a
-    vLLM, TensorRT-LLM or text-embeddings pod is created on the chosen node by
-    the load itself, so a node without a pod is a valid target. Each such pod
+    model supports. It is not the list of nodes that can serve the model: the
+    pod of a per-model-pod backend (get_llm_backend_types) is created on the
+    chosen node by the load itself, so a node without a pod is a valid target. Each such pod
     serves one model, and each model loaded on a node gets its own pod, so
     several can share a node while ai_remaining_gb and a free slot allow.
     """
@@ -83,9 +83,9 @@ async def load_model(model_id: str, request: ModelLoadRequest = ModelLoadRequest
     """Load a mirrored model on a GPU node; answers at once, the load runs on.
 
     node names the target; without it the node with the most AI memory left
-    takes the model. backend is a type (vllm, tensorrt-llm, text-embeddings,
-    ollama) or a type on a node such as vllm-tkspark, which also names the
-    node. max_context_length defaults to the largest of 32768, 16384 and
+    takes the model. backend is an installed backend type
+    (get_llm_backend_types, such as vllm) or a type on a node such as
+    vllm-tkspark, which also names the node. max_context_length defaults to the largest of 32768, 16384 and
     8192 that the model allows and the node has memory for.
 
     The answer is HTTP 200 whether the load was accepted or refused: state
@@ -122,8 +122,8 @@ async def unload_model(model_id: str, request: ModelUnloadRequest = ModelUnloadR
     """Unload a served model and free its GPU memory.
 
     Only a model in state "available" can be unloaded; the answer's message
-    names the state otherwise. The last model on a vLLM, TensorRT-LLM or
-    text-embeddings pod takes the pod down with it. Other users may be calling
+    names the state otherwise. The last model on a pod takes the pod down
+    with it; a per-model-pod backend's pod holds one model. Other users may be calling
     the model: unload only what you loaded or what the user asked to stop.
     """
     entry = llm_model_registry.get_model(model_id)

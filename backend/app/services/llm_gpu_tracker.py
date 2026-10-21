@@ -87,32 +87,31 @@ def _floored_util(
     return min(max(util, min_util), 0.95)
 
 
-# Backends that lock one time-slice slot PER model (each is its own pod).
-# Ollama is excluded: one Ollama pod hosts many models in a single slot.
-SLOT_PER_MODEL_BACKENDS = ("vllm", "tensorrt-llm", "text-embeddings")
-
-
 def _slots_used(allocs) -> int:
     """Time-slice slots consumed on a node, backend-aware.
 
-    vLLM / TensorRT / TEI lock one slot per model; Ollama collapses to a single
-    shared slot however many models it hosts.
+    A one-model backend locks one slot per model, as each model is its own
+    pod; a shared backend (Ollama) takes one slot per pod however many models
+    it hosts.
     """
-    per_model = sum(
-        a.slots for a in allocs if not str(a.backend_id).startswith("ollama")
-    )
-    has_ollama = any(str(a.backend_id).startswith("ollama") for a in allocs)
-    return per_model + (1 if has_ollama else 0)
+    from app.services.llm_lifecycle import is_shared_backend_id
+
+    per_model = sum(a.slots for a in allocs if not is_shared_backend_id(a.backend_id))
+    shared_pods = {a.backend_id for a in allocs if is_shared_backend_id(a.backend_id)}
+    return per_model + len(shared_pods)
 
 
 def _reserved_gb(allocs) -> float:
-    """Memory reserved up front on a node. vLLM/TensorRT/TEI reserve per model;
-    Ollama self-manages its models' memory (keep_alive), so it isn't summed here.
+    """Memory reserved up front on a node. One-model backends reserve per
+    model; a shared backend (Ollama) manages its models' memory itself
+    (keep_alive), so it isn't summed here.
     """
+    from app.services.llm_lifecycle import is_shared_backend_id
+
     return sum(
         a.estimated_memory_gb
         for a in allocs
-        if not str(a.backend_id).startswith("ollama")
+        if not is_shared_backend_id(a.backend_id)
     )
 
 
@@ -164,6 +163,9 @@ class LLMGPUTracker:
                 gpu_replicas = int(labels.get("nvidia.com/gpu.replicas", "1"))
                 gpu_memory_mb = labels.get("nvidia.com/gpu.memory", "")
                 sharing = labels.get("nvidia.com/gpu.sharing-strategy", "none")
+                cc_major = labels.get("nvidia.com/gpu.compute.major")
+                cc_minor = labels.get("nvidia.com/gpu.compute.minor")
+                compute_capability = f"{cc_major}.{cc_minor}" if cc_major and cc_minor else None
 
                 if gpu_memory_mb and gpu_memory_mb != "0":
                     per_gpu_memory = float(gpu_memory_mb) / 1024.0
@@ -196,6 +198,7 @@ class LLMGPUTracker:
                     per_gpu_vram_gb=per_gpu_memory,
                     arch=arch,
                     role=role,
+                    compute_capability=compute_capability,
                     used_memory_gb=0.0,
                     shared_memory=(sharing == "time-slicing"),
                     allocations=[],
@@ -420,7 +423,11 @@ class LLMGPUTracker:
             pod_mem = int(round(max(target_gb, util * total_gb) + margin))
             tp = 1
             remaining = max(ai_budget - reserved_on_node, 0.0)
-            fits = (target_gb + margin) <= remaining and free_slots >= 1
+            # The memory quota of a GPU component's namespace is at most
+            # LLM_UMA_AI_BUDGET_GB (scripts/namespace_quota.py), whatever the
+            # node's planning budget; Kubernetes refuses a pod limit above it.
+            over_quota = pod_mem > UMA_AI_BUDGET_GB
+            fits = (target_gb + margin) <= remaining and free_slots >= 1 and not over_quota
         else:
             # Discrete VRAM: util is per-GPU; cgroup only needs host overhead.
             per_vram = node.per_gpu_vram_gb or (total_gb / max(node.gpu_count, 1))
@@ -451,6 +458,12 @@ class LLMGPUTracker:
 
         if fits:
             reason = "ok"
+        elif arch == "uma" and over_quota:
+            reason = (
+                f"the pod would need a {pod_mem} GiB memory limit for ~{target_gb:.1f} GB "
+                f"(engine share {util:.2f} of {total_gb:.0f} GB, +~{margin:.0f} GB margin) on "
+                f"{node_name}, above the {UMA_AI_BUDGET_GB:.0f} GB namespace quota (LLM_UMA_AI_BUDGET_GB)"
+            )
         elif free_slots < (1 if arch == "uma" else tp):
             reason = f"{node_name} has no free time-slice slot ({node.total_slots} in use)"
         else:

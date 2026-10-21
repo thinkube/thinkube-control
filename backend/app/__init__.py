@@ -28,6 +28,7 @@ from app.services.llm_model_registry import llm_model_registry
 from app.services.llm_backend_discovery import llm_backend_discovery
 from app.services.llm_ollama_client import ollama_client
 from app.services.llm_pod_manager import llm_pod_manager
+from app.services.llm_backend_types import llm_backend_types
 from app.services.metadata_fetcher import CatalogUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -190,6 +191,8 @@ async def app_lifespan(app: FastAPI):
     discovery_task = asyncio.create_task(periodic_discovery())
     logger.info("Started periodic discovery task (5 minute interval)")
 
+    # The backend types name the namespaces the pod manager reconciles.
+    llm_backend_types.refresh()
     # Reconcile gateway-managed pods before backend discovery starts
     await llm_pod_manager.reconcile()
     logger.info("LLM pod manager reconciled")
@@ -550,6 +553,7 @@ MCP_OPERATIONS = [
     "get_llm_model_status",        # Resource
     "resolve_llm_model",           # Resource
     "get_llm_backends",            # Resource
+    "get_llm_backend_types",       # Resource
     "get_llm_gpu_status",          # Resource
     "get_llm_load_options",        # Resource
     "refresh_llm_registry",        # Tool

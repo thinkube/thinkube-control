@@ -18,19 +18,16 @@ class OllamaClient:
     """Routes requests to per-node Ollama instances discovered by backend discovery."""
 
     def __init__(self):
-        self._default_url = os.getenv(
-            "LLM_OLLAMA_URL", "http://ollama.ollama.svc.cluster.local:11434"
-        )
         self._node_urls: Dict[str, str] = {}
-        self._node_pods: Dict[str, str] = {}
+        # node -> (pod name, namespace) of its Ollama pod, for `ollama create`.
+        self._node_pods: Dict[str, tuple[str, str]] = {}
         self._clients: Dict[str, httpx.AsyncClient] = {}
         self._load_timeout = int(os.getenv("LLM_MODEL_LOAD_TIMEOUT_SECONDS", "300"))
 
-    def register_node(self, node_name: str, pod_ip: str, pod_name: str):
-        url = f"http://{pod_ip}:11434"
+    def register_node(self, node_name: str, url: str, pod_name: str, namespace: str):
         old_url = self._node_urls.get(node_name)
         self._node_urls[node_name] = url
-        self._node_pods[node_name] = pod_name
+        self._node_pods[node_name] = (pod_name, namespace)
         if old_url != url and node_name in self._clients:
             old_client = self._clients.pop(node_name)
             try:
@@ -57,15 +54,9 @@ class OllamaClient:
         return list(self._node_urls.keys())
 
     def _get_client(self, node: Optional[str] = None) -> httpx.AsyncClient:
-        if node and node in self._clients:
-            return self._clients[node]
-        if self._clients:
-            return next(iter(self._clients.values()))
-        if "_default" not in self._clients:
-            self._clients["_default"] = httpx.AsyncClient(
-                base_url=self._default_url, timeout=30.0, verify=False
-            )
-        return self._clients["_default"]
+        if node not in self._clients:
+            raise RuntimeError(f"No Ollama pod is registered on node {node}")
+        return self._clients[node]
 
     async def is_available(self, node: Optional[str] = None) -> bool:
         try:
@@ -111,18 +102,14 @@ class OllamaClient:
         stop_tokens: Optional[List[str]] = None,
     ) -> bool:
         loop = asyncio.get_event_loop()
-        pod_name = self._resolve_pod_name(node)
+        if node not in self._node_pods:
+            logger.error(f"Ollama create '{name}': no Ollama pod is registered on node {node}")
+            return False
+        pod_name, namespace = self._node_pods[node]
         return await loop.run_in_executor(
             _k8s_executor, self._create_model_via_exec, name, gguf_path, pod_name,
-            reasoning_format, stop_tokens,
+            namespace, reasoning_format, stop_tokens,
         )
-
-    def _resolve_pod_name(self, node: Optional[str] = None) -> str:
-        if node and node in self._node_pods:
-            return self._node_pods[node]
-        if self._node_pods:
-            return next(iter(self._node_pods.values()))
-        return os.getenv("LLM_OLLAMA_POD", "ollama-0")
 
     def _build_modelfile(
         self, gguf_path: str,
@@ -160,7 +147,7 @@ class OllamaClient:
         return "\n".join(lines)
 
     def _create_model_via_exec(
-        self, name: str, gguf_path: str, pod_name: str,
+        self, name: str, gguf_path: str, pod_name: str, namespace: str,
         reasoning_format: Optional[str] = None,
         stop_tokens: Optional[List[str]] = None,
     ) -> bool:
@@ -174,7 +161,6 @@ class OllamaClient:
             modelfile = self._build_modelfile(gguf_path, reasoning_format, stop_tokens)
             escaped = modelfile.replace("'", "'\\''")
 
-            namespace = os.getenv("LLM_OLLAMA_NAMESPACE", "ollama")
             cmd = [
                 "sh", "-c",
                 f"printf '%s' '{escaped}' > /tmp/Modelfile && "

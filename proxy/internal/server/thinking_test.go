@@ -50,9 +50,9 @@ func chatBackend(t *testing.T, answer string, stream bool, requests chan<- map[s
 	return srv
 }
 
-func chat(t *testing.T, backendURL string, aliases map[string]string, request string) *httptest.ResponseRecorder {
+func chat(t *testing.T, backendURL string, request string) *httptest.ResponseRecorder {
 	t.Helper()
-	h := NewOpenAIHandler(resolver.New(backendURL, aliases), forwarder.New(5*time.Second), 1<<20)
+	h := NewOpenAIHandler(resolver.New(backendURL), forwarder.New(5*time.Second), 1<<20)
 	rec := httptest.NewRecorder()
 	h.ChatCompletions(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(request)))
 	return rec
@@ -115,7 +115,7 @@ const thinkingOnRequest = `{"model":"Qwen/Qwen3.6-35B-A3B","messages":[{"role":"
 func TestThinkingOffAnswerInReasoningIsReturnedAsContent(t *testing.T) {
 	for _, field := range []string{"reasoning", "reasoning_content"} {
 		backend := chatBackend(t, `{"choices":[{"index":0,"message":{"role":"assistant","content":null,"`+field+`":"Hello there."}}]}`, false, nil)
-		msg := message(t, chat(t, backend.URL, nil, thinkingOffRequest))
+		msg := message(t, chat(t, backend.URL, thinkingOffRequest))
 		backend.Close()
 		if msg["content"] != "Hello there." {
 			t.Errorf("%s: content is %v, want the answer", field, msg["content"])
@@ -129,7 +129,7 @@ func TestThinkingOffAnswerInReasoningIsReturnedAsContent(t *testing.T) {
 func TestThinkingOffContentIsKept(t *testing.T) {
 	backend := chatBackend(t, `{"choices":[{"index":0,"message":{"role":"assistant","content":"Hello there."}}]}`, false, nil)
 	defer backend.Close()
-	msg := message(t, chat(t, backend.URL, nil, thinkingOffRequest))
+	msg := message(t, chat(t, backend.URL, thinkingOffRequest))
 	if msg["content"] != "Hello there." {
 		t.Errorf("content is %v, want the answer", msg["content"])
 	}
@@ -138,7 +138,7 @@ func TestThinkingOffContentIsKept(t *testing.T) {
 func TestReasoningEffortNoneIsThinkingOff(t *testing.T) {
 	backend := chatBackend(t, `{"choices":[{"index":0,"message":{"role":"assistant","content":"","reasoning":"Hello there."}}]}`, false, nil)
 	defer backend.Close()
-	msg := message(t, chat(t, backend.URL, nil,
+	msg := message(t, chat(t, backend.URL,
 		`{"model":"Qwen/Qwen3.6-35B-A3B","messages":[],"reasoning_effort":"none"}`))
 	if msg["content"] != "Hello there." {
 		t.Errorf("content is %v, want the answer", msg["content"])
@@ -148,7 +148,7 @@ func TestReasoningEffortNoneIsThinkingOff(t *testing.T) {
 func TestThinkingOnKeepsReasoningApartFromContent(t *testing.T) {
 	backend := chatBackend(t, `{"choices":[{"index":0,"message":{"role":"assistant","content":"Hello there.","reasoning":"The user greets me."}}]}`, false, nil)
 	defer backend.Close()
-	msg := message(t, chat(t, backend.URL, nil, thinkingOnRequest))
+	msg := message(t, chat(t, backend.URL, thinkingOnRequest))
 	if msg["content"] != "Hello there." {
 		t.Errorf("content is %v, want the answer only", msg["content"])
 	}
@@ -169,7 +169,7 @@ const reasoningStream = "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"
 func TestThinkingOffStreamedReasoningIsStreamedAsContent(t *testing.T) {
 	backend := chatBackend(t, reasoningStream, true, nil)
 	defer backend.Close()
-	rec := chat(t, backend.URL, nil, strings.Replace(thinkingOffRequest, `"messages"`, `"stream":true,"messages"`, 1))
+	rec := chat(t, backend.URL, strings.Replace(thinkingOffRequest, `"messages"`, `"stream":true,"messages"`, 1))
 	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
 		t.Fatalf("Content-Type %q, body %s", ct, rec.Body.String())
 	}
@@ -188,7 +188,7 @@ func TestThinkingOnStreamKeepsReasoningApart(t *testing.T) {
 		"data: [DONE]\n\n"
 	backend := chatBackend(t, stream, true, nil)
 	defer backend.Close()
-	rec := chat(t, backend.URL, nil, strings.Replace(thinkingOnRequest, `"messages"`, `"stream":true,"messages"`, 1))
+	rec := chat(t, backend.URL, strings.Replace(thinkingOnRequest, `"messages"`, `"stream":true,"messages"`, 1))
 	content, reasoning, done := streamText(t, rec)
 	if content != "Hello there." || reasoning != "The user greets me." {
 		t.Errorf("content %q, reasoning %q", content, reasoning)
@@ -202,8 +202,7 @@ func TestAliasReachesTheModelByItsServingName(t *testing.T) {
 	requests := make(chan map[string]any, 1)
 	backend := chatBackend(t, `{"choices":[{"index":0,"message":{"role":"assistant","content":"ok"}}]}`, false, requests)
 	defer backend.Close()
-	chat(t, backend.URL, map[string]string{"thinkube-fast": "Qwen/Qwen3.6-35B-A3B"},
-		`{"model":"thinkube-fast","messages":[]}`)
+	chat(t, backend.URL, `{"model":"thinkube-fast","messages":[]}`)
 	if got := (<-requests)["model"]; got != "Qwen/Qwen3.6-35B-A3B" {
 		t.Errorf("model server got model %v, want the serving name", got)
 	}

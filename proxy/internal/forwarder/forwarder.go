@@ -67,6 +67,28 @@ func (f *Forwarder) ForwardStreamRaw(ctx context.Context, backendURL string, bod
 	return resp, nil
 }
 
+// ForwardAnthropic posts an Anthropic Messages request to a backend that
+// serves that API itself. The API requires its version header; a stream has
+// no timeout, as with ForwardStreamRaw.
+func (f *Forwarder) ForwardAnthropic(ctx context.Context, backendURL string, body io.Reader, version string, stream bool) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", backendURL, body)
+	if err != nil {
+		return nil, fmt.Errorf("create anthropic request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("anthropic-version", version)
+	client := f.client
+	if stream {
+		req.Header.Set("Accept", "text/event-stream")
+		client = f.streamClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic request: %w", err)
+	}
+	return resp, nil
+}
+
 func (f *Forwarder) ForwardGet(ctx context.Context, backendURL string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", backendURL, nil)
 	if err != nil {

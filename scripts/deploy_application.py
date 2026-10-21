@@ -656,7 +656,8 @@ git fetch origin main
         """Parse and validate thinkube.yaml configuration."""
         from thinkube_yaml_validator import (
             validate_knative_constraints, validate_component_constraints, validate_replicas, validate_build_size,
-            validate_test_size,
+            validate_test_size, validate_llm_backend, validate_startup_seconds,
+            validate_node_cache,
         )
 
         config_path = Path(self.local_repo_path) / "thinkube.yaml"
@@ -674,6 +675,9 @@ git fetch origin main
             violations.extend(validate_replicas(self.thinkube_config))
             violations.extend(validate_build_size(self.thinkube_config))
             violations.extend(validate_test_size(self.thinkube_config))
+            violations.extend(validate_llm_backend(self.thinkube_config))
+            violations.extend(validate_startup_seconds(self.thinkube_config))
+            violations.extend(validate_node_cache(self.thinkube_config))
             if violations:
                 msg = "thinkube.yaml validation failed:\n" + "\n".join(f"  - {v}" for v in violations)
                 DeploymentLogger.error(msg)
@@ -2203,7 +2207,8 @@ printf 'PUSHED\\t%s\\n' "$(git log -1 --format='%H %s')"
                 'deployment_date': datetime.now().isoformat(),
                 'containers': self.thinkube_config.get('spec', {}).get('containers', []),
                 'routes': self.thinkube_config.get('spec', {}).get('routes', []),
-                'deployment': self.thinkube_config.get('spec', {}).get('deployment', {})
+                'deployment': self.thinkube_config.get('spec', {}).get('deployment', {}),
+                'llm_backend': self.thinkube_config.get('spec', {}).get('llm_backend'),
             }
 
             yaml_content = None

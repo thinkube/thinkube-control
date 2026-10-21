@@ -63,6 +63,19 @@ spec:
                 values: ["{{ memory_value }}"]
 {% endif %}
 {% endif %}
+{% set node_cache = container.nodeCache is defined and container.gpu is defined and container.gpu.count is defined %}
+{% if node_cache %}
+      # containers[].nodeCache: the kubelet creates the node's folder as root,
+      # and the server may run as another user, so it is made writable to
+      # every user, with the sticky bit, before the server starts.
+      initContainers:
+        - name: node-cache-permissions
+          image: {{ container_registry }}/library/busybox:latest
+          command: ["chmod", "1777", "/node-cache"]
+          volumeMounts:
+            - name: node-cache
+              mountPath: /node-cache
+{% endif %}
       containers:
         - name: {{ container.name }}
           image: {{ container_registry }}/thinkube/{{ project_name }}-{{ container.name }}:latest
@@ -246,6 +259,11 @@ spec:
             - name: FLASHINFER_WORKSPACE_BASE
               value: "/root/.cache/vllm"
 {% endif %}
+{% if node_cache %}
+            # containers[].nodeCache: a folder on the node's local disk.
+            - name: NODE_CACHE_DIR
+              value: "{{ container.nodeCache }}"
+{% endif %}
             # Container-specific environment variables (if defined)
             {% if container.environment is defined %}
             {% for env in container.environment %}
@@ -339,7 +357,8 @@ spec:
             initialDelaySeconds: 30  # Give container time to start web server
             periodSeconds: 10        # Check every 10 seconds
             timeoutSeconds: 10
-            failureThreshold: 60      # 60 * 10 = 600 seconds (10 minutes) max for initial startup
+            # containers[].startupSeconds, else 600 seconds (10 minutes), for the initial startup
+            failureThreshold: {{ ((container.startupSeconds | default(600)) / 10) | round(0, 'ceil') | int }}
             successThreshold: 1
 
           # Liveness probe starts after startup probe succeeds
@@ -390,6 +409,10 @@ spec:
             # reloads skip ~226s of recompile/re-autotune (TEP-tgmtd3 / SP-tgqg1j_SL-4).
             - name: vllm-compile-cache
               mountPath: /root/.cache/vllm
+{% if node_cache %}
+            - name: node-cache
+              mountPath: {{ container.nodeCache }}
+{% endif %}
 {%- endif %}
       {% if container.volume is defined %}
       volumes:
@@ -409,5 +432,13 @@ spec:
           hostPath:
             path: /var/lib/thinkube/vllm-compile-cache/{{ project_name }}-{{ container.name }}
             type: DirectoryOrCreate
+        {% if node_cache %}
+        # containers[].nodeCache: kept on the node across pod restarts, for
+        # copies of large files the server reads at random while it serves.
+        - name: node-cache
+          hostPath:
+            path: /var/lib/thinkube/node-cache/{{ project_name }}-{{ container.name }}
+            type: DirectoryOrCreate
+        {% endif %}
       {% endif %}
 {% endfor %}

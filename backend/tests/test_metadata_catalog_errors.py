@@ -32,6 +32,8 @@ REPOS = {"repositories": [{"name": "tkt-webapp", "type": "application_template"}
 @pytest.fixture(autouse=True)
 def clean(monkeypatch):
     mf._memory_cache.clear()
+    monkeypatch.setattr(mf, "_invalidated_at", 0.0)
+    monkeypatch.setattr(mf, "_direct_until", 0.0)
     oc._COMPONENTS_CATALOG_CACHE = None
     oc._COMPONENTS_CATALOG_CACHE_TIME = 0
     monkeypatch.delenv("GITHUB_USERNAME", raising=False)
@@ -216,3 +218,45 @@ def test_the_platform_catalog_without_thinkube_branch_is_an_error_naming_it(monk
 
     with pytest.raises(RuntimeError, match="THINKUBE_BRANCH"):
         mf.fetch_merged_catalog("repositories", "repositories.json", "repositories", "list", "name")
+
+
+API_URL = mf._github_api_url("thinkube", "thinkube-metadata", PLATFORM_REF, "repositories.json")
+
+
+def test_a_refresh_reads_the_catalog_again_through_the_github_api(monkeypatch):
+    """raw.githubusercontent.com lags a push; after a refresh the API answers instead."""
+    newer = {"repositories": REPOS["repositories"] + [{"name": "tkt-flare", "type": "application_template"}]}
+    serve(monkeypatch, {PLATFORM_URL: REPOS, API_URL: newer})
+    assert len(fetch_repositories()) == 1
+
+    mf.invalidate_catalogs()
+
+    assert [r["name"] for r in fetch_repositories()] == ["tkt-webapp", "tkt-flare"]
+
+
+def test_the_api_is_asked_for_the_file_itself(monkeypatch):
+    seen = {}
+
+    def urlopen(req, timeout=None):
+        seen[req.full_url] = req.get_header("Accept")
+        return Resp(REPOS)
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    mf.invalidate_catalogs()
+    fetch_repositories()
+    assert seen == {API_URL: "application/vnd.github.raw+json"}
+
+
+def test_a_refresh_makes_the_components_catalog_stale_too(monkeypatch):
+    components = {"components": {"flare": {
+        "display_name": "Flare", "description": "d", "category": "ai", "requirements": [],
+        "namespace": "flare", "template": {"url": "https://github.com/thinkube/tkt-flare"},
+    }}}
+    raw = mf.platform_metadata_url("optional_components.json")
+    api_url = mf._github_api_url("thinkube", "thinkube-metadata", PLATFORM_REF, "optional_components.json")
+    serve(monkeypatch, {raw: {"components": {}}, api_url: components})
+    assert oc.get_components_catalog() == {}
+
+    mf.invalidate_catalogs()
+
+    assert list(oc.get_components_catalog()) == ["flare"]

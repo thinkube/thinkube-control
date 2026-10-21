@@ -22,9 +22,16 @@ router = APIRouter(tags=["service-discovery-config"])
 DEFAULT_HEALTH_PATH = "/health"
 
 
+# The startup window of a GPU container without containers[].startupSeconds,
+# as the thinkube.yaml specification defines it.
+DEFAULT_STARTUP_SECONDS = 600
+
+
 class Container(BaseModel):
     name: str
     health: Optional[str] = None
+    port: Optional[int] = None
+    startupSeconds: Optional[int] = None
 
 
 class Route(BaseModel):
@@ -47,6 +54,51 @@ class Deployment(BaseModel):
         return self.type == "component"
 
 
+class LLMBackend(BaseModel):
+    """spec.llm_backend: the component is a backend type of the LLM gateway."""
+
+    type: str
+    display_name: str
+    container: str
+    driver: str
+    tier: str
+    # The OpenAI API root, as the OpenAI API specification places it.
+    api_path: str = "/v1"
+    # CUDA compute capabilities ("12.1") the server runs on; empty is any GPU.
+    gpu_compute_capabilities: List[str] = []
+    # The server answers the Anthropic Messages API at <api_path>/messages.
+    anthropic_messages: bool = False
+
+
+def llm_backend_descriptor(
+    backend: LLMBackend, app_name: str, containers: List[Container]
+) -> Dict[str, Any]:
+    """The backend as the gateway reads it from the service ConfigMap.
+
+    The base Deployment is the one the deploy names after the app and the
+    container; the gateway copies it per model and probes the container's port.
+    """
+    container = next((c for c in containers if c.name == backend.container), None)
+    if container is None or not container.port:
+        raise HTTPException(
+            status_code=422,
+            detail=f"llm_backend.container '{backend.container}' names no container with a port",
+        )
+    return {
+        "type": backend.type,
+        "display_name": backend.display_name,
+        "driver": backend.driver,
+        "tier": backend.tier,
+        "deployment": f"{app_name}-{container.name}",
+        "port": container.port,
+        "api_path": backend.api_path,
+        "health_path": container.health or DEFAULT_HEALTH_PATH,
+        "gpu_compute_capabilities": backend.gpu_compute_capabilities,
+        "anthropic_messages": backend.anthropic_messages,
+        "startup_seconds": container.startupSeconds or DEFAULT_STARTUP_SECONDS,
+    }
+
+
 class ServiceDiscoveryConfigRequest(BaseModel):
     app_name: str
     app_host: str
@@ -61,6 +113,7 @@ class ServiceDiscoveryConfigRequest(BaseModel):
     containers: List[Container]
     routes: List[Route] = []
     deployment: Deployment = Deployment()
+    llm_backend: Optional[LLMBackend] = None
 
 
 def resolve_health_path(
@@ -163,6 +216,11 @@ async def generate_service_discovery_yaml(
             },
         }
     }
+
+    if request.llm_backend is not None:
+        service_data["service"]["llm_backend"] = llm_backend_descriptor(
+            request.llm_backend, request.app_name, request.containers
+        )
 
     # Convert to YAML string
     yaml_content = yaml.dump(service_data, default_flow_style=False, sort_keys=False)

@@ -23,8 +23,8 @@ def entry(**overrides):
     return SimpleNamespace(**base)
 
 
-def node(name, remaining, slots=1):
-    return SimpleNamespace(name=name, ai_remaining_gb=remaining, available_slots=slots)
+def node(name, remaining, slots=1, cc="8.6"):
+    return SimpleNamespace(name=name, ai_remaining_gb=remaining, available_slots=slots, compute_capability=cc)
 
 
 @pytest.fixture
@@ -60,7 +60,10 @@ def world(monkeypatch):
         get_status=get_status, plan_sizing=plan_sizing, is_uma=lambda n: n == "tkspark",
         memory_type=lambda n: "uma" if n == "tkspark" else "discrete",
         check_can_load=check_can_load, node_names=lambda: sorted(gpu_nodes),
-        get_node=lambda n: SimpleNamespace(per_gpu_vram_gb=24.0, gpu_count=1) if n in gpu_nodes else None))
+        get_node=lambda n: SimpleNamespace(
+            per_gpu_vram_gb=24.0, gpu_count=1, gpu_product="GPU",
+            compute_capability="12.1" if n == "tkspark" else "8.6",
+        ) if n in gpu_nodes else None))
     monkeypatch.setattr(llm_lifecycle, "_gpus_needed", lambda est, n: 1)
 
     captured = {}
@@ -69,8 +72,8 @@ def world(monkeypatch):
         captured.update(backend=backend, node=node, context=max_context_length)
         return SimpleNamespace(model_id=model_id, state=ModelState.loading, message="captured")
 
-    async def fake_ollama(model_id, keep_alive, node, max_context_length=None):
-        captured.update(backend="ollama", node=node, context=max_context_length)
+    async def fake_ollama(model_id, backend_type, keep_alive, node, max_context_length=None):
+        captured.update(backend=backend_type, node=node, context=max_context_length)
         return SimpleNamespace(model_id=model_id, state=ModelState.loading, message="captured")
 
     monkeypatch.setattr(llm_lifecycle, "_load_performance", fake_performance)
@@ -185,3 +188,55 @@ def test_a_load_waits_for_a_model_starting_on_the_node(world, monkeypatch):
     result = asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3.5-4B", backend="vllm-tkspark"))
     assert result.state == ModelState.deployable
     assert "Qwen/Qwen3-8B" in result.message
+
+
+def test_a_model_on_no_installed_backend_type_is_refused_with_the_installed_ones(world, monkeypatch):
+    world.model.server_type = ["flare"]
+    result = asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3-8B", node="tkspark"))
+    assert result.state == ModelState.deployable
+    assert "flare" in result.message and "vllm" in result.message
+    assert world.captured == {}
+
+
+def test_a_backend_the_model_does_not_run_on_is_refused(world):
+    result = asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3-8B", backend="ollama-tkamd2"))
+    assert result.state == ModelState.deployable
+    assert "does not run on ollama" in result.message
+    assert world.captured == {}
+
+
+def test_without_a_backend_the_requested_tier_picks_the_type(world):
+    world.model.server_type = ["vllm", "ollama"]
+    from app.api.llm.schemas import ModelTier
+
+    asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3-8B", node="tkamd2", tier=ModelTier.flexible))
+    assert world.captured["backend"] == "ollama"
+    world.captured.clear()
+    asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3-8B", node="tkamd2"))
+    assert world.captured["backend"] == "vllm"
+
+
+@pytest.fixture
+def flare_installed(llm_backend_types_installed):
+    from app.services.llm_backend_types import BackendType
+
+    vllm = llm_backend_types_installed["vllm"]
+    llm_backend_types_installed["flare"] = BackendType(**{
+        **vllm.__dict__, "type": "flare", "display_name": "Flare", "namespace": "flare",
+        "deployment": "flare-inference", "gpu_compute_capabilities": ("12.0", "12.1"),
+    })
+
+
+def test_a_node_whose_gpu_the_backend_does_not_run_on_is_refused(world, flare_installed):
+    world.model.server_type = ["flare"]
+    result = asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3-8B", node="tkamd2"))
+    assert result.state == ModelState.deployable
+    assert "12.0, 12.1" in result.message and "8.6" in result.message
+    assert world.captured == {}
+
+
+def test_without_a_node_only_nodes_the_backend_runs_on_are_picked(world, flare_installed):
+    world.model.server_type = ["flare"]
+    world.state["nodes"] = [node("tkamd2", 90.0), node("tkspark", 66.0, cc="12.1")]
+    asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3-8B"))
+    assert world.captured["node"] == "tkspark"
