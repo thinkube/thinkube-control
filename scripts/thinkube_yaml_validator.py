@@ -131,6 +131,64 @@ def validate_replicas(config: Dict[str, Any]) -> List[str]:
     return errors
 
 
+LLM_BACKEND_DRIVERS = ('per-model-pod', 'ollama')
+LLM_BACKEND_TIERS = ('performance', 'flexible')
+
+
+def validate_llm_backend(config: Dict[str, Any]) -> List[str]:
+    """Return a list of constraint violations for spec.llm_backend.
+
+    A backend of the LLM gateway is a gateway-managed component: the gateway
+    copies the named container's base Deployment for each model it loads and
+    reaches the copy on that container's port.
+    """
+    spec = config.get('spec', {})
+    backend = spec.get('llm_backend')
+    if backend is None:
+        return []
+
+    errors = []
+    deployment = spec.get('deployment', {})
+    if deployment.get('type') != 'component' or not deployment.get('gateway_managed'):
+        errors.append(
+            "spec.llm_backend requires spec.deployment.type: component "
+            "and spec.deployment.gateway_managed: true."
+        )
+
+    backend_type = backend.get('type')
+    if not backend_type or not re.match(r'^[a-z][a-z0-9-]*$', str(backend_type)):
+        errors.append(
+            f"spec.llm_backend.type '{backend_type}' is invalid. "
+            "Must be lowercase alphanumeric with hyphens (^[a-z][a-z0-9-]*$)."
+        )
+    if not backend.get('display_name'):
+        errors.append("spec.llm_backend.display_name is required.")
+    if backend.get('driver') not in LLM_BACKEND_DRIVERS:
+        errors.append(
+            f"spec.llm_backend.driver '{backend.get('driver')}' "
+            f"is not one of {', '.join(LLM_BACKEND_DRIVERS)}."
+        )
+    if backend.get('tier') not in LLM_BACKEND_TIERS:
+        errors.append(
+            f"spec.llm_backend.tier '{backend.get('tier')}' "
+            f"is not one of {', '.join(LLM_BACKEND_TIERS)}."
+        )
+
+    container_name = backend.get('container')
+    container = next(
+        (c for c in spec.get('containers', []) if c.get('name') == container_name), None
+    )
+    if container is None:
+        errors.append(
+            f"spec.llm_backend.container '{container_name}' names no container in spec.containers."
+        )
+    elif not container.get('port'):
+        errors.append(
+            f"Container '{container_name}' serves the LLM backend and must declare a port."
+        )
+    return errors
+
+
 BUILD_SIZES = ('small', 'medium', 'large', 'xlarge')
 
 
