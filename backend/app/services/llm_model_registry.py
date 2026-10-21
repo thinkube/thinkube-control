@@ -234,6 +234,7 @@ class LLMModelRegistry:
                 calibration=entry.get("calibration"),
                 enforce_eager=entry.get("enforce_eager", False),
                 publisher=entry.get("publisher"),
+                server_args=entry.get("server_args", []),
                 tool_use=entry.get("tool_use", False),
                 stop_tokens=entry.get("stop_tokens", []),
                 license=entry.get("license"),

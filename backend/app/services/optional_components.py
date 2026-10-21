@@ -5,7 +5,6 @@
 Service for managing optional Thinkube components
 """
 
-import json
 import logging
 import time
 import yaml
@@ -20,10 +19,14 @@ from app.services.metadata_fetcher import (
     _USER_METADATA_REF,
     CatalogUnavailableError,
     _extract,
+    _PLATFORM_METADATA_REPO,
+    _PLATFORM_ORG,
     _fetch_json,
     _get_github_config,
-    _github_raw_url,
-    platform_metadata_url,
+    _github_url,
+    invalidated_at,
+    platform_ref,
+    reads_direct,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,21 +57,22 @@ def get_components_catalog() -> Dict[str, Any]:
     global _COMPONENTS_CATALOG_CACHE, _COMPONENTS_CATALOG_CACHE_TIME
 
     now = time.time()
-    if _COMPONENTS_CATALOG_CACHE is not None and (now - _COMPONENTS_CATALOG_CACHE_TIME) < _COMPONENTS_CATALOG_TTL:
+    if (
+        _COMPONENTS_CATALOG_CACHE is not None
+        and (now - _COMPONENTS_CATALOG_CACHE_TIME) < _COMPONENTS_CATALOG_TTL
+        and _COMPONENTS_CATALOG_CACHE_TIME >= invalidated_at()
+    ):
         return _COMPONENTS_CATALOG_CACHE
 
-    import urllib.request
-    catalog_url = platform_metadata_url(_COMPONENTS_CATALOG_FILE)
-    req = urllib.request.Request(catalog_url, headers={"User-Agent": "thinkube-control"})
+    import urllib.error
+    direct = reads_direct()
+    catalog_url = _github_url(
+        _PLATFORM_ORG, _PLATFORM_METADATA_REPO, platform_ref(), _COMPONENTS_CATALOG_FILE, direct
+    )
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            body = resp.read().decode()
-    except Exception as e:
-        raise CatalogUnavailableError(f"Cannot fetch catalog {catalog_url}: {e}") from e
-    try:
-        data = json.loads(body)
-    except ValueError as e:
-        raise CatalogUnavailableError(f"Catalog {catalog_url} is not valid JSON: {e}") from e
+        data = _fetch_json(catalog_url, token=_get_github_config()[1] if direct else None)
+    except urllib.error.HTTPError as e:
+        raise CatalogUnavailableError(f"Cannot fetch catalog {catalog_url}: HTTP {e.code} {e.reason}") from e
     components = data.get("components") if isinstance(data, dict) else None
     if not isinstance(components, dict):
         raise CatalogUnavailableError(
@@ -100,8 +104,9 @@ def _user_components(platform: Dict[str, Any]) -> Dict[str, Any]:
     if not (github_username and github_token):
         return {}
     import urllib.error
-    url = _github_raw_url(
-        github_username, f"{github_username}-metadata", _USER_METADATA_REF, _COMPONENTS_CATALOG_FILE
+    url = _github_url(
+        github_username, f"{github_username}-metadata", _USER_METADATA_REF, _COMPONENTS_CATALOG_FILE,
+        reads_direct(),
     )
     try:
         data = _fetch_json(url, token=github_token)
