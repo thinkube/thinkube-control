@@ -48,3 +48,18 @@ def test_resolve_all_returns_only_resolvable_models_in_memory(monkeypatch):
     assert r.api_path == "/v1"
     assert r.serving_name == "m-ok"
     assert r.error is None
+
+
+def test_a_backend_with_the_messages_api_is_resolved_as_such(monkeypatch, llm_backend_types_installed):
+    from app.services.llm_backend_types import BackendType
+
+    vllm = llm_backend_types_installed["vllm"]
+    llm_backend_types_installed["flare"] = BackendType(**{**vllm.__dict__, "type": "flare", "anthropic_messages": True})
+    reg = LLMModelRegistry()
+    reg._models = {"m": ModelEntry(id="m", name="m", server_type=["flare"], serving_name="m",
+                                   state=ModelState.available, backend_id="flare-x/m")}
+    flare = BackendEntry(id="flare-x/m", name="f", url="http://f:8000", type="flare",
+                         api_path="/v1", status="healthy", models=["m"])
+    monkeypatch.setattr(disc_mod.llm_backend_discovery, "get_backend", lambda bid: flare)
+
+    assert reg.resolve("m").anthropic_messages is True

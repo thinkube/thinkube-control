@@ -181,6 +181,11 @@ def validate_llm_backend(config: Dict[str, Any]) -> List[str]:
                 "capability written as major.minor, such as '12.1'."
             )
 
+    if 'anthropic_messages' in backend and not isinstance(backend['anthropic_messages'], bool):
+        errors.append(
+            f"spec.llm_backend.anthropic_messages must be true or false, got: {backend['anthropic_messages']}"
+        )
+
     container_name = backend.get('container')
     container = next(
         (c for c in spec.get('containers', []) if c.get('name') == container_name), None

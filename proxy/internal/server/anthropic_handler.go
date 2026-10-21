@@ -71,6 +71,35 @@ func (h *AnthropicHandler) Messages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userID := ""
+	if claims != nil {
+		userID = claims.Username
+	}
+
+	// A backend that serves the Messages API itself gets the request as it
+	// came, with the model's serving name; nothing is translated.
+	if resolved.AnthropicMessages {
+		if req.Stream {
+			metrics.ActiveStreams.WithLabelValues("anthropic", resolved.ModelID).Inc()
+			defer metrics.ActiveStreams.WithLabelValues("anthropic", resolved.ModelID).Dec()
+		}
+		status := h.passThrough(r, w, body, resolved, version, req.Stream)
+		duration := time.Since(start)
+		metrics.RequestsTotal.WithLabelValues("anthropic", resolved.ModelID, resolved.BackendURL, fmt.Sprint(status)).Inc()
+		metrics.RequestDuration.WithLabelValues("anthropic", resolved.ModelID, resolved.BackendURL).Observe(duration.Seconds())
+		slog.Info("request completed",
+			"protocol", "anthropic",
+			"model", resolved.ModelID,
+			"backend", resolved.BackendURL,
+			"stream", req.Stream,
+			"passthrough", true,
+			"status", status,
+			"duration_ms", duration.Milliseconds(),
+			"user_id", userID,
+		)
+		return
+	}
+
 	// Translate Anthropic -> OpenAI
 	openaiReq, err := protocol.TranslateAnthropicToOpenAI(&req)
 	if err != nil {
@@ -93,11 +122,6 @@ func (h *AnthropicHandler) Messages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	backendURL := resolved.BackendURL + resolved.APIPath + "/chat/completions"
-
-	userID := ""
-	if claims != nil {
-		userID = claims.Username
-	}
 
 	slog.Debug("forwarding Anthropic request",
 		"model", resolved.ModelID,
@@ -243,6 +267,90 @@ func (h *AnthropicHandler) handleStream(r *http.Request, w http.ResponseWriter, 
 		}
 		if len(events) > 0 {
 			flusher.Flush()
+		}
+	}
+}
+
+// passThrough forwards an Anthropic request to a backend that serves the
+// Messages API, with only the model renamed to its serving name, and copies
+// the backend's answer back as it is: its status, its errors and, for a
+// stream, its events as they arrive. It returns the status sent.
+func (h *AnthropicHandler) passThrough(r *http.Request, w http.ResponseWriter, body []byte, resolved *resolver.ResolveResult, version string, stream bool) int {
+	obj, err := decodeObject(body)
+	if err != nil {
+		WriteError(w, "anthropic", http.StatusBadRequest, "invalid_request_error", "Invalid JSON in request body")
+		return http.StatusBadRequest
+	}
+	name, err := json.Marshal(resolved.ServingName)
+	if err != nil {
+		WriteError(w, "anthropic", http.StatusInternalServerError, "api_error", "Failed to encode the model name")
+		return http.StatusInternalServerError
+	}
+	backendURL := resolved.BackendURL + resolved.APIPath + "/messages"
+
+	resp, err := h.forwarder.ForwardAnthropic(r.Context(), backendURL, bytes.NewReader(obj.set("model", name).encode()), version, stream)
+	if err != nil {
+		slog.Warn("anthropic pass-through failed", "backend", backendURL, "error", err)
+		WriteError(w, "anthropic", http.StatusBadGateway, "api_error", "Backend request failed")
+		metrics.ErrorsTotal.WithLabelValues("anthropic", "backend").Inc()
+		return http.StatusBadGateway
+	}
+	defer resp.Body.Close()
+
+	if contentType := resp.Header.Get("Content-Type"); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	if resp.StatusCode != http.StatusOK {
+		metrics.ErrorsTotal.WithLabelValues("anthropic", "backend").Inc()
+	}
+
+	if !stream || resp.StatusCode != http.StatusOK {
+		answer, err := io.ReadAll(resp.Body)
+		if err != nil {
+			WriteError(w, "anthropic", http.StatusBadGateway, "api_error", "Failed to read backend response")
+			return http.StatusBadGateway
+		}
+		if resp.StatusCode == http.StatusOK {
+			var usage struct {
+				Usage struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+			}
+			if json.Unmarshal(answer, &usage) == nil {
+				metrics.TokensTotal.WithLabelValues("anthropic", resolved.ModelID, backendURL, "input").Add(float64(usage.Usage.InputTokens))
+				metrics.TokensTotal.WithLabelValues("anthropic", resolved.ModelID, backendURL, "output").Add(float64(usage.Usage.OutputTokens))
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		w.Write(answer)
+		return resp.StatusCode
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		WriteError(w, "anthropic", http.StatusInternalServerError, "api_error", "Streaming not supported")
+		return http.StatusInternalServerError
+	}
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return http.StatusOK
+			}
+			flusher.Flush()
+		}
+		if err != nil {
+			if err != io.EOF {
+				slog.Warn("anthropic pass-through stream ended", "backend", backendURL, "error", err)
+			}
+			return http.StatusOK
 		}
 	}
 }

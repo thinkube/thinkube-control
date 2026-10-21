@@ -104,6 +104,7 @@ class LLMModelRegistry:
                     serving_name=serving,
                     model_state=ModelState.available,
                     tier=resolved_tier,
+                    anthropic_messages=llm_backend_types.require(backend.type).anthropic_messages,
                 )
 
         backends = [
@@ -145,6 +146,7 @@ class LLMModelRegistry:
             serving_name=serving,
             model_state=ModelState.available,
             tier=resolved_tier,
+            anthropic_messages=llm_backend_types.require(backend.type).anthropic_messages,
         )
 
     def resolve_all(self) -> List[ModelResolveResponse]:
