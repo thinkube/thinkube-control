@@ -458,9 +458,12 @@ class LLMModelRegistry:
                         )
                         if node else ("absent", None)
                     )
+                    # A backend whose start window is longer (a server that
+                    # copies its model to the node first) is given that window.
+                    load_timeout = max(LOAD_TIMEOUT_SECONDS, described.startup_seconds + 60)
                     timed_out = (
                         datetime.utcnow() - entry._loading_since
-                        > timedelta(seconds=LOAD_TIMEOUT_SECONDS)
+                        > timedelta(seconds=load_timeout)
                     )
                     # A `failed`/`absent` pod is a confident failure; a pod that is
                     # Ready-but-model-absent past the deadline means the engine
@@ -474,7 +477,7 @@ class LLMModelRegistry:
                     elif timed_out:
                         fail_reason = (
                             f"Engine did not become ready within "
-                            f"{LOAD_TIMEOUT_SECONDS}s on {node}"
+                            f"{load_timeout}s on {node}"
                         )
                     if fail_reason:
                         entry.state = ModelState.deployable

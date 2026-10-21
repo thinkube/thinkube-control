@@ -223,6 +223,25 @@ def validate_startup_seconds(config: Dict[str, Any]) -> List[str]:
     return errors
 
 
+def validate_node_cache(config: Dict[str, Any]) -> List[str]:
+    """Return a list of constraint violations for containers' nodeCache.
+
+    nodeCache mounts a folder on the node's local disk into a GPU container,
+    kept across restarts; the path must be absolute.
+    """
+    errors = []
+    for c in config.get('spec', {}).get('containers', []):
+        if 'nodeCache' not in c:
+            continue
+        name = c.get('name', 'unnamed')
+        path = c['nodeCache']
+        if not isinstance(path, str) or not path.startswith('/') or path.rstrip('/') == '':
+            errors.append(f"Container '{name}': nodeCache must be an absolute path below /, got: {path}")
+        if not (c.get('gpu') or {}).get('count'):
+            errors.append(f"Container '{name}': nodeCache is for a GPU container; it needs gpu.count.")
+    return errors
+
+
 BUILD_SIZES = ('small', 'medium', 'large', 'xlarge')
 
 

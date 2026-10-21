@@ -64,7 +64,13 @@ def test_the_descriptor_names_the_base_deployment_port_and_health_path():
         "health_path": "/health",
         "gpu_compute_capabilities": [],
         "anthropic_messages": False,
+        "startup_seconds": 600,
     }
+
+
+def test_the_descriptor_carries_the_containers_start_window():
+    containers = [{**REQUEST["containers"][0], "startupSeconds": 3600}]
+    assert _service(llm_backend=BACKEND, containers=containers)["llm_backend"]["startup_seconds"] == 3600
 
 
 def test_the_descriptor_carries_the_gpus_the_server_runs_on():
