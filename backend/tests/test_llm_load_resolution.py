@@ -69,8 +69,8 @@ def world(monkeypatch):
         captured.update(backend=backend, node=node, context=max_context_length)
         return SimpleNamespace(model_id=model_id, state=ModelState.loading, message="captured")
 
-    async def fake_ollama(model_id, keep_alive, node, max_context_length=None):
-        captured.update(backend="ollama", node=node, context=max_context_length)
+    async def fake_ollama(model_id, backend_type, keep_alive, node, max_context_length=None):
+        captured.update(backend=backend_type, node=node, context=max_context_length)
         return SimpleNamespace(model_id=model_id, state=ModelState.loading, message="captured")
 
     monkeypatch.setattr(llm_lifecycle, "_load_performance", fake_performance)
@@ -185,3 +185,29 @@ def test_a_load_waits_for_a_model_starting_on_the_node(world, monkeypatch):
     result = asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3.5-4B", backend="vllm-tkspark"))
     assert result.state == ModelState.deployable
     assert "Qwen/Qwen3-8B" in result.message
+
+
+def test_a_model_on_no_installed_backend_type_is_refused_with_the_installed_ones(world, monkeypatch):
+    world.model.server_type = ["flare"]
+    result = asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3-8B", node="tkspark"))
+    assert result.state == ModelState.deployable
+    assert "flare" in result.message and "vllm" in result.message
+    assert world.captured == {}
+
+
+def test_a_backend_the_model_does_not_run_on_is_refused(world):
+    result = asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3-8B", backend="ollama-tkamd2"))
+    assert result.state == ModelState.deployable
+    assert "does not run on ollama" in result.message
+    assert world.captured == {}
+
+
+def test_without_a_backend_the_requested_tier_picks_the_type(world):
+    world.model.server_type = ["vllm", "ollama"]
+    from app.api.llm.schemas import ModelTier
+
+    asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3-8B", node="tkamd2", tier=ModelTier.flexible))
+    assert world.captured["backend"] == "ollama"
+    world.captured.clear()
+    asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3-8B", node="tkamd2"))
+    assert world.captured["backend"] == "vllm"

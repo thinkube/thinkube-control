@@ -31,7 +31,7 @@ import {
   Lock,
 } from 'lucide-react';
 import api from '../lib/axios';
-import LoadModelDialog from '../components/LoadModelDialog';
+import LoadModelDialog, { type BackendType } from '../components/LoadModelDialog';
 
 interface ModelEntry {
   id: string;
@@ -107,13 +107,17 @@ interface GPUStatus {
   can_accept_new_model: boolean;
 }
 
-const LOADABLE_TYPES = new Set(['ollama', 'vllm', 'tensorrt-llm', 'text-embeddings']);
+// server_type values that name no gateway backend, with what the model is for.
 const NON_LOADABLE_LABELS: Record<string, string> = {
   unsloth: 'Fine-tuning',
 };
 
+function gatewayTypes(serverTypes: string[]): string[] {
+  return serverTypes.filter((t) => !(t in NON_LOADABLE_LABELS));
+}
+
 function isModelLoadable(serverTypes: string[]): boolean {
-  return serverTypes.some((t) => LOADABLE_TYPES.has(t));
+  return gatewayTypes(serverTypes).length > 0;
 }
 
 function getNonLoadableLabel(serverTypes: string[]): string | null {
@@ -154,21 +158,22 @@ export default function LLMGatewayPage() {
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({});
   const [copied, setCopied] = useState(false);
   const [loadDialog, setLoadDialog] = useState<ModelEntry | null>(null);
-  const [installedBackendTypes, setInstalledBackendTypes] = useState<string[]>([]);
+  const [backendTypes, setBackendTypes] = useState<BackendType[]>([]);
 
   const gatewayUrl = `https://llm.${window.location.hostname.split('.').slice(-2).join('.')}`;
 
   const fetchAll = useCallback(async () => {
     try {
-      const [modelsRes, backendsRes, gpuRes] = await Promise.all([
+      const [modelsRes, backendsRes, gpuRes, typesRes] = await Promise.all([
         api.get('/llm/models/'),
         api.get('/llm/backends/'),
         api.get('/llm/gpu/status/'),
+        api.get('/llm/backends/types'),
       ]);
       setModels(modelsRes.data.models || []);
       setBackends(backendsRes.data.backends || []);
       setGpuStatus(gpuRes.data);
-      setInstalledBackendTypes(modelsRes.data.installed_backend_types || []);
+      setBackendTypes(typesRes.data.backend_types || []);
       setError(null);
     } catch (err: any) {
       setError(err.response?.data?.detail || err.message || 'Failed to fetch LLM data');
@@ -486,9 +491,7 @@ export default function LLMGatewayPage() {
                       {model.backend_id ? (
                         <TkBadge appearance="muted">
                           {/* A one-model backend's id ends in /<model>; the row already names the model. */}
-                          {model.backend_id.startsWith('ollama-')
-                            ? model.backend_id.replace('ollama-', '')
-                            : model.backend_id.split('/')[0]}
+                          {model.backend_id.split('/')[0]}
                         </TkBadge>
                       ) : (
                         <span className="text-muted-foreground">-</span>
@@ -498,7 +501,7 @@ export default function LLMGatewayPage() {
                       <ModelActions
                         model={model}
                         actionLoading={!!actionLoading[model.id]}
-                        installedBackendTypes={installedBackendTypes}
+                        installedBackendTypes={backendTypes.map((b) => b.type)}
                         onLoad={() => setLoadDialog(model)}
                         onUnload={() => handleUnload(model.id)}
                       />
@@ -517,6 +520,7 @@ export default function LLMGatewayPage() {
           modelId={loadDialog.id}
           modelName={loadDialog.name}
           serverType={loadDialog.server_type || []}
+          backendTypes={backendTypes}
           size={loadDialog.size}
           quantization={loadDialog.quantization}
           params_b={loadDialog.params_b}
@@ -676,9 +680,7 @@ function ModelActions({
 
     const hasInstalledBackend = model.server_type.some(t => installedBackendTypes.includes(t));
     if (!hasInstalledBackend) {
-      const missing = model.server_type
-        .filter(t => LOADABLE_TYPES.has(t))
-        .join(', ');
+      const missing = gatewayTypes(model.server_type).join(', ');
       return (
         <span className="text-xs text-muted-foreground max-w-[200px] text-right">
           Requires {missing}

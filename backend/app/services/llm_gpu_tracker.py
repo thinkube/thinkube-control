@@ -87,32 +87,31 @@ def _floored_util(
     return min(max(util, min_util), 0.95)
 
 
-# Backends that lock one time-slice slot PER model (each is its own pod).
-# Ollama is excluded: one Ollama pod hosts many models in a single slot.
-SLOT_PER_MODEL_BACKENDS = ("vllm", "tensorrt-llm", "text-embeddings")
-
-
 def _slots_used(allocs) -> int:
     """Time-slice slots consumed on a node, backend-aware.
 
-    vLLM / TensorRT / TEI lock one slot per model; Ollama collapses to a single
-    shared slot however many models it hosts.
+    A one-model backend locks one slot per model, as each model is its own
+    pod; a shared backend (Ollama) takes one slot per pod however many models
+    it hosts.
     """
-    per_model = sum(
-        a.slots for a in allocs if not str(a.backend_id).startswith("ollama")
-    )
-    has_ollama = any(str(a.backend_id).startswith("ollama") for a in allocs)
-    return per_model + (1 if has_ollama else 0)
+    from app.services.llm_lifecycle import is_shared_backend_id
+
+    per_model = sum(a.slots for a in allocs if not is_shared_backend_id(a.backend_id))
+    shared_pods = {a.backend_id for a in allocs if is_shared_backend_id(a.backend_id)}
+    return per_model + len(shared_pods)
 
 
 def _reserved_gb(allocs) -> float:
-    """Memory reserved up front on a node. vLLM/TensorRT/TEI reserve per model;
-    Ollama self-manages its models' memory (keep_alive), so it isn't summed here.
+    """Memory reserved up front on a node. One-model backends reserve per
+    model; a shared backend (Ollama) manages its models' memory itself
+    (keep_alive), so it isn't summed here.
     """
+    from app.services.llm_lifecycle import is_shared_backend_id
+
     return sum(
         a.estimated_memory_gb
         for a in allocs
-        if not str(a.backend_id).startswith("ollama")
+        if not is_shared_backend_id(a.backend_id)
     )
 
 

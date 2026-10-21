@@ -56,6 +56,8 @@ TensorRT-LLM:: NVIDIA's inference engine, one pod per model; the catalogue entri
 Ollama:: Quantised GGUF models; one pod hosts several models.
 text-embeddings:: Text Embeddings Inference, for embedding models.
 
+Each backend declares itself in its component's `thinkube.yaml` with `spec.llm_backend`: its type, its driver and its tier. Thinkube Control reads the installed backend types from the components' service ConfigMaps; `get_llm_backend_types` lists them. A model's `server_type` in the catalogue names the backend types it runs on. A new inference server is added as a template that declares `spec.llm_backend`, with no change to Thinkube Control. See the `thinkube.yaml` reference for the fields.
+
 == Mirroring
 
 A model must be in the catalogue shown on *AI Models* before it can be mirrored. Mirroring downloads the weights from Hugging Face once into Thinkube Storage, and registers the model in Thinkube Experiments. Submit it from *AI Models* or with `submit_model_mirror`; follow it with `get_mirror_status`. A gated model needs its licence accepted on Hugging Face by the account whose token the installer stored.
@@ -66,7 +68,7 @@ Load from the *Load* dialog on the LLM Gateway page or with `load_llm_model`. Th
 
 [horizontal]
 node:: The GPU node. Without it, the node with the most AI memory left and a free slot takes the model.
-tier:: `flexible` loads through Ollama when the model has a GGUF entry: quick, quantised, smaller. `performance` loads through vLLM or TensorRT-LLM.
+tier:: `flexible` loads through a flexible backend (Ollama) when the model has one: quick, quantised, smaller. `performance` loads through a performance backend, such as vLLM or TensorRT-LLM. Without a tier, a performance backend is used when the model has one.
 backend:: A backend type instead of a tier, or a backend by id as `get_llm_load_options` lists them, such as `vllm-tkspark`; an id names its node too. Other values are refused, and the error lists the accepted forms.
 max_context_length:: Caps the context window. The KV cache grows with it, so a serving-sized value such as 8k to 32k uses far less memory than the model's full window. Without it, Thinkube Control picks the largest of 32k, 16k or 8k that the model supports and the node has memory for. The answer names the node and the context chosen.
 keep_alive:: Ollama only: how long the model stays loaded after its last request.

@@ -102,6 +102,20 @@ class BackendEntry(BaseModel):
     node: Optional[str] = None
 
 
+class BackendTypeEntry(BaseModel):
+    """An installed backend type, as its component declares it."""
+
+    type: str
+    display_name: str
+    namespace: str
+    driver: str
+    tier: str
+
+
+class BackendTypesListResponse(BaseModel):
+    backend_types: List[BackendTypeEntry]
+
+
 class BackendsListResponse(BaseModel):
     backends: List[BackendEntry]
     total: int

@@ -66,11 +66,13 @@ interface LoadOptions {
   context_length: number | null;
 }
 
-const BACKEND_TYPE_LABELS: Record<string, string> = {
-  ollama: 'Ollama',
-  vllm: 'vLLM',
-  'tensorrt-llm': 'TensorRT-LLM',
-};
+export interface BackendType {
+  type: string;
+  display_name: string;
+  namespace: string;
+  driver: string;
+  tier: string;
+}
 
 const CONTEXT_OPTIONS = [
   { value: 2048, label: '2K' },
@@ -91,6 +93,7 @@ interface Props {
   modelId: string;
   modelName: string;
   serverType: string[];
+  backendTypes: BackendType[];
   size: string | null;
   quantization: string | null;
   params_b: number | null;
@@ -133,6 +136,7 @@ export default function LoadModelDialog({
   modelId,
   modelName,
   serverType,
+  backendTypes,
   size,
   quantization,
   params_b,
@@ -157,7 +161,9 @@ export default function LoadModelDialog({
   // The model uses speculative decoding iff its catalog config sets a method.
   const usesSpeculative = !!speculative_config;
 
-  const compatibleTypes = serverType.filter((t) => t in BACKEND_TYPE_LABELS);
+  // The model's backend types that are installed, in the model's order.
+  const compatibleTypes = serverType.filter((t) => backendTypes.some((b) => b.type === t));
+  const backendLabel = (t: string) => backendTypes.find((b) => b.type === t)?.display_name ?? t;
 
   useEffect(() => {
     if (!open) return;
@@ -312,7 +318,7 @@ export default function LoadModelDialog({
                   <TkSelectContent>
                     {compatibleTypes.map((t) => (
                       <TkSelectItem key={t} value={t}>
-                        {BACKEND_TYPE_LABELS[t] || t}
+                        {backendLabel(t)}
                       </TkSelectItem>
                     ))}
                   </TkSelectContent>

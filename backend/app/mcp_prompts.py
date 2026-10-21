@@ -27,12 +27,12 @@ Serve the model {{model_id}} through the Thinkube LLM gateway and leave it ready
 Target node: {{node}} (when this says "choose", pick a node in step 4).
 
 Rules that the tools do not state:
-- A vLLM, TensorRT-LLM or text-embeddings pod serves ONE model. Each model loaded on a node
+- A pod of a per-model-pod backend (vLLM, TensorRT-LLM, text-embeddings) serves ONE model. Each model loaded on a node
   gets its own pod there, created on load and deleted on unload, so several models can
   share a node. A load that does not fit the node's remaining memory is refused, with the
   reason; a loaded model is never replaced. Models on one node start one at a time: while
   one is loading, a second load on that node is refused; load it once the first is
-  available. Ollama is different: one Ollama pod per node serves several models.
+  available. An ollama-driver backend is different: one Ollama pod per node serves several models.
 - `get_llm_load_options` lists in compatible_backends only the pods running NOW. An empty
   list, or a node that has no pod, does not mean the node cannot serve the model: the load
   creates the pod there. Choose by gpu_nodes, not by compatible_backends.
@@ -52,8 +52,9 @@ Steps:
    (every 60 seconds).
 3. `get_llm_models`: the model must be listed with state "deployable" (mirrored, not loaded).
    "available" means it is already served: skip to step 7. "loading" means someone else is
-   loading it: wait with step 6. The model's server_type names its backend: vllm,
-   tensorrt-llm and text-embeddings are one-model pods; ollama is the shared pod.
+   loading it: wait with step 6. The model's server_type names the backend types it runs
+   on. `get_llm_backend_types` lists the installed ones with their driver: per-model-pod
+   (vllm, tensorrt-llm, text-embeddings) is a one-model pod; ollama is the shared pod.
    The backend type must appear in installed_backend_types. If it does not, install it with
    `install_optional_component` (component names: vllm, tensorrt, text-embeddings, ollama)
    and poll `get_deployment_status` with the returned deployment_id until success.

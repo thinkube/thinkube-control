@@ -59,16 +59,31 @@ def test_a_model_whose_pod_is_down_is_downgraded_and_scaled_to_zero(world, pod):
     assert world.scaled == [("vllm", "tkspark", MODEL)]
 
 
-def test_discovery_keeps_the_status_and_models_of_a_known_pod():
+def test_discovery_keeps_the_status_and_models_of_a_known_pod(monkeypatch):
+    import asyncio
+
+    import kubernetes
+
+    from app.api.llm.schemas import BackendEntry
+    from app.services.llm_pod_manager import MODEL_LABEL
+
+    pod = SimpleNamespace(
+        status=SimpleNamespace(phase="Running", pod_ip="10.0.0.1"),
+        spec=SimpleNamespace(node_name="tkspark"),
+        metadata=SimpleNamespace(name="vllm-inference-tkspark-m", labels={MODEL_LABEL: "m"}),
+    )
+    monkeypatch.setattr(kubernetes.config, "load_incluster_config", lambda: None)
+    monkeypatch.setattr(kubernetes.client, "CoreV1Api", lambda: SimpleNamespace(
+        list_namespaced_pod=lambda ns, label_selector: SimpleNamespace(items=[pod] if ns == "vllm" else []),
+    ))
+
     d = LLMBackendDiscovery.__new__(LLMBackendDiscovery)
     d._backends, d._probe_failures = {}, {}
-    from app.api.llm.schemas import BackendEntry
-
     d._backends["vllm-tkspark/m"] = BackendEntry(
         id="vllm-tkspark/m", name="vLLM", url="http://10.0.0.1:7860", type="vllm",
         api_path="/v1", status="healthy", models=[MODEL], node="tkspark",
     )
-    d._static_backends_raw = "- name: vllm-tkspark/m\n  url: http://10.0.0.1:7860\n  type: vllm\n"
-    d._discover_static()
+    asyncio.run(d._discover_gateway_pods())
     assert d._backends["vllm-tkspark/m"].status == "healthy"
     assert d._backends["vllm-tkspark/m"].models == [MODEL]
+    assert d._backends["vllm-tkspark/m"].name == "vLLM (tkspark, m)"
