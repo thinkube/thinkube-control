@@ -104,7 +104,8 @@ func TestListModelsListsAliasesWithTheirRoot(t *testing.T) {
 func TestListModelsDescribesEachModelForAgents(t *testing.T) {
 	backend := modelBackend(t, `{"models":[
 		{"id":"org/flash","name":"Flash","state":"available","aliases":["thinkube-flash"],
-		 "capabilities":["agent","vision"],"default_agent":true,"max_output":32768,"served_context_length":262144},
+		 "capabilities":["agent","vision"],"default_agent":true,"max_output":32768,"served_context_length":262144,
+		 "context_length":262144,"reasoning_format":"qwen3"},
 		{"id":"org/embed","name":"Embed","state":"deployable"}]}`)
 	defer backend.Close()
 
@@ -118,6 +119,9 @@ func TestListModelsDescribesEachModelForAgents(t *testing.T) {
 	if flash["state"] != "available" || flash["default_agent"] != true || flash["context_window"] != 262144.0 || flash["max_output"] != 32768.0 {
 		t.Fatalf("flash: %v", flash)
 	}
+	if flash["reasoning_format"] != "qwen3" || flash["context_length"] != 262144.0 {
+		t.Fatalf("flash reasoning or length: %v", flash)
+	}
 	if fmt.Sprint(flash["input"]) != "[text image]" || fmt.Sprint(flash["capabilities"]) != "[agent vision]" {
 		t.Fatalf("flash inputs or capabilities: %v", flash)
 	}
@@ -125,7 +129,7 @@ func TestListModelsDescribesEachModelForAgents(t *testing.T) {
 		t.Fatalf("the alias does not describe its model: %v", byID["thinkube-flash"])
 	}
 	embed := byID["org/embed"]
-	if fmt.Sprint(embed["capabilities"]) != "[]" || embed["context_window"] != nil || fmt.Sprint(embed["input"]) != "[text]" {
+	if fmt.Sprint(embed["capabilities"]) != "[]" || embed["context_window"] != nil || embed["reasoning_format"] != nil || fmt.Sprint(embed["input"]) != "[text]" {
 		t.Fatalf("embed: %v", embed)
 	}
 }

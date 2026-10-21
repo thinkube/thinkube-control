@@ -46,7 +46,8 @@ def resolve_names(entries: List[Dict]) -> List[Dict]:
     """The catalog with each alias, and the agent default, owned by one model.
 
     An alias names one model and is never a model id. One model at most is
-    the agent default (default_agent), and it is marked agent. A claim in
+    the agent default (default_agent), and it is marked agent. A model marked
+    agent has a context_length and a max_output, which agent clients need. A claim in
     the user's metadata repository wins over the platform's: the platform
     entry loses that alias, or its default. Two claims from the same source
     make the catalog unavailable, with both entries named.
@@ -72,6 +73,15 @@ def resolve_names(entries: List[Dict]) -> List[Dict]:
         for entry in claimants:
             if entry is not winners[0]:
                 dropped_aliases.setdefault(entry["id"], set()).add(alias)
+
+    for entry in entries:
+        if "agent" in (entry.get("capabilities") or []):
+            missing = [f for f in ("context_length", "max_output") if not entry.get(f)]
+            if missing:
+                raise CatalogUnavailableError(
+                    f"Model catalog: {entry['id']} is marked agent but has no {' or '.join(missing)}; "
+                    "an agent client needs both"
+                )
 
     defaults = [e for e in entries if e.get("default_agent")]
     user_defaults = [e for e in defaults if e.get("_source") == "user"]

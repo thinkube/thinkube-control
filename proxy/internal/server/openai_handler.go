@@ -182,8 +182,9 @@ func (h *OpenAIHandler) forwardStream(r *http.Request, w http.ResponseWriter, ba
 // points to; a model's own `root` is its id. An app reads `root` to know which
 // model an alias names before it calls it. Every entry carries a `thinkube`
 // object: the model's state, aliases, capabilities ("agent", "vision"),
-// whether it is the agent default, its inputs, the context its backend serves
-// it with and the answer budget agents reserve. The backend route carries a
+// whether it is the agent default, its inputs, its reasoning format, the
+// context its backend serves it with (context_window), the length it supports
+// (context_length) and the answer budget agents reserve. The backend route carries a
 // trailing slash; without it the backend redirects, and the forwarder does not
 // follow redirects, so the exact path matters. A backend answer that is not
 // 200 or not the expected shape is reported, never shown as an empty list.
@@ -213,6 +214,8 @@ func (h *OpenAIHandler) ListModels(w http.ResponseWriter, r *http.Request) {
 			DefaultAgent        bool     `json:"default_agent"`
 			MaxOutput           *int     `json:"max_output"`
 			ServedContextLength *int     `json:"served_context_length"`
+			ContextLength       *int     `json:"context_length"`
+			ReasoningFormat     *string  `json:"reasoning_format"`
 		} `json:"models"`
 	}
 
@@ -223,14 +226,16 @@ func (h *OpenAIHandler) ListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type thinkubeModel struct {
-		Name          string   `json:"name"`
-		State         string   `json:"state"`
-		Aliases       []string `json:"aliases"`
-		Capabilities  []string `json:"capabilities"`
-		DefaultAgent  bool     `json:"default_agent"`
-		Input         []string `json:"input"`
-		ContextWindow *int     `json:"context_window"`
-		MaxOutput     *int     `json:"max_output"`
+		Name            string   `json:"name"`
+		State           string   `json:"state"`
+		Aliases         []string `json:"aliases"`
+		Capabilities    []string `json:"capabilities"`
+		DefaultAgent    bool     `json:"default_agent"`
+		Input           []string `json:"input"`
+		ReasoningFormat *string  `json:"reasoning_format"`
+		ContextWindow   *int     `json:"context_window"`
+		ContextLength   *int     `json:"context_length"`
+		MaxOutput       *int     `json:"max_output"`
 	}
 	type openAIModel struct {
 		ID       string         `json:"id"`
@@ -260,7 +265,8 @@ func (h *OpenAIHandler) ListModels(w http.ResponseWriter, r *http.Request) {
 		}
 		info := &thinkubeModel{
 			Name: m.Name, State: m.State, Aliases: nonNil(m.Aliases), Capabilities: nonNil(m.Capabilities),
-			DefaultAgent: m.DefaultAgent, Input: input, ContextWindow: m.ServedContextLength, MaxOutput: m.MaxOutput,
+			DefaultAgent: m.DefaultAgent, Input: input, ReasoningFormat: m.ReasoningFormat,
+			ContextWindow: m.ServedContextLength, ContextLength: m.ContextLength, MaxOutput: m.MaxOutput,
 		}
 		models = append(models, openAIModel{ID: m.ID, Object: "model", Created: now, OwnedBy: "local", Root: m.ID, Thinkube: info})
 		for _, alias := range m.Aliases {
