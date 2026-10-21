@@ -80,6 +80,34 @@ def client(app, test_db: Session) -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
+@pytest.fixture(autouse=True)
+def llm_backend_types_installed(monkeypatch):
+    """The backend types the platform ships, as their service ConfigMaps declare them."""
+    from app.services.llm_backend_types import BackendType, llm_backend_types
+
+    def per_model(type_, display_name, namespace, deployment):
+        return BackendType(
+            type=type_, display_name=display_name, namespace=namespace, deployment=deployment,
+            port=7860, api_path="/v1", health_path="/health", driver="per-model-pod",
+            tier="performance",
+        )
+
+    types = {
+        "vllm": per_model("vllm", "vLLM", "vllm", "vllm-inference"),
+        "tensorrt-llm": per_model("tensorrt-llm", "TensorRT-LLM", "tensorrt", "tensorrt-inference"),
+        "text-embeddings": per_model(
+            "text-embeddings", "Text Embeddings", "text-embeddings", "text-embeddings-inference"
+        ),
+        "ollama": BackendType(
+            type="ollama", display_name="Ollama", namespace="ollama", deployment="ollama",
+            port=11434, api_path="/v1", health_path="/", driver="ollama", tier="flexible",
+        ),
+    }
+    monkeypatch.setattr(llm_backend_types, "_types", types)
+    monkeypatch.setattr(llm_backend_types, "refresh", lambda: len(types))
+    return types
+
+
 @pytest.fixture
 def mock_keycloak_token():
     """Mock Keycloak access token for testing."""
