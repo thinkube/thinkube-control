@@ -48,10 +48,15 @@ VENV_PACKAGES_FILE = Path(
 # Installs that need their own pip flags, added after a template's packages.
 TEMPLATE_DETAILS = {
     "fine-tuning": {
-        "description": "Fine-tuning venv with bitsandbytes, peft, trl, and Unsloth",
+        "description": "Fine-tuning venv with bitsandbytes, peft and trl",
+        "special_installs": [],
+    },
+    "fine-tuning-unsloth": {
+        "description": "The fine-tuning venv with Unsloth",
+        "sections": ["fine-tuning", "unsloth"],
         "special_installs": [
-            "git+https://github.com/unslothai/unsloth-zoo.git --no-deps",
-            "unsloth[cu130onlytorch291] @ git+https://github.com/unslothai/unsloth.git --no-build-isolation --no-deps",
+            "unsloth_zoo==2026.10.7 --no-deps",
+            "unsloth==2026.10.7 --no-deps",
         ],
     },
     "agent-dev": {
@@ -90,14 +95,15 @@ def read_package_sections(path: Path = VENV_PACKAGES_FILE) -> Dict[str, List[str
 def venv_templates() -> Dict[str, Dict[str, Any]]:
     """The built-in venv templates, their packages read from venv-packages.txt."""
     sections = read_package_sections()
-    for name in ("base", *TEMPLATE_DETAILS):
+    used = {"base"} | {s for name, details in TEMPLATE_DETAILS.items() for s in details.get("sections", [name])}
+    for name in sorted(used):
         if not sections.get(name):
             raise ValueError(f"{VENV_PACKAGES_FILE}: section [{name}] is missing or empty")
     return {
         name: {
             "name": name,
             "description": details["description"],
-            "packages": sections["base"] + sections[name],
+            "packages": sections["base"] + [p for s in details.get("sections", [name]) for p in sections[s]],
             "special_installs": details["special_installs"],
         }
         for name, details in TEMPLATE_DETAILS.items()
@@ -223,7 +229,7 @@ async def create_jupyter_venv(
 
             # Get template packages
             template = venv_templates()[request.parent_template]
-            packages = template["packages"].copy()
+            packages = template["packages"] + template["special_installs"]
 
             # Find or create template record
             template_record = db.query(JupyterVenv).filter_by(
