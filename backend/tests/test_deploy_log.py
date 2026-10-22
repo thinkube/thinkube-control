@@ -48,3 +48,33 @@ def test_the_line_carries_the_time_and_level():
 def test_an_unknown_level_is_refused_where_the_line_is_written():
     with pytest.raises(ValueError, match="WARNING"):
         format_line("WARNING", "x", NOW)
+
+
+def test_a_build_fact_is_read_back_from_its_line():
+    from deploy_log import build_fact, build_line
+
+    line = build_line("workflow", "llama-cpp-build-frc75", NOW)
+    assert entry_type(line) == "info"
+    assert build_fact(line) == ("workflow", "llama-cpp-build-frc75")
+
+
+def test_a_value_may_hold_the_separator():
+    from deploy_log import build_fact, build_line
+
+    assert build_fact(build_line("pushed_at", "2026-10-22T11:00:00+00:00", NOW)) == ("pushed_at", "2026-10-22T11:00:00+00:00")
+
+
+def test_other_lines_carry_no_fact():
+    from deploy_log import build_fact
+
+    assert build_fact(format_line("INFO", "workflow=x", NOW)) is None
+    assert build_fact("workflow=x") is None
+
+
+def test_an_unknown_fact_is_refused():
+    from deploy_log import build_fact, build_line
+
+    with pytest.raises(ValueError, match="commit"):
+        build_line("commit", "abc", NOW)
+    with pytest.raises(ValueError, match="BUILD line"):
+        build_fact("[08:54:36.123] [BUILD] commit=abc")

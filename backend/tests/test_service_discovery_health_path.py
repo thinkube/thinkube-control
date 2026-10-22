@@ -11,18 +11,21 @@ to use the health path of whichever container is routed at "/". Hardcoding
 Antora static site declaring `health: /` has no /health route and returns 404.
 """
 
-import asyncio
+import sys
+from pathlib import Path
 
 import pytest
 
-from app.api.service_discovery_config import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+
+from service_config import (  # noqa: E402
     DEFAULT_HEALTH_PATH,
     Container,
     Deployment,
     Route,
-    ServiceDiscoveryConfigRequest,
-    generate_service_discovery_yaml,
+    ServiceConfigRequest,
     resolve_health_path,
+    service_data,
 )
 
 
@@ -76,9 +79,7 @@ MINIMAL_REQUEST = {
 
 
 def _generated_service(**overrides):
-    request = ServiceDiscoveryConfigRequest(**{**MINIMAL_REQUEST, **overrides})
-    result = asyncio.run(generate_service_discovery_yaml(request, current_user={}))
-    return result["service_data"]["service"]
+    return service_data(ServiceConfigRequest(**{**MINIMAL_REQUEST, **overrides}))["service"]
 
 
 def test_component_version_is_the_template_release():
@@ -99,7 +100,7 @@ def test_app_version_is_the_apps_own():
 
 def test_routes_are_optional_for_callers():
     """Callers predating the routes field must keep the previous behaviour."""
-    request = ServiceDiscoveryConfigRequest(**MINIMAL_REQUEST)
+    request = ServiceConfigRequest(**MINIMAL_REQUEST)
 
     assert request.routes == []
     assert resolve_health_path(request.containers, request.routes) == DEFAULT_HEALTH_PATH
@@ -107,13 +108,13 @@ def test_routes_are_optional_for_callers():
 
 def test_gateway_managed_defaults_to_false():
     """An app that says nothing is an ordinary always-on deployment."""
-    request = ServiceDiscoveryConfigRequest(**MINIMAL_REQUEST)
+    request = ServiceConfigRequest(**MINIMAL_REQUEST)
 
     assert request.deployment.gateway_managed is False
 
 
 def test_gateway_managed_is_read_from_the_deployment_block():
-    request = ServiceDiscoveryConfigRequest(
+    request = ServiceConfigRequest(
         **MINIMAL_REQUEST,
         deployment={"type": "component", "replicas": 0, "gateway_managed": True},
     )
@@ -123,7 +124,7 @@ def test_gateway_managed_is_read_from_the_deployment_block():
 
 def test_deployment_block_ignores_fields_it_does_not_use():
     """thinkube.yaml's deployment block carries type/name/replicas too."""
-    request = ServiceDiscoveryConfigRequest(
+    request = ServiceConfigRequest(
         **MINIMAL_REQUEST,
         deployment={"type": "app", "name": "whatever", "replicas": 3},
     )
@@ -154,7 +155,7 @@ def test_component_is_recognised_from_the_declared_type(declared_type, is_compon
 
 def test_deployment_type_defaults_to_app():
     """thinkube.yaml may omit the type; an app is the default."""
-    request = ServiceDiscoveryConfigRequest(**MINIMAL_REQUEST)
+    request = ServiceConfigRequest(**MINIMAL_REQUEST)
 
     assert request.deployment.type == "app"
     assert request.deployment.is_component is False

@@ -28,6 +28,8 @@ class TemplateDeployment(Base):
     )  # pending, running, success, failed, cancelled
     variables = Column(JSON, nullable=True)  # Template variables used
     output = Column(Text, nullable=True)  # Final output/summary
+    # The facts of the build a template deploy's push started (app/services/build_follow.py)
+    build = Column(JSON, nullable=True)
 
     # Timestamps
     created_at = Column(
@@ -53,6 +55,7 @@ class TemplateDeployment(Base):
             "status": self.status,
             "variables": self.variables,
             "output": self.output,
+            "build": self.build,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": (

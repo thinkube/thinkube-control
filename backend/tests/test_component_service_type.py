@@ -11,9 +11,14 @@ produced a label and a body that disagreed. Components also get their own
 category rather than sitting among the user applications.
 """
 
+import sys
+from pathlib import Path
+
 import pytest
 
-from app.api.service_discovery_config import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+
+from service_config import (  # noqa: E402
     APP_CATEGORY,
     APP_SERVICE_TYPE,
     COMPONENT_CATEGORY,

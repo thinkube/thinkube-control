@@ -16,7 +16,6 @@ from app.api import (
     debug,
     services,
     pod_resources,
-    service_discovery_config,
     secrets,
     resource_status,
     optional_components,
@@ -53,9 +52,6 @@ api_router.include_router(tokens.router, prefix="/tokens", tags=["api-tokens"])
 api_router.include_router(templates.router, prefix="/templates", tags=["templates"])
 api_router.include_router(stacks.router, prefix="/stacks", tags=["stacks"])
 api_router.include_router(knative_services.router, tags=["knative-services"])
-api_router.include_router(
-    service_discovery_config.router, prefix="/config", tags=["service-discovery-config"]
-)
 api_router.include_router(secrets.router, prefix="/secrets", tags=["secrets"])
 api_router.include_router(resource_status.router, prefix="/resource-status", tags=["resource-status"])
 api_router.include_router(optional_components.router, prefix="/optional-components", tags=["optional-components"])

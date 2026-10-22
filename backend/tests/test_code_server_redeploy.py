@@ -114,8 +114,8 @@ def test_the_playbook_skips_the_repository_reset():
 
 
 def test_runs_left_in_flight_at_startup_are_marked_failed():
-    runs = [SimpleNamespace(id="a", name="redeploy-code-server", status="running", output=None, completed_at=None),
-            SimpleNamespace(id="b", name="optional-nats", status="pending", output=None, completed_at=None)]
+    runs = [SimpleNamespace(id="a", name="redeploy-code-server", status="running", output=None, completed_at=None, build=None),
+            SimpleNamespace(id="b", name="optional-nats", status="pending", output=None, completed_at=None, build=None)]
     db = FakeDB(runs)
     assert mark_interrupted_runs(db) == 2
     assert all(r.status == "failed" and r.output == INTERRUPTED and r.completed_at for r in runs)

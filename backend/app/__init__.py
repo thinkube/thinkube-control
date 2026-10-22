@@ -131,6 +131,18 @@ async def app_lifespan(app: FastAPI):
                 conn.commit()
                 logger.info("Added %s column to notebook_jobs table", column)
 
+    # template_deployments tables made before a run kept its build have no build column.
+    with get_engine().connect() as conn:
+        if not conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='template_deployments' AND column_name='build'"
+            )
+        ).fetchone():
+            conn.execute(text("ALTER TABLE template_deployments ADD COLUMN build JSON"))
+            conn.commit()
+            logger.info("Added build column to template_deployments table")
+
     # Initialize services in database
     try:
         from app.db.init_services import init_services
@@ -270,8 +282,12 @@ async def app_lifespan(app: FastAPI):
     # Deployment runs end with the backend process; rows a previous process
     # left pending or running would otherwise say so for ever.
     try:
-        from app.db.init_deployments import mark_interrupted_runs
+        from app.db.init_deployments import mark_interrupted_runs, runs_to_follow
+        from app.services.background_executor import background_executor
+
         mark_interrupted_runs()
+        for run_id in runs_to_follow():
+            await background_executor.resume(run_id)
     except Exception as e:
         logger.warning(f"Could not mark interrupted deployment runs: {e}")
 
@@ -306,11 +322,14 @@ async def app_lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"custom image build reconciliation: {e}")
             try:
-                from app.db.init_deployments import mark_interrupted_runs
+                from app.db.init_deployments import mark_interrupted_runs, runs_to_follow
                 from app.services.background_executor import background_executor
 
-                if mark_interrupted_runs(still_running=lambda run_id: run_id in background_executor.running_deployments):
+                held = set(background_executor.running_deployments)
+                if mark_interrupted_runs(still_running=lambda run_id: run_id in held):
                     run_queue.wake()
+                for run_id in runs_to_follow(still_running=lambda run_id: run_id in held):
+                    await background_executor.resume(run_id)
             except Exception as e:
                 logger.warning(f"deployment run reconciliation: {e}")
 

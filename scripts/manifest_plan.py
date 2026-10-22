@@ -16,6 +16,8 @@ BASE_RESOURCES = [
     'namespace.yaml',
     'resource-policies.yaml',
     'app-metadata.yaml',
+    # The discovery ConfigMap (service_config.py)
+    'service-config.yaml',
 ]
 
 # An extension is a part of Thinkube Control: it runs in Control's namespace,

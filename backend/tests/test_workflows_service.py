@@ -301,6 +301,7 @@ def test_the_existing_order_is_unchanged_for_an_app_without_workflows():
         "namespace.yaml",
         "resource-policies.yaml",
         "app-metadata.yaml",
+        "service-config.yaml",
         "deployments.yaml",
         "services.yaml",
         "ingress.yaml",
@@ -316,6 +317,7 @@ def test_a_knative_app_still_lists_its_own_resources():
         "namespace.yaml",
         "resource-policies.yaml",
         "app-metadata.yaml",
+        "service-config.yaml",
         "knative-service.yaml",
         "argocd-postsync-hook.yaml",
     ]
@@ -392,6 +394,7 @@ def test_an_extension_lists_no_namespace_of_its_own():
         is_knative=False, needs_storage=False, has_workflows=False, extension=True
     ) == [
         "app-metadata.yaml",
+        "service-config.yaml",
         "deployments.yaml",
         "services.yaml",
         "ingress.yaml",

@@ -10,21 +10,15 @@ Control: the deploy validates the block and writes the resolved descriptor,
 with the base Deployment, port and health path, into the service ConfigMap.
 """
 
-import asyncio
 import sys
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
-
-from app.api.service_discovery_config import (
-    ServiceDiscoveryConfigRequest,
-    generate_service_discovery_yaml,
-)
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts"))
 
+from service_config import ServiceConfigRequest, service_data  # noqa: E402
 from thinkube_yaml_validator import validate_llm_backend  # noqa: E402
 
 BACKEND = {
@@ -48,8 +42,7 @@ REQUEST = {
 
 
 def _service(**overrides):
-    request = ServiceDiscoveryConfigRequest(**{**REQUEST, **overrides})
-    return asyncio.run(generate_service_discovery_yaml(request, current_user={}))["service_data"]["service"]
+    return service_data(ServiceConfigRequest(**{**REQUEST, **overrides}))["service"]
 
 
 def test_the_descriptor_names_the_base_deployment_port_and_health_path():
@@ -83,7 +76,7 @@ def test_a_service_without_the_block_has_no_descriptor():
 
 
 def test_a_container_without_a_port_is_refused():
-    with pytest.raises(HTTPException):
+    with pytest.raises(ValueError, match="names no container with a port"):
         _service(llm_backend=BACKEND, containers=[{"name": "inference"}])
 
 

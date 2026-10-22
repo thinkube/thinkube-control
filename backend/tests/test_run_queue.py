@@ -158,3 +158,37 @@ def test_a_run_this_process_holds_is_left_running(db):
 
     assert mark_interrupted_runs(db, still_running=lambda run_id: run_id == str(alive.id)) == 0
     assert alive.status == "running"
+
+
+PUSHED = {
+    "pushed_at": "2026-10-22T11:00:00+00:00",
+    "discovery": "llama-cpp/thinkube-service-config",
+    "deployed_at": "2026-10-22T10:59:00+00:00",
+}
+
+
+def test_a_run_whose_push_started_a_build_is_followed_not_marked(db):
+    """A restart of Thinkube Control does not stop the build: the run's outcome is the build's."""
+    from app.db.init_deployments import mark_interrupted_runs, runs_to_follow
+
+    pushed = run("llama-cpp", "https://github.com/thinkube/tkt-llama-cpp", 0, status="running")
+    pushed.build = PUSHED
+    before_push = run("notes", "https://github.com/thinkube/tkt-webapp-react-fastapi", 1, status="running")
+    db.add_all([pushed, before_push])
+    db.commit()
+
+    assert mark_interrupted_runs(db, still_running=lambda run_id: False) == 1
+    assert pushed.status == "running"
+    assert before_push.status == "failed"
+    assert runs_to_follow(db, still_running=lambda run_id: False) == [str(pushed.id)]
+
+
+def test_a_followed_run_this_process_holds_is_not_followed_twice(db):
+    from app.db.init_deployments import runs_to_follow
+
+    pushed = run("llama-cpp", "https://github.com/thinkube/tkt-llama-cpp", 0, status="running")
+    pushed.build = PUSHED
+    db.add(pushed)
+    db.commit()
+
+    assert runs_to_follow(db, still_running=lambda run_id: run_id == str(pushed.id)) == []

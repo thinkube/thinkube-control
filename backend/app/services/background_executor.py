@@ -38,6 +38,8 @@ class BackgroundExecutor:
 
     def __init__(self):
         self.running_deployments = {}
+        # Runs a person cancelled, told apart from runs this process stops with
+        self.cancel_requested = set()
 
     async def start_deployment(self, deployment_id: str) -> None:
         """Start a deployment in the background."""
@@ -91,34 +93,110 @@ class BackgroundExecutor:
             # Execute the deployment
             try:
                 result = await self._run_ansible_playbook(deployment, db)
-
-                # Update deployment status based on result
                 if result["success"]:
-                    deployment.status = "success"
-                    deployment.output = "Deployment completed successfully"
-                else:
-                    deployment.status = "failed"
-                    deployment.output = result.get("error", "Deployment failed")
-
-            except asyncio.CancelledError:
-                deployment.status = "cancelled"
-                deployment.output = "Deployment was cancelled"
+                    await self._follow_build(deployment, db)
+                self._finish(deployment, db, result)
+            except asyncio.CancelledError as e:
+                self._end(deployment, db, e)
                 raise
             except Exception as e:
-                logger.error(f"Deployment {deployment_id} failed: {e}")
-                deployment.status = "failed"
-                deployment.output = f"Deployment failed: {str(e)}"
-
-            finally:
-                deployment.completed_at = datetime.now(timezone.utc)
-                db.commit()
-
-                # Remove from running deployments
-                self.running_deployments.pop(deployment_id, None)
-                _wake_queue()
-
+                self._end(deployment, db, e)
         finally:
             db.close()
+
+    async def resume(self, deployment_id: str) -> None:
+        """Follow a run whose push started a build, which another process began."""
+        if deployment_id not in self.running_deployments:
+            task = asyncio.create_task(self._resume_deployment(deployment_id))
+            self.running_deployments[deployment_id] = task
+
+    async def _resume_deployment(self, deployment_id: str) -> None:
+        db = next(get_db())
+        try:
+            deployment = db.query(TemplateDeployment).filter_by(id=deployment_id).first()
+            self._log_to_db(
+                db, deployment.id, "info",
+                "Thinkube Control restarted during this run; following its build from here",
+            )
+            try:
+                await self._follow_build(deployment, db)
+                self._finish(deployment, db, {"success": True})
+            except asyncio.CancelledError as e:
+                self._end(deployment, db, e)
+                raise
+            except Exception as e:
+                self._end(deployment, db, e)
+        finally:
+            db.close()
+
+    async def _follow_build(self, deployment: TemplateDeployment, db: Session) -> None:
+        from app.core.config import settings
+        from app.services.build_follow import follow
+
+        await follow(
+            deployment.variables["app_name"],
+            deployment.build or {},
+            settings.DOMAIN_NAME,
+            log=lambda kind, message: self._log_to_db(db, deployment.id, kind, message),
+            record_workflow=lambda name: self._record_build(db, deployment, "workflow", name),
+        )
+
+    def _record_build(self, db: Session, deployment: TemplateDeployment, fact: str, value: str) -> None:
+        """Keep a fact of the run's build. A run with a build is alive: if another
+        process marked it interrupted meanwhile, it is running again."""
+        deployment.build = {**(deployment.build or {}), fact: value}
+        deployment.status = "running"
+        deployment.output = None
+        deployment.completed_at = None
+        db.commit()
+
+    def _finish(self, deployment: TemplateDeployment, db: Session, result: Dict[str, Any]) -> None:
+        if result["success"]:
+            deployment.status = "success"
+            deployment.output = "Deployment completed successfully"
+            self._log_to_db(db, deployment.id, "complete", "Deployment completed successfully")
+        else:
+            deployment.status = "failed"
+            deployment.output = result.get("error", "Deployment failed")
+        self._close(deployment, db)
+
+    def _end(self, deployment: TemplateDeployment, db: Session, error: BaseException) -> None:
+        """The run ended by an error, a cancellation, or this process stopping."""
+        from app.db.init_deployments import INTERRUPTED
+        from app.services.build_follow import BuildFailed
+
+        deployment_id = str(deployment.id)
+        if isinstance(error, asyncio.CancelledError):
+            if deployment_id in self.cancel_requested:
+                self.cancel_requested.discard(deployment_id)
+                deployment.status = "cancelled"
+                deployment.output = "Deployment was cancelled"
+            elif (deployment.build or {}).get("pushed_at"):
+                # The build goes on in Argo; the next process follows it from the run's facts
+                self._log_to_db(
+                    db, deployment.id, "info",
+                    "Thinkube Control is stopping; its next start follows this run's build",
+                )
+                self.running_deployments.pop(deployment_id, None)
+                return
+            else:
+                deployment.status = "failed"
+                deployment.output = INTERRUPTED
+        elif isinstance(error, BuildFailed):
+            self._log_to_db(db, deployment.id, "error", str(error))
+            deployment.status = "failed"
+            deployment.output = str(error)
+        else:
+            logger.error(f"Deployment {deployment_id} failed: {error}")
+            deployment.status = "failed"
+            deployment.output = f"Deployment failed: {error}"
+        self._close(deployment, db)
+
+    def _close(self, deployment: TemplateDeployment, db: Session) -> None:
+        deployment.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        self.running_deployments.pop(str(deployment.id), None)
+        _wake_queue()
 
     async def _execute_component_deployment(
         self,
@@ -330,7 +408,7 @@ class BackgroundExecutor:
         """
         # The script's line format is defined beside the script.
         sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
-        from deploy_log import entry_type
+        from deploy_log import build_fact, entry_type
 
         process = None
         error_lines = []
@@ -361,6 +439,9 @@ class BackgroundExecutor:
                 # Every line is stored, typed by the level the script gave it.
                 kind = entry_type(line_text)
                 self._log_to_db(db, deployment.id, kind, line_text)
+                fact = build_fact(line_text)
+                if fact:
+                    self._record_build(db, deployment, *fact)
                 if kind == "error":
                     error_lines.append(line_text)
 
@@ -369,12 +450,7 @@ class BackgroundExecutor:
 
             # Log final status
             if return_code == 0:
-                self._log_to_db(
-                    db,
-                    deployment.id,
-                    "complete",
-                    "Deployment completed successfully",
-                )
+                self._log_to_db(db, deployment.id, "info", "The build has started; following it")
                 return {"success": True}
             else:
                 # The script's own error lines say why; the run's status carries them.
@@ -570,6 +646,7 @@ class BackgroundExecutor:
         """Cancel a running deployment."""
         if deployment_id in self.running_deployments:
             task = self.running_deployments[deployment_id]
+            self.cancel_requested.add(deployment_id)
             task.cancel()
             return True
         return False

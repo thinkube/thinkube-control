@@ -15,7 +15,7 @@ import os
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -41,7 +41,7 @@ from component_checkout import check_declared_type, checkout_path, developer_com
 from manifest_plan import EXTENSION_NAMESPACE, NAMESPACE_RESOURCES
 from template_version import github_git_env, template_ref
 from thinkube_yaml_placeholders import substitute as substitute_placeholders
-from deploy_log import format_line
+from deploy_log import build_line, format_line
 
 
 APPS_DIR = "/home/thinkube/apps"
@@ -79,6 +79,10 @@ class DeploymentLogger:
     def phase(phase_num: int, message: str):
         DeploymentLogger.log(f"🚀 PHASE {phase_num}: {message}", "PHASE")
 
+    @staticmethod
+    def build(fact: str, value: str):
+        print(build_line(fact, value, datetime.now()), flush=True)
+
 
 class ApplicationDeployer:
     """Main deployment orchestrator."""
@@ -87,6 +91,8 @@ class ApplicationDeployer:
         self.params = params
         self.app_name = params['app_name']
         self.deployment_id = params['deployment_id']
+        # Written into the discovery ConfigMap: the backend knows this deploy's sync by it
+        self.deployment_date = datetime.now(timezone.utc).isoformat()
         self.namespace = params['deployment_namespace']
         self.domain = params['domain_name']
         self.template_url = params['template_url']
@@ -1315,6 +1321,23 @@ data:
             httproute_content = httproute_template.render(**template_vars)
             write('ingress.yaml', httproute_content)
 
+        # 6b. The discovery ConfigMap, which Argo CD applies with the rest of the app
+        import service_config
+
+        write(service_config.MANIFEST, service_config.manifest(
+            service_config.request_for(
+                app_name=self.app_name,
+                domain=self.domain,
+                namespace=self.namespace,
+                config=self.thinkube_config,
+                template_url=self.template_url,
+                template_version=self.template_version,
+                project_description=self.params.get('project_description', ''),
+                deployment_date=self.deployment_date,
+            ),
+            extension=self.is_extension,
+        ))
+
         # 7. Generate paused-backend.yaml from template (apps only)
         if not is_knative:
             paused_template = env.get_template('paused-backend.yaml.j2')
@@ -1474,8 +1497,12 @@ spec:
     # ==================== PHASE 4: Git Operations ====================
 
     async def phase4_git_operations(self):
-        """Phase 4: Sequential git operations + build monitoring."""
-        DeploymentLogger.phase(4, "Git Operations & Build Monitoring")
+        """Phase 4: Sequential git operations, ending when the build has started.
+
+        The backend follows the build from here, from the BUILD lines this
+        phase prints; a restart of the backend does not stop it.
+        """
+        DeploymentLogger.phase(4, "Git Operations & Build Start")
 
         # Sequential order: generate manifests → migrations → git hooks → repo → webhook → ArgoCD app → push
         await self.generate_migrations()
@@ -1513,17 +1540,22 @@ spec:
         # Get existing workflow names BEFORE git push so we can detect NEW workflows
         existing_workflows = await self._get_existing_workflow_names()
 
+        # The build this push starts is the first workflow of the app created after this time
+        from service_config import configmap_name
+        DeploymentLogger.build("discovery", f"{self.namespace}/{configmap_name(self.app_name, self.is_extension)}")
+        DeploymentLogger.build("deployed_at", self.deployment_date)
+        DeploymentLogger.build("pushed_at", datetime.now(timezone.utc).isoformat())
+
         await self.git_commit_and_push()
 
         DeploymentLogger.success("Changes pushed to Gitea")
 
         # Wait for webhook to trigger workflow (only detect NEW workflows)
         workflow_name = await self.wait_for_workflow_trigger(exclude_workflows=existing_workflows)
+        DeploymentLogger.build("workflow", workflow_name)
+        DeploymentLogger.log(f"🔗 Argo Workflow UI: https://argo.{self.domain}/workflows/argo/{workflow_name}")
 
-        # Monitor workflow until completion
-        await self.monitor_workflow(workflow_name)
-
-        DeploymentLogger.success("Phase 4 complete - build succeeded!")
+        DeploymentLogger.success("Phase 4 complete - build started; Thinkube Control follows it to its end")
 
     def _run_migration_sync(self, migration_script: str, cwd: str) -> tuple:
         """Synchronous migration execution (runs in thread pool to avoid blocking event loop)."""
@@ -1990,82 +2022,6 @@ printf 'PUSHED\\t%s\\n' "$(git log -1 --format='%H %s')"
 
         return workflow_name
 
-    async def monitor_workflow(self, workflow_name: str):
-        """Monitor Argo Workflow execution and stream status."""
-        argo_ui_url = f"https://argo.{self.domain}/workflows/argo/{workflow_name}"
-        DeploymentLogger.log(f"🔗 Argo Workflow UI: {argo_ui_url}")
-
-        last_reported_nodes = set()
-
-        while True:
-            try:
-                workflow = await self.k8s_custom.get_namespaced_custom_object(
-                    group="argoproj.io",
-                    version="v1alpha1",
-                    namespace="argo",
-                    plural="workflows",
-                    name=workflow_name
-                )
-
-                status = workflow.get('status', {})
-                phase = status.get('phase')
-                nodes = status.get('nodes', {})
-
-                # Report new node statuses
-                for node_id, node in nodes.items():
-                    node_name = node.get('displayName', node.get('name', 'unknown'))
-                    node_phase = node.get('phase')
-                    node_key = f"{node_name}:{node_phase}"
-
-                    if node_key not in last_reported_nodes:
-                        last_reported_nodes.add(node_key)
-
-                        if node_phase == 'Running':
-                            DeploymentLogger.log(f"  ⚙️  {node_name}: Running")
-                        elif node_phase == 'Succeeded':
-                            DeploymentLogger.log(f"  ✅ {node_name}: Succeeded")
-                        elif node_phase in ['Failed', 'Error']:
-                            DeploymentLogger.error(f"  ❌ {node_name}: {node_phase}")
-
-                # Check overall workflow status
-                if phase == 'Succeeded':
-                    DeploymentLogger.success("🎉 Build workflow completed successfully!")
-                    DeploymentLogger.log(f"🔗 View details: {argo_ui_url}")
-                    break
-
-                elif phase in ['Failed', 'Error']:
-                    message = status.get('message', 'No error message')
-                    DeploymentLogger.error(f"❌ Build workflow failed: {message}")
-                    DeploymentLogger.error(f"🔗 View failure details: {argo_ui_url}")
-                    raise RuntimeError(f"Workflow {workflow_name} failed: {message}")
-
-                elif phase in ['Pending', 'Running']:
-                    # Still running, continue monitoring
-                    pass
-
-                else:
-                    DeploymentLogger.log(f"Workflow status: {phase}")
-
-            except ApiException as e:
-                if e.status == 404:
-                    DeploymentLogger.error(f"Workflow {workflow_name} not found")
-                    raise
-                else:
-                    DeploymentLogger.error(f"Error monitoring workflow: {e}")
-
-            await asyncio.sleep(5)
-
-    # ==================== PHASE 5: Service Discovery ====================
-
-    async def phase5_deploy(self):
-        """Phase 5: Service discovery."""
-        DeploymentLogger.phase(5, "Service Discovery")
-
-        # ArgoCD app was already created in Phase 4 (before git push)
-        await self.setup_service_discovery()
-
-        DeploymentLogger.success("Phase 5 complete - application deployed")
-
     async def deploy_argocd_app(self):
         """Create ArgoCD application with SSH setup (matches Ansible argocd role)."""
         gitea_hostname = f"git.{self.domain}"
@@ -2192,91 +2148,6 @@ printf 'PUSHED\\t%s\\n' "$(git log -1 --format='%H %s')"
                 # Other errors should fail the deployment
                 raise
 
-    async def setup_service_discovery(self):
-        """Setup service discovery via thinkube-control API."""
-        # Use MCP default token for API authentication
-        try:
-            mcp_secret = await self.k8s_core.read_namespaced_secret('mcp-default-token', 'thinkube-control')
-        except ApiException as e:
-            raise RuntimeError(
-                f"Cannot read thinkube-control/mcp-default-token, which service discovery "
-                f"authenticates with: {e.reason}"
-            ) from e
-        api_token = self._decode_secret_data(mcp_secret, 'token')
-        control_base = f"https://control.{self.domain}"
-        app_host = f"{self.app_name}.{self.domain}"
-
-        async with aiohttp.ClientSession() as session:
-            headers = {
-                'Authorization': f'Bearer {api_token}',
-                'Content-Type': 'application/json'
-            }
-
-            # Step 1: Generate service discovery YAML via API
-            generate_url = f"{control_base}/api/v1/config/service-discovery/generate-configmap-yaml"
-            body = {
-                'app_name': self.app_name,
-                'app_host': app_host,
-                'k8s_namespace': self.namespace,
-                'template_url': self.template_url,
-                'template_version': self.template_version,
-                'app_version': self.thinkube_config.get('metadata', {}).get('version'),
-                'project_description': self.params.get('project_description', ''),
-                'deployment_date': datetime.now().isoformat(),
-                'containers': self.thinkube_config.get('spec', {}).get('containers', []),
-                'routes': self.thinkube_config.get('spec', {}).get('routes', []),
-                'deployment': self.thinkube_config.get('spec', {}).get('deployment', {}),
-                'llm_backend': self.thinkube_config.get('spec', {}).get('llm_backend'),
-            }
-
-            yaml_content = None
-            async with session.post(generate_url, headers=headers, json=body, ssl=False) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    yaml_content = result.get('yaml_content', '')
-                    DeploymentLogger.log("Generated service discovery YAML")
-                else:
-                    error_text = await resp.text()
-                    DeploymentLogger.error(f"Failed to generate service discovery YAML: {resp.status} - {error_text}")
-
-            # Step 2: Create ConfigMap with the generated YAML
-            if yaml_content:
-                # Discovery reads every labelled ConfigMap; in Control's namespace
-                # the name thinkube-service-config is Control's own
-                discovery_name = f'{self.app_name}-service-config' if self.is_extension else 'thinkube-service-config'
-                discovery_cm = client.V1ConfigMap(
-                    metadata=client.V1ObjectMeta(
-                        name=discovery_name,
-                        namespace=self.namespace,
-                        labels={
-                            'app': self.app_name,
-                            'thinkube.io/managed': 'true',
-                            'thinkube.io/service-type': 'component' if self._is_component() else 'user_app',
-                            'thinkube.io/service-name': self.app_name
-                        }
-                    ),
-                    data={'service.yaml': yaml_content}
-                )
-
-                try:
-                    await self.k8s_core.create_namespaced_config_map(self.namespace, discovery_cm)
-                    DeploymentLogger.log(f"Created {discovery_name} ConfigMap")
-                except ApiException as e:
-                    if e.status == 409:
-                        await self.k8s_core.replace_namespaced_config_map(
-                            discovery_name, self.namespace, discovery_cm
-                        )
-                        DeploymentLogger.log(f"Updated {discovery_name} ConfigMap")
-
-            # Step 3: Trigger service sync to register app immediately
-            sync_url = f"{control_base}/api/v1/services/sync"
-            async with session.post(sync_url, headers=headers, ssl=False) as resp:
-                if resp.status in [200, 201]:
-                    DeploymentLogger.success("Service discovery sync triggered - app registered")
-                else:
-                    DeploymentLogger.log("Service sync trigger failed (app will appear via auto-discovery within 5 min)")
-
-
     # ==================== Main Orchestration ====================
 
     async def list_existing_deployments(self):
@@ -2401,10 +2272,6 @@ LIMIT 5;"
             DeploymentLogger.debug(" Starting Phase 4")
             await self.phase4_git_operations()
             DeploymentLogger.debug(" Phase 4 complete")
-
-            DeploymentLogger.debug(" Starting Phase 5")
-            await self.phase5_deploy()
-            DeploymentLogger.debug(" Phase 5 complete")
 
             elapsed = (datetime.now() - start_time).total_seconds()
             DeploymentLogger.success(f"Deployment complete in {elapsed:.1f} seconds")

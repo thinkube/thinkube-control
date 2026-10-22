@@ -50,6 +50,7 @@ from manifest_parameters import (
     recorded_values as _recorded_parameter_values,
 )
 import spec_env as _spec_env
+import service_config as _service_config
 from dependency_resolution import knative_url, knative_view, service_url, service_view
 from build_architectures import (
     app_architectures as _app_architectures,
@@ -420,6 +421,18 @@ data:
             generated_files['ingress.yaml'] = env.get_template('httproute.j2').render(**template_vars)
             generated_files['paused-backend.yaml'] = env.get_template('paused-backend.yaml.j2').render(**template_vars)
 
+        # The discovery ConfigMap, with the deploy's values it recorded
+        generated_files[_service_config.MANIFEST] = _service_config.manifest(
+            _service_config.request_for(
+                app_name=self.app_name,
+                domain=self.domain,
+                namespace=self.namespace,
+                config=self.thinkube_config,
+                **self._recorded_deploy(),
+            ),
+            extension=self.is_extension,
+        )
+
         if needs_storage:
             generated_files['storage-pvc.yaml'] = env.get_template('storage-pvc.j2').render(**template_vars)
 
@@ -614,6 +627,20 @@ data:
                     if variable.value is not None:
                         out.setdefault(variable.name, variable.value)
         return out
+
+    def _recorded_deploy(self) -> Dict[str, str]:
+        """The template, template version, description and deploy date of the
+        app's last template deploy, from its discovery ConfigMap in the cluster."""
+        name = _service_config.configmap_name(self.app_name, self.is_extension)
+        where = f"ConfigMap {self.namespace}/{name}"
+        try:
+            configmap = self.core_v1.read_namespaced_config_map(name, self.namespace)
+        except ApiException as e:
+            raise ValueError(
+                f"Cannot read {where}, which records the template {self.app_name} was deployed from: "
+                f"{e.status} {e.reason}. Redeploy the app from its template (redeploy_template) to write it"
+            ) from e
+        return _service_config.recorded_deploy(configmap.data, where)
 
     def _read_manifest_params(self, app_path: Path) -> Dict[str, str]:
         """The parameters manifest.yaml declares, with the values the app was deployed with.
