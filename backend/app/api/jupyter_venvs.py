@@ -51,7 +51,7 @@ TEMPLATE_DETAILS = {
         "description": "Fine-tuning venv with bitsandbytes, peft and trl",
         "special_installs": [],
     },
-    "unsloth": {
+    "fine-tuning-unsloth": {
         "description": "The fine-tuning venv with Unsloth",
         "sections": ["fine-tuning"],
         "special_installs": [
@@ -229,7 +229,7 @@ async def create_jupyter_venv(
 
             # Get template packages
             template = venv_templates()[request.parent_template]
-            packages = template["packages"].copy()
+            packages = template["packages"] + template["special_installs"]
 
             # Find or create template record
             template_record = db.query(JupyterVenv).filter_by(
