@@ -53,7 +53,7 @@ TEMPLATE_DETAILS = {
     },
     "fine-tuning-unsloth": {
         "description": "The fine-tuning venv with Unsloth",
-        "sections": ["fine-tuning"],
+        "sections": ["fine-tuning", "unsloth"],
         "special_installs": [
             "unsloth_zoo==2026.10.7 --no-deps",
             "unsloth==2026.10.7 --no-deps",
