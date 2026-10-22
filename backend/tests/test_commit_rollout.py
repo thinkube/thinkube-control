@@ -121,3 +121,29 @@ def test_the_image_tag_is_read_from_the_reference():
     assert cr.image_tag("registry.thinkube.com/thinkube/research-debate-backend:uid-b2") == "uid-b2"
     with pytest.raises(ValueError, match="has no tag"):
         cr.image_tag("registry.thinkube.com/thinkube/research-debate-backend")
+
+
+DONE = {"replicas": 1, "updated_replicas": 1, "available_replicas": 1, "total_replicas": 1,
+        "generation": 3, "observed_generation": 3}
+
+
+def test_a_rollout_is_complete_only_when_no_pod_of_the_earlier_version_is_left():
+    assert cr.rollout_complete(DONE)
+    # The new pod exists but crashes; the old one keeps the deployment available
+    assert not cr.rollout_complete({**DONE, "total_replicas": 2})
+    assert not cr.rollout_complete({**DONE, "observed_generation": 2})
+
+
+def test_pods_stuck_in_crash_loop_are_failing_and_a_starting_pod_is_not():
+    pods = [{"pod": "a", "reason": "CrashLoopBackOff", "message": "", "restarts": 6},
+            {"pod": "b", "reason": "ContainerCreating", "message": "", "restarts": 0},
+            {"pod": "c", "reason": None, "message": "", "restarts": 0}]
+    assert [p["pod"] for p in cr.failing_pods(pods)] == ["a"]
+
+
+def test_a_deployment_whose_new_pods_fail_is_not_live_and_says_so():
+    failing = {"deployment": "backend", "source": "this_commit", "rollout_complete": False,
+               "failing_pods": [{"pod": "a", "reason": "CrashLoopBackOff", "message": "", "restarts": 6}]}
+    live, summary = cr.verdict([failing])
+    assert live is False
+    assert summary.startswith("failed:") and "CrashLoopBackOff" in summary

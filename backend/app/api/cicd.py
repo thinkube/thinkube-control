@@ -573,6 +573,26 @@ def _gitea_get(path: str, token: str, params: Dict[str, Any]) -> Any:
     return json.loads(response.data)
 
 
+def _pods_of_image(core_v1, deployment, container: str, image: str) -> List[dict]:
+    """The pods of a deployment that run `image` in `container`, with the reason
+    their container waits, if it does."""
+    selector = ",".join(f"{k}={v}" for k, v in (deployment.spec.selector.match_labels or {}).items())
+    pods = []
+    for pod in core_v1.list_namespaced_pod(deployment.metadata.namespace, label_selector=selector).items:
+        spec = next((c for c in pod.spec.containers if c.name == container), None)
+        if spec is None or spec.image != image:
+            continue
+        status = next((s for s in pod.status.container_statuses or [] if s.name == container), None)
+        waiting = status.state.waiting if status and status.state else None
+        pods.append({
+            "pod": pod.metadata.name,
+            "reason": waiting.reason if waiting else None,
+            "message": (waiting.message or "")[:300] if waiting else "",
+            "restarts": status.restart_count if status else 0,
+        })
+    return pods
+
+
 @router.get("/apps/{app_name}/commits/{commit}/rollout", operation_id="get_commit_rollout")
 def get_commit_rollout(
     app_name: str,
@@ -592,8 +612,10 @@ def get_commit_rollout(
     - running: each deployment of the app with the image it runs now, whether its rollout is
       complete, and source: this_commit, later_commit (a later commit's build, which includes
       this one), earlier_commit (not live yet) or unknown.
+    - failing_pods, per deployment: pods of that image whose container does not start
+      (CrashLoopBackOff, ImagePullBackOff, ...), with the reason and the restarts.
     - live and summary: true when every deployment runs an image built from this commit or a
-      later one and its rollout is complete.
+      later one and its rollout is complete; false, saying so, when its new pods fail.
 
     A push to main is the deploy: it builds, tests and rolls out the app with no other call.
     """
@@ -661,6 +683,9 @@ def get_commit_rollout(
                     "replicas": d.spec.replicas or 0,
                     "updated_replicas": d.status.updated_replicas or 0,
                     "available_replicas": d.status.available_replicas or 0,
+                    "total_replicas": d.status.replicas or 0,
+                    "generation": d.metadata.generation or 0,
+                    "observed_generation": d.status.observed_generation or 0,
                 }
                 running.append({
                     "deployment": d.metadata.name,
@@ -668,6 +693,7 @@ def get_commit_rollout(
                     "image": c.image,
                     **state,
                     "rollout_complete": cr.rollout_complete(state),
+                    "failing_pods": cr.failing_pods(_pods_of_image(core_v1, d, c.name, c.image)),
                     **cr.image_source(cr.image_tag(c.image), build, builds, pushes, main, position, at),
                 })
         live, summary = cr.verdict(running)

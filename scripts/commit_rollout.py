@@ -182,9 +182,29 @@ def image_source(
 
 
 def rollout_complete(deployment: dict) -> bool:
-    """Whether every replica of a deployment runs its current template and is available."""
+    """Whether every replica of a deployment runs its current template and is
+    available, and no pod of an earlier template is left: the rule of
+    `kubectl rollout status`. While a new pod fails, the old one keeps the
+    deployment available, so available replicas alone do not say the new
+    template is running."""
     wanted = deployment["replicas"]
-    return deployment["updated_replicas"] == wanted and deployment["available_replicas"] == wanted
+    return (
+        deployment["observed_generation"] >= deployment["generation"]
+        and deployment["updated_replicas"] == wanted
+        and deployment["total_replicas"] == wanted
+        and deployment["available_replicas"] == wanted
+    )
+
+
+# Container states in which a pod does not start, whatever the wait
+FAILING_REASONS = ("CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "CreateContainerConfigError",
+                   "CreateContainerError", "InvalidImageName", "RunContainerError")
+
+
+def failing_pods(pods: list[dict]) -> list[dict]:
+    """The pods whose container is stuck in a state it does not leave by
+    waiting, each pod given as {"pod", "reason", "message", "restarts"}."""
+    return [p for p in pods if p["reason"] in FAILING_REASONS]
 
 
 def verdict(running: list[dict]) -> tuple[bool, str]:
@@ -195,6 +215,10 @@ def verdict(running: list[dict]) -> tuple[bool, str]:
     if behind:
         names = ", ".join(f"{r['deployment']} ({r['source']})" for r in behind)
         return False, f"not live: {names} does not run an image built from this commit or a later one"
+    failing = [r for r in running if r.get("failing_pods")]
+    if failing:
+        names = ", ".join(f"{r['deployment']} ({r['failing_pods'][0]['reason']})" for r in failing)
+        return False, f"failed: the new pods of {names} do not start; the earlier version keeps serving"
     rolling = [r["deployment"] for r in running if not r["rollout_complete"]]
     if rolling:
         return False, f"built, but the rollout is not complete in {', '.join(rolling)}"
