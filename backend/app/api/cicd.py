@@ -255,11 +255,10 @@ def _read_pipelines(custom_api, label_selector: str, limit: int) -> dict:
 def _get_argocd_deploy_stages(
     custom_api, core_v1, apps_v1, app_name: str, target_namespace: str, after_epoch: Optional[float]
 ) -> list:
-    """Query ArgoCD Application and its Deployment rollout to build deploy stages.
-
-    Returns a list of stage dicts for each Deployment managed by the ArgoCD app,
-    with status reflecting the rollout health and timing from the last sync.
-    """
+    """The Argo CD sync and the rollout of each Deployment the application
+    manages, as stages. A rollout succeeds when no pod of the earlier version is
+    left, fails when its new pods do not start, and ends when Kubernetes marks
+    the new ReplicaSet available."""
     stages = []
     try:
         argocd_app = custom_api.get_namespaced_custom_object(
@@ -269,8 +268,11 @@ def _get_argocd_deploy_stages(
             plural="applications",
             name=app_name,
         )
-    except ApiException:
-        return stages
+    except ApiException as e:
+        if e.status == 404:
+            # An app without an Argo CD application has no deploy stages
+            return stages
+        raise
 
     op_state = argocd_app.get("status", {}).get("operationState", {})
     sync_started = _parse_iso_to_epoch(op_state.get("startedAt"))
@@ -308,87 +310,64 @@ def _get_argocd_deploy_stages(
         "details": {"type": "argocd"},
     })
 
-    # Add a stage for each Deployment rollout in the target namespace
+    # A stage for each Deployment the Argo CD application manages
     if not target_namespace:
         return stages
+    sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
+    import commit_rollout as cr
 
-    try:
-        deployments = apps_v1.list_namespaced_deployment(
-            namespace=target_namespace,
-            label_selector=f"app.kubernetes.io/instance={app_name}",
-        )
-        # Fallback: if no label match, try getting deployments from ArgoCD resources
-        if not deployments.items:
-            resources = argocd_app.get("status", {}).get("resources", [])
-            deploy_names = [
-                r["name"] for r in resources
-                if r.get("kind") == "Deployment" and r.get("group", "") == "apps"
-            ]
-            for dname in deploy_names:
-                try:
-                    dep = apps_v1.read_namespaced_deployment(name=dname, namespace=target_namespace)
-                    deployments.items.append(dep)
-                except ApiException:
-                    pass
-    except ApiException:
-        return stages
+    resources = argocd_app.get("status", {}).get("resources", [])
+    names = [r["name"] for r in resources if r.get("kind") == "Deployment" and r.get("group", "") == "apps"]
+    for name in names:
+        try:
+            dep = apps_v1.read_namespaced_deployment(name=name, namespace=target_namespace)
+        except ApiException as e:
+            if e.status == 404:
+                # Listed by Argo CD but deleted since; nothing rolls out
+                continue
+            raise
+        state = {
+            "replicas": dep.spec.replicas or 0,
+            "updated_replicas": dep.status.updated_replicas or 0,
+            "available_replicas": dep.status.available_replicas or 0,
+            "total_replicas": dep.status.replicas or 0,
+            "generation": dep.metadata.generation or 0,
+            "observed_generation": dep.status.observed_generation or 0,
+        }
+        pods = _pod_states(core_v1, dep)
+        failing = cr.failing_pods(pods)
+        progressing = next((c for c in dep.status.conditions or [] if c.type == "Progressing"), None)
 
-    for dep in deployments.items:
-        dep_name = dep.metadata.name
-        dep_status = dep.status
-
-        # Determine rollout status from conditions
-        rollout_status = "RUNNING"
         error_msg = None
         rollout_finished = None
+        if failing:
+            status = "FAILED"
+            error_msg = f"{failing[0]['pod']}: {failing[0]['reason']} {failing[0]['message']}".strip()
+        elif cr.rollout_complete(state):
+            status = "SUCCEEDED"
+            # Kubernetes sets reason NewReplicaSetAvailable when a rollout
+            # completes; its update time is when that happened. A sync that
+            # changed nothing finds the rollout already complete.
+            if progressing and progressing.reason == "NewReplicaSetAvailable" and progressing.last_update_time:
+                rollout_finished = max(progressing.last_update_time.timestamp(), sync_finished or 0)
+        elif progressing and progressing.status == "False":
+            status = "FAILED"
+            error_msg = progressing.message
+        else:
+            status = "RUNNING"
 
-        ready = dep_status.ready_replicas or 0
-        desired = dep.spec.replicas or 1
-        updated = dep_status.updated_replicas or 0
-
-        if updated >= desired and ready >= desired:
-            rollout_status = "SUCCEEDED"
-        elif dep_status.conditions:
-            for cond in dep_status.conditions:
-                if cond.type == "Progressing" and cond.status == "False":
-                    rollout_status = "FAILED"
-                    error_msg = cond.message
-                    break
-
-        # Use the newest pod's start time as rollout start, ready time as end
-        rollout_started = sync_finished  # rollout starts after sync
-        if rollout_status == "SUCCEEDED" and dep_status.conditions:
-            for cond in dep_status.conditions:
-                if cond.type == "Available" and cond.status == "True" and cond.last_transition_time:
-                    rollout_finished = cond.last_transition_time.timestamp()
-
-        rollout_duration = None
-        if rollout_started and rollout_finished:
-            rollout_duration = rollout_finished - rollout_started
-
-        # Find the current pod name for log access
-        pod_name = None
-        try:
-            pods = core_v1.list_namespaced_pod(
-                namespace=target_namespace,
-                label_selector=f"app={dep_name}",
-                limit=1,
-            )
-            if pods.items:
-                pod_name = pods.items[0].metadata.name
-        except ApiException:
-            pass
-
+        rollout_started = sync_finished
+        newest = max(pods, key=lambda p: p["created"], default=None)
         stages.append({
-            "id": f"deploy-{dep_name}",
-            "stageName": f"deploy-{dep_name.split('-', 2)[-1] if '-' in dep_name else dep_name}",
+            "id": f"deploy-{name}",
+            "stageName": f"deploy-{name.split('-', 2)[-1] if '-' in name else name}",
             "component": "deployment",
-            "status": rollout_status,
+            "status": status,
             "startedAt": rollout_started,
             "completedAt": rollout_finished,
-            "duration": rollout_duration,
+            "duration": rollout_finished - rollout_started if rollout_started and rollout_finished else None,
             "errorMessage": error_msg,
-            "podName": pod_name,
+            "podName": failing[0]["pod"] if failing else (newest["pod"] if newest else None),
             "details": {"type": "deployment", "namespace": target_namespace},
         })
 
@@ -573,22 +552,25 @@ def _gitea_get(path: str, token: str, params: Dict[str, Any]) -> Any:
     return json.loads(response.data)
 
 
-def _pods_of_image(core_v1, deployment, container: str, image: str) -> List[dict]:
-    """The pods of a deployment that run `image` in `container`, with the reason
-    their container waits, if it does."""
+def _pod_states(core_v1, deployment, container: Optional[str] = None, image: Optional[str] = None) -> List[dict]:
+    """The pods of a deployment, found by its selector, with the reason their
+    container waits, if it does. Given a container and an image, only the pods
+    that run that image in that container."""
     selector = ",".join(f"{k}={v}" for k, v in (deployment.spec.selector.match_labels or {}).items())
     pods = []
     for pod in core_v1.list_namespaced_pod(deployment.metadata.namespace, label_selector=selector).items:
-        spec = next((c for c in pod.spec.containers if c.name == container), None)
-        if spec is None or spec.image != image:
-            continue
-        status = next((s for s in pod.status.container_statuses or [] if s.name == container), None)
-        waiting = status.state.waiting if status and status.state else None
+        if container is not None:
+            spec = next((c for c in pod.spec.containers if c.name == container), None)
+            if spec is None or spec.image != image:
+                continue
+        statuses = [s for s in pod.status.container_statuses or [] if container is None or s.name == container]
+        waiting = next((s.state.waiting for s in statuses if s.state and s.state.waiting), None)
         pods.append({
             "pod": pod.metadata.name,
+            "created": pod.metadata.creation_timestamp.timestamp() if pod.metadata.creation_timestamp else 0,
             "reason": waiting.reason if waiting else None,
             "message": (waiting.message or "")[:300] if waiting else "",
-            "restarts": status.restart_count if status else 0,
+            "restarts": sum(s.restart_count for s in statuses),
         })
     return pods
 
@@ -693,7 +675,7 @@ def get_commit_rollout(
                     "image": c.image,
                     **state,
                     "rollout_complete": cr.rollout_complete(state),
-                    "failing_pods": cr.failing_pods(_pods_of_image(core_v1, d, c.name, c.image)),
+                    "failing_pods": [{k: p[k] for k in ("pod", "reason", "message", "restarts")} for p in cr.failing_pods(_pod_states(core_v1, d, c.name, c.image))],
                     **cr.image_source(cr.image_tag(c.image), build, builds, pushes, main, position, at),
                 })
         live, summary = cr.verdict(running)
