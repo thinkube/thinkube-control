@@ -6,6 +6,7 @@ again after a restart while its server exists, and a training needs training
 mode on for its node."""
 
 import asyncio
+import json
 import uuid
 
 import pytest
@@ -194,3 +195,43 @@ def test_a_training_is_refused_on_another_node_than_training_mode(monkeypatch):
     e = ask_training(monkeypatch, {"node": "tkamd2"})
     assert e.status_code == 409
     assert "training mode is on for tkamd2, not tkspark" in e.detail
+
+
+NOTEBOOK = {"nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [{"cell_type": "code", "metadata": {}, "outputs": [], "execution_count": None,
+                       "source": "print(PARAMETERS['steps'])"}]}
+
+
+def written(root, relative):
+    return json.loads((root / relative).read_text())
+
+
+def test_a_given_notebook_runs_as_its_own_copy_with_the_parameters_first(tmp_path):
+    relative = js._job_notebook(tmp_path, JOB, None, NOTEBOOK, {"steps": 3, "name": "a \"quoted\" run"})
+    assert relative == f"job-runs/{JOB}.ipynb"
+    cells = written(tmp_path, relative)["cells"]
+    assert cells[0]["metadata"]["tags"] == ["parameters"]
+    scope = {}
+    exec(cells[0]["source"], scope)
+    assert scope["PARAMETERS"] == {"steps": 3, "name": "a \"quoted\" run"}
+    assert cells[1] == NOTEBOOK["cells"][0]
+
+
+def test_parameters_for_a_notebook_in_the_folder_leave_that_notebook_as_it_is(tmp_path):
+    (tmp_path / "train.ipynb").write_text(json.dumps(NOTEBOOK))
+    relative = js._job_notebook(tmp_path, JOB, "train.ipynb", None, {"steps": 1})
+    assert json.loads((tmp_path / "train.ipynb").read_text()) == NOTEBOOK
+    assert len(written(tmp_path, relative)["cells"]) == 2
+
+
+@pytest.mark.parametrize("path", ["../train.ipynb", "/etc/train.ipynb"])
+def test_a_notebook_path_outside_the_notebooks_folder_is_refused(tmp_path, path):
+    with pytest.raises(HTTPException) as e:
+        js._job_notebook(tmp_path, JOB, path, None, {"steps": 1})
+    assert e.value.status_code == 422
+
+
+def test_a_given_notebook_that_is_not_nbformat_is_refused(tmp_path):
+    with pytest.raises(HTTPException) as e:
+        js._job_notebook(tmp_path, JOB, None, {"cells": "x"}, None)
+    assert e.value.status_code == 422

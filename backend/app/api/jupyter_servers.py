@@ -24,9 +24,11 @@ and recorded in the ``notebook_jobs`` table.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -41,6 +43,7 @@ from app.core.config import settings
 from app.db.session import SessionLocal, get_db
 from app.models.notebook_jobs import NotebookJob
 from app.services import jupyterhub_client as hub
+from app.services import storage
 from app.services import training_mode
 from app.services import notebook_resources as res
 
@@ -353,7 +356,21 @@ async def stop_notebook_server(node: str, current_user: dict = Depends(get_curre
 # ---------------------------------------------------------------------------
 
 class RunNotebookJobRequest(BaseModel):
-    notebook_path: str = Field(..., description="Path of the notebook, relative to the notebooks folder.")
+    notebook_path: Optional[str] = Field(None, description="Path of the notebook, relative to the notebooks folder. Give this or notebook.")
+    notebook: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "The notebook itself, as nbformat JSON, for a caller that cannot write into the notebooks folder. "
+            "Give this or notebook_path."
+        ),
+    )
+    parameters: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "Values for the run, any JSON object. A first cell tagged 'parameters' sets them as the dict "
+            "PARAMETERS in the kernel."
+        ),
+    )
     kernel_name: Optional[str] = Field(None, description="Kernel to run it with, for example 'fine-tuning'. Defaults to the one the notebook names.")
     node: str = Field(..., description="The node to run on, for example 'tkspark'.")
     cpu_cores: Union[int, str, None] = Field(None, description="CPU cores for the run.")
@@ -381,6 +398,50 @@ class RunNotebookJobRequest(BaseModel):
 
 class JobResponse(BaseModel):
     job: Dict[str, Any]
+
+
+# The volume claim of the notebooks folder, and the folder in it that holds
+# the notebook each job with a given notebook or parameters runs. The folder
+# is not hidden: the Jupyter server does not open hidden paths.
+NOTEBOOKS_CLAIM = "jupyterhub/jupyterhub-notebooks-pvc"
+JOB_NOTEBOOKS_FOLDER = "job-runs"
+
+
+def _parameters_cell(parameters: Dict[str, Any]) -> Dict[str, Any]:
+    text = json.dumps(json.dumps(parameters))
+    return {
+        "cell_type": "code",
+        "execution_count": None,
+        "metadata": {"tags": ["parameters"]},
+        "outputs": [],
+        "source": f"import json\nPARAMETERS = json.loads({text})",
+    }
+
+
+def _job_notebook(root: Path, job_id: uuid.UUID, notebook_path: Optional[str],
+                  notebook: Optional[Dict[str, Any]], parameters: Optional[Dict[str, Any]]) -> str:
+    """Writes the notebook a job runs into JOB_NOTEBOOKS_FOLDER of the notebooks
+    folder `root`: the given notebook, or a copy of the one at notebook_path,
+    with the parameters cell first when there are parameters. The source
+    notebook is left as it is. Returns the path relative to `root`."""
+    if notebook is None:
+        given = PurePosixPath(notebook_path)
+        source = root.joinpath(*given.parts)
+        if given.is_absolute() or any(p in ("..", ".") for p in given.parts) or not source.is_file():
+            raise HTTPException(status_code=422, detail=f"notebook_path {notebook_path!r} is not a notebook in the notebooks folder")
+        try:
+            notebook = json.loads(source.read_text())
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=f"{notebook_path} is not a notebook: {e}")
+    if not isinstance(notebook.get("cells"), list) or not isinstance(notebook.get("nbformat"), int):
+        raise HTTPException(status_code=422, detail="notebook must be nbformat JSON with 'cells' and 'nbformat'")
+    if parameters:
+        notebook = {**notebook, "cells": [_parameters_cell(parameters)] + notebook["cells"]}
+    folder = root / JOB_NOTEBOOKS_FOLDER
+    folder.mkdir(exist_ok=True)
+    target = folder / f"{job_id}.ipynb"
+    target.write_text(json.dumps(notebook, indent=1))
+    return f"{JOB_NOTEBOOKS_FOLDER}/{target.name}"
 
 
 def _job_session() -> Session:
@@ -565,7 +626,7 @@ async def run_notebook_job(
     current_user: dict = Depends(get_current_user_dual_auth),
     db: Session = Depends(get_db),
 ):
-    """Run a whole notebook unattended on its own server: started on the node with the GPUs asked for (the node's defaults fill the rest), run top to bottom, stopped when done. Returns a job_id at once; poll notebook_job_status. The notebook file keeps the outputs. A training sets training true and runs on the node training mode is on."""
+    """Run a whole notebook unattended on its own server: started on the node with the GPUs asked for (the node's defaults fill the rest), run top to bottom, stopped when done. Returns a job_id at once; poll notebook_job_status. The notebook file keeps the outputs. A training sets training true and runs on the node training mode is on. With a given notebook or parameters, the job runs its own copy, job-runs/<job_id>.ipynb in the notebooks folder, which keeps the outputs; parameters reach the notebook as the dict PARAMETERS."""
     is_training = jupyter_notebooks._bool(request.training, False)
     training = await training_mode.status()
     if is_training and training is None:
@@ -589,9 +650,20 @@ async def run_notebook_job(
     placement.training_node = training is not None and training["node"] == placement.node
     stop_on_error = jupyter_notebooks._bool(request.stop_on_error, True)
     cell_timeout = jupyter_notebooks._opt_int(request.cell_timeout_seconds, "cell_timeout_seconds")
+    if (request.notebook_path is None) == (request.notebook is None):
+        raise HTTPException(status_code=422, detail="give one of notebook_path and notebook")
+    job_id = uuid.uuid4()
+    notebook_path = request.notebook_path
+    if request.notebook is not None or request.parameters:
+        try:
+            root = await asyncio.to_thread(storage.claim_folder, NOTEBOOKS_CLAIM)
+        except storage.StorageError as e:
+            raise HTTPException(status_code=503, detail=f"the notebooks folder: {e}")
+        notebook_path = _job_notebook(root, job_id, request.notebook_path, request.notebook, request.parameters)
     job = NotebookJob(
+        id=job_id,
         server_name=f"{JOB_SERVER_PREFIX}{uuid.uuid4().hex[:8]}",
-        notebook_path=request.notebook_path,
+        notebook_path=notebook_path,
         kernel_name=request.kernel_name,
         node=placement.node,
         cpu_cores=placement.cpu_cores,
@@ -610,7 +682,7 @@ async def run_notebook_job(
             job.id,
             job.server_name,
             placement,
-            request.notebook_path,
+            notebook_path,
             request.kernel_name,
             stop_on_error,
             cell_timeout,

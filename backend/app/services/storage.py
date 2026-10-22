@@ -283,6 +283,22 @@ def _fs(core: client.CoreV1Api, name: str) -> Dict[str, Any]:
     return filesystems[name]
 
 
+def claim_folder(claim: str) -> Path:
+    """The path in this pod of the folder a JuiceFS volume claim mounts,
+    `claim` being "<namespace>/<name>"."""
+    core = _core()
+    filesystems = _filesystems(core)
+    found = [(fs_name, folder) for (fs_name, folder), vols in _juicefs_volumes(core, filesystems).items()
+             if any(v["claim"] == claim for v in vols)]
+    if len(found) != 1:
+        raise StorageError(f"volume claim {claim} mounts {len(found)} JuiceFS folders; one was expected")
+    fs_name, folder = found[0]
+    path = _inside(filesystems[fs_name], folder)
+    if not path.is_dir():
+        raise StorageError(f"the folder of volume claim {claim}, {fs_name}:/{folder}, is not mounted here")
+    return path
+
+
 def set_quota(filesystem: str, folder_name: str, size_gib: int) -> Dict[str, Any]:
     """Sets the quota of a top-level folder that has one, on the folder and on
     the PVs whose capacity the CSI driver turns into it at every mount.
