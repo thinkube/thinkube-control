@@ -60,8 +60,20 @@ def init_venvs(db: Session = None):
                 updated += 1
                 logger.info(f"Updated venv template: {template_id} ({len(all_packages)} packages)")
 
+        # A template the code no longer defines goes, unless a custom venv was made from it
+        removed = 0
+        current = set(venv_templates())
+        for stale in db.query(JupyterVenv).filter_by(is_template=True).all():
+            if stale.name in current:
+                continue
+            if db.query(JupyterVenv).filter_by(parent_template_id=stale.id).first():
+                logger.info(f"Venv template {stale.name} is no longer defined; kept for the venvs made from it")
+                continue
+            db.delete(stale)
+            removed += 1
+
         db.commit()
-        logger.info(f"Venv templates: {created} created, {updated} updated")
+        logger.info(f"Venv templates: {created} created, {updated} updated, {removed} removed")
 
     except Exception as e:
         logger.error(f"Failed to initialize venv templates: {e}")
