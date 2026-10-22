@@ -39,6 +39,7 @@ from pathlib import Path
 from app.services.background_executor import background_executor
 from app.services.dependency_manager import DependencyManager
 from app.services.model_downloader import ModelDownloaderService
+from app.services.fixes_feed import FeedError, platform_version
 from app.services.metadata_fetcher import CatalogUnavailableError, fetch_merged_catalog
 
 sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
@@ -446,6 +447,12 @@ async def _queue_template_deploy(
                 ),
             )
         deploy_type = "extension" if is_extension else service_type
+        # The template writes the platform the extension is built for: this one, on every deploy
+        if is_extension:
+            try:
+                request.variables["platform_version"] = platform_version()
+            except FeedError as e:
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         # A component is installed from Optional Components, which records its
         # deployment itself; this endpoint only renders an installed one again.
