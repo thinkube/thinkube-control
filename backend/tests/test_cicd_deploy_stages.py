@@ -57,7 +57,7 @@ def test_a_finished_rollout_ends_when_the_new_replicaset_became_available():
     deploy = stages(deployment(1, done), [pod("forge-backend-new")])[1]
     assert deploy["status"] == "SUCCEEDED"
     assert deploy["completedAt"] == at("2026-10-22T08:26:10Z").timestamp()
-    assert deploy["duration"] == 19
+    assert deploy["duration"] == 35
     assert deploy["podName"] == "forge-backend-new"
 
 

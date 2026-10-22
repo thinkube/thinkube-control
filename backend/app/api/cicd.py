@@ -349,14 +349,16 @@ def _get_argocd_deploy_stages(
             # completes; its update time is when that happened. A sync that
             # changed nothing finds the rollout already complete.
             if progressing and progressing.reason == "NewReplicaSetAvailable" and progressing.last_update_time:
-                rollout_finished = max(progressing.last_update_time.timestamp(), sync_finished or 0)
+                rollout_finished = max(progressing.last_update_time.timestamp(), sync_started or 0)
         elif progressing and progressing.status == "False":
             status = "FAILED"
             error_msg = progressing.message
         else:
             status = "RUNNING"
 
-        rollout_started = sync_finished
+        # Argo CD applies the manifests when the sync starts; the rollout runs
+        # while the sync waits for the app to be healthy
+        rollout_started = sync_started
         newest = max(pods, key=lambda p: p["created"], default=None)
         stages.append({
             "id": f"deploy-{name}",
