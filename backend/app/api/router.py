@@ -38,6 +38,7 @@ from app.api import (
     training_mode,
     storage,
 )
+from app.api import extensions
 from app.api.llm.router import llm_router
 
 api_router = APIRouter()
@@ -76,6 +77,7 @@ api_router.include_router(training_mode.router, tags=["training-mode"])
 api_router.include_router(storage.router, tags=["storage"])
 api_router.include_router(debug.router, tags=["debug"])
 api_router.include_router(docs_search.router, prefix="/docs", tags=["docs"])
+api_router.include_router(extensions.router, tags=["extensions"])
 
 # LLM Gateway API
 api_router.include_router(llm_router, prefix="/llm", tags=["llm"])

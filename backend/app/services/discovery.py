@@ -17,6 +17,8 @@ from app.models.services import Service as ServiceModel, ServiceEndpoint
 from app.models.service_schemas import ServiceType
 from sqlalchemy.dialects.postgresql import insert
 
+from app.services.extensions import check_extension
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,15 +33,14 @@ class ServiceDiscovery:
     SERVICE_LABEL = "thinkube.io/managed"
     _gitea_token: Optional[str] = None
 
-    def _app_version(self, app_name: str) -> Tuple[Optional[str], Optional[str]]:
-        """An app's version and the reason it could not be read.
+    def _app_config(self, app_name: str) -> Tuple[Optional[dict], Optional[str]]:
+        """An app's thinkube.yaml and the reason it could not be read.
 
-        An app's version changes with each push, while its service config is
-        written only at deploy, so the version is read from metadata.version of
-        thinkube.yaml on the app's Gitea main: the code the build deploys. The
-        version is None when thinkube.yaml declares none. A failure is returned
-        as the reason instead of raised, so the app still shows on the
-        dashboard, with the reason in place of its version.
+        An app's version and its extension declaration change with each push,
+        while its service config is written only at deploy, so they are read
+        from thinkube.yaml on the app's Gitea main: the code the build deploys.
+        A failure is returned as the reason instead of raised, so the app still
+        shows on the dashboard, with the reason in place of its version.
         """
         import urllib3
         from app.core.config import settings
@@ -60,8 +61,7 @@ class ServiceDiscovery:
             )
             if response.status != 200:
                 return None, f"Gitea answered {response.status} for {path}"
-            config = yaml.safe_load(response.data) or {}
-            return (config.get("metadata") or {}).get("version"), None
+            return yaml.safe_load(response.data) or {}, None
         except Exception as e:
             return None, f"Cannot read {path} from Gitea: {e}"
 
@@ -211,10 +211,20 @@ class ServiceDiscovery:
 
             # A component's version is fixed at deploy; an app's follows its pushes.
             version_error = None
+            extension = None
+            extension_error = None
             if svc.get("type") == "user_app":
-                component_version, version_error = self._app_version(svc["name"])
+                app_config, version_error = self._app_config(svc["name"])
                 if version_error:
                     logger.error(f"Version of {svc['name']}: {version_error}")
+                    component_version = None
+                else:
+                    component_version = (app_config.get("metadata") or {}).get("version")
+                    declared = (app_config.get("spec") or {}).get("extension")
+                    if declared is not None:
+                        extension, extension_error = check_extension(declared)
+                        if extension_error:
+                            logger.error(f"Extension of {svc['name']}: {extension_error}")
             else:
                 component_version = svc.get("component_version")
 
@@ -255,6 +265,8 @@ class ServiceDiscovery:
                     # The component's VERSION, or an app's own version.
                     "component_version": component_version,
                     "version_error": version_error,
+                    "extension": extension,
+                    "extension_error": extension_error,
                     # For services deployed from a template: the template and
                     # the release tag the service was generated from.
                     "template_url": svc.get("metadata", {}).get("template_url"),

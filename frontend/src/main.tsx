@@ -24,6 +24,9 @@ import { FixesIndicator } from './components/FixesIndicator';
 
 // Pages
 import HomePage from './pages/HomePage';
+import ExtensionPage from './pages/ExtensionPage';
+import { extensionBase, listExtensions, type Extension } from './lib/extensions';
+import { extensionIcon } from './lib/extensionIcon';
 import LoginPage from './pages/LoginPage';
 import AuthCallbackPage from './pages/AuthCallbackPage';
 import DashboardPage from './pages/DashboardPage';
@@ -106,11 +109,19 @@ function AppContent() {
   const navigate = useNavigate();
   const { getCategories, fetchServices, services } = useServicesStore();
   const [navigationItems, setNavigationItems] = useState<TkNavItem[]>(baseNavigationItems);
+  const [extensions, setExtensions] = useState<Extension[]>([]);
 
   // Fetch services on mount
   useEffect(() => {
     fetchServices();
   }, [fetchServices]);
+
+  // The extensions service discovery found; each gets its own group in the navigation
+  useEffect(() => {
+    listExtensions()
+      .then(setExtensions)
+      .catch((e) => console.error('The extensions could not be listed:', e));
+  }, []);
 
   // Dynamically build navigation items with categories when services change
   useEffect(() => {
@@ -133,11 +144,38 @@ function AppContent() {
       ],
     };
 
+    const extensionGroups: TkNavItem[] = extensions.map((extension) => ({
+      id: `x:${extension.name}`,
+      label: extension.title,
+      lucideIcon: extension.icon ? extensionIcon(extension.icon) : Puzzle,
+      isGroup: true,
+      children: extension.nav.map((entry, i) => ({
+        id: `x:${extension.name}:${i}`,
+        label: entry.label,
+        lucideIcon: entry.icon ? extensionIcon(entry.icon) : undefined,
+        href: `${extensionBase(extension.name)}${entry.path === '/' ? '' : entry.path}`,
+      })),
+    }));
+
     setNavigationItems([
       updatedDashboard,
+      ...extensionGroups,
       ...baseNavigationItems.slice(1),
     ]);
-  }, [services, getCategories]);
+  }, [services, getCategories, extensions]);
+
+  // The extension whose page is shown, and the navigation entry whose path matches most of the address
+  const shownExtension = extensions.find((e) => location.pathname.startsWith(extensionBase(e.name)));
+  const extensionEntry = () => {
+    if (!shownExtension) return undefined;
+    const below = location.pathname.slice(extensionBase(shownExtension.name).length) || '/';
+    let best: number | undefined;
+    shownExtension.nav.forEach((entry, i) => {
+      const matches = entry.path === '/' ? below === '/' : below === entry.path || below.startsWith(`${entry.path}/`);
+      if (matches && (best === undefined || entry.path.length > shownExtension.nav[best].path.length)) best = i;
+    });
+    return best;
+  };
 
   const handleNavClick = (id: string) => {
     const routes: Record<string, string> = {
@@ -158,6 +196,14 @@ function AppContent() {
       news: '/news',
     };
 
+    if (id.startsWith('x:')) {
+      const [, name, index] = id.split(':');
+      const extension = extensions.find((e) => e.name === name);
+      const entry = extension?.nav[Number(index)];
+      if (entry) navigate(`${extensionBase(name)}${entry.path === '/' ? '' : entry.path}`);
+      return;
+    }
+
     // Handle category routes
     if (id.startsWith('category-')) {
       const category = id.replace('category-', '');
@@ -172,6 +218,10 @@ function AppContent() {
   // Determine active item from current path
   const getActiveItem = () => {
     const path = location.pathname;
+    if (shownExtension) {
+      const entry = extensionEntry();
+      return entry === undefined ? `x:${shownExtension.name}` : `x:${shownExtension.name}:${entry}`;
+    }
     if (path === '/' || path === '/dashboard/favorites') return 'favorites';
     if (path === '/dashboard/all') return 'all-services';
     if (path.startsWith('/dashboard/category/')) {
@@ -197,6 +247,10 @@ function AppContent() {
   // Determine page title from current path
   const getPageTitle = () => {
     const path = location.pathname;
+    if (shownExtension) {
+      const entry = extensionEntry();
+      return entry === undefined ? shownExtension.title : `${shownExtension.title} - ${shownExtension.nav[entry].label}`;
+    }
     if (path === '/' || path === '/dashboard/favorites') return 'Dashboard - Favorites';
     if (path === '/dashboard/all') return 'Dashboard - All Services';
     if (path.startsWith('/dashboard/category/')) {
@@ -261,6 +315,7 @@ function AppContent() {
         <Route path="/news" element={<NewsAndFixesPage />} />
         <Route path="/harbor-images" element={<HarborImages />} />
         <Route path="/image-mirror/:source" element={<ImageMirrorDeployment />} />
+        <Route path="/x/:name/*" element={<ExtensionPage extensions={extensions} />} />
       </Routes>
     </TkAppLayout>
   );
