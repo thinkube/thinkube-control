@@ -68,3 +68,17 @@ def test_new_pods_that_crash_fail_the_stage_while_the_old_pod_still_serves():
     assert "CrashLoopBackOff" in deploy["errorMessage"]
     assert deploy["podName"] == "forge-backend-new"
     assert deploy["duration"] is None
+
+
+def test_a_build_the_adapter_did_not_deploy_shows_a_skipped_deploy_stage(monkeypatch):
+    workflow = {
+        "metadata": {"name": "forge-build-old", "labels": {"thinkube.io/app-name": "forge"},
+                     "annotations": {cicd.SUPERSEDED_ANNOTATION: "forge-build-new"}},
+        "spec": {}, "status": {"phase": "Succeeded", "nodes": {}},
+    }
+    custom = NS(get_namespaced_custom_object=lambda **kwargs: workflow)
+    monkeypatch.setattr(cicd, "_get_k8s_clients", lambda: (custom, None, None))
+    pipeline = cicd.get_pipeline("forge-build-old", current_user={})
+    deploy = pipeline["stages"][-1]
+    assert deploy["status"] == "SKIPPED"
+    assert "forge-build-new" in deploy["errorMessage"]

@@ -34,6 +34,8 @@ PHASE_TO_STATUS = {
 
 ARGO_NAMESPACE = "argo"
 ARGOCD_NAMESPACE = "argocd"
+# Set by the harbor webhook adapter on a build it did not deploy because a newer one was
+SUPERSEDED_ANNOTATION = "thinkube.io/deploy-superseded-by"
 
 
 def _get_k8s_clients():
@@ -402,7 +404,23 @@ def get_pipeline(
         # Enrich with ArgoCD deploy stages
         app_name = pipeline.get("appName")
         target_ns = pipeline.get("namespace")
-        if app_name:
+        newer = (wf.get("metadata", {}).get("annotations") or {}).get(SUPERSEDED_ANNOTATION)
+        if newer:
+            # The webhook adapter did not deploy this build: a newer one was deployed first
+            pipeline["stages"].append({
+                "id": f"deploy-skipped-{workflow_name}",
+                "stageName": "deploy",
+                "component": "argocd",
+                "status": "SKIPPED",
+                "startedAt": pipeline.get("completedAt"),
+                "completedAt": pipeline.get("completedAt"),
+                "duration": 0,
+                "errorMessage": f"not deployed: the newer build {newer} was deployed first",
+                "podName": None,
+                "details": {"type": "argocd"},
+            })
+            pipeline["stageCount"] = len(pipeline["stages"])
+        elif app_name:
             deploy_stages = _get_argocd_deploy_stages(
                 custom_api, core_v1, apps_v1,
                 app_name, target_ns, pipeline.get("startedAt"),
