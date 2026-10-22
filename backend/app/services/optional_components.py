@@ -486,6 +486,8 @@ class OptionalComponentService:
             failed_pods = len([p for p in pods.items if p.status.phase == "Failed"])
             
             if total_pods == 0:
+                if self._check_if_installed(component_name):
+                    return {"status": "installed", "message": "Installed; the component runs no pods"}
                 return {"status": "not_installed", "message": "No pods found"}
             elif running_pods == total_pods:
                 return {
