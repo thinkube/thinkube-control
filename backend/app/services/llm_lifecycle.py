@@ -547,7 +547,7 @@ class LLMLifecycleManager:
                 message=f"Insufficient GPU resources: {reason}",
             )
 
-        payload: dict = {"model_id": model_id}
+        payload: dict = {"model_id": model_id, "task": entry.task}
         if entry.stop_tokens:
             payload["stop_tokens"] = entry.stop_tokens
         if entry.reasoning_format:
@@ -609,7 +609,9 @@ class LLMLifecycleManager:
         from app.services.llm_pod_manager import llm_pod_manager
 
         try:
-            model_env = {"MODEL_ID": model_id}
+            # The catalog's task (text-generation, automatic-speech-recognition,
+            # text-to-image, ...), for a server that serves several kinds.
+            model_env = {"MODEL_ID": model_id, "TASK": payload["task"]}
             if payload.get("stop_tokens"):
                 model_env["STOP_TOKENS"] = json_mod.dumps(payload["stop_tokens"])
             if payload.get("reasoning_format"):
