@@ -568,6 +568,9 @@ try:
         # Create and upload MLflow metadata
         print(f'Creating MLflow metadata...', flush=True)
         is_gguf = any(f.endswith('.gguf') for f in os.listdir(staging_model_path) if os.path.isfile(os.path.join(staging_model_path, f)))
+        # A diffusers model has model_index.json and its parts in folders,
+        # and no config.json for MLflow's transformers flavor.
+        is_diffusers = os.path.isfile(os.path.join(staging_model_path, 'model_index.json'))
         package_format = {repr(package_format)}
 
         if package_format:
@@ -616,6 +619,28 @@ try:
                 Body=mlmodel_yaml.encode()
             )
             print(f'✓ Uploaded GGUF metadata ({{len(gguf_files)}} gguf files)', flush=True)
+        elif is_diffusers:
+            import yaml
+            diffusers_files = sorted(
+                os.path.relpath(os.path.join(r, f), staging_model_path)
+                for r, _, fs in os.walk(staging_model_path) for f in fs
+            )
+            mlmodel_content = {{
+                'flavors': {{
+                    'diffusers': {{
+                        'model_files': diffusers_files,
+                        'format': 'diffusers',
+                        'task': model_task,
+                    }}
+                }},
+                'model_id': model_id,
+            }}
+            s3_client.put_object(
+                Bucket=s3_bucket,
+                Key=f'{{s3_artifact_prefix}}/MLmodel',
+                Body=yaml.dump(mlmodel_content, default_flow_style=False).encode()
+            )
+            print(f'✓ Uploaded diffusers metadata ({{len(diffusers_files)}} files)', flush=True)
         else:
             # Transformers models — generate full metadata
             temp_mlmodel_dir = tempfile.mkdtemp()
