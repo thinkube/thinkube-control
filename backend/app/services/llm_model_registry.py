@@ -40,6 +40,19 @@ def _tier_of(backend_type: str) -> ModelTier:
     return ModelTier(llm_backend_types.require(backend_type).tier)
 
 
+def served_name(entry: ModelEntry, backend_type: str) -> str:
+    """The name a backend of this type serves the model under.
+
+    An Ollama pod hosts several models, each under the catalog's
+    serving_name. A one-model pod is started with MODEL_ID and serves the
+    model under its id, so a model listed for both kinds has two names.
+    """
+    described = llm_backend_types.get(backend_type)
+    if described is not None and described.driver == DRIVER_OLLAMA:
+        return entry.serving_name or entry.id
+    return entry.id
+
+
 class LLMModelRegistry:
     def __init__(self):
         self._models: Dict[str, ModelEntry] = {}
@@ -101,7 +114,7 @@ class LLMModelRegistry:
                     backend_url=backend.url,
                     api_path=backend.api_path,
                     model_id=entry.id,
-                    serving_name=serving,
+                    serving_name=served_name(entry, backend.type),
                     model_state=ModelState.available,
                     tier=resolved_tier,
                     anthropic_messages=llm_backend_types.require(backend.type).anthropic_messages,
@@ -144,7 +157,7 @@ class LLMModelRegistry:
             backend_url=backend.url,
             api_path=backend.api_path,
             model_id=entry.id,
-            serving_name=serving,
+            serving_name=served_name(entry, backend.type),
             model_state=ModelState.available,
             tier=resolved_tier,
             anthropic_messages=llm_backend_types.require(backend.type).anthropic_messages,
@@ -268,18 +281,15 @@ class LLMModelRegistry:
 
         catalog_serving = set()
         for model in updated.values():
-            if model.serving_name and model.server_type:
-                for stype in model.server_type:
-                    catalog_serving.add(f"{stype}:{model.serving_name}")
+            for stype in model.server_type:
+                catalog_serving.add(f"{stype}:{served_name(model, stype)}")
 
         for model_id, existing in self._models.items():
             if model_id not in updated and existing.state in (ModelState.available, ModelState.loading):
-                covered = False
-                if existing.serving_name and existing.server_type:
-                    for stype in existing.server_type:
-                        if f"{stype}:{existing.serving_name}" in catalog_serving:
-                            covered = True
-                            break
+                covered = any(
+                    f"{stype}:{served_name(existing, stype)}" in catalog_serving
+                    for stype in existing.server_type
+                )
                 if not covered:
                     updated[model_id] = existing
 
@@ -385,17 +395,19 @@ class LLMModelRegistry:
 
         for model_id, entry in self._models.items():
             matched_backend_id = None
+            matched_name = None
 
-            if entry.serving_name and entry.server_type:
-                for stype in entry.server_type:
-                    key = f"{stype}:{entry.serving_name}"
-                    if key in composite_map:
-                        _, matched_backend_id = composite_map[key]
-                        matched_keys.add(key)
-                        break
+            for stype in entry.server_type:
+                name = served_name(entry, stype)
+                key = f"{stype}:{name}"
+                if key in composite_map:
+                    _, matched_backend_id = composite_map[key]
+                    matched_name = name
+                    matched_keys.add(key)
+                    break
 
             if matched_backend_id:
-                entry.served_context_length = served_context.get((matched_backend_id, entry.serving_name))
+                entry.served_context_length = served_context.get((matched_backend_id, matched_name))
             else:
                 entry.served_context_length = None
 
