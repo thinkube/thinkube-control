@@ -11,7 +11,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"sort"
 	"time"
 
@@ -298,43 +301,50 @@ func nonNil(items []string) []string {
 	return items
 }
 
-type openAIEmbeddingRequest struct {
+type openAIModelRequest struct {
 	Model string `json:"model"`
 }
 
 func (h *OpenAIHandler) Embeddings(w http.ResponseWriter, r *http.Request) {
-	start := time.Now()
-	claims := auth.ClaimsFromContext(r.Context())
+	h.forwardJSON(w, r, "/embeddings", "embeddings")
+}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, h.maxBody+1))
-	if err != nil {
-		WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+// ImageGenerations forwards an image request; the backend answers with the
+// images as base64 JSON or URLs.
+func (h *OpenAIHandler) ImageGenerations(w http.ResponseWriter, r *http.Request) {
+	h.forwardJSON(w, r, "/images/generations", "image generation")
+}
+
+// AudioSpeech forwards a text-to-speech request; the backend answers with
+// the audio bytes, which are copied back unchanged.
+func (h *OpenAIHandler) AudioSpeech(w http.ResponseWriter, r *http.Request) {
+	h.forwardJSON(w, r, "/audio/speech", "speech")
+}
+
+// forwardJSON sends a JSON request that names its model to the backend that
+// serves the model, at path under the backend's API root, and copies the
+// backend's answer back unchanged.
+func (h *OpenAIHandler) forwardJSON(w http.ResponseWriter, r *http.Request, path, kind string) {
+	body, ok := h.readBody(w, r)
+	if !ok {
 		return
 	}
-	if int64(len(body)) > h.maxBody {
-		WriteError(w, "openai", http.StatusRequestEntityTooLarge, "request_too_large", "Request body exceeds maximum size")
-		return
-	}
 
-	var req openAIEmbeddingRequest
+	var req openAIModelRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Invalid JSON in request body")
 		return
 	}
-
 	if req.Model == "" {
 		WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Missing required field: model")
 		return
 	}
 
-	tier := r.Header.Get("X-LLM-Tier")
-	resolved, err := h.resolver.Resolve(r.Context(), req.Model, tier)
+	resolved, err := h.resolver.Resolve(r.Context(), req.Model, r.Header.Get("X-LLM-Tier"))
 	if err != nil {
 		writeResolveError(w, "openai", req.Model, err)
 		return
 	}
-
-	backendURL := resolved.BackendURL + resolved.APIPath + "/embeddings"
 
 	if resolved.ServingName != "" && resolved.ServingName != req.Model {
 		if body, err = rewriteModelField(body, resolved.ServingName); err != nil {
@@ -343,18 +353,125 @@ func (h *OpenAIHandler) Embeddings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	h.relay(w, r, resolved, path, kind, func(url string) (*http.Response, error) {
+		return h.forwarder.Forward(r.Context(), url, bytes.NewReader(body), r.Header)
+	})
+}
+
+// AudioTranscriptions forwards a speech-to-text upload. The request is a
+// multipart form with the audio file and a model field; the form is written
+// again with the model's served name.
+func (h *OpenAIHandler) AudioTranscriptions(w http.ResponseWriter, r *http.Request) {
+	body, ok := h.readBody(w, r)
+	if !ok {
+		return
+	}
+
+	mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "multipart/form-data" || params["boundary"] == "" {
+		WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "The request must be multipart/form-data with the audio file and a model field")
+		return
+	}
+
+	type part struct {
+		header textproto.MIMEHeader
+		data   []byte
+	}
+	var parts []part
+	model := ""
+	reader := multipart.NewReader(bytes.NewReader(body), params["boundary"])
+	for {
+		p, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Invalid multipart form: "+err.Error())
+			return
+		}
+		data, err := io.ReadAll(p)
+		if err != nil {
+			WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Invalid multipart form: "+err.Error())
+			return
+		}
+		if p.FormName() == "model" {
+			model = string(data)
+		}
+		parts = append(parts, part{header: p.Header, data: data})
+	}
+	if model == "" {
+		WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Missing required field: model")
+		return
+	}
+
+	resolved, err := h.resolver.Resolve(r.Context(), model, r.Header.Get("X-LLM-Tier"))
+	if err != nil {
+		writeResolveError(w, "openai", model, err)
+		return
+	}
+
+	var form bytes.Buffer
+	writer := multipart.NewWriter(&form)
+	for _, p := range parts {
+		data := p.data
+		if formName(p.header) == "model" && resolved.ServingName != "" {
+			data = []byte(resolved.ServingName)
+		}
+		pw, err := writer.CreatePart(p.header)
+		if err != nil {
+			WriteError(w, "openai", http.StatusInternalServerError, "internal_error", "Failed to write the form: "+err.Error())
+			return
+		}
+		pw.Write(data)
+	}
+	writer.Close()
+
+	h.relay(w, r, resolved, "/audio/transcriptions", "transcription", func(url string) (*http.Response, error) {
+		return h.forwarder.ForwardForm(r.Context(), url, &form, writer.FormDataContentType(), r.Header)
+	})
+}
+
+// formName is the name a multipart part's Content-Disposition gives it.
+func formName(header textproto.MIMEHeader) string {
+	_, params, err := mime.ParseMediaType(header.Get("Content-Disposition"))
+	if err != nil {
+		return ""
+	}
+	return params["name"]
+}
+
+// readBody reads the request body up to the configured limit, answering the
+// client itself when it cannot.
+func (h *OpenAIHandler) readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, h.maxBody+1))
+	if err != nil {
+		WriteError(w, "openai", http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
+		return nil, false
+	}
+	if int64(len(body)) > h.maxBody {
+		WriteError(w, "openai", http.StatusRequestEntityTooLarge, "request_too_large", "Request body exceeds maximum size")
+		return nil, false
+	}
+	return body, true
+}
+
+// relay sends the request with send to the resolved backend's path and
+// copies its answer, headers and status back to the client.
+func (h *OpenAIHandler) relay(w http.ResponseWriter, r *http.Request, resolved *resolver.ResolveResult, path, kind string, send func(string) (*http.Response, error)) {
+	start := time.Now()
 	userID := ""
-	if claims != nil {
+	if claims := auth.ClaimsFromContext(r.Context()); claims != nil {
 		userID = claims.Username
 	}
 
-	slog.Debug("forwarding embeddings request",
+	backendURL := resolved.BackendURL + resolved.APIPath + path
+	slog.Debug("forwarding "+kind+" request",
 		"model", resolved.ModelID,
 		"backend", backendURL,
 		"user", userID,
 	)
 
-	resp, err := h.forwarder.Forward(r.Context(), backendURL, bytes.NewReader(body), r.Header)
+	resp, err := send(backendURL)
 	if err != nil {
 		WriteError(w, "openai", http.StatusBadGateway, "backend_error", "Backend request failed")
 		metrics.ErrorsTotal.WithLabelValues("openai", "backend").Inc()
@@ -377,13 +494,14 @@ func (h *OpenAIHandler) Embeddings(w http.ResponseWriter, r *http.Request) {
 	w.Write(respBody)
 
 	duration := time.Since(start)
-	metrics.RequestsTotal.WithLabelValues("openai", resolved.ModelID, resolved.BackendURL, "200").Inc()
+	metrics.RequestsTotal.WithLabelValues("openai", resolved.ModelID, resolved.BackendURL, fmt.Sprintf("%d", resp.StatusCode)).Inc()
 	metrics.RequestDuration.WithLabelValues("openai", resolved.ModelID, resolved.BackendURL).Observe(duration.Seconds())
 
-	slog.Info("embeddings request completed",
+	slog.Info(kind+" request completed",
 		"protocol", "openai",
 		"model", resolved.ModelID,
 		"backend", resolved.BackendURL,
+		"status", resp.StatusCode,
 		"duration_ms", duration.Milliseconds(),
 		"user_id", userID,
 	)

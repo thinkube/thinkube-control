@@ -52,6 +52,27 @@ func (f *Forwarder) Forward(ctx context.Context, backendURL string, body io.Read
 	return resp, nil
 }
 
+// ForwardForm sends a body of the given content type, such as a multipart
+// form with its boundary.
+func (f *Forwarder) ForwardForm(ctx context.Context, backendURL string, body io.Reader, contentType string, headers http.Header) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", backendURL, body)
+	if err != nil {
+		return nil, fmt.Errorf("create forward request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", contentType)
+	if accept := headers.Get("Accept"); accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("forward request: %w", err)
+	}
+
+	return resp, nil
+}
+
 func (f *Forwarder) ForwardStreamRaw(ctx context.Context, backendURL string, body io.Reader) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", backendURL, body)
 	if err != nil {
