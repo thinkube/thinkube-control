@@ -502,6 +502,7 @@ MCP_OPERATIONS = [
     "get_mirror_status",           # Resource
     "check_mlflow_status",         # Resource
     "submit_model_mirror",         # Tool
+    "register_finetuned_model",    # Tool
     "cancel_model_mirror",         # Tool
     "reset_mirror_job",            # Tool
     "delete_model",                # Tool

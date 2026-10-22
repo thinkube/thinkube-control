@@ -7,7 +7,8 @@ API endpoints for HuggingFace model mirroring to MLflow
 
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
+import asyncio
 import logging
 
 from pydantic import BaseModel
@@ -17,7 +18,9 @@ from app.services.model_downloader import ModelDownloaderService, MlflowDeleteEr
 from app.db.session import get_db
 from app.models.model_mirrors import ModelMirrorJob
 from app.core.config import settings
-from app.services.metadata_fetcher import CatalogUnavailableError
+from app.services.metadata_fetcher import CatalogUnavailableError, invalidate_catalogs
+from app.services import finetuned_models
+from app.services.llm_model_registry import llm_model_registry
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["models"])
@@ -572,4 +575,45 @@ async def delete_model(
         "model_id": model_id,
         "status": "deleted",
         "message": f"Model {model_id} deleted successfully"
+    }
+
+
+class FinetunedModelRequest(BaseModel):
+    catalog_entry: Dict[str, Any]
+
+
+@router.post("/finetuned", operation_id="register_finetuned_model")
+async def register_finetuned_model(
+    request: FinetunedModelRequest,
+    current_user: dict = Depends(get_current_user_dual_auth),
+    db: Session = Depends(get_db),
+):
+    """Publish a fine-tuned model whose merged 16-bit weights are already a model
+    version in MLflow: write its catalogue entry to the user's metadata
+    repository and record its weights as in place, so the LLM Gateway lists it,
+    normally as deployable. The entry needs every catalogue field, with
+    server_type ["vllm"], quantization "BF16", is_finetuned true and
+    serving_name equal to id."""
+    entry = request.catalog_entry
+    try:
+        finetuned_models.check_entry(entry)
+        repository = await asyncio.to_thread(finetuned_models.write_entry, entry)
+    except finetuned_models.FinetunedModelError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+
+    job = db.query(ModelMirrorJob).filter(ModelMirrorJob.model_id == entry["id"]).first()
+    if job is None:
+        db.add(ModelMirrorJob(model_id=entry["id"], status="succeeded"))
+    else:
+        job.status = "succeeded"
+        job.error_message = None
+    db.commit()
+
+    invalidate_catalogs()
+    await llm_model_registry.refresh()
+    listed = llm_model_registry.get_model(entry["id"])
+    return {
+        "model_id": entry["id"],
+        "repository": repository,
+        "state": listed.state if listed else None,
     }
