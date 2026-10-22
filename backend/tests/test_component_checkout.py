@@ -37,12 +37,25 @@ def test_a_deploy_without_its_type_is_refused():
 
 
 def test_a_thinkube_yaml_that_disagrees_with_the_catalog_is_refused():
-    check_declared_type("component", True, "vllm")
-    check_declared_type("user_app", False, "notes")
-    with pytest.raises(ValueError, match="does not list it as one"):
-        check_declared_type("user_app", True, "vllm")
-    with pytest.raises(ValueError, match="does not declare"):
-        check_declared_type("component", False, "vllm")
+    check_declared_type("component", "component", "vllm")
+    check_declared_type("user_app", "app", "notes")
+    check_declared_type("user_app", None, "notes")
+    with pytest.raises(ValueError, match="the template catalog does not"):
+        check_declared_type("user_app", "component", "vllm")
+    with pytest.raises(ValueError, match="declares deployment type app"):
+        check_declared_type("component", "app", "vllm")
+
+
+def test_an_extension_is_one_by_its_request_and_its_thinkube_yaml():
+    check_declared_type("extension", "extension", "forge")
+    with pytest.raises(ValueError, match="the deploy request does not"):
+        check_declared_type("user_app", "extension", "forge")
+    with pytest.raises(ValueError, match="declares deployment type app"):
+        check_declared_type("extension", None, "forge")
+
+
+def test_an_extension_is_checked_out_with_the_apps():
+    assert checkout_path("/h/apps", "/h/components", "forge", "extension") == "/h/apps/forge"
 
 
 def test_deploy_and_build_commits_are_not_developer_changes():

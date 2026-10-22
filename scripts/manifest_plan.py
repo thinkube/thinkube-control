@@ -18,6 +18,30 @@ BASE_RESOURCES = [
     'app-metadata.yaml',
 ]
 
+# An extension is a part of Thinkube Control: it runs in Control's namespace,
+# which Control owns with its limits and quota, so an extension's manifests
+# carry no Namespace, LimitRange or ResourceQuota, and its Services carry its
+# name, as its Deployments do.
+EXTENSION_NAMESPACE = 'thinkube-control'
+# Names an extension cannot take: Thinkube Control's own objects in its
+# namespace carry them, and tools that find a workload by part of its name
+# would reach Control's (thinkube-control-backend, node-metrics, ...).
+RESERVED_EXTENSION_NAMES = frozenset({
+    'thinkube', 'thinkube-control', 'control', 'backend', 'frontend',
+    'llm', 'proxy', 'llm-proxy', 'node', 'metrics', 'node-metrics',
+})
+NAMESPACE_RESOURCES = ('namespace.yaml', 'resource-policies.yaml')
+
+
+def is_extension(config: Dict[str, Any]) -> bool:
+    return (config.get('spec', {}).get('deployment') or {}).get('type') == 'extension'
+
+
+def service_name(app_name: str, container_name: str, extension: bool) -> str:
+    """The Service of a container: its own name in the app's namespace, the
+    app's name and its own in Control's namespace, which several share."""
+    return f'{app_name}-{container_name}' if extension else container_name
+
 KNATIVE_RESOURCES = ['knative-service.yaml']
 
 APP_RESOURCES = ['deployments.yaml', 'services.yaml', 'ingress.yaml']
@@ -48,9 +72,10 @@ def kustomization_resources(
     is_knative: bool,
     needs_storage: bool,
     has_workflows: bool,
+    extension: bool,
 ) -> List[str]:
     """The resources kustomization.yaml lists, in the order it lists them."""
-    resources = list(BASE_RESOURCES)
+    resources = [r for r in BASE_RESOURCES if not (extension and r in NAMESPACE_RESOURCES)]
     resources.extend(KNATIVE_RESOURCES if is_knative else APP_RESOURCES)
     if needs_storage:
         resources.append('storage-pvc.yaml')

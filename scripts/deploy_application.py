@@ -38,6 +38,7 @@ from build_architectures import (
 from checkout_state import STATUS_COMMAND, UNPUSHED_COMMAND, changed_files
 from checkout_state import refusal as checkout_refusal
 from component_checkout import check_declared_type, checkout_path, developer_commits, parse_log, refusal
+from manifest_plan import EXTENSION_NAMESPACE, NAMESPACE_RESOURCES
 from template_version import github_git_env, template_ref
 from thinkube_yaml_placeholders import substitute as substitute_placeholders
 from deploy_log import format_line
@@ -95,6 +96,13 @@ class ApplicationDeployer:
         # catalog, so the checkout is in its place before anything is pulled.
         self.deployment_type = params.get('deployment_type')
         self.local_repo_path = checkout_path(APPS_DIR, COMPONENTS_DIR, self.app_name, self.deployment_type)
+        # An extension is a part of Thinkube Control, in Control's namespace
+        self.is_extension = self.deployment_type == 'extension'
+        if self.is_extension and self.namespace != EXTENSION_NAMESPACE:
+            raise ValueError(
+                f"extension {self.app_name} must deploy to {EXTENSION_NAMESPACE}, "
+                f"not {self.namespace}; the deploy request sets the namespace"
+            )
         self.replace_developer_commits = params.get('replace_developer_commits') is True
 
         # Unique Gitea repository name: {app_name}-{deployment_id}
@@ -655,7 +663,8 @@ git fetch origin main
     async def parse_thinkube_yaml(self):
         """Parse and validate thinkube.yaml configuration."""
         from thinkube_yaml_validator import (
-            validate_knative_constraints, validate_component_constraints, validate_replicas, validate_build_size,
+            validate_knative_constraints, validate_component_constraints, validate_extension_constraints,
+            validate_replicas, validate_build_size,
             validate_test_size, validate_llm_backend, validate_startup_seconds,
             validate_node_cache,
         )
@@ -672,6 +681,7 @@ git fetch origin main
 
             violations = validate_knative_constraints(self.thinkube_config)
             violations.extend(validate_component_constraints(self.thinkube_config))
+            violations.extend(validate_extension_constraints(self.thinkube_config))
             violations.extend(validate_replicas(self.thinkube_config))
             violations.extend(validate_build_size(self.thinkube_config))
             violations.extend(validate_test_size(self.thinkube_config))
@@ -683,7 +693,8 @@ git fetch origin main
                 DeploymentLogger.error(msg)
                 raise ValueError(msg)
 
-            check_declared_type(self.deployment_type, self._is_component(), self.app_name)
+            declared_type = (self.thinkube_config.get('spec', {}).get('deployment') or {}).get('type')
+            check_declared_type(self.deployment_type, declared_type, self.app_name)
             if self._is_component():
                 manifest_name = self.thinkube_config['spec']['deployment']['name']
                 if manifest_name != self.app_name:
@@ -764,10 +775,11 @@ git fetch origin main
         DeploymentLogger.phase(3, "Resource Creation (Parallel)")
 
         # Create all resources concurrently
+        # In Control's namespace the TLS copy and mlflow-auth-config are Control's own
+        namespace_objects = [] if self.is_extension else [self.create_tls_secret(), self.create_mlflow_config()]
         await asyncio.gather(
-            self.create_tls_secret(),
+            *namespace_objects,
             self.create_harbor_secret(),
-            self.create_mlflow_config(),
             self.create_app_metadata(),
             self.manage_databases(),
             self.create_keycloak_client(),
@@ -1203,9 +1215,10 @@ git fetch origin main
             'spec_env': self.spec_env,
             'seaweedfs_endpoint': seaweedfs_endpoint,
             'deployment_env_from': self.deployment_env_from,
+            'extension': self.is_extension,
         }
 
-        # 1. Generate namespace.yaml
+        # 1. Generate namespace.yaml (not for an extension: Control owns its namespace)
         namespace_content = f"""apiVersion: v1
 kind: Namespace
 metadata:
@@ -1214,7 +1227,8 @@ metadata:
     app.kubernetes.io/name: {self.app_name}
     app.kubernetes.io/managed-by: argocd
 """
-        write('namespace.yaml', namespace_content)
+        if not self.is_extension:
+            write('namespace.yaml', namespace_content)
 
         # 1b. Generate resource-policies.yaml (LimitRange + ResourceQuota for namespace)
         quota_req_mem, quota_lim_mem, quota_req_cpu, quota_lim_cpu = self._gpu_quota
@@ -1245,7 +1259,10 @@ spec:
     requests.cpu: "{quota_req_cpu}"
     limits.cpu: "{quota_lim_cpu}"
 """
-        write('resource-policies.yaml', resource_policies_content)
+        if not self.is_extension:
+            write('resource-policies.yaml', resource_policies_content)
+        for name in NAMESPACE_RESOURCES if self.is_extension else ():
+            (k8s_dir / name).unlink(missing_ok=True)
 
         # 2. Files an earlier generator wrote with credentials in them
         from platform_credentials import RETIRED_MANIFESTS
@@ -1354,6 +1371,7 @@ data:
                 is_knative=is_knative,
                 needs_storage=needs_storage,
                 has_workflows=has_workflows,
+                extension=self.is_extension,
             ),
             has_workflows=has_workflows,
         ))
@@ -2223,9 +2241,12 @@ printf 'PUSHED\\t%s\\n' "$(git log -1 --format='%H %s')"
 
             # Step 2: Create ConfigMap with the generated YAML
             if yaml_content:
+                # Discovery reads every labelled ConfigMap; in Control's namespace
+                # the name thinkube-service-config is Control's own
+                discovery_name = f'{self.app_name}-service-config' if self.is_extension else 'thinkube-service-config'
                 discovery_cm = client.V1ConfigMap(
                     metadata=client.V1ObjectMeta(
-                        name='thinkube-service-config',
+                        name=discovery_name,
                         namespace=self.namespace,
                         labels={
                             'app': self.app_name,
@@ -2239,13 +2260,13 @@ printf 'PUSHED\\t%s\\n' "$(git log -1 --format='%H %s')"
 
                 try:
                     await self.k8s_core.create_namespaced_config_map(self.namespace, discovery_cm)
-                    DeploymentLogger.log("Created thinkube-service-config ConfigMap")
+                    DeploymentLogger.log(f"Created {discovery_name} ConfigMap")
                 except ApiException as e:
                     if e.status == 409:
                         await self.k8s_core.replace_namespaced_config_map(
-                            'thinkube-service-config', self.namespace, discovery_cm
+                            discovery_name, self.namespace, discovery_cm
                         )
-                        DeploymentLogger.log("Updated thinkube-service-config ConfigMap")
+                        DeploymentLogger.log(f"Updated {discovery_name} ConfigMap")
 
             # Step 3: Trigger service sync to register app immediately
             sync_url = f"{control_base}/api/v1/services/sync"

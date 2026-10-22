@@ -18,7 +18,7 @@ REPO = Path(__file__).resolve().parents[2]
 TEMPLATES = REPO / "templates/k8s"
 
 
-def render(spec):
+def render(spec, extension=False):
     env = jinja2.Environment(
         loader=jinja2.FileSystemLoader(str(TEMPLATES)),
         undefined=jinja2.StrictUndefined,
@@ -28,6 +28,7 @@ def render(spec):
         k8s_namespace="dentalpin",
         domain_name="thinkube.com",
         thinkube_spec=spec,
+        extension=extension,
     )
     [route] = [d for d in yaml.safe_load_all(rendered) if d]
     return route
@@ -51,3 +52,25 @@ def test_the_route_without_declared_routes_allows_600_seconds():
     route = render({"spec": {"containers": [FRONTEND]}})
     [rule] = route["spec"]["rules"]
     assert rule["timeouts"] == {"request": "600s"}
+
+
+def test_an_extension_routes_to_services_named_after_it():
+    route = render({"spec": {
+        "containers": [BACKEND, FRONTEND],
+        "routes": [{"path": "/api", "to": "backend"}, {"path": "/", "to": "frontend"}],
+    }}, extension=True)
+    assert [r["backendRefs"][0]["name"] for r in route["spec"]["rules"]] == ["dentalpin-backend", "dentalpin-frontend"]
+
+
+def services(extension):
+    env = jinja2.Environment(loader=jinja2.FileSystemLoader(str(TEMPLATES)), undefined=jinja2.StrictUndefined)
+    rendered = env.get_template("services-separate.j2").render(
+        project_name="dentalpin", k8s_namespace="dentalpin",
+        thinkube_spec={"spec": {"containers": [BACKEND, FRONTEND]}}, extension=extension,
+    )
+    return [d["metadata"]["name"] for d in yaml.safe_load_all(rendered) if d]
+
+
+def test_an_apps_services_keep_their_container_names_and_an_extensions_carry_its_name():
+    assert services(extension=False) == ["backend", "frontend"]
+    assert services(extension=True) == ["dentalpin-backend", "dentalpin-frontend"]

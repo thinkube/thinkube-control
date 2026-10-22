@@ -275,28 +275,28 @@ def test_without_any_services_at_all_nothing_changes():
 
 def test_workflows_yaml_is_listed_when_declared():
     resources = kustomization_resources(
-        is_knative=False, needs_storage=False, has_workflows=True
+        is_knative=False, needs_storage=False, has_workflows=True, extension=False
     )
     assert "workflows.yaml" in resources
 
 
 def test_workflows_yaml_is_absent_when_not_declared():
     resources = kustomization_resources(
-        is_knative=False, needs_storage=False, has_workflows=False
+        is_knative=False, needs_storage=False, has_workflows=False, extension=False
     )
     assert "workflows.yaml" not in resources
 
 
 def test_the_post_sync_hook_stays_last():
     resources = kustomization_resources(
-        is_knative=False, needs_storage=True, has_workflows=True
+        is_knative=False, needs_storage=True, has_workflows=True, extension=False
     )
     assert resources[-1] == "argocd-postsync-hook.yaml"
 
 
 def test_the_existing_order_is_unchanged_for_an_app_without_workflows():
     assert kustomization_resources(
-        is_knative=False, needs_storage=True, has_workflows=False
+        is_knative=False, needs_storage=True, has_workflows=False, extension=False
     ) == [
         "namespace.yaml",
         "resource-policies.yaml",
@@ -311,7 +311,7 @@ def test_the_existing_order_is_unchanged_for_an_app_without_workflows():
 
 def test_a_knative_app_still_lists_its_own_resources():
     assert kustomization_resources(
-        is_knative=True, needs_storage=False, has_workflows=False
+        is_knative=True, needs_storage=False, has_workflows=False, extension=False
     ) == [
         "namespace.yaml",
         "resource-policies.yaml",
@@ -384,3 +384,16 @@ def test_knative_accepts_the_services_it_always_did():
     config = spec(services=["database", "cache", "queue"], deployment={"type": "knative"})
     config["spec"]["containers"] = [config["spec"]["containers"][0]]
     assert validate_knative_constraints(config) == []
+
+
+def test_an_extension_lists_no_namespace_of_its_own():
+    """An extension runs in Control's namespace, with Control's limits and quota."""
+    assert kustomization_resources(
+        is_knative=False, needs_storage=False, has_workflows=False, extension=True
+    ) == [
+        "app-metadata.yaml",
+        "deployments.yaml",
+        "services.yaml",
+        "ingress.yaml",
+        "argocd-postsync-hook.yaml",
+    ]

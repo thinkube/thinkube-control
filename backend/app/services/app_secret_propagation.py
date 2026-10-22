@@ -51,28 +51,32 @@ def propagate(
     failed: Dict[str, str] = {}
     for app in app_names:
         try:
+            # Where Argo CD deploys the app: its own namespace, or Control's for an extension
+            namespace = custom.get_namespaced_custom_object(
+                group="argoproj.io", version="v1alpha1", namespace="argocd", plural="applications", name=app,
+            )["spec"]["destination"]["namespace"]
             core.patch_namespaced_secret(
-                f"{app}-secrets", app, {"stringData": {secret_name: value}}, _content_type=MERGE_PATCH
+                f"{app}-secrets", namespace, {"stringData": {secret_name: value}}, _content_type=MERGE_PATCH
             )
-            services = _knative_services(custom, app)
+            services = _knative_services(custom, namespace)
             if services:
                 # Knative owns the Deployments of its revisions; a new revision
                 # comes from the service's template.
                 for service in services:
                     custom.patch_namespaced_custom_object(
-                        group="serving.knative.dev", version="v1", namespace=app, plural="services",
+                        group="serving.knative.dev", version="v1", namespace=namespace, plural="services",
                         name=service["metadata"]["name"], body=_restart_template(stamp),
                         _content_type=MERGE_PATCH,
                     )
             else:
                 deployments = apps.list_namespaced_deployment(
-                    app, label_selector=f"app.kubernetes.io/name={app}"
+                    namespace, label_selector=f"app.kubernetes.io/name={app}"
                 ).items
                 if not deployments:
-                    raise RuntimeError(f"no Deployment labelled app.kubernetes.io/name={app} in namespace {app}")
+                    raise RuntimeError(f"no Deployment labelled app.kubernetes.io/name={app} in namespace {namespace}")
                 for deployment in deployments:
                     apps.patch_namespaced_deployment(
-                        deployment.metadata.name, app, _restart_template(stamp), _content_type=MERGE_PATCH
+                        deployment.metadata.name, namespace, _restart_template(stamp), _content_type=MERGE_PATCH
                     )
             restarted.append(app)
         except ApiException as e:

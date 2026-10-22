@@ -31,7 +31,7 @@ spec:
             type: PathPrefix
             value: "{{ route.path }}"
       backendRefs:
-        - name: {{ container.name }}
+        - name: {{ (project_name ~ '-') if extension else '' }}{{ container.name }}
           port: {{ container.port }}
       timeouts:
         request: 600s
@@ -43,7 +43,7 @@ spec:
             type: PathPrefix
             value: "/"
       backendRefs:
-        - name: {{ containers_with_ports[0].name }}
+        - name: {{ (project_name ~ '-') if extension else '' }}{{ containers_with_ports[0].name }}
           port: {{ containers_with_ports[0].port }}
       timeouts:
         request: 600s

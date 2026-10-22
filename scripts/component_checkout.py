@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-DEPLOYMENT_TYPES = ("component", "user_app")
+DEPLOYMENT_TYPES = ("component", "user_app", "extension")
 
 
 @dataclass(frozen=True)
@@ -31,27 +31,30 @@ class Commit:
 
 
 def checkout_path(apps_dir: str, components_dir: str, app_name: str, deployment_type: str) -> str:
-    """The checkout of this deploy: components/<name> for a component, apps/<name> for an app."""
+    """The checkout of this deploy: components/<name> for a component, apps/<name> for an app or an extension."""
     if deployment_type not in DEPLOYMENT_TYPES:
         raise ValueError(
             f"deployment_type {deployment_type!r} is not one of {DEPLOYMENT_TYPES}; "
-            f"the deploy request sets it from the template catalog"
+            f"the deploy request sets it from the template catalog, or extension when the app is one"
         )
     return f"{components_dir if deployment_type == 'component' else apps_dir}/{app_name}"
 
 
-def check_declared_type(deployment_type: str, declares_component: bool, app_name: str) -> None:
-    """Refuse a template whose thinkube.yaml disagrees with the catalog about being a component."""
-    if declares_component and deployment_type != "component":
-        raise ValueError(
-            f"thinkube.yaml of {app_name} declares a component, but the template catalog does not list it as one; "
-            f"add it to the catalog as a component or change its deployment type"
-        )
-    if not declares_component and deployment_type == "component":
-        raise ValueError(
-            f"the template catalog lists {app_name} as a component, but its thinkube.yaml does not declare "
-            f"deployment type component"
-        )
+def check_declared_type(deployment_type: str, declared: str, app_name: str) -> None:
+    """Refuse a deploy whose thinkube.yaml declares another deployment type than
+    the request: a component is one in the template catalog, an extension is
+    one by its request, and thinkube.yaml must say the same."""
+    for kind, source in (("component", "the template catalog"), ("extension", "the deploy request")):
+        if declared == kind and deployment_type != kind:
+            raise ValueError(
+                f"thinkube.yaml of {app_name} declares deployment type {kind}, but {source} does not; "
+                f"change one of them so they agree"
+            )
+        if declared != kind and deployment_type == kind:
+            raise ValueError(
+                f"{source} deploys {app_name} as {kind}, but its thinkube.yaml declares deployment type "
+                f"{declared or 'app'}"
+            )
 
 
 def parse_log(output: str) -> list[Commit]:

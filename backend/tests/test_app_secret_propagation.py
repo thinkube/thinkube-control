@@ -38,8 +38,10 @@ propagation = load("app_secret_propagation_under_test", "app_secret_propagation.
 class Cluster:
     """Applications as the API sees them, recording every call."""
 
-    def __init__(self, deployments=None, knative=None, knative_installed=True, missing_secrets=()):
+    def __init__(self, deployments=None, knative=None, knative_installed=True, missing_secrets=(), namespaces=None):
         self.deployments = deployments or {}
+        # The namespace Argo CD deploys each app to, when it is not the app's name
+        self.namespaces = namespaces or {}
         self.knative = knative or {}
         self.knative_installed = knative_installed
         self.missing_secrets = set(missing_secrets)
@@ -53,14 +55,19 @@ class Cluster:
 
     # AppsV1Api
     def list_namespaced_deployment(self, namespace, label_selector):
-        assert label_selector == f"app.kubernetes.io/name={namespace}"
-        names = self.deployments.get(namespace, [])
+        app = label_selector.removeprefix("app.kubernetes.io/name=")
+        assert self.namespaces.get(app, app) == namespace
+        names = self.deployments.get(app, [])
         return SimpleNamespace(items=[SimpleNamespace(metadata=SimpleNamespace(name=n)) for n in names])
 
     def patch_namespaced_deployment(self, name, namespace, body, _content_type):
         self.calls.append(("deployment", namespace, name, body, _content_type))
 
     # CustomObjectsApi
+    def get_namespaced_custom_object(self, group, version, namespace, plural, name):
+        assert (group, namespace, plural) == ("argoproj.io", "argocd", "applications")
+        return {"spec": {"destination": {"namespace": self.namespaces.get(name, name)}}}
+
     def list_namespaced_custom_object(self, group, version, namespace, plural):
         if not self.knative_installed:
             raise ApiException(status=404, reason="Not Found")
@@ -142,3 +149,13 @@ def test_writes_need_the_deploy_kubeconfig(tmp_path, monkeypatch):
     monkeypatch.setattr(identity, "DEPLOY_KUBECONFIG", tmp_path / "missing" / "config")
     with pytest.raises(RuntimeError, match="kubeconfig the first deploy uses"):
         identity.deploy_api_client()
+
+
+def test_an_extension_is_restarted_in_controls_namespace(cluster):
+    c = cluster(Cluster(deployments={"forge": ["forge-backend"]}, namespaces={"forge": "thinkube-control"}))
+    restarted, failed = propagation.propagate("TOKEN", "v", ["forge"], api_client=None)
+    assert (restarted, failed) == (["forge"], {})
+    assert [(call[0], call[1], call[2]) for call in c.calls] == [
+        ("secret", "thinkube-control", "forge-secrets"),
+        ("deployment", "thinkube-control", "forge-backend"),
+    ]

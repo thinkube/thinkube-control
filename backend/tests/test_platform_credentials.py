@@ -75,7 +75,9 @@ def test_argocd_neither_tracks_nor_reports_the_secrets():
 
 
 def test_the_kustomization_lists_no_credential_file():
-    resources = kustomization_resources(is_knative=False, needs_storage=True, has_workflows=True)
+    resources = kustomization_resources(
+        is_knative=False, needs_storage=True, has_workflows=True, extension=False
+    )
     assert not set(RETIRED_MANIFESTS) & set(resources)
 
 
@@ -98,6 +100,7 @@ def render(template, **extra):
         thinkube_spec=spec, manifest_params={}, spec_env={}, seaweedfs_endpoint="http://seaweedfs:8333",
         deployment_env_from=[], system_username="thinkube", master_node_name="tkamd1",
         gitea_org="thinkube-deployments", build_architectures=["amd64", "arm64"],
+        extension=False,
     )
     variables.update(extra)
     # A variable given as None is left out, as scripts/build_architectures.py leaves

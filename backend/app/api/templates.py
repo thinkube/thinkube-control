@@ -40,6 +40,9 @@ from app.services.background_executor import background_executor
 from app.services.dependency_manager import DependencyManager
 from app.services.model_downloader import ModelDownloaderService
 from app.services.metadata_fetcher import CatalogUnavailableError, fetch_merged_catalog
+
+sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
+from manifest_plan import EXTENSION_NAMESPACE, RESERVED_EXTENSION_NAMES  # noqa: E402
 from typing import List as TypingList
 import yaml
 import aiohttp
@@ -429,6 +432,20 @@ async def _queue_template_deploy(
         template_repo = catalog_template(str(request.template_url))
         is_component = bool(template_repo) and template_repo.get("deployment_type") == "component"
         service_type = "component" if is_component else "user_app"
+        # An extension is an app the request makes part of Thinkube Control: it
+        # runs in Control's namespace, and its thinkube.yaml declares the same
+        is_extension = request.variables.get("extension") is True
+        if is_extension and is_component:
+            raise HTTPException(status_code=400, detail="a component cannot be deployed as an extension")
+        if is_extension and request.template_name in RESERVED_EXTENSION_NAMES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"'{request.template_name}' cannot name an extension: Thinkube Control's own "
+                    f"objects in its namespace use it ({', '.join(sorted(RESERVED_EXTENSION_NAMES))})"
+                ),
+            )
+        deploy_type = "extension" if is_extension else service_type
 
         # A component is installed from Optional Components, which records its
         # deployment itself; this endpoint only renders an installed one again.
@@ -469,7 +486,7 @@ async def _queue_template_deploy(
         from checkout_state import replacement_warning
         from component_checkout import checkout_path
 
-        checkout = checkout_path(APPS_DIR, COMPONENTS_DIR, request.template_name, service_type)
+        checkout = checkout_path(APPS_DIR, COMPONENTS_DIR, request.template_name, deploy_type)
         replaced = replacement_warning(checkout, Path(checkout, ".git").exists())
 
         # Components auto-confirm overwrites; user apps need explicit confirmation
@@ -489,7 +506,8 @@ async def _queue_template_deploy(
         deployment_vars = {
             "template_url": str(request.template_url),
             "app_name": request.template_name,
-            "deployment_namespace": request.template_name,  # Same as app_name - no prefixes
+            # An app's namespace is its name; an extension runs in Control's
+            "deployment_namespace": EXTENSION_NAMESPACE if is_extension else request.template_name,
             **request.variables,
             # Add system variables
             "domain_name": domain_name,
@@ -499,7 +517,7 @@ async def _queue_template_deploy(
             # through list_deployments / get_deployment_status responses).
             "overwrite_existing": overwrite_confirmed,  # Pass to deployment
             # Where the checkout lives and what the deploy checks before replacing it.
-            "deployment_type": service_type,
+            "deployment_type": deploy_type,
             "replace_developer_commits": replace_developer_commits,
         }
 

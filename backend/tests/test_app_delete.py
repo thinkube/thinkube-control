@@ -117,6 +117,7 @@ def teardown(monkeypatch):
     ):
         monkeypatch.setattr(t, method, recorded(method))
     monkeypatch.setattr(t, "_delete_gitea_repo", lambda name: calls.append("_delete_gitea_repo") or True)
+    monkeypatch.setattr(t, "_deployed_as_extension", lambda name: False)
     t.calls = calls
     return t
 
@@ -243,7 +244,7 @@ def test_mlflow_volumes_of_another_app_with_a_longer_name_are_kept(teardown):
         volume("notes-web-storage", "notes"),
     ])
     teardown.core_v1.delete_persistent_volume = deleted.append
-    assert teardown._mlflow_volumes("notes") == ["notes-web-mlflow-root"]
+    assert teardown._mlflow_volumes("notes", "notes") == ["notes-web-mlflow-root"]
     assert deleted == ["notes-web-mlflow-root"]
 
 
@@ -310,3 +311,53 @@ def test_harbor_repositories_are_the_image_and_cache_of_each_container(teardown,
     removed = app_teardown.AppTeardown._harbor_repositories(teardown, "notes")
     assert removed == ["thinkube/notes-web/cache", "thinkube/notes-web", "thinkube/notes-api"]
     assert deleted == removed
+
+
+def test_an_extension_loses_its_own_objects_in_controls_namespace_and_nothing_else(teardown):
+    """Only what carries the extension's label, and the four objects named after it."""
+    selector_seen, deleted = set(), []
+
+    def listing(kind, names):
+        def list_objects(namespace, label_selector):
+            assert namespace == "thinkube-control"
+            selector_seen.add(label_selector)
+            return SimpleNamespace(items=[SimpleNamespace(metadata=SimpleNamespace(name=n)) for n in names])
+        return list_objects
+
+    def deleting(kind):
+        def delete(name, namespace, propagation_policy=None):
+            assert namespace == "thinkube-control"
+            deleted.append(f"{kind} {name}")
+        return delete
+
+    teardown.apps_v1 = SimpleNamespace(
+        list_namespaced_deployment=listing("Deployment", ["forge-backend"]),
+        delete_namespaced_deployment=deleting("Deployment"))
+    teardown.core_v1 = SimpleNamespace(
+        list_namespaced_service=listing("Service", ["forge-backend"]),
+        delete_namespaced_service=deleting("Service"),
+        list_namespaced_persistent_volume_claim=listing("PVC", []),
+        delete_namespaced_persistent_volume_claim=deleting("PVC"),
+        list_namespaced_secret=listing("Secret", ["forge-secrets"]),
+        delete_namespaced_secret=deleting("Secret"),
+        list_namespaced_config_map=listing("ConfigMap", []),
+        delete_namespaced_config_map=deleting("ConfigMap"),
+        list_namespaced_service_account=listing("ServiceAccount", []),
+        delete_namespaced_service_account=deleting("ServiceAccount"))
+    teardown.batch_v1 = SimpleNamespace(
+        list_namespaced_job=listing("Job", []), delete_namespaced_job=deleting("Job"))
+    teardown.rbac_v1 = SimpleNamespace(
+        list_namespaced_role=listing("Role", []), delete_namespaced_role=deleting("Role"),
+        list_namespaced_role_binding=listing("RoleBinding", []),
+        delete_namespaced_role_binding=deleting("RoleBinding"))
+    teardown.custom = SimpleNamespace(
+        list_namespaced_custom_object=lambda group, version, namespace, plural, label_selector: {"items": []},
+        delete_namespaced_custom_object=None)
+
+    teardown._extension_objects("forge", "thinkube-control")
+    assert selector_seen == {"app.kubernetes.io/name=forge"}
+    assert deleted == [
+        "Deployment forge-backend", "Service forge-backend", "Secret forge-secrets",
+        "ConfigMap forge-metadata", "ConfigMap forge-service-config",
+        "Job forge-deployment-completed", "Job forge-deployment-failed",
+    ]

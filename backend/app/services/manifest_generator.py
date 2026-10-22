@@ -26,11 +26,18 @@ sys.path.insert(0, '/home/thinkube/thinkube-control/scripts')
 from thinkube_yaml_validator import (
     validate_knative_constraints as _validate_knative_constraints,
     validate_component_constraints as _validate_component_constraints,
+    validate_extension_constraints as _validate_extension_constraints,
     validate_replicas as _validate_replicas,
     validate_build_size as _validate_build_size,
 )
 from thinkube_yaml_placeholders import substitute as _substitute_placeholders
-from manifest_plan import kustomization_content as _kustomization_content, kustomization_resources as _kustomization_resources
+from manifest_plan import (
+    EXTENSION_NAMESPACE as _EXTENSION_NAMESPACE,
+    NAMESPACE_RESOURCES as _NAMESPACE_RESOURCES,
+    is_extension as _is_extension,
+    kustomization_content as _kustomization_content,
+    kustomization_resources as _kustomization_resources,
+)
 from platform_credentials import (
     RETIRED_MANIFESTS as _RETIRED_MANIFESTS,
     PlatformValues as _PlatformValues,
@@ -102,7 +109,8 @@ class ManifestGenerator:
     def __init__(self, app_name: str, domain: str):
         self.app_name = app_name
         self.domain = domain
-        self.namespace = app_name  # namespace == app_name by convention
+        # An app's namespace is its name; an extension's is Control's, set once thinkube.yaml is read
+        self.namespace = app_name
         self.local_repo_path = f"/home/thinkube/apps/{self.app_name}"
         self.thinkube_config = {}
         self.secrets = {}
@@ -255,10 +263,14 @@ class ManifestGenerator:
         if 'metadata' not in self.thinkube_config:
             self.thinkube_config['metadata'] = {}
         self.thinkube_config['metadata']['name'] = self.app_name
+        self.is_extension = _is_extension(self.thinkube_config)
+        if self.is_extension:
+            self.namespace = _EXTENSION_NAMESPACE
 
         # Validate Knative portability constraints
         violations = _validate_knative_constraints(self.thinkube_config)
         violations.extend(_validate_component_constraints(self.thinkube_config))
+        violations.extend(_validate_extension_constraints(self.thinkube_config))
         violations.extend(_validate_replicas(self.thinkube_config))
         violations.extend(_validate_build_size(self.thinkube_config))
         if violations:
@@ -319,6 +331,7 @@ class ManifestGenerator:
             'spec_env': spec_env,
             'seaweedfs_endpoint': self.secrets['seaweedfs_endpoint'],
             'deployment_env_from': _env_from(self.app_name, self.declared_secrets),
+            'extension': self.is_extension,
         }
 
         k8s_dir = app_path / 'k8s'
@@ -452,6 +465,7 @@ data:
                 is_knative=is_knative,
                 needs_storage=needs_storage,
                 has_workflows=has_workflows,
+                extension=self.is_extension,
             ),
             has_workflows=has_workflows,
         )
@@ -463,6 +477,11 @@ data:
             generated_files['argocd-postsync-hook.yaml'] = existing_postsync.read_text()
 
         # Write all files to k8s/
+        # An extension's namespace is Control's, with Control's own limits and quota
+        if self.is_extension:
+            for filename in _NAMESPACE_RESOURCES:
+                generated_files.pop(filename, None)
+                (k8s_dir / filename).unlink(missing_ok=True)
         for filename, content in generated_files.items():
             (k8s_dir / filename).write_text(content)
 
@@ -583,7 +602,10 @@ data:
         config.load_incluster_config()
         out: Dict[str, str] = {}
         try:
-            deployments = client.AppsV1Api().list_namespaced_deployment(self.namespace).items
+            # Only this app's: an extension shares Control's namespace
+            deployments = client.AppsV1Api().list_namespaced_deployment(
+                self.namespace, label_selector=f"app.kubernetes.io/name={self.app_name}"
+            ).items
         except ApiException:
             return out
         for deployment in deployments:

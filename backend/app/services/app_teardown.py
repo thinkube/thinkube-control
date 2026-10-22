@@ -47,6 +47,9 @@ from app.services.component_teardown import APPS_DIR, ARGOCD_NAMESPACE, GITEA_OR
 from app.services.deploy_identity import deploy_api_client
 from app.services.harbor_client import HarborClient
 
+sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
+from manifest_plan import EXTENSION_NAMESPACE  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 # The deploy's helpers for the names it gives an app's objects.
@@ -100,7 +103,7 @@ def refusal(db, name: str) -> Optional[str]:
             f"'{name}' is a component deployed from a template, not a user application. "
             "Remove it with uninstall_optional_component."
         )
-    if "user_app" not in types:
+    if not types & {"user_app", "extension"}:
         return f"'{name}' has no deployment record of a user application deployed from a template"
 
     from app.services.run_queue import IN_FLIGHT
@@ -141,19 +144,31 @@ class AppTeardown(ComponentTeardown):
         # psql runs through a pod exec, which takes over the connection of the
         # client it is given, so it has a client of its own.
         self.exec_v1 = client.CoreV1Api(deploy_api_client())
+        api = deploy_api_client()
+        self.apps_v1 = client.AppsV1Api(api)
+        self.batch_v1 = client.BatchV1Api(api)
+        self.rbac_v1 = client.RbacAuthorizationV1Api(api)
 
     def remove_app(
         self, name: str, delete_repository: bool, delete_databases: bool
     ) -> Dict:
         """Run every step in order and report each one. Never raises for a failed step."""
+        # An extension runs in Thinkube Control's namespace: its own objects
+        # are removed, by label and by name, never the namespace
+        extension = self._deployed_as_extension(name)
+        namespace = EXTENSION_NAMESPACE if extension else name
+        namespace_step = (
+            (f"Objects of {name} in namespace {namespace}", lambda: self._extension_objects(name, namespace))
+            if extension else (f"Namespace {name}", lambda: self._namespace_gone(name))
+        )
         steps: List[Tuple[str, Callable[[], List[str]]]] = [
             ("Argo CD Application argocd/" + name, lambda: self._argocd_app(name)),
             (f"WorkflowTemplate argo/{name}-build", lambda: self._workflow_template(name)),
             (f"Secret argo/{self._build_secret(name)}", lambda: self._secret(ARGO_NAMESPACE, self._build_secret(name))),
             (f"Workflows in argo labelled {APP_LABEL}={name}", lambda: self._workflows(name)),
             (f"Secret argocd/gitea-{name}-ssh", lambda: self._secret(ARGOCD_NAMESPACE, f"gitea-{name}-ssh")),
-            (f"Namespace {name}", lambda: self._namespace_gone(name)),
-            (f"PersistentVolumes {name}-<container>-mlflow-root", lambda: self._mlflow_volumes(name)),
+            namespace_step,
+            (f"PersistentVolumes {name}-<container>-mlflow-root", lambda: self._mlflow_volumes(name, namespace)),
             (f"Keycloak client {name} in realm {KEYCLOAK_REALM}", lambda: self._keycloak_client(name)),
             (f"Harbor repositories {HARBOR_PROJECT}/{name}-<container>", lambda: self._harbor_repositories(name)),
             (f"Objects under {name}/ in bucket {ARTIFACT_BUCKET}", lambda: self._artifacts(name)),
@@ -320,7 +335,56 @@ class AppTeardown(ComponentTeardown):
                 )
             time.sleep(NAMESPACE_POLL_SECONDS)
 
-    def _mlflow_volumes(self, name: str) -> List[str]:
+    def _deployed_as_extension(self, name: str) -> bool:
+        records = self.db.query(TemplateDeployment).filter(TemplateDeployment.name == name).all()
+        return any((r.variables or {}).get("deployment_type") == "extension" for r in records)
+
+    def _extension_objects(self, name: str, namespace: str) -> List[str]:
+        """The objects an extension's deploy made in Control's namespace: those
+        labelled app.kubernetes.io/name=<name>, and the four it names without
+        the label. Control's own objects there carry neither."""
+        selector = f"app.kubernetes.io/name={name}"
+        removed: List[str] = []
+        kinds = [
+            ("Deployment", self.apps_v1.list_namespaced_deployment, self.apps_v1.delete_namespaced_deployment),
+            ("Service", self.core_v1.list_namespaced_service, self.core_v1.delete_namespaced_service),
+            ("PersistentVolumeClaim", self.core_v1.list_namespaced_persistent_volume_claim,
+             self.core_v1.delete_namespaced_persistent_volume_claim),
+            ("Secret", self.core_v1.list_namespaced_secret, self.core_v1.delete_namespaced_secret),
+            ("ConfigMap", self.core_v1.list_namespaced_config_map, self.core_v1.delete_namespaced_config_map),
+            ("Job", self.batch_v1.list_namespaced_job, self.batch_v1.delete_namespaced_job),
+            ("ServiceAccount", self.core_v1.list_namespaced_service_account,
+             self.core_v1.delete_namespaced_service_account),
+            ("Role", self.rbac_v1.list_namespaced_role, self.rbac_v1.delete_namespaced_role),
+            ("RoleBinding", self.rbac_v1.list_namespaced_role_binding, self.rbac_v1.delete_namespaced_role_binding),
+        ]
+        for kind, list_objects, delete in kinds:
+            for item in list_objects(namespace, label_selector=selector).items:
+                delete(item.metadata.name, namespace, propagation_policy="Background")
+                removed.append(f"{kind} {item.metadata.name}")
+        for route in self.custom.list_namespaced_custom_object(
+            "gateway.networking.k8s.io", "v1", namespace, "httproutes", label_selector=selector
+        ).get("items", []):
+            self.custom.delete_namespaced_custom_object(
+                "gateway.networking.k8s.io", "v1", namespace, "httproutes", route["metadata"]["name"]
+            )
+            removed.append(f"HTTPRoute {route['metadata']['name']}")
+        named = [
+            ("ConfigMap", self.core_v1.delete_namespaced_config_map, f"{name}-metadata"),
+            ("ConfigMap", self.core_v1.delete_namespaced_config_map, f"{name}-service-config"),
+            ("Job", self.batch_v1.delete_namespaced_job, f"{name}-deployment-completed"),
+            ("Job", self.batch_v1.delete_namespaced_job, f"{name}-deployment-failed"),
+        ]
+        for kind, delete, object_name in named:
+            try:
+                delete(object_name, namespace, propagation_policy="Background")
+                removed.append(f"{kind} {object_name}")
+            except ApiException as e:
+                if e.status != 404:
+                    raise
+        return removed
+
+    def _mlflow_volumes(self, name: str, namespace: str) -> List[str]:
         """The MLflow root volumes the app's claims in its namespace were bound to.
 
         storage-pvc.j2 names them <app>-<container>-mlflow-root and puts no label
@@ -333,7 +397,7 @@ class AppTeardown(ComponentTeardown):
             claim = volume.spec.claim_ref if volume.spec else None
             if not (volume_name.startswith(f"{name}-") and volume_name.endswith("-mlflow-root")):
                 continue
-            if claim is None or claim.namespace != name:
+            if claim is None or claim.namespace != namespace:
                 continue
             try:
                 self.core_v1.delete_persistent_volume(volume_name)

@@ -676,8 +676,14 @@ def get_commit_rollout(
         build, build_note = cr.build_of_push(push, pushes, builds)
         update = cr.automatic_update(main, app_name, build.uid) if build else None
 
+        # Where Argo CD deploys the app: its own namespace, or Control's for an extension
+        application = custom_api.get_namespaced_custom_object(
+            group="argoproj.io", version="v1alpha1", namespace=ARGOCD_NAMESPACE,
+            plural="applications", name=app_name,
+        )
+        namespace = application["spec"]["destination"]["namespace"]
         running = []
-        for d in apps_v1.list_namespaced_deployment(app_name).items:
+        for d in apps_v1.list_namespaced_deployment(namespace).items:
             for c in d.spec.template.spec.containers:
                 if f"/thinkube/{app_name}-" not in c.image:
                     continue
