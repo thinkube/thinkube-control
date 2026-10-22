@@ -6,6 +6,15 @@ from contextlib import asynccontextmanager
 import asyncio
 import logging
 import os
+
+# Messages of INFO and above from every logger reach the container's log.
+# Python prints only WARNING and above until logging is set up, and uvicorn
+# sets up its own loggers only. The handler's level also holds back the DEBUG
+# messages of a logger set to DEBUG.
+_handler = logging.StreamHandler()
+_handler.setLevel(logging.INFO)
+_handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
