@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 from app.core.api_tokens import get_current_user_dual_auth
 from app.db.session import get_db
 from app.models.services import Service
+from app.services.extensions import problems
+from app.services.fixes_feed import platform_version
 
 router = APIRouter()
 
@@ -39,11 +41,14 @@ def _extension(db: Session, name: str) -> Service:
 
 @router.get("/extensions", operation_id="list_extensions")
 def list_extensions(current_user: dict = Depends(get_current_user_dual_auth), db: Session = Depends(get_db)):
-    """The extensions of Control: each one's title, icon, navigation entries and UI module."""
+    """The extensions of Control: each one's title, icon, navigation entries and UI
+    module, and the problems that keep its pages from loading, if any."""
+    found = _extensions(db)
+    platform = platform_version()
     listed: List[Dict[str, Any]] = []
-    for name, service in sorted(_extensions(db).items()):
+    for name, service in sorted(found.items()):
         declared = service.service_metadata["extension"]
-        listed.append({"name": name, **declared})
+        listed.append({"name": name, **declared, "problems": problems(declared, list(found), platform)})
     return listed
 
 

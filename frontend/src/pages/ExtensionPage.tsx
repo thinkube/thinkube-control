@@ -55,8 +55,10 @@ export default function ExtensionPage({ extensions }: { extensions: Extension[] 
     [base, name],
   );
 
+  const blocked = extension ? extension.problems.length > 0 : false;
+
   useEffect(() => {
-    if (!extension || !element.current) return;
+    if (!extension || blocked || !element.current) return;
     setError(null);
     let unmount: (() => void) | undefined;
     let cancelled = false;
@@ -83,12 +85,19 @@ export default function ExtensionPage({ extensions }: { extensions: Extension[] 
     };
     // Mounted again only when the module or stylesheet changes, not when the list is read again
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [extension?.ui.module, extension?.ui.css, name, host]);
+  }, [extension?.ui.module, extension?.ui.css, blocked, name, host]);
 
   if (!extension) {
     return (
       <TkPageWrapper>
         <TkErrorAlert title="Extension not found">No enabled extension is named {name}.</TkErrorAlert>
+      </TkPageWrapper>
+    );
+  }
+  if (blocked) {
+    return (
+      <TkPageWrapper>
+        <TkErrorAlert title={`${extension.title} cannot be loaded`}>{extension.problems.join('; ')}</TkErrorAlert>
       </TkPageWrapper>
     );
   }

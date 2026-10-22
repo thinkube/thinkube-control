@@ -12,8 +12,12 @@ export interface Extension {
   title: string;
   description: string;
   icon: string | null;
+  platform: string;
+  depends: string[];
   ui: { module: string; css: string | null; folder: string };
   nav: { label: string; path: string; icon: string | null }[];
+  /** Why its pages cannot be loaded: another platform version, or depends not installed. */
+  problems: string[];
 }
 
 /** What Control hands an extension's module when it mounts it.
