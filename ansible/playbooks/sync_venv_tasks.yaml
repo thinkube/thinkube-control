@@ -86,6 +86,8 @@
     src: "{{ sync_dir_effective }}/"
     dest: "{{ sync_dir_effective }}/"
     mode: pull
+    # The source side reads world-readable files; sudo there would ask for a password
+    rsync_path: rsync
     rsync_opts:
       - "--archive"
       - "--compress"
