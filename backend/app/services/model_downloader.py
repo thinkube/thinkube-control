@@ -514,8 +514,11 @@ try:
         print(f'Run ID: {{run_id}}', flush=True)
         print(f'Artifact URI: {{artifact_uri}}', flush=True)
 
-        # Extract S3 path from artifact_uri
-        s3_base_path = artifact_uri.replace('s3://mlflow/', '')
+        # MLflow serves the artifacts: mlflow-artifacts:/<x> is <x> under the
+        # artifacts folder of the mlflow bucket, which this script writes directly
+        if not artifact_uri.startswith('mlflow-artifacts:/') or artifact_uri.startswith('mlflow-artifacts://'):
+            raise RuntimeError(f'the run artifacts are at {{artifact_uri}}, not under mlflow-artifacts:/')
+        s3_base_path = 'artifacts/' + artifact_uri[len('mlflow-artifacts:/'):]
         s3_artifact_prefix = f'{{s3_base_path}}/model'
         print(f'S3 upload prefix: {{s3_artifact_prefix}}', flush=True)
 
@@ -1048,7 +1051,10 @@ with mlflow.start_run(run_name=f'mirror-{{model_name}}') as run:
     )
 
     artifact_uri = run.info.artifact_uri
-    s3_base_path = artifact_uri.replace('s3://mlflow/', '')
+    # mlflow-artifacts:/<x> is <x> under the artifacts folder of the mlflow bucket
+    if not artifact_uri.startswith('mlflow-artifacts:/') or artifact_uri.startswith('mlflow-artifacts://'):
+        raise RuntimeError(f'the run artifacts are at {{artifact_uri}}, not under mlflow-artifacts:/')
+    s3_base_path = 'artifacts/' + artifact_uri[len('mlflow-artifacts:/'):]
     s3_artifact_prefix = f'{{s3_base_path}}/model'
 
     mlmodel_content = {{
