@@ -22,6 +22,19 @@ from app.services.llm_backend_types import DRIVER_OLLAMA, llm_backend_types
 logger = logging.getLogger(__name__)
 
 
+def _served_context(card: dict) -> Optional[int]:
+    """The context a model card of /v1/models says the model is served with.
+
+    vLLM and Flare give it as max_model_len, llama-server as meta.n_ctx.
+    """
+    if isinstance(card.get("max_model_len"), int):
+        return card["max_model_len"]
+    meta = card.get("meta")
+    if isinstance(meta, dict) and isinstance(meta.get("n_ctx"), int):
+        return meta["n_ctx"]
+    return None
+
+
 class LLMBackendDiscovery:
     # Number of consecutive probe failures before marking a backend unhealthy.
     # Prevents transient network hiccups from clearing the models list and
@@ -201,7 +214,7 @@ class LLMBackendDiscovery:
                 cards = [m for m in data.get("data", []) if m.get("id")]
                 backend.models = [m["id"] for m in cards]
                 backend.model_context = {
-                    m["id"]: m["max_model_len"] for m in cards if isinstance(m.get("max_model_len"), int)
+                    m["id"]: length for m in cards if (length := _served_context(m)) is not None
                 }
             # Don't clear models on /v1/models failure — keep last known good list
         except Exception:
