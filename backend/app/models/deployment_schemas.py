@@ -66,6 +66,9 @@ class DeploymentStatus(BaseModel):
     status: str
     variables: Optional[Dict[str, Any]] = None
     output: Optional[str] = None
+    # A template deploy's build once its push started one: pushed_at, workflow,
+    # discovery and deployed_at (app/services/build_follow.py)
+    build: Optional[Dict[str, str]] = None
     created_at: datetime
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None

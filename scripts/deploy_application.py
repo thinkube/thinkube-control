@@ -2274,7 +2274,7 @@ LIMIT 5;"
             DeploymentLogger.debug(" Phase 4 complete")
 
             elapsed = (datetime.now() - start_time).total_seconds()
-            DeploymentLogger.success(f"Deployment complete in {elapsed:.1f} seconds")
+            DeploymentLogger.success(f"Pushed in {elapsed:.1f} seconds; the build is running")
             DeploymentLogger.debug(" Returning exit code 0")
 
             return 0
