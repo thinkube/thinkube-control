@@ -323,6 +323,19 @@ async def app_lifespan(app: FastAPI):
 
     fixes_feed_task = asyncio.create_task(check_fixes_feed())
 
+    # Old build workflows and their pods: removed every hour.
+    async def clean_builds():
+        from app.services import build_cleanup
+
+        while True:
+            try:
+                await asyncio.to_thread(build_cleanup.clean_once)
+            except Exception as e:
+                logger.error(f"Build clean-up failed: {e}")
+            await asyncio.sleep(build_cleanup.INTERVAL_SECONDS)
+
+    build_cleanup_task = asyncio.create_task(clean_builds())
+
     yield
 
     # Shutdown: Clean up resources
@@ -333,6 +346,7 @@ async def app_lifespan(app: FastAPI):
     health_check_task.cancel()
     venv_reconcile_task.cancel()
     fixes_feed_task.cancel()
+    build_cleanup_task.cancel()
     discovery_task.cancel()
     llm_registry_task.cancel()
     llm_discovery_task.cancel()
