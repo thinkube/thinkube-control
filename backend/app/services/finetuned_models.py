@@ -7,8 +7,9 @@ merges over the platform catalogue.
 
 The weights are already in MLflow when this runs: the training merged the
 adapter into a 16-bit checkpoint, uploaded it to the model folder of its run
-and registered a model version. The entry is what makes the LLM Gateway
-know the model; vLLM serves it from that folder.
+and registered a model version, or an export converted that checkpoint to a
+GGUF file the same way. The entry is what makes the LLM Gateway know the
+model; vLLM or llama.cpp serves it from that folder.
 """
 
 import base64
@@ -37,19 +38,26 @@ class FinetunedModelError(Exception):
         self.status = status
 
 
+# How a fine-tune is served: vLLM from the merged 16-bit checkpoint, or
+# llama.cpp from a GGUF file converted from it
+SERVING = {"vllm": {"BF16"}, "llama-cpp": {"Q8_0", "F16"}}
+
+
 def check_entry(entry: Dict[str, Any]) -> None:
-    """Refuse an entry that is incomplete or names a serving path other than
-    vLLM, which serves a fine-tune as a merged 16-bit checkpoint."""
+    """Refuse an entry that is incomplete, or that names a serving path other
+    than vLLM with the merged 16-bit checkpoint or llama.cpp with a GGUF file."""
     missing = [field for field in CATALOG_FIELDS if field not in entry]
     if missing:
         raise FinetunedModelError(f"catalog_entry is missing: {', '.join(missing)}", 422)
-    required = {
-        "server_type": ["vllm"],
-        "quantization": "BF16",
-        "task": "text-generation",
-        "is_finetuned": True,
-        "serving_name": entry["id"],
-    }
+    servers = entry["server_type"]
+    if not (isinstance(servers, list) and len(servers) == 1 and servers[0] in SERVING):
+        raise FinetunedModelError(f"catalog_entry has server_type {servers}; a fine-tune is served by one of "
+                                  f"{[[s] for s in SERVING]}", 422)
+    quantizations = SERVING[servers[0]]
+    if entry["quantization"] not in quantizations:
+        raise FinetunedModelError(f"catalog_entry has quantization {entry['quantization']}; {servers[0]} serves a "
+                                  f"fine-tune as {sorted(quantizations)}", 422)
+    required = {"task": "text-generation", "is_finetuned": True, "serving_name": entry["id"]}
     wrong = {field: entry[field] for field, value in required.items() if entry[field] != value}
     if wrong:
         raise FinetunedModelError(f"catalog_entry has {wrong}; a fine-tune needs {required}", 422)

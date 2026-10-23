@@ -32,6 +32,20 @@ def test_an_entry_not_served_by_vllm_as_bf16_is_refused():
     assert "quantization" in str(e.value)
 
 
+def test_a_gguf_export_is_served_by_llama_cpp():
+    fm.check_entry({**ENTRY, "id": "forge/greeter-gguf", "serving_name": "forge/greeter-gguf",
+                    "server_type": ["llama-cpp"], "quantization": "Q8_0"})
+
+
+def test_a_gguf_entry_for_vllm_or_with_another_quantization_is_refused():
+    with pytest.raises(fm.FinetunedModelError, match="vllm serves a fine-tune as"):
+        fm.check_entry({**ENTRY, "quantization": "Q8_0"})
+    with pytest.raises(fm.FinetunedModelError, match="llama-cpp serves a fine-tune as"):
+        fm.check_entry({**ENTRY, "server_type": ["llama-cpp"], "quantization": "Q4_K_M"})
+    with pytest.raises(fm.FinetunedModelError, match="server_type"):
+        fm.check_entry({**ENTRY, "server_type": ["vllm", "llama-cpp"]})
+
+
 class GitHub:
     """The GitHub contents API of one repository holding models.json."""
 
