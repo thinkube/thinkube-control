@@ -48,7 +48,12 @@ export async function listExtensions(): Promise<Extension[]> {
 /** A call to the extension's API through Control: /api/v1/x/<name>/api/<path>. */
 export function extensionRequest(name: string) {
   return (config: AxiosRequestConfig) =>
-    api.request({ ...config, url: `/x/${name}/api${config.url ?? ''}` });
+    api.request({
+      ...config,
+      url: `/x/${name}/api${config.url ?? ''}`,
+      // An upload stays multipart: under Control's JSON default axios would turn the form into JSON
+      ...(config.data instanceof FormData ? { headers: { ...config.headers, 'Content-Type': 'multipart/form-data' } } : {}),
+    });
 }
 
 export const uiUrl = (name: string, file: string) => `/api/v1/x/${name}/ui${file}`;
