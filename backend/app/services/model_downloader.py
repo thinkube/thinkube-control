@@ -269,7 +269,10 @@ class ModelDownloaderService:
                 backoff=hera_models.Backoff(
                     duration="1m",
                     factor=2,
-                    max_duration="10m"
+                    # A cap on each wait, not a limit on the total: max_duration
+                    # counts from the submission, so a pod that waited to be
+                    # scheduled would get no retry at all
+                    cap="10m"
                 )
             ),
             image_pull_secrets=[hera_models.LocalObjectReference(name="app-pull-secret")],
@@ -909,7 +912,10 @@ except Exception as e:
                 backoff=hera_models.Backoff(
                     duration="1m",
                     factor=2,
-                    max_duration="10m",
+                    # A cap on each wait, not a limit on the total: max_duration
+                    # counts from the submission, so a pod that waited to be
+                    # scheduled would get no retry at all
+                    cap="10m",
                 ),
             ),
             image_pull_secrets=[
