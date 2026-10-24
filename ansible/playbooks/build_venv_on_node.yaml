@@ -137,6 +137,24 @@
                       "$VENV_PATH/bin/pip" install $EXTRA_INDEX "${PLAIN[@]}"
                     fi
 
+                    {% if package_list | select('match', '^flash-linear-attention') | list %}
+                    # A fine-tuning environment (flash-linear-attention names it) gets
+                    # causal-conv1d, the CUDA convolution of hybrid-attention models
+                    # (Qwen3.5's GatedDeltaNet layers), as the built-in fine-tuning
+                    # venv does (build-venvs.sh in the thinkube repository). It is a
+                    # compiled extension: a binary built against another torch fails
+                    # at import, so it is built here against the image's torch, with
+                    # the same flags as there. Without it, Transformers falls back to
+                    # a PyTorch convolution that is correct and many times slower.
+                    echo "Building causal-conv1d from source against the image's torch..."
+                    CAUSAL_CONV1D_FORCE_BUILD=TRUE \
+                    TORCH_CUDA_ARCH_LIST="8.0 8.6 8.9 9.0 12.0" \
+                    MAX_JOBS=4 \
+                    "$VENV_PATH/bin/pip" install \
+                      --no-binary causal_conv1d --no-cache-dir --no-build-isolation --no-deps \
+                      causal-conv1d
+                    {% endif %}
+
                     echo "Installing ipykernel..."
                     "$VENV_PATH/bin/pip" install ipykernel
 
@@ -149,7 +167,8 @@
                 resources:
                   limits:
                     cpu: "4"
-                    memory: "8Gi"
+                    # The causal-conv1d build compiles CUDA kernels for five architectures
+                    memory: "16Gi"
                   requests:
                     cpu: "1"
                     memory: "2Gi"
