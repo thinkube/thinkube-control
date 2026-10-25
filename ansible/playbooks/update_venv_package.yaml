@@ -104,7 +104,12 @@
                         fi
                         echo "=== Updating {{ venv_name }} ($ARCH_NAME) on $(hostname): {{ package }}"
                         EXTRA_INDEX="--extra-index-url https://{{ devpi_api_hostname }}/root/{{ devpi_index_name }}/+simple/"
-                        "$VENV/bin/pip" install --upgrade --no-cache-dir $EXTRA_INDEX {{ package | quote }}
+                        # The package itself is always reinstalled: pip takes a requirement
+                        # at a new commit with the same version number as satisfied. Its
+                        # dependencies are then checked in a second pass, which installs
+                        # only what the new version needs and does not have.
+                        "$VENV/bin/pip" install --no-cache-dir --force-reinstall --no-deps $EXTRA_INDEX {{ package | quote }}
+                        "$VENV/bin/pip" install --no-cache-dir $EXTRA_INDEX {{ package | quote }}
                         echo "=== Updated"
                     securityContext:
                       runAsUser: 0
@@ -141,6 +146,39 @@
       retries: 120
       delay: 5
       loop: "{{ target_nodes }}"
+
+    - name: Find the update Jobs' pods
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: v1
+        kind: Pod
+        namespace: "{{ job_namespace }}"
+        label_selectors:
+          - "job-name={{ job_prefix }}-{{ item }}"
+      delegate_to: localhost
+      register: update_pods
+      loop: "{{ target_nodes }}"
+
+    - name: Read each update Job's output
+      kubernetes.core.k8s_log:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: v1
+        kind: Pod
+        namespace: "{{ job_namespace }}"
+        name: "{{ item.resources[0].metadata.name }}"
+      delegate_to: localhost
+      register: update_logs
+      when: item.resources | length > 0
+      loop: "{{ update_pods.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Show each update Job's output
+      ansible.builtin.debug:
+        msg: "{{ item.log_lines | default(['No logs available']) }}"
+      loop: "{{ update_logs.results }}"
+      loop_control:
+        label: "{{ item.item.item }}"
 
     - name: Report a node whose update failed
       ansible.builtin.fail:
