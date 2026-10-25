@@ -49,6 +49,13 @@ NODES = [
         "allocated": {"cpu": 4, "memory": "16Gi", "gpu": 0},
         "available": {"cpu": 12, "memory": "46Gi", "gpu": 0},
     },
+    {
+        # two GPUs shared in two slices each
+        "name": "tkamd2",
+        "capacity": {"cpu": 31, "memory": "116Gi", "gpu": 4, "effective_gpu": 1, "physical_gpu": 2, "gpu_slices": 2},
+        "allocated": {"cpu": 2, "memory": "8Gi", "gpu": 0},
+        "available": {"cpu": 29, "memory": "108Gi", "gpu": 4},
+    },
 ]
 
 
@@ -92,10 +99,33 @@ def test_values_outside_the_choices_are_refused():
 
 def test_gpu_on_spark_is_capped_to_one_slot():
     placement = asyncio.run(js.resolve_placement(FakeDB(), "tkspark", 8, 32, 1))
-    assert placement.gpus == 1
+    assert placement.gpus == 1 and placement.gpu_slots == 1
     with pytest.raises(HTTPException) as e:
         asyncio.run(js.resolve_placement(FakeDB(), "tkspark", 8, 32, 2))
-    assert "gpus must be between 0 and 1" in e.value.detail
+    assert "gpus must be one of [0, 1]" in e.value.detail
+
+
+def test_a_node_with_two_sliced_gpus_gives_one_or_both():
+    one = asyncio.run(js.resolve_placement(FakeDB(), "tkamd2", 8, 32, 1))
+    assert (one.gpus, one.gpu_slots) == (1, 1) and one.user_options()["enable_gpu"] == "1"
+    both = asyncio.run(js.resolve_placement(FakeDB(), "tkamd2", 8, 32, 2))
+    assert (both.gpus, both.gpu_slots) == (2, 4)  # every slice of the node: both GPUs, each whole
+    assert both.user_options()["enable_gpu"] == "4" and both.user_options()["gpus"] == "2"
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(js.resolve_placement(FakeDB(), "tkamd2", 8, 32, 3))
+    assert "gpus must be one of [0, 1, 2]" in e.value.detail and "time slices" in e.value.detail
+
+
+def test_both_gpus_need_every_slot_free(monkeypatch):
+    busy = [dict(n, available={**n["available"], "gpu": 3}) if n["name"] == "tkamd2" else n for n in NODES]
+
+    async def fake():
+        return busy
+
+    monkeypatch.setattr(js, "get_cluster_resources", fake)
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(js.resolve_placement(FakeDB(), "tkamd2", 8, 32, 2))
+    assert "3 GPU slots free of 4; 2 GPUs need 4" in e.value.detail
 
 
 def test_no_gpu_node_refuses_a_gpu():
@@ -117,6 +147,8 @@ def test_placement_read_back_from_hub_options():
     assert js._placement_of({"user_options": {"node": "tkspark", "cpu": "8", "memory": "32G", "enable_gpu": "1"}}) == {
         "node": "tkspark", "cpu_cores": 8, "memory_gb": 32, "gpus": 1,
     }
+    # a server on every GPU of a sliced node: four slots, two GPUs
+    assert js._placement_of({"user_options": {"node": "tkamd2", "cpu": "8", "memory": "32G", "enable_gpu": "4", "gpus": "2"}})["gpus"] == 2
     assert js._placement_of(None) == {"node": None, "cpu_cores": None, "memory_gb": None, "gpus": None}
 
 

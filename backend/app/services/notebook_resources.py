@@ -32,13 +32,34 @@ def gb(memory: str) -> float:
 
 
 def node_capacity(node: Dict[str, Any]) -> Dict[str, int]:
-    """CPU cores, memory in GB and GPUs a server on this node can be given at most."""
+    """CPU cores, memory in GB and GPUs a server on this node can be given.
+
+    gpus is what one server gets at most on a node that shares its GPUs in
+    time slices: one slice. physical_gpus is every GPU of the node, which a
+    server gets by taking every slice (gpu_slices per GPU); on a node without
+    slicing the three numbers agree.
+    """
     cap = node["capacity"]
+    gpus = int(cap.get("effective_gpu", cap.get("gpu", 0)))
     return {
         "cpu_cores": int(cap["cpu"]),
         "memory_gb": int(gb(cap["memory"])),
-        "gpus": int(cap.get("effective_gpu", cap.get("gpu", 0))),
+        "gpus": gpus,
+        "physical_gpus": int(cap.get("physical_gpu", cap.get("gpu", gpus))),
+        "gpu_slices": int(cap.get("gpu_slices", 1)),
     }
+
+
+def gpu_choices(capacity: Dict[str, int]) -> List[int]:
+    """The GPU counts a server can ask for: on a sliced node, none, one, or every GPU; elsewhere any number."""
+    if capacity["gpu_slices"] > 1 and capacity["physical_gpus"] > 1:
+        return [0, 1, capacity["physical_gpus"]]
+    return list(range(0, capacity["gpus"] + 1))
+
+
+def gpu_slots(capacity: Dict[str, int], gpus: int) -> int:
+    """The nvidia.com/gpu count that gives `gpus` GPUs: every slice of the node for every GPU of a sliced node."""
+    return gpus * capacity["gpu_slices"] if gpus > 1 else gpus
 
 
 def node_choices(node: Dict[str, Any]) -> Dict[str, List[int]]:
@@ -46,7 +67,7 @@ def node_choices(node: Dict[str, Any]) -> Dict[str, List[int]]:
     return {
         "cpu_cores": [c for c in CPU_CHOICES if c <= capacity["cpu_cores"]] or [CPU_CHOICES[0]],
         "memory_gb": [m for m in MEMORY_CHOICES_GB if m <= capacity["memory_gb"]] or [MEMORY_CHOICES_GB[0]],
-        "gpus": list(range(0, capacity["gpus"] + 1)),
+        "gpus": gpu_choices(capacity),
     }
 
 

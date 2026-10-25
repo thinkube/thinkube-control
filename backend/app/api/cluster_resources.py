@@ -268,13 +268,15 @@ def _compute_cluster_resources() -> List[Dict[str, Any]]:
             "gpu": max(0, capacity["gpu"] - allocated_gpu)
         }
 
-        # Effective GPU: a time-sliced node advertises several slices per
-        # physical GPU (nvidia.com/gpu.replicas, set by GPU feature discovery).
-        # A pod asking for more than one slice may get slices of the same GPU,
-        # so a server on such a node is given at most one.
+        # A time-sliced node advertises several slices per physical GPU
+        # (nvidia.com/gpu.replicas, set by GPU feature discovery). A pod asking
+        # for some of the slices may get slices of the same GPU, so a server on
+        # such a node is given one slice (effective_gpu), or every slice, which
+        # is every physical GPU (physical_gpu, gpu_slices).
         labels = node.metadata.labels or {}
         replicas = int(labels.get("nvidia.com/gpu.replicas", "1"))
         effective_gpu = 1 if capacity["gpu"] > 0 and replicas > 1 else capacity["gpu"]
+        physical_gpu = capacity["gpu"] // replicas if replicas > 1 else capacity["gpu"]
 
         result.append({
             "name": node_name,
@@ -282,7 +284,9 @@ def _compute_cluster_resources() -> List[Dict[str, Any]]:
                 "cpu": capacity["cpu"],
                 "memory": format_memory(capacity["memory"]),
                 "gpu": capacity["gpu"],
-                "effective_gpu": effective_gpu
+                "effective_gpu": effective_gpu,
+                "physical_gpu": physical_gpu,
+                "gpu_slices": replicas,
             },
             "allocated": {
                 "cpu": round(allocated_cpu, 2),

@@ -70,6 +70,9 @@ class Placement(BaseModel):
     cpu_cores: int
     memory_gb: int
     gpus: int
+    # What the spawner requests as nvidia.com/gpu: on a node that shares its
+    # GPUs in time slices, every GPU means every slice (see notebook_resources)
+    gpu_slots: int = 0
     # The spawner requests a quarter of memory_gb, so a server can be placed
     # where memory is short and still grow to its limit. A run that must not
     # be killed for memory asks the node to reserve all of it.
@@ -86,7 +89,8 @@ class Placement(BaseModel):
             "node": self.node,
             "cpu": str(self.cpu_cores),
             "memory": f"{self.memory_gb}G",
-            "enable_gpu": str(self.gpus),
+            "enable_gpu": str(self.gpu_slots),
+            "gpus": str(self.gpus),
         }
 
 
@@ -127,13 +131,22 @@ async def resolve_placement(
         problems.append(f"cpu_cores must be one of {choices['cpu_cores']} on {node}")
     if placement.memory_gb not in choices["memory_gb"]:
         problems.append(f"memory_gb must be one of {choices['memory_gb']} on {node}")
-    if placement.gpus < 0 or placement.gpus > capacity["gpus"]:
-        problems.append(f"gpus must be between 0 and {capacity['gpus']} on {node}" if capacity["gpus"] else f"{node} has no GPU")
-    elif placement.gpus > free_gpus:
-        problems.append(
-            f"{node} has {free_gpus} GPU slots free of {int(info['capacity'].get('gpu', 0))}; "
-            "a served model may be holding the rest (unload_llm_model frees one)"
-        )
+    if placement.gpus not in choices["gpus"]:
+        if not capacity["gpus"]:
+            problems.append(f"{node} has no GPU")
+        elif capacity["gpu_slices"] > 1:
+            problems.append(f"gpus must be one of {choices['gpus']} on {node}: it shares its GPUs in time slices, "
+                            "so a server takes one slice or every GPU")
+        else:
+            problems.append(f"gpus must be one of {choices['gpus']} on {node}")
+    else:
+        placement.gpu_slots = res.gpu_slots(capacity, placement.gpus)
+        if placement.gpu_slots > free_gpus:
+            problems.append(
+                f"{node} has {free_gpus} GPU slots free of {int(info['capacity'].get('gpu', 0))}; "
+                f"{placement.gpus} GPUs need {placement.gpu_slots}; a served model may be holding the rest "
+                "(unload_llm_model frees one)"
+            )
     if problems:
         raise HTTPException(status_code=422, detail="; ".join(problems))
     return placement
@@ -146,7 +159,10 @@ def _placement_of(model: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "node": options.get("node"),
         "cpu_cores": int(options["cpu"]) if str(options.get("cpu", "")).isdigit() else None,
         "memory_gb": int(memory) if memory.isdigit() else None,
-        "gpus": int(options["enable_gpu"]) if str(options.get("enable_gpu", "")).isdigit() else None,
+        # gpus says how many GPUs; enable_gpu is the slot count the spawner got, and all a server started
+        # before gpus was recorded has
+        "gpus": int(options["gpus"]) if str(options.get("gpus", "")).isdigit()
+        else int(options["enable_gpu"]) if str(options.get("enable_gpu", "")).isdigit() else None,
     }
 
 
@@ -303,7 +319,7 @@ async def watch_start(node: str) -> None:
 class StartServerRequest(BaseModel):
     cpu_cores: Union[int, str, None] = Field(None, description="CPU cores; defaults to the node's default.")
     memory_gb: Union[int, str, None] = Field(None, description="Memory in GB; defaults to the node's default.")
-    gpus: Union[int, str, None] = Field(None, description="GPUs to reserve, 0 for none; defaults to the node's default.")
+    gpus: Union[int, str, None] = Field(None, description="GPUs to reserve, 0 for none; defaults to the node's default. On a node that shares its GPUs in time slices, 1 or every GPU of the node.")
 
 
 @router.post("/servers/{node}/start", response_model=NodeServer, operation_id="start_notebook_server")
@@ -375,7 +391,7 @@ class RunNotebookJobRequest(BaseModel):
     node: str = Field(..., description="The node to run on, for example 'tkspark'.")
     cpu_cores: Union[int, str, None] = Field(None, description="CPU cores for the run.")
     memory_gb: Union[int, str, None] = Field(None, description="Memory in GB for the run.")
-    gpus: Union[int, str, None] = Field(None, description="GPUs to reserve for the run, 0 for none.")
+    gpus: Union[int, str, None] = Field(None, description="GPUs to reserve for the run, 0 for none. On a node that shares its GPUs in time slices, 1 or every GPU of the node (for a run on several GPUs).")
     stop_on_error: Union[bool, str, None] = Field(True, description="Stop at the first cell that raises (default true).")
     cell_timeout_seconds: Union[int, str, None] = Field(None, description="Seconds allowed per cell; default 3600.")
     reserve_memory: Union[bool, str, None] = Field(
