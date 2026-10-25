@@ -192,8 +192,10 @@
   until: >
     (arch_job_status.resources[0].status.succeeded | default(0) > 0) or
     (arch_job_status.resources[0].status.failed | default(0) > 0)
-  retries: 60
-  delay: 10
+  # Up to an hour: a fine-tuning environment compiles causal-conv1d for five
+  # GPU architectures on four cores, which took 17 minutes on tkamd1
+  retries: 240
+  delay: 15
 
 - name: "Check if {{ target_build_arch }} Job succeeded"
   ansible.builtin.fail:
