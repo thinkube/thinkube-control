@@ -602,8 +602,19 @@ async def update_venv_package(
     )
 
 
+def venv_task_running(venv_id: str, status: str) -> bool:
+    """Whether this process holds the task behind a venv record that says building or deleting."""
+    if status == "deleting":
+        return detached.running(f"venv-delete:{venv_id}")
+    return detached.running(f"venv-build:{venv_id}") or detached.running(f"venv-update:{venv_id}")
+
+
 async def _execute_venv_package_update(venv_id: str, package: str) -> None:
-    """Install one package into the venv through update_venv_package.yaml and record it in the package list."""
+    """Install one package into the venv through update_venv_package.yaml and record it in the package list.
+
+    A failed update leaves the venv as it was, built and usable: the record
+    goes back to success and its output says what failed.
+    """
     db = SessionLocal()()
     try:
         venv = db.query(JupyterVenv).filter_by(id=venv_id).first()
@@ -616,18 +627,17 @@ async def _execute_venv_package_update(venv_id: str, package: str) -> None:
         except Exception as e:
             return_code, reason = 1, str(e)
         else:
-            reason = f"Update failed with return code {return_code}. Log: {log_file}"
+            reason = f"Update failed with return code {return_code}; the venv is as it was. Log: {log_file}"
+        name = requirement_name(package)
         if return_code == 0:
-            name = requirement_name(package)
             kept = [p for p in venv.packages if requirement_name(p) != name]
             venv.packages = kept + [package]
-            venv.status = "success"
             venv.output = f"Updated {name}. Log: {log_file}"
             logger.info(f"Venv {venv.name}: {name} updated on every node")
         else:
-            venv.status = "failed"
             venv.output = reason
-            logger.error(f"Venv {venv.name}: update failed: {reason}")
+            logger.error(f"Venv {venv.name}: update of {name} failed: {reason}")
+        venv.status = "success"
         venv.completed_at = datetime.now(timezone.utc)
         db.commit()
     finally:

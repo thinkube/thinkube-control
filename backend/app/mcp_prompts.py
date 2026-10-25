@@ -210,8 +210,12 @@ Rules that the tools do not state:
   installs; the answer of `build_jupyter_venv` comes at once.
 - A venv is registered as a kernel named after it when a notebook server starts. A server
   already running does not see a venv built after it started: stop and start it.
-- The package list of an existing venv cannot be changed from here: delete the venv and
-  create it again.
+- The package list of a built venv is not changed from here: delete the venv and create it
+  again. One package of a built custom venv is updated in place with `update_venv_package`
+  (the venv id and the new pip requirement, such as a package from a repository at a new
+  commit): pip install --upgrade of that one package on every node, about a minute. Poll
+  `get_jupyter_venv` as for a build; a failed update leaves the venv as it was, status
+  "success", with the failure in output.
 
 Steps:
 1. `get_venv_templates`, and `get_venv_template_details` with the template id when a

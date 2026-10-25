@@ -303,16 +303,13 @@ async def app_lifespan(app: FastAPI):
     async def reconcile_venv_builds():
         from app.db.init_venvs import mark_orphaned_builds
         from app.api.custom_images import mark_orphaned_image_builds
+        from app.api.jupyter_venvs import venv_task_running
         from app.services import detached
 
         while True:
             await asyncio.sleep(60)
             try:
-                mark_orphaned_builds(
-                    still_running=lambda venv_id, status: detached.running(
-                        f"venv-delete:{venv_id}" if status == "deleting" else f"venv-build:{venv_id}"
-                    )
-                )
+                mark_orphaned_builds(still_running=venv_task_running)
             except Exception as e:
                 logger.debug(f"venv build reconciliation: {e}")
             try:
@@ -558,6 +555,7 @@ MCP_OPERATIONS = [
     "download_venv_build_log",     # Resource
     "create_jupyter_venv",         # Tool
     "build_jupyter_venv",          # Tool
+    "update_venv_package",         # Tool
     "delete_jupyter_venv",         # Tool
 
     # === JupyterHub Config ===

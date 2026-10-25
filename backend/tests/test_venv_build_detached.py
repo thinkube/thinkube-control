@@ -363,3 +363,51 @@ def test_a_failed_build_for_one_architecture_says_which_and_keeps_the_others(mon
     assert venv.status == "failed"
     assert venv.architectures_built == ["amd64"]
     assert "Build for arm64 failed" in venv.output and "amd64 are unchanged" in venv.output
+
+
+def _run_package_update(monkeypatch, venv, package, return_code):
+    received = {}
+
+    async def fake_playbook(v, playbook, extra_vars):
+        received.update(extra_vars, playbook=playbook)
+        return return_code, [], "/tmp/thinkube-venvs/x/update-1.log"
+
+    monkeypatch.setattr(jv, "_run_venv_playbook", fake_playbook)
+    monkeypatch.setattr(jv, "SessionLocal", lambda: (lambda: FakeVenvDB(venv)))
+    asyncio.run(jv._execute_venv_package_update(str(venv.id), package))
+    return received
+
+
+def test_a_package_update_replaces_the_requirement_of_the_same_name(monkeypatch):
+    venv = custom_venv("llebre", ["amd64", "arm64"])
+    venv.packages = ["numpy", "tk-llebre[qlora] @ git+https://github.com/thinkube/llebre@aaaa"]
+    venv.status = "building"
+    new = "tk-llebre[qlora] @ git+https://github.com/thinkube/llebre@bbbb"
+    received = _run_package_update(monkeypatch, venv, new, 0)
+
+    assert received["playbook"] == "update_venv_package.yaml" and received["package"] == new
+    assert venv.status == "success" and venv.packages == ["numpy", new]
+    assert "Updated tk-llebre" in venv.output
+
+
+def test_a_failed_package_update_leaves_the_venv_built_and_says_what_failed(monkeypatch):
+    venv = custom_venv("llebre", ["amd64", "arm64"])
+    venv.status = "building"
+    _run_package_update(monkeypatch, venv, "tk-llebre @ git+https://github.com/thinkube/llebre@bbbb", 2)
+
+    assert venv.status == "success" and venv.packages == ["numpy"]
+    assert "return code 2" in venv.output and "as it was" in venv.output
+
+
+def test_the_reconciler_knows_a_running_package_update():
+    async def wait():
+        await asyncio.sleep(1)
+
+    async def scenario():
+        detached.start("venv-update:u1", wait())
+        await asyncio.sleep(0)
+        assert jv.venv_task_running("u1", "building")
+        assert not jv.venv_task_running("u2", "building")
+        assert not jv.venv_task_running("u1", "deleting")
+
+    asyncio.run(scenario())
