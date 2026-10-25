@@ -550,6 +550,90 @@ async def update_venv_packages(
     return {"message": "Packages updated successfully", "packages": venv.packages}
 
 
+class UpdatePackageRequest(BaseModel):
+    """One package to install into a built venv, as a pip requirement"""
+    package: str
+
+
+def requirement_name(spec: str) -> str:
+    """The distribution name a pip requirement names: 'tk-llebre[qlora] @ git+...' -> 'tk-llebre'."""
+    return re.split(r"[\[@=<>!~; ]", spec.strip(), maxsplit=1)[0].lower().replace("_", "-")
+
+
+@router.post("/{venv_id}/packages/update", response_model=BuildResponse, operation_id="update_venv_package")
+async def update_venv_package(
+    venv_id: UUID,
+    request: UpdatePackageRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_dual_auth)
+):
+    """Install one package into a built custom venv, in place, on every node that holds it.
+
+    pip install --upgrade of that one requirement, nothing else rebuilt: a
+    minute, where a build takes many. For a package that changes while the
+    rest of the venv does not, such as one installed from a repository at a
+    commit: give the requirement with the new commit. The venv's package list
+    keeps the new requirement in place of the old one of the same name. Poll
+    get_jupyter_venv until status is success or failed.
+    """
+    venv = db.query(JupyterVenv).filter_by(id=venv_id).first()
+    if not venv:
+        raise HTTPException(status_code=404, detail="Venv not found")
+    if venv.is_template:
+        raise HTTPException(status_code=400, detail="A built-in venv comes from the venvs release and is not changed here")
+    if venv.status != "success":
+        raise HTTPException(status_code=400, detail=f"The venv is {venv.status}; a package is installed into a built venv")
+    package = request.package.strip()
+    if not package:
+        raise HTTPException(status_code=400, detail="package must be a pip requirement")
+
+    venv.status = "building"
+    venv.output = None
+    venv.started_at = datetime.now(timezone.utc)
+    venv.completed_at = None
+    db.commit()
+
+    detached.start(f"venv-update:{venv.id}", _execute_venv_package_update(str(venv.id), package))
+    return BuildResponse(
+        build_id=str(venv.id),
+        status="building",
+        message=f"Installing {requirement_name(package)} into {venv.name} on every node; poll get_jupyter_venv for its status",
+        poll_url=f"/jupyter-venvs/{venv.id}",
+    )
+
+
+async def _execute_venv_package_update(venv_id: str, package: str) -> None:
+    """Install one package into the venv through update_venv_package.yaml and record it in the package list."""
+    db = SessionLocal()()
+    try:
+        venv = db.query(JupyterVenv).filter_by(id=venv_id).first()
+        if not venv:
+            logger.error(f"Venv {venv_id} not found")
+            return
+        try:
+            return_code, _, log_file = await _run_venv_playbook(
+                venv, "update_venv_package.yaml", {"venv_name": venv.name, "package": package})
+        except Exception as e:
+            return_code, reason = 1, str(e)
+        else:
+            reason = f"Update failed with return code {return_code}. Log: {log_file}"
+        if return_code == 0:
+            name = requirement_name(package)
+            kept = [p for p in venv.packages if requirement_name(p) != name]
+            venv.packages = kept + [package]
+            venv.status = "success"
+            venv.output = f"Updated {name}. Log: {log_file}"
+            logger.info(f"Venv {venv.name}: {name} updated on every node")
+        else:
+            venv.status = "failed"
+            venv.output = reason
+            logger.error(f"Venv {venv.name}: update failed: {reason}")
+        venv.completed_at = datetime.now(timezone.utc)
+        db.commit()
+    finally:
+        db.close()
+
+
 # Background task for venv build
 async def _execute_venv_build(venv_id: str) -> None:
     """Execute venv build using Ansible playbook.

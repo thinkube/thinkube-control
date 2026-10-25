@@ -1,0 +1,162 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: Apache-2.0
+
+---
+# ansible/playbooks/update_venv_package.yaml
+#
+# Installs one package into a custom venv on every node that holds it, in
+# place: pip install --upgrade of that package, nothing else rebuilt. For a
+# package that changes often while the rest of the venv does not, such as one
+# installed from a repository at a commit, this takes a minute where a build
+# takes many.
+#
+# A custom venv lives under <base>/custom/<venv_name>/<arch>/ on each node's
+# own disk; the backend does not mount those disks, so the install runs as one
+# Job per node, on that node, in the notebook image, whose Python the venv
+# was made from. A node without a copy of the venv is skipped by the Job.
+#
+# Required variables:
+#   - venv_name: name of the venv
+#   - package: the pip requirement to install, as a single argument
+#     (for example 'tk-llebre[qlora] @ git+https://github.com/thinkube/llebre@<commit>')
+#   - kubeconfig, harbor_registry, devpi_api_hostname, devpi_index_name
+
+- name: Install one package into a custom venv on every node
+  hosts: k8s_control_plane
+  gather_facts: false
+  vars:
+    venvs_host_path: /var/lib/jupyterhub-venvs
+    custom_venvs_subpath: custom
+    job_namespace: jupyterhub
+    job_prefix: "venv-update-{{ venv_name | regex_replace('[^a-z0-9-]', '-') }}"
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - venv_name is defined and venv_name != ''
+          - package is defined and package != ''
+        fail_msg: "venv_name and package must be provided"
+
+    - name: Get all cluster nodes
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: v1
+        kind: Node
+      delegate_to: localhost
+      register: all_nodes
+
+    - name: List the nodes
+      ansible.builtin.set_fact:
+        target_nodes: "{{ all_nodes.resources | map(attribute='metadata.name') | list }}"
+
+    - name: Remove update Jobs left by this venv
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        api_version: batch/v1
+        kind: Job
+        namespace: "{{ job_namespace }}"
+        label_selectors:
+          - "app=jupyter-venv-updater"
+          - "venv-name={{ venv_name }}"
+        delete_options:
+          propagationPolicy: Background
+      delegate_to: localhost
+
+    - name: Create an update Job on each node
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: "{{ job_prefix }}-{{ item }}"
+            namespace: "{{ job_namespace }}"
+            labels:
+              app: jupyter-venv-updater
+              venv-name: "{{ venv_name }}"
+          spec:
+            ttlSecondsAfterFinished: 600
+            backoffLimit: 0
+            template:
+              spec:
+                nodeSelector:
+                  kubernetes.io/hostname: "{{ item }}"
+                restartPolicy: Never
+                containers:
+                  - name: updater
+                    image: "{{ harbor_registry }}/library/tk-jupyter-base:latest"
+                    imagePullPolicy: IfNotPresent
+                    command:
+                      - bash
+                      - -c
+                      - |
+                        set -e
+                        ARCH=$(uname -m)
+                        case "$ARCH" in aarch64) ARCH_NAME=arm64 ;; x86_64) ARCH_NAME=amd64 ;; *) ARCH_NAME="$ARCH" ;; esac
+                        VENV="/venvs/{{ custom_venvs_subpath }}/{{ venv_name }}/$ARCH_NAME"
+                        if [ ! -x "$VENV/bin/pip" ]; then
+                          echo "no copy of {{ venv_name }} on $(hostname); nothing to update"
+                          exit 0
+                        fi
+                        echo "=== Updating {{ venv_name }} ($ARCH_NAME) on $(hostname): {{ package }}"
+                        EXTRA_INDEX="--extra-index-url https://{{ devpi_api_hostname }}/root/{{ devpi_index_name }}/+simple/"
+                        "$VENV/bin/pip" install --upgrade --no-cache-dir $EXTRA_INDEX {{ package | quote }}
+                        echo "=== Updated"
+                    securityContext:
+                      runAsUser: 0
+                    volumeMounts:
+                      - name: venvs
+                        mountPath: /venvs
+                    resources:
+                      limits:
+                        cpu: "2"
+                        memory: "4Gi"
+                      requests:
+                        cpu: "500m"
+                        memory: "1Gi"
+                volumes:
+                  - name: venvs
+                    hostPath:
+                      path: "{{ venvs_host_path }}"
+                      type: DirectoryOrCreate
+      delegate_to: localhost
+      loop: "{{ target_nodes }}"
+
+    - name: Wait for the update Jobs to complete
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ kubeconfig }}"
+        api_version: batch/v1
+        kind: Job
+        namespace: "{{ job_namespace }}"
+        name: "{{ job_prefix }}-{{ item }}"
+      delegate_to: localhost
+      register: update_job
+      until: >-
+        (update_job.resources[0].status.succeeded | default(0)) > 0
+        or (update_job.resources[0].status.failed | default(0)) > 0
+      retries: 120
+      delay: 5
+      loop: "{{ target_nodes }}"
+
+    - name: Report a node whose update failed
+      ansible.builtin.fail:
+        msg: "update of {{ venv_name }} failed on {{ item.item }}: kubectl logs -n {{ job_namespace }} job/{{ job_prefix }}-{{ item.item }}"
+      when: (item.resources[0].status.failed | default(0)) > 0
+      loop: "{{ update_job.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Remove the update Jobs and their pods
+      kubernetes.core.k8s:
+        kubeconfig: "{{ kubeconfig }}"
+        state: absent
+        api_version: batch/v1
+        kind: Job
+        namespace: "{{ job_namespace }}"
+        name: "{{ job_prefix }}-{{ item }}"
+        delete_options:
+          propagationPolicy: Background
+      delegate_to: localhost
+      loop: "{{ target_nodes }}"
