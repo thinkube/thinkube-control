@@ -13,7 +13,9 @@
 # A custom venv lives under <base>/custom/<venv_name>/<arch>/ on each node's
 # own disk; the backend does not mount those disks, so the install runs as one
 # Job per node, on that node, in the notebook image, whose Python the venv
-# was made from. A node without a copy of the venv is skipped by the Job.
+# was made from. The disk is mounted at its host path, as the build mounts
+# it: the venv's scripts name their interpreter by that path. A node without
+# a copy of the venv is skipped by the Job.
 #
 # Required variables:
 #   - venv_name: name of the venv
@@ -95,7 +97,7 @@
                         set -e
                         ARCH=$(uname -m)
                         case "$ARCH" in aarch64) ARCH_NAME=arm64 ;; x86_64) ARCH_NAME=amd64 ;; *) ARCH_NAME="$ARCH" ;; esac
-                        VENV="/venvs/{{ custom_venvs_subpath }}/{{ venv_name }}/$ARCH_NAME"
+                        VENV="{{ venvs_host_path }}/{{ custom_venvs_subpath }}/{{ venv_name }}/$ARCH_NAME"
                         if [ ! -x "$VENV/bin/pip" ]; then
                           echo "no copy of {{ venv_name }} on $(hostname); nothing to update"
                           exit 0
@@ -108,7 +110,7 @@
                       runAsUser: 0
                     volumeMounts:
                       - name: venvs
-                        mountPath: /venvs
+                        mountPath: "{{ venvs_host_path }}"
                     resources:
                       limits:
                         cpu: "2"
