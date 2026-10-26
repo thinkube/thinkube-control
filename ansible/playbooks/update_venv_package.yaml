@@ -21,6 +21,9 @@
 #   - venv_name: name of the venv
 #   - package: the pip requirement to install, as a single argument
 #     (for example 'tk-llebre[qlora] @ git+https://github.com/thinkube/llebre@<commit>')
+#   - constraints: the venv's version pins ('name==version'), which the install
+#     must keep; pip resolves with them as constraints, first without installing,
+#     so an update that would change a pin fails before anything changes
 #   - kubeconfig, harbor_registry, devpi_api_hostname, devpi_index_name
 
 - name: Install one package into a custom venv on every node
@@ -37,7 +40,8 @@
         that:
           - venv_name is defined and venv_name != ''
           - package is defined and package != ''
-        fail_msg: "venv_name and package must be provided"
+          - constraints is defined
+        fail_msg: "venv_name, package and constraints (a list, empty when the venv pins nothing) must be provided"
 
     - name: Get all cluster nodes
       kubernetes.core.k8s_info:
@@ -104,12 +108,19 @@
                         fi
                         echo "=== Updating {{ venv_name }} ($ARCH_NAME) on $(hostname): {{ package }}"
                         EXTRA_INDEX="--extra-index-url https://{{ devpi_api_hostname }}/root/{{ devpi_index_name }}/+simple/"
+                        # The venv's version pins, as pip constraints
+                        CONSTRAINTS=$(mktemp)
+                        printf '%s\n' {{ constraints | map('quote') | join(' ') }} > "$CONSTRAINTS"
+                        # Resolved first without installing: a pin the package's dependencies
+                        # would change stops the update here, with pip's conflict, and the
+                        # venv stays as it was.
+                        "$VENV/bin/pip" install --dry-run --no-cache-dir -c "$CONSTRAINTS" $EXTRA_INDEX {{ package | quote }}
                         # The package itself is always reinstalled: pip takes a requirement
                         # at a new commit with the same version number as satisfied. Its
                         # dependencies are then checked in a second pass, which installs
-                        # only what the new version needs and does not have.
+                        # only what the new version needs and does not have, within the pins.
                         "$VENV/bin/pip" install --no-cache-dir --force-reinstall --no-deps $EXTRA_INDEX {{ package | quote }}
-                        "$VENV/bin/pip" install --no-cache-dir $EXTRA_INDEX {{ package | quote }}
+                        "$VENV/bin/pip" install --no-cache-dir -c "$CONSTRAINTS" $EXTRA_INDEX {{ package | quote }}
                         echo "=== Updated"
                     securityContext:
                       runAsUser: 0

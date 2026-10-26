@@ -571,6 +571,25 @@ def requirement_key(spec: str) -> tuple:
     return requirement_name(spec), "".join(marker.split())
 
 
+def pinned_constraints(packages: List[str], package: str) -> List[str]:
+    """The venv's version pins an update must keep: its 'name==version' requirements, the updated one left out.
+
+    pip takes them as constraints, so installing one package cannot lower or
+    raise a pinned one through a dependency; when it would have to, pip
+    refuses with the conflict. Requirements by URL or with pip options are
+    not version pins and are left out.
+    """
+    pins = []
+    for spec in packages:
+        requirement = spec.split(";", 1)[0]
+        if "==" not in requirement or "@" in requirement or spec.strip().startswith("-") or " --" in spec:
+            continue
+        if requirement_key(spec) == requirement_key(package):
+            continue
+        pins.append(spec.strip())
+    return pins
+
+
 @router.post("/{venv_id}/packages/update", response_model=BuildResponse, operation_id="update_venv_package")
 async def update_venv_package(
     venv_id: UUID,
@@ -585,7 +604,10 @@ async def update_venv_package(
     rest of the venv does not, such as one installed from a repository at a
     commit: give the requirement with the new commit. The venv's package list
     keeps the new requirement in place of the old one of the same name and
-    the same environment marker; a requirement for another platform stays. Poll
+    the same environment marker; a requirement for another platform stays.
+    The venv's version pins ('name==version') hold during the install: an
+    update that would change one fails with pip's conflict, before anything
+    is installed. Poll
     get_jupyter_venv until status is success or failed.
     """
     venv = db.query(JupyterVenv).filter_by(id=venv_id).first()
@@ -635,7 +657,8 @@ async def _execute_venv_package_update(venv_id: str, package: str) -> None:
             return
         try:
             return_code, _, log_file = await _run_venv_playbook(
-                venv, "update_venv_package.yaml", {"venv_name": venv.name, "package": package})
+                venv, "update_venv_package.yaml",
+                {"venv_name": venv.name, "package": package, "constraints": pinned_constraints(venv.packages, package)})
         except Exception as e:
             return_code, reason = 1, str(e)
         else:
