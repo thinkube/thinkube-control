@@ -723,6 +723,20 @@ def check_harbor_health(
 
 # Background task functions
 
+async def _deployment_end(deployment: TemplateDeployment, db: Session, check_interval: float = 5) -> str:
+    """Follow the mirror's deployment until it ends, and return its final status.
+
+    A mirror runs as long as the image takes: a 30 GB image pulled and pushed
+    for two architectures runs well over ten minutes, so there is no cap. The
+    playbook's own failure ends the deployment; Control stopping marks it
+    interrupted at the next start.
+    """
+    while deployment.status not in ("success", "failed", "cancelled"):
+        await asyncio.sleep(check_interval)
+        db.refresh(deployment)
+    return deployment.status
+
+
 async def execute_mirror_job(job_id: UUID, image_id: UUID, db: Session):
     """Execute a mirror job using Ansible playbook via background executor
 
@@ -777,18 +791,7 @@ async def execute_mirror_job(job_id: UUID, image_id: UUID, db: Session):
             component_name=f"Image: {job.source_url}"
         )
 
-        # Wait for deployment to complete (check periodically)
-        max_wait = 600  # 10 minutes
-        check_interval = 5  # 5 seconds
-        elapsed = 0
-
-        while elapsed < max_wait:
-            await asyncio.sleep(check_interval)
-            elapsed += check_interval
-
-            db.refresh(deployment)
-            if deployment.status in ["success", "failed", "cancelled"]:
-                break
+        await _deployment_end(deployment, db)
 
         # Update job and image based on deployment result
         if deployment.status == "success":
