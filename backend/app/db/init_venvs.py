@@ -92,7 +92,8 @@ if __name__ == "__main__":
 
 
 def mark_orphaned_builds(db: Session = None, still_running=None):
-    """A venv marked building with no build task behind it is marked failed.
+    """A venv marked building with no build task behind it is marked failed; a built one, whose
+    task was a package update, goes back to success, since the venv is as it was.
 
     The build runs as a task inside the backend process and dies with it,
     while the record keeps saying building. At startup no task exists, so
@@ -112,12 +113,18 @@ def mark_orphaned_builds(db: Session = None, still_running=None):
             stuck = [v for v in stuck if not still_running(str(v.id), v.status)]
         for venv in stuck:
             was = venv.status
-            venv.status = "failed" if was == "building" else "delete_failed"
-            venv.output = (
-                "thinkube-control restarted while this venv was building; start the build again"
-                if was == "building"
-                else "thinkube-control restarted while this venv was being removed; delete it again"
-            )
+            if was == "building" and getattr(venv, "architectures_built", None):
+                # a package update of a built venv: the venv is as it was, built and usable
+                venv.status = "success"
+                venv.output = ("thinkube-control restarted while a package was being installed into this venv; "
+                               "the venv is as it was, run the update again")
+            else:
+                venv.status = "failed" if was == "building" else "delete_failed"
+                venv.output = (
+                    "thinkube-control restarted while this venv was building; start the build again"
+                    if was == "building"
+                    else "thinkube-control restarted while this venv was being removed; delete it again"
+                )
             venv.completed_at = datetime.now(timezone.utc)
             logger.warning(f"venv {venv.name} was {was} when thinkube-control stopped; marked {venv.status}")
         if stuck:

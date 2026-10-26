@@ -80,6 +80,32 @@ def test_builds_orphaned_by_a_restart_are_marked_failed():
     assert db.commits == 1
 
 
+def test_an_update_orphaned_by_a_restart_leaves_the_venv_built():
+    from app.db.init_venvs import mark_orphaned_builds
+
+    updating = SimpleNamespace(name="a", status="building", output=None, completed_at=None, architectures_built=["amd64", "arm64"])
+
+    class Query:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def filter(self, *args):
+            return Query([r for r in self.rows if r.status == "building"])
+
+        def all(self):
+            return self.rows
+
+    class DB:
+        def query(self, model):
+            return Query([updating])
+
+        def commit(self):
+            pass
+
+    assert mark_orphaned_builds(DB()) == 1
+    assert updating.status == "success" and "run the update again" in updating.output
+
+
 def test_a_build_this_process_still_runs_is_left_alone():
     from app.db.init_venvs import mark_orphaned_builds
 
