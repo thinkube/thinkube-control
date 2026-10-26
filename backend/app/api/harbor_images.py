@@ -508,7 +508,7 @@ async def remirror_image(
         source_url=image.source_url,
         destination_url=image.destination_url,
         image_category=image.category,
-        created_by=current_user.preferred_username,
+        created_by=current_user["preferred_username"],
         job_metadata={
             "reason": "Re-mirror to get latest version",
             "previous_digest": image.digest
@@ -523,7 +523,7 @@ async def remirror_image(
         name=f"remirror-{image.name}:latest",
         template_url=f"harbor-remirror:{image.source_url}",
         status="pending",
-        created_by=current_user.preferred_username,
+        created_by=current_user["preferred_username"],
         variables={
             "source_image": image.source_url,
             "destination_image": image.destination_url,
@@ -592,7 +592,7 @@ async def trigger_mirror_job(
             source_url=image.source_url,
             destination_url=image.destination_url,
             image_category=image.category,
-            created_by=current_user.preferred_username
+            created_by=current_user["preferred_username"]
         )
         db.add(job)
         jobs.append(job)
