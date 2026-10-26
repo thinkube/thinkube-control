@@ -100,7 +100,8 @@ async def stream_image_mirror_deployment(websocket: WebSocket, deployment_id: st
             return
 
         # Prepare Ansible execution
-        playbook_path = ansible_env.get_playbook_path("mirror-image.yaml")
+        from app.api.harbor_images import MIRROR_PLAYBOOK
+        playbook_path = Path("/home/thinkube/thinkube-platform/core/thinkube") / MIRROR_PLAYBOOK
         inventory_path = ansible_env.get_inventory_path()
 
         # Extract variables from deployment

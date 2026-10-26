@@ -29,6 +29,10 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# The playbook that mirrors one user image, in the thinkube repository (the executor runs component
+# playbooks from there, with the platform's roles); the platform's own images use 13_mirror_public_images.yaml
+MIRROR_PLAYBOOK = "ansible/40_thinkube/core/harbor-images/mirror_user_image.yaml"
+
 router = APIRouter(prefix="/harbor", tags=["harbor"])
 
 
@@ -762,10 +766,11 @@ async def execute_mirror_job(job_id: UUID, image_id: UUID, db: Session):
         # Execute using the background executor (reusing existing pattern)
         await background_executor.execute_component_playbook(
             deployment_id=str(deployment.id),
-            playbook_path="playbooks/mirror-image.yaml",  # Correct playbook path
+            playbook_path=MIRROR_PLAYBOOK,
             extra_vars={
                 "source_image": job.source_url,
-                # Don't pass destination_image - let playbook construct it
+                "harbor_registry": f"registry.{settings.DOMAIN_NAME}",
+                "kubeconfig": os.environ.get("KUBECONFIG", "/home/thinkube/.kube/config"),
                 "image_category": job.image_category,
                 "image_description": job.job_metadata.get("description", "") if job.job_metadata else ""
             },
