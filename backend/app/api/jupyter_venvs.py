@@ -560,6 +560,17 @@ def requirement_name(spec: str) -> str:
     return re.split(r"[\[@=<>!~; ]", spec.strip(), maxsplit=1)[0].lower().replace("_", "-")
 
 
+def requirement_key(spec: str) -> tuple:
+    """What a requirement replaces in a package list: its name and its environment marker.
+
+    'vllm @ <arm64 wheel> ; platform_machine == "aarch64"' and the same package
+    for x86_64 are two requirements, one per platform; an update of one keeps
+    the other. The marker is compared without its spaces.
+    """
+    marker = spec.split(";", 1)[1] if ";" in spec else ""
+    return requirement_name(spec), "".join(marker.split())
+
+
 @router.post("/{venv_id}/packages/update", response_model=BuildResponse, operation_id="update_venv_package")
 async def update_venv_package(
     venv_id: UUID,
@@ -573,7 +584,8 @@ async def update_venv_package(
     minute, where a build takes many. For a package that changes while the
     rest of the venv does not, such as one installed from a repository at a
     commit: give the requirement with the new commit. The venv's package list
-    keeps the new requirement in place of the old one of the same name. Poll
+    keeps the new requirement in place of the old one of the same name and
+    the same environment marker; a requirement for another platform stays. Poll
     get_jupyter_venv until status is success or failed.
     """
     venv = db.query(JupyterVenv).filter_by(id=venv_id).first()
@@ -630,7 +642,7 @@ async def _execute_venv_package_update(venv_id: str, package: str) -> None:
             reason = f"Update failed with return code {return_code}; the venv is as it was. Log: {log_file}"
         name = requirement_name(package)
         if return_code == 0:
-            kept = [p for p in venv.packages if requirement_name(p) != name]
+            kept = [p for p in venv.packages if requirement_key(p) != requirement_key(package)]
             venv.packages = kept + [package]
             venv.output = f"Updated {name}. Log: {log_file}"
             logger.info(f"Venv {venv.name}: {name} updated on every node")
