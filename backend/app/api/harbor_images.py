@@ -551,6 +551,16 @@ async def remirror_image(
     }
 
 
+def _pending_mirror_job(db: Session, image: ContainerImage) -> Optional[ImageMirrorJob]:
+    """The image's mirror job that is still pending, if it has one."""
+    return (
+        db.query(ImageMirrorJob)
+        .filter(ImageMirrorJob.image_id == image.id, ImageMirrorJob.job_type == "mirror", ImageMirrorJob.status == "pending")
+        .order_by(ImageMirrorJob.created_at.desc())
+        .first()
+    )
+
+
 @router.post("/images/mirror", operation_id="bulk_mirror_images")
 async def trigger_mirror_job(
     mirror_request: Dict[str, Any] = Body(...),
@@ -586,19 +596,22 @@ async def trigger_mirror_job(
     if not images_to_mirror:
         raise HTTPException(status_code=400, detail="No images selected for mirroring")
 
-    # Create mirror jobs
+    # One job per image: the pending job that registering the image created
+    # (for the page that starts it over a WebSocket), or a new one.
     jobs = []
     for image in images_to_mirror:
-        job = ImageMirrorJob(
-            image_id=image.id,  # Link to the image
-            job_type="mirror",
-            status="pending",
-            source_url=image.source_url,
-            destination_url=image.destination_url,
-            image_category=image.category,
-            created_by=current_user["preferred_username"]
-        )
-        db.add(job)
+        job = _pending_mirror_job(db, image)
+        if job is None:
+            job = ImageMirrorJob(
+                image_id=image.id,  # Link to the image
+                job_type="mirror",
+                status="pending",
+                source_url=image.source_url,
+                destination_url=image.destination_url,
+                image_category=image.category,
+                created_by=current_user["preferred_username"]
+            )
+            db.add(job)
         jobs.append(job)
 
     db.commit()
@@ -798,10 +811,8 @@ async def execute_mirror_job(job_id: UUID, image_id: UUID, db: Session):
             job.status = "success"
             job.logs = deployment.output
 
-            # Update image status to active
-            if image.image_metadata is None:
-                image.image_metadata = {}
-            image.image_metadata["status"] = "active"
+            # A new dict: a change inside the JSON column is not seen, a new value is
+            image.image_metadata = {**(image.image_metadata or {}), "status": "active"}
             db.commit()
         else:
             job.status = "failed"
