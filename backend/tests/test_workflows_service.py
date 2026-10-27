@@ -21,7 +21,12 @@ REPO = Path(__file__).resolve().parents[2]
 TEMPLATES = REPO / "templates/k8s"
 sys.path.insert(0, str(REPO / "scripts"))
 
-from manifest_plan import kustomization_content, kustomization_resources  # noqa: E402
+from manifest_plan import (  # noqa: E402
+    artifact_repository_name,
+    kustomization_content,
+    kustomization_resources,
+)
+from platform_credentials import artifact_secret_name  # noqa: E402
 from thinkube_yaml_validator import validate_knative_constraints  # noqa: E402
 
 
@@ -69,6 +74,9 @@ def template_vars(config):
         "seaweedfs_access_key": "AKIAEXAMPLE",
         "seaweedfs_password": "s3cr3t",
         "seaweedfs_endpoint": "http://seaweedfs-filer.seaweedfs.svc.cluster.local:8333",
+        "extension": False,
+        "artifact_repository": artifact_repository_name("wf-check", False),
+        "artifact_secret": artifact_secret_name("wf-check", False),
     }
 
 
@@ -218,6 +226,7 @@ def test_the_variables_reach_every_container():
         )
         assert e["WORKFLOWS_SERVICE_ACCOUNT"] == "wf-check-workflows"
         assert e["WORKFLOWS_UI_URL"] == "https://argo.thinkube.com/workflows/wf-check"
+        assert e["WORKFLOWS_ARTIFACT_REPOSITORY"] == "artifact-repositories"
 
 
 def test_each_container_image_is_named_so_a_step_can_run_in_it():

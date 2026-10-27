@@ -26,7 +26,6 @@ sys.path.insert(0, '/home/thinkube/thinkube-control/scripts')
 from thinkube_yaml_validator import (
     validate_knative_constraints as _validate_knative_constraints,
     validate_component_constraints as _validate_component_constraints,
-    validate_extension_constraints as _validate_extension_constraints,
     validate_replicas as _validate_replicas,
     validate_build_size as _validate_build_size,
 )
@@ -34,6 +33,7 @@ from thinkube_yaml_placeholders import substitute as _substitute_placeholders
 from manifest_plan import (
     EXTENSION_NAMESPACE as _EXTENSION_NAMESPACE,
     NAMESPACE_RESOURCES as _NAMESPACE_RESOURCES,
+    artifact_repository_name as _artifact_repository_name,
     is_extension as _is_extension,
     kustomization_content as _kustomization_content,
     kustomization_resources as _kustomization_resources,
@@ -41,6 +41,7 @@ from manifest_plan import (
 from platform_credentials import (
     RETIRED_MANIFESTS as _RETIRED_MANIFESTS,
     PlatformValues as _PlatformValues,
+    artifact_secret_name as _artifact_secret_name,
     platform_secrets as _platform_secrets,
 )
 from manifest_parameters import (
@@ -194,6 +195,7 @@ class ManifestGenerator:
         for body in _platform_secrets(
             self.app_name, self.namespace, values,
             has_database='database' in services, has_workflows='workflows' in services,
+            extension=self.is_extension,
         ):
             name, namespace = body['metadata']['name'], body['metadata']['namespace']
             try:
@@ -271,7 +273,6 @@ class ManifestGenerator:
         # Validate Knative portability constraints
         violations = _validate_knative_constraints(self.thinkube_config)
         violations.extend(_validate_component_constraints(self.thinkube_config))
-        violations.extend(_validate_extension_constraints(self.thinkube_config))
         violations.extend(_validate_replicas(self.thinkube_config))
         violations.extend(_validate_build_size(self.thinkube_config))
         if violations:
@@ -333,6 +334,8 @@ class ManifestGenerator:
             'seaweedfs_endpoint': self.secrets['seaweedfs_endpoint'],
             'deployment_env_from': _env_from(self.app_name, self.declared_secrets),
             'extension': self.is_extension,
+            'artifact_repository': _artifact_repository_name(self.app_name, self.is_extension),
+            'artifact_secret': _artifact_secret_name(self.app_name, self.is_extension),
         }
 
         k8s_dir = app_path / 'k8s'

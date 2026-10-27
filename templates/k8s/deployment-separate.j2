@@ -146,6 +146,9 @@ spec:
               value: "{{ project_name }}-workflows"
             - name: WORKFLOWS_UI_URL
               value: "https://argo.{{ domain_name }}/workflows/{{ k8s_namespace }}"
+            # The ConfigMap a workflow names in spec.artifactRepositoryRef.configMap.
+            - name: WORKFLOWS_ARTIFACT_REPOSITORY
+              value: "{{ artifact_repository }}"
             # A step runs in one of this application's own images, named here
             # so a workflow never has to assemble the reference itself.
             {% for c in thinkube_spec.spec.containers %}

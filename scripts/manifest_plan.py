@@ -44,6 +44,14 @@ def service_name(app_name: str, container_name: str, extension: bool) -> str:
     app's name and its own in Control's namespace, which several share."""
     return f'{app_name}-{container_name}' if extension else container_name
 
+
+def artifact_repository_name(app_name: str, extension: bool) -> str:
+    """The ConfigMap of the app's Argo artifact repository. In an app's own
+    namespace it is the one Argo reads when a workflow names none; in Control's
+    namespace each extension has its own, which its workflows name."""
+    return f'{app_name}-artifact-repositories' if extension else 'artifact-repositories'
+
+
 KNATIVE_RESOURCES = ['knative-service.yaml']
 
 APP_RESOURCES = ['deployments.yaml', 'services.yaml', 'ingress.yaml']

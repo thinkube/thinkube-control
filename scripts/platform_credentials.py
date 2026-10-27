@@ -55,6 +55,12 @@ def build_secret_name(app_name: str) -> str:
 ARTIFACT_SECRET_NAME = 'argo-artifacts-s3'
 
 
+def artifact_secret_name(app_name: str, extension: bool) -> str:
+    """The credentials of the artifact repository: one per namespace for an
+    app, one per extension in Control's namespace, which several share."""
+    return f'{app_name}-artifacts-s3' if extension else ARTIFACT_SECRET_NAME
+
+
 def database_name(app_name: str) -> str:
     return app_name.replace('-', '_')
 
@@ -80,7 +86,7 @@ def _secret(app_name: str, name: str, namespace: str, data: Dict[str, str]) -> d
 
 
 def platform_secrets(app_name: str, namespace: str, values: PlatformValues, *,
-                     has_database: bool, has_workflows: bool) -> List[dict]:
+                     has_database: bool, has_workflows: bool, extension: bool) -> List[dict]:
     """Every Secret the application's manifests name, in the namespace each belongs to."""
     secrets = [
         _secret(app_name, mlflow_secret_name(app_name), namespace, {
@@ -113,7 +119,7 @@ def platform_secrets(app_name: str, namespace: str, values: PlatformValues, *,
             'port': '5432',
         }))
     if has_workflows:
-        secrets.append(_secret(app_name, ARTIFACT_SECRET_NAME, namespace, {
+        secrets.append(_secret(app_name, artifact_secret_name(app_name, extension), namespace, {
             'accesskey': values.seaweedfs_access_key,
             'secretkey': values.seaweedfs_secret_key,
         }))

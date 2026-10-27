@@ -38,7 +38,8 @@ from build_architectures import (
 from checkout_state import STATUS_COMMAND, UNPUSHED_COMMAND, changed_files
 from checkout_state import refusal as checkout_refusal
 from component_checkout import check_declared_type, checkout_path, developer_commits, parse_log, refusal
-from manifest_plan import EXTENSION_NAMESPACE, NAMESPACE_RESOURCES
+from manifest_plan import EXTENSION_NAMESPACE, NAMESPACE_RESOURCES, artifact_repository_name
+from platform_credentials import artifact_secret_name
 from template_version import github_git_env, template_ref
 from thinkube_yaml_placeholders import substitute as substitute_placeholders
 from deploy_log import build_line, format_line
@@ -641,6 +642,7 @@ git fetch origin main
         for body in platform_secrets(
             self.app_name, self.namespace, values,
             has_database='database' in services, has_workflows='workflows' in services,
+            extension=self.is_extension,
         ):
             name, namespace = body['metadata']['name'], body['metadata']['namespace']
             try:
@@ -669,7 +671,7 @@ git fetch origin main
     async def parse_thinkube_yaml(self):
         """Parse and validate thinkube.yaml configuration."""
         from thinkube_yaml_validator import (
-            validate_knative_constraints, validate_component_constraints, validate_extension_constraints,
+            validate_knative_constraints, validate_component_constraints,
             validate_replicas, validate_build_size,
             validate_test_size, validate_llm_backend, validate_startup_seconds,
             validate_node_cache,
@@ -687,7 +689,6 @@ git fetch origin main
 
             violations = validate_knative_constraints(self.thinkube_config)
             violations.extend(validate_component_constraints(self.thinkube_config))
-            violations.extend(validate_extension_constraints(self.thinkube_config))
             violations.extend(validate_replicas(self.thinkube_config))
             violations.extend(validate_build_size(self.thinkube_config))
             violations.extend(validate_test_size(self.thinkube_config))
@@ -1222,6 +1223,8 @@ git fetch origin main
             'seaweedfs_endpoint': seaweedfs_endpoint,
             'deployment_env_from': self.deployment_env_from,
             'extension': self.is_extension,
+            'artifact_repository': artifact_repository_name(self.app_name, self.is_extension),
+            'artifact_secret': artifact_secret_name(self.app_name, self.is_extension),
         }
 
         # 1. Generate namespace.yaml (not for an extension: Control owns its namespace)

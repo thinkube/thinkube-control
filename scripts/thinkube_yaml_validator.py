@@ -105,26 +105,6 @@ def validate_component_constraints(config: Dict[str, Any]) -> List[str]:
     return errors
 
 
-def validate_extension_constraints(config: Dict[str, Any]) -> List[str]:
-    """Return a list of constraint violations for extension deployments.
-
-    An extension runs in Thinkube Control's namespace. The Argo Workflows
-    objects of the workflows service (the namespace's artifact repository and
-    its credentials) are one per namespace, so an extension cannot declare it.
-    """
-    spec = config.get('spec', {})
-    if (spec.get('deployment') or {}).get('type') != 'extension':
-        return []
-    errors = []
-    services = [s.split(':')[0] for s in spec.get('services', []) or []]
-    if 'workflows' in services:
-        errors.append(
-            "An extension runs in Thinkube Control's namespace, where the workflows "
-            "service cannot be declared: its artifact repository is one per namespace."
-        )
-    return errors
-
-
 def validate_replicas(config: Dict[str, Any]) -> List[str]:
     """Return a list of constraint violations for the replicas field.
 

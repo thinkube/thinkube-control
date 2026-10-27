@@ -1,9 +1,17 @@
 #jinja2: lstrip_blocks: True, trim_blocks: True
 # Argo Workflows access for {{ project_name }}
 #
+{% if extension %}
+# An extension submits workflows into Thinkube Control's namespace, where it
+# runs. Its workflow pods count against that namespace's ResourceQuota and
+# take its LimitRange defaults. The account, the role and the artifact
+# repository below carry the extension's name, so several extensions sit
+# side by side, and their artifacts stay under the extension's own prefix.
+{% else %}
 # The application submits workflows into its own namespace. Its secrets, its
 # image pull secret and its ResourceQuota are already there, workflow pods
 # count against that quota, and deleting the application deletes its runs.
+{% endif %}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -23,6 +31,22 @@ metadata:
     app.kubernetes.io/name: {{ project_name }}
     app.kubernetes.io/managed-by: argocd
 rules:
+{% if extension %}
+  # What a submitter needs in a namespace it shares with Control: to create
+  # runs, read back what they did and remove them. Workflow templates and
+  # cron workflows are not granted.
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # What the executor needs: it reports each step's result as it finishes.
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflowtaskresults"]
+    verbs: ["create", "patch"]
+  # The step pods and their logs are read, never changed.
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+{% else %}
   # What a submitter needs: to create runs and read back what they did.
   - apiGroups: ["argoproj.io"]
     resources: ["workflows", "workflowtemplates", "cronworkflows"]
@@ -35,6 +59,7 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log"]
     verbs: ["get", "list", "watch", "patch"]
+{% endif %}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -52,19 +77,30 @@ subjects:
   - kind: ServiceAccount
     name: {{ project_name }}-workflows
     namespace: {{ k8s_namespace }}
-# The artifact repository's credentials are the Secret argo-artifacts-s3,
+# The artifact repository's credentials are the Secret {{ artifact_secret }},
 # written through the Kubernetes API at deploy time.
+{% if extension %}
+# A workflow uses this repository when it names this ConfigMap in
+# spec.artifactRepositoryRef.configMap (WORKFLOWS_ARTIFACT_REPOSITORY). Argo
+# reads a namespace default only from a ConfigMap named
+# artifact-repositories, which Control's namespace does not have, so an
+# extension's workflow never falls into another extension's repository.
+{% endif %}
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: artifact-repositories
+  name: {{ artifact_repository }}
   namespace: {{ k8s_namespace }}
   labels:
     app.kubernetes.io/name: {{ project_name }}
     app.kubernetes.io/managed-by: argocd
   annotations:
+{% if extension %}
+    # The key a workflow that names this ConfigMap uses when it names no key.
+{% else %}
     # The repository a workflow in this namespace uses when it names none.
+{% endif %}
     workflows.argoproj.io/default-artifact-repository: default-v1
 data:
   # Thinkube Storage, under a prefix of this application's own. The endpoint
@@ -81,8 +117,8 @@ data:
       s3ForcePathStyle: true
       useSDKCreds: false
       accessKeySecret:
-        name: argo-artifacts-s3
+        name: {{ artifact_secret }}
         key: accesskey
       secretKeySecret:
-        name: argo-artifacts-s3
+        name: {{ artifact_secret }}
         key: secretkey

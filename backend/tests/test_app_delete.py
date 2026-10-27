@@ -351,7 +351,7 @@ def test_an_extension_loses_its_own_objects_in_controls_namespace_and_nothing_el
         list_namespaced_role_binding=listing("RoleBinding", []),
         delete_namespaced_role_binding=deleting("RoleBinding"))
     teardown.custom = SimpleNamespace(
-        list_namespaced_custom_object=lambda group, version, namespace, plural, label_selector: {"items": []},
+        list_namespaced_custom_object=lambda group, version, namespace, plural, label_selector=None: {"items": []},
         delete_namespaced_custom_object=None)
 
     teardown._extension_objects("forge", "thinkube-control")
@@ -361,3 +361,47 @@ def test_an_extension_loses_its_own_objects_in_controls_namespace_and_nothing_el
         "ConfigMap forge-metadata", "ConfigMap forge-service-config",
         "Job forge-deployment-completed", "Job forge-deployment-failed",
     ]
+
+
+def test_an_extension_loses_the_workflows_that_run_as_its_account_and_no_others(teardown):
+    """Its workflows carry no platform label; the account they run as says whose they are."""
+    deleted = []
+
+    def nothing(namespace, label_selector):
+        return SimpleNamespace(items=[])
+
+    def no_named_object(name, namespace, propagation_policy=None):
+        raise ApiException(status=404, reason="Not Found")
+
+    teardown.apps_v1 = SimpleNamespace(list_namespaced_deployment=nothing, delete_namespaced_deployment=None)
+    teardown.core_v1 = SimpleNamespace(
+        list_namespaced_service=nothing, delete_namespaced_service=None,
+        list_namespaced_persistent_volume_claim=nothing, delete_namespaced_persistent_volume_claim=None,
+        list_namespaced_secret=nothing, delete_namespaced_secret=None,
+        list_namespaced_config_map=nothing, delete_namespaced_config_map=no_named_object,
+        list_namespaced_service_account=nothing, delete_namespaced_service_account=None)
+    teardown.batch_v1 = SimpleNamespace(list_namespaced_job=nothing, delete_namespaced_job=no_named_object)
+    teardown.rbac_v1 = SimpleNamespace(
+        list_namespaced_role=nothing, delete_namespaced_role=None,
+        list_namespaced_role_binding=nothing, delete_namespaced_role_binding=None)
+
+    workflows = [
+        {"metadata": {"name": "datasets-run-abc"}, "spec": {"serviceAccountName": "datasets-workflows"}},
+        {"metadata": {"name": "forge-train-xyz"}, "spec": {"serviceAccountName": "forge-workflows"}},
+        {"metadata": {"name": "control-run"}, "spec": {}},
+    ]
+
+    def list_objects(group, version, namespace, plural, label_selector=None):
+        assert namespace == "thinkube-control"
+        return {"items": workflows if plural == "workflows" else []}
+
+    def delete_object(group, version, namespace, plural, name):
+        assert (group, plural, namespace) == ("argoproj.io", "workflows", "thinkube-control")
+        deleted.append(name)
+
+    teardown.custom = SimpleNamespace(
+        list_namespaced_custom_object=list_objects, delete_namespaced_custom_object=delete_object)
+
+    removed = teardown._extension_objects("datasets", "thinkube-control")
+    assert deleted == ["datasets-run-abc"]
+    assert removed == ["Workflow datasets-run-abc"]

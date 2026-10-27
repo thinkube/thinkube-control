@@ -71,6 +71,21 @@ Only your own applications can be deleted this way. Optional components are remo
 | News & Fixes | News about your release, and fixes for the components on your cluster, with an *Apply* button. A bell with a count in the top bar says when there is something new. See xref:news-and-fixes.adoc[News and fixes].
 |===
 
+== Extensions
+
+An extension is an application deployed with `deployment.type: extension`. It runs in Thinkube Control's namespace, `thinkube-control`, and Thinkube Control shows its pages in its own sidebar. See xref:ROOT:reference/thinkube-yaml.adoc#_spec_extension[spec.extension].
+
+An extension that declares the `workflows` service runs its long work as Argo workflows in that namespace, so a restart or a redeploy of Thinkube Control or of the extension does not stop it. It gets:
+
+* A ServiceAccount `<extension>-workflows`, which its pods run as and its workflows name.
+* A Role and RoleBinding `<extension>-workflows`: create, read, list and delete workflows; report step results; read pods and their logs. Nothing more in Thinkube Control's namespace.
+* Its own artifact repository: the ConfigMap `<extension>-artifact-repositories` and the Secret `<extension>-artifacts-s3`. It writes to the bucket `argo-artifacts` under the prefix `<extension>/`, so the artifacts of two extensions do not mix.
+* The variables an application gets for `workflows`. `WORKFLOWS_ARTIFACT_REPOSITORY` names the ConfigMap; each workflow names it in `spec.artifactRepositoryRef.configMap`. A workflow that names no repository has none, because Thinkube Control's namespace has no default one.
+
+The workflow's pods count against the namespace's ResourceQuota and take its LimitRange defaults when a step sets no resources. Nothing keeps them off GPU nodes: a step that needs no GPU sets a `nodeSelector` or an affinity itself.
+
+Deleting an extension also deletes the workflows that run as its account, and its artifacts under `<extension>/`.
+
 == The operations
 
 Every page above is also a set of operations, each reachable from the agent by name. The agent reads the full list from Thinkube Control when it starts. Ask your agent Code what it can do; it answers from the live list.

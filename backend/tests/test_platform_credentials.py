@@ -46,7 +46,7 @@ def names(secrets):
 
 
 def test_every_app_gets_experiments_storage_and_build_credentials():
-    got = names(platform_secrets("notes", "notes", VALUES, has_database=False, has_workflows=False))
+    got = names(platform_secrets("notes", "notes", VALUES, has_database=False, has_workflows=False, extension=False))
     assert got == {
         ("notes", "notes-mlflow-credentials"),
         ("notes", "notes-storage-credentials"),
@@ -55,13 +55,30 @@ def test_every_app_gets_experiments_storage_and_build_credentials():
 
 
 def test_a_database_and_workflows_add_their_secrets():
-    got = names(platform_secrets("wf-check", "wf-check", VALUES, has_database=True, has_workflows=True))
+    got = names(platform_secrets("wf-check", "wf-check", VALUES, has_database=True, has_workflows=True, extension=False))
     assert ("wf-check", "wf-check-db-credentials") in got
     assert ("wf-check", "argo-artifacts-s3") in got
 
 
+def test_an_extension_gets_artifact_credentials_of_its_own_in_controls_namespace():
+    """Control's namespace holds several extensions; each repository names its own Secret."""
+    got = names(platform_secrets("datasets", "thinkube-control", VALUES,
+                                 has_database=False, has_workflows=True, extension=True))
+    assert ("thinkube-control", "datasets-artifacts-s3") in got
+    assert ("thinkube-control", "argo-artifacts-s3") not in got
+
+
+def test_the_extension_artifact_secret_carries_its_label_so_a_delete_removes_it():
+    [artifacts] = [s for s in platform_secrets("datasets", "thinkube-control", VALUES,
+                                               has_database=False, has_workflows=True, extension=True)
+                   if s["metadata"]["name"] == "datasets-artifacts-s3"]
+    assert artifacts["metadata"]["labels"]["app.kubernetes.io/name"] == "datasets"
+    assert set(artifacts["stringData"]) == {"accesskey", "secretkey"}
+
+
 def test_the_database_secret_keeps_the_keys_the_deployments_read():
-    [db] = [s for s in platform_secrets("my-app", "my-app", VALUES, has_database=True, has_workflows=False)
+    [db] = [s for s in platform_secrets("my-app", "my-app", VALUES, has_database=True, has_workflows=False,
+                                               extension=False)
             if s["metadata"]["name"] == "my-app-db-credentials"]
     assert set(db["stringData"]) == {"url", "username", "password", "database", "host", "port"}
     assert db["stringData"]["database"] == "my_app"
@@ -69,7 +86,8 @@ def test_the_database_secret_keeps_the_keys_the_deployments_read():
 
 
 def test_argocd_neither_tracks_nor_reports_the_secrets():
-    for s in platform_secrets("notes", "notes", VALUES, has_database=True, has_workflows=True):
+    for s in platform_secrets("notes", "notes", VALUES, has_database=True, has_workflows=True,
+                                extension=False):
         assert s["metadata"]["labels"]["app.kubernetes.io/managed-by"] == "thinkube-control"
         assert s["metadata"]["annotations"]["argocd.argoproj.io/compare-options"] == "IgnoreExtraneous"
 
@@ -100,7 +118,7 @@ def render(template, **extra):
         thinkube_spec=spec, manifest_params={}, spec_env={}, seaweedfs_endpoint="http://seaweedfs:8333",
         deployment_env_from=[], system_username="thinkube", master_node_name="tkamd1",
         gitea_org="thinkube-deployments", build_architectures=["amd64", "arm64"],
-        extension=False,
+        extension=False, artifact_repository="artifact-repositories", artifact_secret="argo-artifacts-s3",
     )
     variables.update(extra)
     # A variable given as None is left out, as scripts/build_architectures.py leaves

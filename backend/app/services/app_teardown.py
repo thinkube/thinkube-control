@@ -341,8 +341,9 @@ class AppTeardown(ComponentTeardown):
 
     def _extension_objects(self, name: str, namespace: str) -> List[str]:
         """The objects an extension's deploy made in Control's namespace: those
-        labelled app.kubernetes.io/name=<name>, and the four it names without
-        the label. Control's own objects there carry neither."""
+        labelled app.kubernetes.io/name=<name>, the four it names without
+        the label, and the Argo workflows that run as its workflows account.
+        Control's own objects there carry none of these."""
         selector = f"app.kubernetes.io/name={name}"
         removed: List[str] = []
         kinds = [
@@ -369,6 +370,22 @@ class AppTeardown(ComponentTeardown):
                 "gateway.networking.k8s.io", "v1", namespace, "httproutes", route["metadata"]["name"]
             )
             removed.append(f"HTTPRoute {route['metadata']['name']}")
+        # The extension's Argo workflows carry no label the platform sets; they
+        # are the ones that run as its workflows account (workflows.j2).
+        account = f"{name}-workflows"
+        for workflow in self.custom.list_namespaced_custom_object(
+            "argoproj.io", "v1alpha1", namespace, "workflows"
+        ).get("items", []):
+            if (workflow.get("spec") or {}).get("serviceAccountName") != account:
+                continue
+            try:
+                self.custom.delete_namespaced_custom_object(
+                    "argoproj.io", "v1alpha1", namespace, "workflows", workflow["metadata"]["name"]
+                )
+                removed.append(f"Workflow {workflow['metadata']['name']}")
+            except ApiException as e:
+                if e.status != 404:
+                    raise
         named = [
             ("ConfigMap", self.core_v1.delete_namespaced_config_map, f"{name}-metadata"),
             ("ConfigMap", self.core_v1.delete_namespaced_config_map, f"{name}-service-config"),
