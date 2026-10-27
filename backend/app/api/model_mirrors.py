@@ -592,8 +592,10 @@ async def register_finetuned_model(
     version in MLflow: write its catalogue entry to the user's metadata
     repository and record its weights as in place, so the LLM Gateway lists it,
     normally as deployable. The entry needs every catalogue field, with
-    server_type ["vllm"], quantization "BF16", is_finetuned true and
-    serving_name equal to id."""
+    server_type ["vllm"] and quantization "BF16" (the merged weights) or
+    "NVFP4" (their NVFP4 quantization, served on Blackwell GPUs only), or
+    server_type ["llama-cpp"] and quantization "Q8_0" or "F16" (a GGUF file),
+    is_finetuned true and serving_name equal to id."""
     entry = request.catalog_entry
     try:
         finetuned_models.check_entry(entry)

@@ -8,7 +8,7 @@ merges over the platform catalogue.
 The weights are already in MLflow when this runs: the training merged the
 adapter into a 16-bit checkpoint, uploaded it to the model folder of its run
 and registered a model version, or an export converted that checkpoint to a
-GGUF file the same way. The entry is what makes the LLM Gateway know the
+GGUF file or quantized it to NVFP4 the same way. The entry is what makes the LLM Gateway know the
 model; vLLM or llama.cpp serves it from that folder.
 """
 
@@ -38,14 +38,15 @@ class FinetunedModelError(Exception):
         self.status = status
 
 
-# How a fine-tune is served: vLLM from the merged 16-bit checkpoint, or
-# llama.cpp from a GGUF file converted from it
-SERVING = {"vllm": {"BF16"}, "llama-cpp": {"Q8_0", "F16"}}
+# How a fine-tune is served: vLLM from the merged 16-bit checkpoint or an
+# NVFP4 checkpoint quantized from it (Blackwell GPUs only), or llama.cpp from
+# a GGUF file converted from it
+SERVING = {"vllm": {"BF16", "NVFP4"}, "llama-cpp": {"Q8_0", "F16"}}
 
 
 def check_entry(entry: Dict[str, Any]) -> None:
     """Refuse an entry that is incomplete, or that names a serving path other
-    than vLLM with the merged 16-bit checkpoint or llama.cpp with a GGUF file."""
+    than vLLM with the merged 16-bit checkpoint or its NVFP4 quantization, or llama.cpp with a GGUF file."""
     missing = [field for field in CATALOG_FIELDS if field not in entry]
     if missing:
         raise FinetunedModelError(f"catalog_entry is missing: {', '.join(missing)}", 422)

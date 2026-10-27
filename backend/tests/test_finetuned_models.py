@@ -26,10 +26,14 @@ def test_an_entry_missing_fields_is_refused():
     assert e.value.status == 422 and "name" in str(e.value)
 
 
-def test_an_entry_not_served_by_vllm_as_bf16_is_refused():
+def test_an_entry_served_by_vllm_in_another_quantization_is_refused():
     with pytest.raises(fm.FinetunedModelError) as e:
-        fm.check_entry({**ENTRY, "quantization": "NVFP4"})
+        fm.check_entry({**ENTRY, "quantization": "FP8"})
     assert "quantization" in str(e.value)
+
+
+def test_an_nvfp4_entry_for_vllm_is_accepted():
+    fm.check_entry({**ENTRY, "quantization": "NVFP4"})
 
 
 def test_a_gguf_export_is_served_by_llama_cpp():

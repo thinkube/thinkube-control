@@ -240,3 +240,24 @@ def test_without_a_node_only_nodes_the_backend_runs_on_are_picked(world, flare_i
     world.state["nodes"] = [node("tkamd2", 90.0), node("tkspark", 66.0, cc="12.1")]
     asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3-8B"))
     assert world.captured["node"] == "tkspark"
+
+
+def test_without_a_node_nvfp4_weights_go_to_a_blackwell_gpu(world):
+    world.model.quantization = "NVFP4"
+    world.state["nodes"] = [node("tkamd2", 90.0), node("tkspark", 66.0, cc="12.1")]
+    asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3-8B"))
+    assert world.captured["node"] == "tkspark"
+
+
+def test_nvfp4_weights_on_a_gpu_older_than_blackwell_are_refused(world):
+    world.model.quantization = "NVFP4"
+    response = asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3-8B", backend="vllm", node="tkamd2"))
+    assert "NVFP4 weights are computed by GPUs of compute capability 10.0 or higher" in response.message
+    assert "tkamd2 has 8.6" in response.message and "node" not in world.captured
+
+
+def test_weights_run_on():
+    assert lifecycle_module.weights_run_on("BF16", "8.6")
+    assert lifecycle_module.weights_run_on("NVFP4", "12.1") and lifecycle_module.weights_run_on("NVFP4", "10.0")
+    assert not lifecycle_module.weights_run_on("NVFP4", "8.9")
+    assert not lifecycle_module.weights_run_on("NVFP4", None)

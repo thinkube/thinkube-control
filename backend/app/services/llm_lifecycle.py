@@ -46,6 +46,21 @@ def is_shared_backend_id(backend_id: str) -> bool:
     return backend is not None and backend.shared
 
 
+
+# NVFP4 weights are computed by Blackwell tensor cores: compute capability 10.0 and higher
+NVFP4_MIN_CAPABILITY = (10, 0)
+
+
+def weights_run_on(quantization: Optional[str], compute_capability: Optional[str]) -> bool:
+    """Whether a GPU of this compute capability ("major.minor") computes weights of this quantization."""
+    if "NVFP4" not in (quantization or "").upper():
+        return True
+    if not compute_capability:
+        return False
+    major, minor = (int(part) for part in compute_capability.split(".", 1))
+    return (major, minor) >= NVFP4_MIN_CAPABILITY
+
+
 class LLMLifecycleManager:
     def __init__(self):
         self._load_timeout = int(os.getenv("LLM_MODEL_LOAD_TIMEOUT_SECONDS", "300"))
@@ -141,13 +156,13 @@ class LLMLifecycleManager:
         # Without a node, the GPU node with the most AI memory left whose GPU
         # the backend runs on takes it.
         if not node:
-            node = await self._pick_node(backend_type)
+            node = await self._pick_node(backend_type, entry)
             if not node:
                 return ModelLoadResponse(
                     model_id=model_id, state=entry.state,
-                    message=f"No GPU node is known that {backend_type.display_name} runs on; a target node is required",
+                    message=f"No GPU node is known that {backend_type.display_name} runs {model_id} on; a target node is required",
                 )
-        refusal = self._gpu_refusal(backend_type, node)
+        refusal = self._gpu_refusal(backend_type, node, entry)
         if refusal:
             return ModelLoadResponse(model_id=model_id, state=entry.state, message=refusal)
 
@@ -188,25 +203,35 @@ class LLMLifecycleManager:
             f"nor a backend type on a GPU node ({', '.join(forms) or 'no GPU nodes known yet'})"
         )
 
-    def _gpu_refusal(self, backend_type, node: str) -> Optional[str]:
-        """Why the backend cannot run on the node's GPU, or None when it can."""
+    def _gpu_refusal(self, backend_type, node: str, entry) -> Optional[str]:
+        """Why the backend, or the model's weights, cannot run on the node's GPU, or None when they can."""
         from app.services.llm_gpu_tracker import llm_gpu_tracker
 
         found = llm_gpu_tracker.get_node(node)
-        if found is None or backend_type.runs_on(found.compute_capability):
+        if found is None:
             return None
-        return (
-            f"{backend_type.display_name} runs on GPUs of compute capability "
-            f"{', '.join(backend_type.gpu_compute_capabilities)}; {node} has "
-            f"{found.compute_capability or 'an unknown one'} ({found.gpu_product or 'GPU'})"
-        )
+        if not backend_type.runs_on(found.compute_capability):
+            return (
+                f"{backend_type.display_name} runs on GPUs of compute capability "
+                f"{', '.join(backend_type.gpu_compute_capabilities)}; {node} has "
+                f"{found.compute_capability or 'an unknown one'} ({found.gpu_product or 'GPU'})"
+            )
+        if not weights_run_on(entry.quantization, found.compute_capability):
+            return (
+                f"{entry.quantization} weights are computed by GPUs of compute capability "
+                f"{NVFP4_MIN_CAPABILITY[0]}.{NVFP4_MIN_CAPABILITY[1]} or higher (Blackwell); {node} has "
+                f"{found.compute_capability or 'an unknown one'} ({found.gpu_product or 'GPU'})"
+            )
+        return None
 
-    async def _pick_node(self, backend_type) -> Optional[str]:
-        """The GPU node with the most AI memory left and a free slot, else the most memory."""
+    async def _pick_node(self, backend_type, entry) -> Optional[str]:
+        """The GPU node, among those the backend and the model's weights run on, with the most AI memory left and a
+        free slot, else the most memory."""
         from app.services.llm_gpu_tracker import llm_gpu_tracker
 
         status = await llm_gpu_tracker.get_status()
-        nodes = [n for n in status.nodes if backend_type.runs_on(n.compute_capability)]
+        nodes = [n for n in status.nodes
+                 if backend_type.runs_on(n.compute_capability) and weights_run_on(entry.quantization, n.compute_capability)]
         if not nodes:
             return None
         free = [n for n in nodes if n.available_slots > 0]
