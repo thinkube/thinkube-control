@@ -17,7 +17,7 @@ def entry(**overrides):
     base = dict(
         id="Qwen/Qwen3-8B", role="primary", server_type=["vllm"], state=ModelState.deployable,
         context_length=131072, params_b=8.2, active_params_b=None, quantization="BF16", size="~16GB",
-        backend_id=None, calibration=None,
+        backend_id=None, calibration=None, task="text-generation",
     )
     base.update(overrides)
     return SimpleNamespace(**base)
