@@ -28,3 +28,9 @@ def test_ranges_urls_and_options_are_not_pins():
     pins = pinned_constraints(PACKAGES, "ipykernel")
     assert "trl>=1.16" not in pins
     assert not any("@" in p or "--" in p for p in pins)
+
+
+def test_a_pin_with_extras_is_a_constraint_without_them():
+    pins = pinned_constraints(["nvidia-modelopt[hf]==0.47.0", 'torch[cuda]==2.11.0 ; platform_machine == "x86_64"'],
+                              "boto3")
+    assert pins == ["nvidia-modelopt==0.47.0", 'torch==2.11.0 ; platform_machine == "x86_64"']

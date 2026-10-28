@@ -577,7 +577,9 @@ def pinned_constraints(packages: List[str], package: str) -> List[str]:
     pip takes them as constraints, so installing one package cannot lower or
     raise a pinned one through a dependency; when it would have to, pip
     refuses with the conflict. Requirements by URL or with pip options are
-    not version pins and are left out.
+    not version pins and are left out. A constraint names no extras (pip
+    refuses them there), so 'name[extra]==version' is kept as
+    'name==version', with its environment marker.
     """
     pins = []
     for spec in packages:
@@ -586,7 +588,7 @@ def pinned_constraints(packages: List[str], package: str) -> List[str]:
             continue
         if requirement_key(spec) == requirement_key(package):
             continue
-        pins.append(spec.strip())
+        pins.append(re.sub(r"\[[^\]]*\]", "", spec.strip(), count=1))
     return pins
 
 
