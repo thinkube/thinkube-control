@@ -224,7 +224,9 @@ Steps:
    venv with the same name and status "success" is already built; say so and stop unless
    the user wants it rebuilt (`build_jupyter_venv` with force true).
 3. `create_jupyter_venv` with name, packages (a list of pip requirements) and
-   parent_template (omit it for no template). It answers with the venv's id.
+   parent_template (omit it for no template). Without a template, needs_gpu is required:
+   true keeps the venv on the GPU nodes only (training, CUDA packages), false on every
+   node. A venv from a template takes the template's. It answers with the venv's id.
 4. `build_jupyter_venv` with that id (no body). It answers with status "building".
 5. Poll `get_jupyter_venv` with the id every 30 seconds until status is "success" or
    "failed". output gives the reason, or the log path, and architectures_built the

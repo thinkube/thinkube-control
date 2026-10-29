@@ -5,7 +5,9 @@
 # ansible/playbooks/build_venv.yaml
 # Description:
 #   Builds a custom venv for ALL architectures present in the cluster.
-#   For each architecture, finds a GPU node and creates a K8s Job.
+#   For each architecture, picks a node the venv belongs on and creates a K8s
+#   Job there: a venv that needs a GPU is built on and copied to the Thinkube
+#   GPU nodes (baremetal_gpus) only, any other venv to every node.
 #   A custom venv is stored at <base>/custom/<venv_name>/<arch>/; a template
 #   (is_template=true) is the built-in venv and is rebuilt in place at
 #   <base>/<arch>/<venv_name>/, replacing what the release installed, so
@@ -22,6 +24,7 @@
 # Variables:
 #   - venv_name: Name of the venv to create
 #   - packages: JSON list of packages to install
+#   - needs_gpu: whether the venv needs a GPU
 #   - kubeconfig: Path to kubeconfig file
 #   - harbor_registry: Container registry hostname
 
@@ -39,12 +42,20 @@
         that:
           - venv_name is defined
           - packages is defined
-        fail_msg: "Required variables venv_name and packages must be provided"
+          - needs_gpu is defined
+        fail_msg: "Required variables venv_name, packages and needs_gpu must be provided"
 
     - name: Parse packages if string
       ansible.builtin.set_fact:
         package_list: "{{ packages if packages is sequence and packages is not string else packages | from_json }}"
         venv_is_template: "{{ is_template | default(false) | bool }}"
+        venv_nodes: "{{ groups['baremetal_gpus'] if needs_gpu | bool else groups['k8s'] }}"
+
+    - name: Require a node for the venv
+      ansible.builtin.assert:
+        that: venv_nodes | length > 0
+        fail_msg: >-
+          {{ venv_name }} needs a GPU and the inventory lists no GPU node (baremetal_gpus)
 
     - name: Get all cluster nodes
       kubernetes.core.k8s_info:
@@ -58,7 +69,7 @@
       ansible.builtin.set_fact:
         cluster_architectures: >-
           {%- set archs = [] -%}
-          {%- for node in all_nodes.resources -%}
+          {%- for node in all_nodes.resources if node.metadata.name in venv_nodes -%}
             {%- set arch = node.metadata.labels['kubernetes.io/arch'] -%}
             {%- if arch not in archs -%}
               {%- set _ = archs.append(arch) -%}
@@ -68,7 +79,7 @@
         arch_builds: >-
           {%- set builds = [] -%}
           {%- set seen = [] -%}
-          {%- for node in all_nodes.resources -%}
+          {%- for node in all_nodes.resources if node.metadata.name in venv_nodes -%}
             {%- set arch = node.metadata.labels['kubernetes.io/arch'] -%}
             {%- if arch not in seen -%}
               {%- set _ = seen.append(arch) -%}

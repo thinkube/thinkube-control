@@ -17,6 +17,7 @@
 #   - venvs_host_path: Base path
 #   - custom_venvs_subpath: Subpath for custom venvs
 #   - job_namespace: Namespace for build jobs
+#   - venv_nodes: the nodes the venv belongs on (see build_venv.yaml)
 
 # Where the venv lives and what its kernel is called. A template is one of
 # the built-in venvs the notebook server installs from the release under
@@ -253,7 +254,7 @@
     filter_architecture: "{{ target_build_arch }}"
     sync_dir: "{{ venv_host_dir }}"
     remove_dir: "{{ shadow_custom_dir if (venv_is_template | default(false) | bool) else '' }}"
-  when: groups['baremetal_gpus'] | length > 1
+  when: venv_nodes | length > 1
 
 - name: "Find running Jupyter pods for {{ target_build_arch }}"
   kubernetes.core.k8s_info:

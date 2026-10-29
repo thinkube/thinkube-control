@@ -131,6 +131,21 @@ async def app_lifespan(app: FastAPI):
                 conn.commit()
                 logger.info("Added %s column to notebook_jobs table", column)
 
+    # jupyter_venvs tables made before a venv said whether it needs a GPU have no
+    # needs_gpu column. Every venv in them was built for and copied to the GPU
+    # nodes, so they keep that placement; a new venv states its own.
+    with get_engine().connect() as conn:
+        if not conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='jupyter_venvs' AND column_name='needs_gpu'"
+            )
+        ).fetchone():
+            conn.execute(text("ALTER TABLE jupyter_venvs ADD COLUMN needs_gpu BOOLEAN NOT NULL DEFAULT TRUE"))
+            conn.execute(text("ALTER TABLE jupyter_venvs ALTER COLUMN needs_gpu DROP DEFAULT"))
+            conn.commit()
+            logger.info("Added needs_gpu column to jupyter_venvs table")
+
     # template_deployments tables made before a run kept its build have no build column.
     with get_engine().connect() as conn:
         if not conn.execute(

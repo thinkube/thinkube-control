@@ -166,13 +166,15 @@ def test_a_template_build_tells_the_playbook_so(monkeypatch):
     monkeypatch.setattr(jv_mod.ansible_env, "get_inventory_path", lambda: "/tmp/inv.yaml")
     monkeypatch.setattr(jv_mod.ansible_env, "get_environment", lambda context="template": {})
 
-    template = SimpleNamespace(name="agent-dev", packages=["a"], is_template=True)
+    template = SimpleNamespace(name="agent-dev", packages=["a"], is_template=True, needs_gpu=False)
     asyncio.run(jv_mod._run_ansible_build(template))
     assert seen["is_template"] is True and seen["venv_name"] == "agent-dev"
+    assert seen["needs_gpu"] is False
 
-    custom = SimpleNamespace(name="mine", packages=["a"], is_template=False)
+    custom = SimpleNamespace(name="mine", packages=["a"], is_template=False, needs_gpu=True)
     asyncio.run(jv_mod._run_ansible_build(custom))
     assert seen["is_template"] is False
+    assert seen["needs_gpu"] is True
 
 
 def test_built_architectures_are_read_from_verbose_output():
@@ -214,7 +216,7 @@ def test_the_venv_answer_carries_the_architectures_built():
 
     answer = VenvResponse(
         id="x", name="agent-dev", packages=["a"], status="success", output=None, is_template=True,
-        parent_template_id=None, venv_path="/var/lib/jupyterhub-venvs/<arch>/agent-dev", architecture="amd64",
+        parent_template_id=None, needs_gpu=False, venv_path="/var/lib/jupyterhub-venvs/<arch>/agent-dev", architecture="amd64",
         architectures_built=["amd64", "arm64"], created_at="t", started_at=None, completed_at=None,
         created_by="system", duration=None,
     )
@@ -314,7 +316,7 @@ class FakeVenvDB:
 
 def custom_venv(name, archs):
     return SimpleNamespace(id=uuid.uuid4(), name=name, packages=["numpy"], status="success", is_template=False,
-                           architectures_built=list(archs), output=None, started_at=None, completed_at=None)
+                           needs_gpu=True, architectures_built=list(archs), output=None, started_at=None, completed_at=None)
 
 
 def test_only_custom_venvs_missing_the_architecture_are_built(monkeypatch):

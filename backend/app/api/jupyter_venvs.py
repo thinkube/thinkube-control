@@ -44,6 +44,9 @@ router = APIRouter(prefix="/jupyter-venvs", tags=["jupyter-venvs"])
 VENV_PACKAGES_FILE = Path(
     "/home/thinkube/thinkube-platform/core/thinkube/ansible/40_thinkube/core/jupyterhub/venv-packages.txt"
 )
+# Which of those sections need a GPU (venv_gpu_sections), in the same repository,
+# read by the notebook servers' venv setup too.
+VENV_VARS_FILE = VENV_PACKAGES_FILE.parent / "vars" / "venvs.yaml"
 
 # Installs that need their own pip flags, added after a template's packages.
 TEMPLATE_DETAILS = {
@@ -92,9 +95,20 @@ def read_package_sections(path: Path = VENV_PACKAGES_FILE) -> Dict[str, List[str
     return sections
 
 
+def gpu_sections(path: Path = VENV_VARS_FILE) -> List[str]:
+    """The sections of venv-packages.txt whose packages need a GPU."""
+    if not path.is_file():
+        raise FileNotFoundError(f"{path} not found; it lists the venv sections that need a GPU and comes with the thinkube repository")
+    listed = (yaml.safe_load(path.read_text()) or {}).get("venv_gpu_sections")
+    if not isinstance(listed, list):
+        raise ValueError(f"{path}: venv_gpu_sections, the list of venv sections that need a GPU, is missing")
+    return listed
+
+
 def venv_templates() -> Dict[str, Dict[str, Any]]:
     """The built-in venv templates, their packages read from venv-packages.txt."""
     sections = read_package_sections()
+    needs_gpu = set(gpu_sections())
     used = {"base"} | {s for name, details in TEMPLATE_DETAILS.items() for s in details.get("sections", [name])}
     for name in sorted(used):
         if not sections.get(name):
@@ -105,6 +119,7 @@ def venv_templates() -> Dict[str, Dict[str, Any]]:
             "description": details["description"],
             "packages": sections["base"] + [p for s in details.get("sections", [name]) for p in sections[s]],
             "special_installs": details["special_installs"],
+            "needs_gpu": any(s in needs_gpu for s in details.get("sections", [name])),
         }
         for name, details in TEMPLATE_DETAILS.items()
     }
@@ -116,6 +131,10 @@ class CreateVenvRequest(BaseModel):
     name: str
     packages: Optional[List[str]] = None  # Additional packages beyond template
     parent_template: Optional[str] = None  # "fine-tuning" or "agent-dev"
+    # Whether the venv needs a GPU: it is then built on and copied to the GPU nodes
+    # only. A venv made from a template takes the template's; one without a template
+    # must say.
+    needs_gpu: Optional[bool] = None
 
 
 class VenvResponse(BaseModel):
@@ -127,6 +146,7 @@ class VenvResponse(BaseModel):
     output: Optional[str]
     is_template: bool
     parent_template_id: Optional[str]
+    needs_gpu: bool
     venv_path: Optional[str]
     architecture: Optional[str]
     architectures_built: List[str] = []
@@ -170,6 +190,7 @@ def get_venv_templates(
             "description": template["description"],
             "package_count": len(template["packages"]),
             "has_special_installs": len(template.get("special_installs", [])) > 0,
+            "needs_gpu": template["needs_gpu"],
         })
     return {"templates": templates}
 
@@ -190,6 +211,7 @@ def get_venv_template_details(
         "description": template["description"],
         "packages": template["packages"],
         "special_installs": template.get("special_installs", []),
+        "needs_gpu": template["needs_gpu"],
     }
 
 
@@ -222,6 +244,7 @@ async def create_jupyter_venv(
         # Build package list
         packages = []
         parent_template_id = None
+        needs_gpu = request.needs_gpu
 
         if request.parent_template:
             if request.parent_template not in venv_templates():
@@ -230,6 +253,13 @@ async def create_jupyter_venv(
             # Get template packages
             template = venv_templates()[request.parent_template]
             packages = template["packages"] + template["special_installs"]
+            if needs_gpu is not None and needs_gpu != template["needs_gpu"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"The template {request.parent_template} "
+                           f"{'needs' if template['needs_gpu'] else 'does not need'} a GPU; a venv made from it does the same",
+                )
+            needs_gpu = template["needs_gpu"]
 
             # Find or create template record
             template_record = db.query(JupyterVenv).filter_by(
@@ -245,6 +275,12 @@ async def create_jupyter_venv(
 
         if not packages:
             raise HTTPException(status_code=400, detail="No packages specified. Use a template or provide packages.")
+        if needs_gpu is None:
+            raise HTTPException(
+                status_code=400,
+                detail="needs_gpu is required for a venv without a template: true builds and keeps it on the GPU nodes only, "
+                       "false on every node",
+            )
 
         # Create database record
         venv = JupyterVenv(
@@ -254,6 +290,7 @@ async def create_jupyter_venv(
             status="pending",
             is_template=False,
             parent_template_id=parent_template_id,
+            needs_gpu=needs_gpu,
             created_by=current_user.get("preferred_username", "unknown")
         )
         db.add(venv)
@@ -854,6 +891,7 @@ async def _run_ansible_build(venv) -> Dict[str, Any]:
         "venv_name": venv.name,
         "packages": json.dumps(venv.packages),  # JSON string for Ansible
         "is_template": bool(venv.is_template),
+        "needs_gpu": venv.needs_gpu,
     }
     try:
         return_code, output_lines, log_file = await _run_venv_playbook(venv, "build_venv.yaml", extra_vars)
@@ -891,6 +929,7 @@ async def _execute_venv_architecture_build(venv_id: str, architecture: str) -> N
             "venv_name": venv.name,
             "packages": json.dumps(venv.packages),
             "is_template": False,
+            "needs_gpu": venv.needs_gpu,
             "target_architecture": architecture,
         }
         try:

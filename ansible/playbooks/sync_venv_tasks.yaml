@@ -4,21 +4,23 @@
 ---
 # ansible/playbooks/sync_venv_tasks.yaml
 # Description:
-#   Tasks to sync a venv from source node to other GPU nodes.
+#   Tasks to sync a venv from source node to the other nodes it belongs on.
 #   When filter_architecture is set, only syncs to nodes of the same architecture.
 #   Venvs contain native binaries and must match architecture.
 #
 # Required variables:
 #   - source_node: Node where venv was built
 #   - venv_name: Name of venv to sync
+#   - venv_nodes: the nodes the venv belongs on (build_venv.yaml: the GPU nodes
+#     for a venv that needs a GPU, every node otherwise)
 #   - venvs_host_path: Base path for venvs (default: /var/lib/jupyterhub-venvs)
 #   - custom_venvs_subpath: Subpath for custom venvs (default: custom)
 # Optional variables:
 #   - filter_architecture: Only sync to nodes matching this arch (e.g. "arm64", "amd64")
 
-- name: Get list of target GPU nodes (excluding source)
+- name: Get list of target nodes (excluding source)
   ansible.builtin.set_fact:
-    all_target_nodes: "{{ groups['baremetal_gpus'] | difference([source_node]) }}"
+    all_target_nodes: "{{ venv_nodes | difference([source_node]) }}"
 
 # The architecture is the one the build just made the venv for. A node's
 # architecture comes from its Kubernetes label, which every node carries.

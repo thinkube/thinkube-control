@@ -41,6 +41,7 @@ from app.api.jupyterhub_config import defaults_for_nodes
 from app.core.api_tokens import get_current_user_dual_auth
 from app.core.config import settings
 from app.db.session import SessionLocal, get_db
+from app.models.jupyter_venvs import JupyterVenv
 from app.models.notebook_jobs import NotebookJob
 from app.services import jupyterhub_client as hub
 from app.services import storage
@@ -99,6 +100,19 @@ async def _nodes() -> Dict[str, Dict[str, Any]]:
     if not nodes:
         raise HTTPException(status_code=503, detail="The cluster's node resources are not known yet; try again in a moment.")
     return nodes
+
+
+async def _check_kernel_fits_node(db: Session, kernel_name: str, node: str) -> None:
+    """A venv that needs a GPU is kept only on the GPU nodes, so its kernel exists nowhere else."""
+    venv = db.query(JupyterVenv).filter_by(name=kernel_name).first()
+    if venv is None or not venv.needs_gpu:
+        return
+    if not res.node_capacity((await _nodes())[node])["gpus"]:
+        raise HTTPException(
+            status_code=422,
+            detail=f"the kernel {kernel_name} is a venv that needs a GPU, and {node} has no Thinkube GPU, so the venv "
+                   "is not there; run the job on a GPU node",
+        )
 
 
 async def resolve_placement(
@@ -664,6 +678,8 @@ async def run_notebook_job(
     )
     placement.reserve_memory = jupyter_notebooks._bool(request.reserve_memory, False)
     placement.training_node = training is not None and training["node"] == placement.node
+    if request.kernel_name:
+        await _check_kernel_fits_node(db, request.kernel_name, placement.node)
     stop_on_error = jupyter_notebooks._bool(request.stop_on_error, True)
     cell_timeout = jupyter_notebooks._opt_int(request.cell_timeout_seconds, "cell_timeout_seconds")
     if (request.notebook_path is None) == (request.notebook is None):

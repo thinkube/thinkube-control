@@ -50,13 +50,15 @@ def init_venvs(db: Session = None):
                         packages=all_packages,
                         status="template",  # Special status for templates
                         is_template=True,
+                        needs_gpu=template_data["needs_gpu"],
                         created_by="system",
                     )
                 )
                 created += 1
                 logger.info(f"Created venv template: {template_id} ({len(all_packages)} packages)")
-            elif list(existing.packages or []) != all_packages:
+            elif list(existing.packages or []) != all_packages or existing.needs_gpu != template_data["needs_gpu"]:
                 existing.packages = all_packages
+                existing.needs_gpu = template_data["needs_gpu"]
                 updated += 1
                 logger.info(f"Updated venv template: {template_id} ({len(all_packages)} packages)")
 

@@ -33,6 +33,8 @@ class JupyterVenv(Base):
     # Template/inheritance
     is_template = Column(Boolean, default=False, nullable=False)  # Is this a template (fine-tuning, agent-dev)
     parent_template_id = Column(UUID(as_uuid=True), ForeignKey('jupyter_venvs.id'), nullable=True)
+    # A venv that needs a GPU is built on and copied to the Thinkube GPU nodes only
+    needs_gpu = Column(Boolean, nullable=False)
 
     # Location
     venv_path = Column(Text, nullable=True)  # Base path (e.g., /var/lib/jupyterhub-venvs/custom/my-env)
@@ -62,6 +64,7 @@ class JupyterVenv(Base):
             "output": self.output,
             "is_template": self.is_template,
             "parent_template_id": str(self.parent_template_id) if self.parent_template_id else None,
+            "needs_gpu": self.needs_gpu,
             "venv_path": self.venv_path,
             "architecture": self.architecture,
             "architectures_built": self.architectures_built or [],

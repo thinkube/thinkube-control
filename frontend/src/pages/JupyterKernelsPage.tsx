@@ -20,6 +20,7 @@ interface VenvTemplate {
   name: string
   description: string
   package_count: number
+  needs_gpu: boolean
 }
 
 interface JupyterVenv {
@@ -28,6 +29,7 @@ interface JupyterVenv {
   packages: string[]
   status: string
   is_template: boolean
+  needs_gpu: boolean
   created_at: string
   created_by: string
   architecture?: string
@@ -241,7 +243,7 @@ export default function JupyterKernelsPage() {
                     <TkSelectContent>
                       {venvTemplates.map((template) => (
                         <TkSelectItem key={template.id} value={template.id}>
-                          {template.name} ({template.package_count} packages)
+                          {template.name} ({template.package_count} packages{template.needs_gpu ? ', GPU nodes only' : ''})
                         </TkSelectItem>
                       ))}
                     </TkSelectContent>
@@ -304,7 +306,7 @@ export default function JupyterKernelsPage() {
                               ) : null}
                             </div>
                             <div className="text-sm text-muted-foreground">
-                              {venv.packages.length} packages | Created by {venv.created_by}
+                              {venv.packages.length} packages | {venv.needs_gpu ? 'GPU nodes only' : 'Every node'} | Created by {venv.created_by}
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
