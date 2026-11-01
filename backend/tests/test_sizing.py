@@ -89,3 +89,56 @@ def test_discrete_floor_leaves_room_for_another_model_on_the_card():
     util = _floored_util(0.73, 14.47, 24.0, overhead_gb=DISCRETE_FRAMEWORK_OVERHEAD_GB)
     assert util * 24.0 >= 14.47 + DISCRETE_FRAMEWORK_OVERHEAD_GB - 0.01
     assert util * 24.0 <= 24.0 - 1.5
+
+
+# --- Online quantization: vLLM quantizes a 16-bit checkpoint while loading ---
+
+def _gemma(**kw) -> ModelEntry:
+    base = dict(
+        id="google/gemma-4-26B-A4B-it", name="Gemma 4 26B-A4B",
+        server_type=["vllm"], task="text-generation",
+        params_b=25.8, quantization="BF16", context_length=262144,
+        weight_bytes=51_644_340_088,
+    )
+    base.update(kw)
+    return ModelEntry(**base)
+
+
+def test_online_fp8_halves_the_measured_checkpoint():
+    full = _mgr._weight_gb(_gemma())
+    fp8 = _mgr._weight_gb(_gemma(server_args=["--quantization", "fp8"]))
+    assert abs(fp8 - full / 2) < 1e-9
+
+
+def test_online_fp8_accepts_the_equals_form():
+    a = _mgr._weight_gb(_gemma(server_args=["--quantization=fp8"]))
+    b = _mgr._weight_gb(_gemma(server_args=["--quantization", "fp8"]))
+    assert a == b
+
+
+def test_online_fp8_halves_the_params_estimate():
+    full = _mgr._weight_gb(_gemma(weight_bytes=None))
+    fp8 = _mgr._weight_gb(_gemma(weight_bytes=None, server_args=["--quantization", "fp8"]))
+    assert abs(fp8 - full / 2) < 1e-9
+
+
+def test_other_server_args_leave_the_weights_alone():
+    assert _mgr._weight_gb(_gemma(server_args=["--enable-prefix-caching"])) == _mgr._weight_gb(_gemma())
+
+
+def test_unknown_online_method_is_refused():
+    import pytest
+    with pytest.raises(ValueError, match="awq"):
+        _mgr._weight_gb(_gemma(server_args=["--quantization", "awq"]))
+
+
+def test_online_fp8_of_a_quantized_checkpoint_is_refused():
+    import pytest
+    with pytest.raises(ValueError, match="16-bit"):
+        _mgr._weight_gb(_entry(server_args=["--quantization", "fp8"]))
+
+
+def test_quantization_flag_without_method_is_refused():
+    import pytest
+    with pytest.raises(ValueError, match="no method"):
+        _mgr._weight_gb(_gemma(server_args=["--quantization"]))

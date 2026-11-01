@@ -61,6 +61,44 @@ def weights_run_on(quantization: Optional[str], compute_capability: Optional[str
     return (major, minor) >= NVFP4_MIN_CAPABILITY
 
 
+# Share of a 16-bit checkpoint's size that its weights take in GPU memory when
+# vLLM quantizes them while loading (`--quantization <method>` in the model's
+# server_args). FP8 stores one byte per weight instead of two.
+ONLINE_QUANTIZATION_SHARE = {"fp8": 0.5}
+SIXTEEN_BIT = ("BF16", "FP16", "F16")
+
+
+def online_quantization(server_args: Optional[list[str]]) -> Optional[str]:
+    """The method of `--quantization` in vLLM server arguments, or None."""
+    args = server_args or []
+    for i, arg in enumerate(args):
+        if arg.startswith("--quantization="):
+            return arg.split("=", 1)[1]
+        if arg == "--quantization":
+            if i + 1 == len(args):
+                raise ValueError("server_args end with --quantization and no method")
+            return args[i + 1]
+    return None
+
+
+def served_weight_share(entry) -> float:
+    """Share of the checkpoint's weight size that the served weights take."""
+    method = online_quantization(getattr(entry, "server_args", None))
+    if method is None:
+        return 1.0
+    if method not in ONLINE_QUANTIZATION_SHARE:
+        raise ValueError(
+            f"{entry.id}: server_args quantize with '{method}', and the memory plan "
+            f"knows only {sorted(ONLINE_QUANTIZATION_SHARE)}"
+        )
+    if (entry.quantization or "").upper() not in SIXTEEN_BIT:
+        raise ValueError(
+            f"{entry.id}: server_args quantize to {method} while loading, which needs a "
+            f"16-bit checkpoint; the catalog says {entry.quantization}"
+        )
+    return ONLINE_QUANTIZATION_SHARE[method]
+
+
 class LLMLifecycleManager:
     def __init__(self):
         self._load_timeout = int(os.getenv("LLM_MODEL_LOAD_TIMEOUT_SECONDS", "300"))
@@ -1052,15 +1090,19 @@ class LLMLifecycleManager:
         _ensure_measured_weight) over the params×dtype heuristic, which
         under-counts multimodal / mixed-precision weights (vision encoder,
         non-quantized embeddings/lm_head). Falls back to the parsed catalog size.
+        A checkpoint that vLLM quantizes while loading takes the share of
+        served_weight_share.
         """
         if entry is None:
             return None
+        share = served_weight_share(entry)
         measured_bytes = getattr(entry, "weight_bytes", None)
         if measured_bytes:
-            return measured_bytes / (1024 ** 3)
+            return share * measured_bytes / (1024 ** 3)
         if getattr(entry, "params_b", None):
-            return self._estimate_weight_gb(entry.params_b, entry.quantization)
-        return self._estimate_weight_from_size(entry)
+            return share * self._estimate_weight_gb(entry.params_b, entry.quantization)
+        size_gb = self._estimate_weight_from_size(entry)
+        return None if size_gb is None else share * size_gb
 
     def _estimate_memory(
         self, entry, max_context_length: Optional[int] = None,
