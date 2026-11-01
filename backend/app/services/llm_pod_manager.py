@@ -35,6 +35,10 @@ MODEL_LABEL = "thinkube.io/model"
 
 _SLUG_MAX = 40
 
+# The memory-backed /dev/shm of a pod on several GPUs.
+SHM_VOLUME = "dshm"
+SHM_SIZE = "2Gi"
+
 
 def model_slug(model_id: str) -> str:
     """A model id as a Kubernetes name part: lowercase letters, digits and hyphens.
@@ -326,6 +330,11 @@ class LLMPodManager:
                     if slots and deployment_gpu_request(existing) != slots:
                         needs_recreate = True
 
+                    if gpu_count > 1 and not any(
+                        v.name == SHM_VOLUME for v in (existing.spec.template.spec.volumes or [])
+                    ):
+                        needs_recreate = True
+
                     if not needs_recreate:
                         pod_status, _ = self.check_pod_status(backend_type, node_name, model_id)
                         if pod_status == "failed":
@@ -380,6 +389,21 @@ class LLMPodManager:
                     limits["nvidia.com/gpu"] = str(slots)
                     container.resources.requests = requests
                     container.resources.limits = limits
+
+            # Tensor-parallel ranks exchange their inputs through /dev/shm,
+            # which a pod gets at 64 MiB; vLLM needs more for two ranks and
+            # refuses to start. The memory counts against the pod's limit.
+            if gpu_count > 1:
+                volumes = list(pod_template.spec.volumes or [])
+                volumes.append(client.V1Volume(
+                    name=SHM_VOLUME,
+                    empty_dir=client.V1EmptyDirVolumeSource(medium="Memory", size_limit=SHM_SIZE),
+                ))
+                pod_template.spec.volumes = volumes
+                for container in pod_template.spec.containers:
+                    mounts = list(container.volume_mounts or [])
+                    mounts.append(client.V1VolumeMount(name=SHM_VOLUME, mount_path="/dev/shm"))
+                    container.volume_mounts = mounts
 
             # Architecture-aware memory sizing: on UMA the model's GPU memory is
             # host RAM charged to this cgroup, so the limit must cover it; on
