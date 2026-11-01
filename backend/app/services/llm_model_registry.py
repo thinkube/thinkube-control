@@ -548,7 +548,7 @@ class LLMModelRegistry:
                 )
 
     def _sync_gpu_allocation(self, model_id, backend_id, gpu_tracker, lifecycle):
-        from app.services.llm_lifecycle import parse_backend_id
+        from app.services.llm_lifecycle import is_shared_backend_id, parse_backend_id
         existing = gpu_tracker.get_eviction_candidates()
         if any(a.model_id == model_id for a in existing):
             return
@@ -556,8 +556,12 @@ class LLMModelRegistry:
         estimated = lifecycle.planned_memory_gb(model_id)
         if estimated is None:
             estimated = lifecycle._estimate_memory(entry) if entry else 4.0
-        _, node_name = parse_backend_id(backend_id)
-        gpu_tracker.record_allocation(model_id, backend_id, estimated, node_name=node_name)
+        backend_type, node_name = parse_backend_id(backend_id)
+        slots = 1
+        if node_name and not is_shared_backend_id(backend_id):
+            from app.services.llm_pod_manager import llm_pod_manager
+            slots = llm_pod_manager.gpu_slots_of(backend_type, node_name, model_id)
+        gpu_tracker.record_allocation(model_id, backend_id, estimated, node_name=node_name, slots=slots)
 
 
 llm_model_registry = LLMModelRegistry()

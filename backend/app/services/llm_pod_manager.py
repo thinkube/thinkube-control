@@ -49,6 +49,15 @@ def model_slug(model_id: str) -> str:
     return slug
 
 
+def deployment_gpu_request(deployment) -> int:
+    """The nvidia.com/gpu limit of a Deployment's pods, summed over its containers."""
+    total = 0
+    for container in deployment.spec.template.spec.containers:
+        limits = (container.resources.limits if container.resources else None) or {}
+        total += int(limits.get("nvidia.com/gpu", 0))
+    return total
+
+
 class ManagedPod:
     """Tracks a gateway-created Deployment."""
 
@@ -115,6 +124,20 @@ class LLMPodManager:
         if not model_id:
             raise ValueError(f"A {backend_type} pod serves one model; the model is required")
         return model_slug(model_id)
+
+    def gpu_slots_of(self, backend_type: str, node_name: str, model_id: str) -> int:
+        """The time-slice slots a one-model pod holds: its Deployment's nvidia.com/gpu request."""
+        from kubernetes import client, config as k8s_config
+
+        try:
+            k8s_config.load_incluster_config()
+        except k8s_config.ConfigException:
+            k8s_config.load_kube_config()
+        deployment = client.AppsV1Api().read_namespaced_deployment(
+            self._make_deployment_name(backend_type, node_name, model_id),
+            self._get_namespace(backend_type),
+        )
+        return deployment_gpu_request(deployment)
 
     def _make_deployment_name(self, backend_type: str, node_name: str, model_id: Optional[str] = None) -> str:
         base = self._get_base_deployment_name(backend_type)
@@ -285,6 +308,12 @@ class LLMPodManager:
 
             base = apps_v1.read_namespaced_deployment(base_name, namespace)
 
+            from app.services.llm_gpu_tracker import gpu_slots, llm_gpu_tracker
+            gpu_node = llm_gpu_tracker.get_node(node_name)
+            if gpu_count > 0 and gpu_node is None:
+                raise ValueError(f"{node_name} is not a known GPU node")
+            slots = gpu_slots(gpu_node, gpu_count) if gpu_count > 0 else 0
+
             try:
                 existing = apps_v1.read_namespaced_deployment(deploy_name, namespace)
                 if existing:
@@ -293,6 +322,9 @@ class LLMPodManager:
                         existing_model_id = self._get_container_env(existing, "MODEL_ID")
                         if existing_model_id and existing_model_id != model_env["MODEL_ID"]:
                             needs_recreate = True
+
+                    if slots and deployment_gpu_request(existing) != slots:
+                        needs_recreate = True
 
                     if not needs_recreate:
                         pod_status, _ = self.check_pod_status(backend_type, node_name, model_id)
@@ -344,8 +376,8 @@ class LLMPodManager:
                 for container in pod_template.spec.containers:
                     requests = container.resources.requests or {}
                     limits = container.resources.limits or {}
-                    requests["nvidia.com/gpu"] = str(gpu_count)
-                    limits["nvidia.com/gpu"] = str(gpu_count)
+                    requests["nvidia.com/gpu"] = str(slots)
+                    limits["nvidia.com/gpu"] = str(slots)
                     container.resources.requests = requests
                     container.resources.limits = limits
 

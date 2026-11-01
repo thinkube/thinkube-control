@@ -87,6 +87,25 @@ def _floored_util(
     return min(max(util, min_util), 0.95)
 
 
+def gpu_slots(node, gpus: int) -> int:
+    """The nvidia.com/gpu count that gives a pod `gpus` GPUs of the node.
+
+    On a node that shares its GPUs in time slices, a request for several
+    slices can be served by slices of one GPU, so a load on several GPUs
+    takes every slice of the node, as a notebook server on every GPU does
+    (notebook_resources.gpu_slots), and its tensor-parallel ranks get GPUs
+    of their own.
+    """
+    if gpus > 1 and node.gpu_replicas > 1:
+        if gpus != node.gpu_count:
+            raise ValueError(
+                f"{node.name} shares its GPUs in time slices: a load takes one GPU or all "
+                f"{node.gpu_count}, not {gpus}"
+            )
+        return gpus * node.gpu_replicas
+    return gpus
+
+
 def _slots_used(allocs) -> int:
     """Time-slice slots consumed on a node, backend-aware.
 
@@ -453,8 +472,14 @@ class LLMGPUTracker:
                     2,
                 )
             pod_mem = int(round(max(8.0, 0.25 * target_gb + 4.0)))
+            if tp > node.gpu_count:
+                return {"fits": False, "reason": (
+                    f"model needs ~{target_gb:.1f} GB, {tp} GPUs of {per_vram:.0f} GB, and "
+                    f"{node_name} has {node.gpu_count}"
+                )}
             remaining = max((per_vram * tp) - reserved_on_node, 0.0)
-            fits = target_gb <= remaining and free_slots >= tp
+            slots = gpu_slots(node, tp)
+            fits = target_gb <= remaining and free_slots >= slots
 
         if fits:
             reason = "ok"
@@ -464,8 +489,11 @@ class LLMGPUTracker:
                 f"(engine share {util:.2f} of {total_gb:.0f} GB, +~{margin:.0f} GB margin) on "
                 f"{node_name}, above the {UMA_AI_BUDGET_GB:.0f} GB namespace quota (LLM_UMA_AI_BUDGET_GB)"
             )
-        elif free_slots < (1 if arch == "uma" else tp):
-            reason = f"{node_name} has no free time-slice slot ({node.total_slots} in use)"
+        elif free_slots < (1 if arch == "uma" else slots):
+            reason = (
+                f"{node_name} has {free_slots} free time-slice slot(s) of {node.total_slots}, "
+                f"and the load needs {1 if arch == 'uma' else slots}"
+            )
         else:
             reason = (
                 f"model needs ~{target_gb:.1f} GB (+~{margin:.0f} GB margin) but "
