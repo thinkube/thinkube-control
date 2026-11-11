@@ -18,7 +18,8 @@ from app.services.fixes_feed import platform_version
 
 router = APIRouter()
 
-TIMEOUT = httpx.Timeout(120.0)
+# Longer than the slowest call of an extension: Storage reads a node's training folder for up to 120 s
+TIMEOUT = httpx.Timeout(300.0)
 # Headers passed on in each direction
 REQUEST_HEADERS = ("authorization", "content-type", "accept")
 RESPONSE_HEADERS = ("content-type", "content-disposition")
