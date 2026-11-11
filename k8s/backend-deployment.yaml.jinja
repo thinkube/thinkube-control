@@ -250,8 +250,6 @@ spec:
           mountPath: /var/lib/containers
         - name: storage-thinkube-shared
           mountPath: /storage/thinkube-shared
-        - name: storage-mlflow
-          mountPath: /storage/mlflow
       # Add nodeSelector to ensure pod runs on control plane node
       nodeSelector:
         kubernetes.io/hostname: {{ master_node_name }}
@@ -273,8 +271,5 @@ spec:
       - name: storage-thinkube-shared
         persistentVolumeClaim:
           claimName: storage-thinkube-shared
-      - name: storage-mlflow
-        persistentVolumeClaim:
-          claimName: storage-mlflow
       imagePullSecrets:
       - name: app-pull-secret

@@ -44,7 +44,7 @@ from app.db.session import SessionLocal, get_db
 from app.models.jupyter_venvs import JupyterVenv
 from app.models.notebook_jobs import NotebookJob
 from app.services import jupyterhub_client as hub
-from app.services import storage
+from app.services import shared_folder
 from app.services import training_mode
 from app.services import notebook_resources as res
 
@@ -688,8 +688,8 @@ async def run_notebook_job(
     notebook_path = request.notebook_path
     if request.notebook is not None or request.parameters:
         try:
-            root = await asyncio.to_thread(storage.claim_folder, NOTEBOOKS_CLAIM)
-        except storage.StorageError as e:
+            root = await asyncio.to_thread(shared_folder.claim_folder, NOTEBOOKS_CLAIM)
+        except shared_folder.FolderError as e:
             raise HTTPException(status_code=503, detail=f"the notebooks folder: {e}")
         notebook_path = _job_notebook(root, job_id, request.notebook_path, request.notebook, request.parameters)
     job = NotebookJob(

@@ -1,11 +1,12 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
 # SPDX-License-Identifier: Apache-2.0
 
-# The roots of the JuiceFS file systems, mounted in the backend at
-# /storage/<file system> for the Storage page. Static volumes without a
-# subPath or a capacity attribute: the JuiceFS driver mounts the root and sets
-# no quota for them. Retain: deleting a claim never touches the data.
-{% for fs in [{"name": "thinkube-shared", "secret": "juicefs-secret"}, {"name": "mlflow", "secret": "juicefs-mlflow-secret"}] %}
+# The root of the shared file system, mounted in the backend at
+# /storage/thinkube-shared: a notebook job's notebook is written into the
+# notebooks claim's folder through it. A static volume without a subPath or
+# a capacity attribute: the JuiceFS driver mounts the root and sets no quota
+# for it. Retain: deleting the claim never touches the data.
+{% for fs in [{"name": "thinkube-shared", "secret": "juicefs-secret"}] %}
 ---
 apiVersion: v1
 kind: PersistentVolume
