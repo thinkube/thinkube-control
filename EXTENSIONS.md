@@ -1,0 +1,95 @@
+# Thinkube Control and its extensions
+
+Thinkube Control is being divided into a core and extensions. An extension is
+a part of Control that is built and deployed on its own
+(`backend/app/services/extensions.py`, and `spec.extension` in the
+thinkube.yaml reference). This file says which part is where, the rules an
+extension follows, and how a part is moved.
+
+## Where each part is
+
+| Part | Where | State |
+|---|---|---|
+| Login, API tokens, secrets | Control | stays |
+| Service discovery, dashboard, health checks | Control | stays |
+| Templates and deploys, pipeline view, run queue | Control | stays |
+| Extension registry and proxy (`/x/<name>`) | Control | stays |
+| Optional components, News & Fixes, docs search | Control | stays |
+| Cluster nodes | Control | stays |
+| Datasets | extension `datasets` | done |
+| Forge | extension `forge` | done |
+| Storage | extension `control-storage` | done |
+| Images (Harbor images, custom images, Jupyter images, mirror) | Control | to move, as `control-images` |
+| Models (catalogue, mirrors, fine-tuned models) | Control | to move, as `control-models` |
+| LLM Gateway (`api/llm`, `services/llm_*`) | Control | to move, as `control-llm`, after Models |
+| Notebooks (kernels, servers, notebook jobs, JupyterHub config, training mode, GPU metrics) | Control | to move, as `control-notebooks`, last |
+
+The order is the order of the table. Each move ends before the next begins.
+
+## Rules
+
+- **Name.** A part moved out of Control is named `control-<part>`. An app is
+  served at `<name>.<domain>`, and `storage.`, `notebooks.` and `llm.` are
+  platform services; a deploy whose address is taken is refused
+  (`backend/app/services/hostname_claims.py`). The title in the navigation
+  is the part's plain name.
+- **Cluster access.** What a container needs from the cluster beyond its own
+  objects it declares in thinkube.yaml: `access` (Kubernetes rules) and
+  `filesystems` (shared file systems at their root). Name each resource and
+  verb; `*` is refused.
+- **Long work.** The proxy answers within 300 s and carries no WebSocket. A
+  run that takes longer is started on the server and answers at once with an
+  id; the page polls it (`app/services/detached.py` is Control's form of it).
+- **Calls between extensions.** A backend calls another extension's backend
+  at its Service in Control's namespace (`http://<name>-backend:8000`), with
+  the user's token. A backend calls Control at `CONTROL_API_URL`.
+- **Agents.** Each extension has its own MCP server at `/api/v1/mcp`. Its
+  tools are named `<part>_<verb>...` (`storage_get`, `forge_list_runs`). The
+  server is listed in `ansible/roles/agent_clients/vars/main.yaml` of
+  thinkube, with its read-only tools.
+- **Sign-in.** A Thinkube Control API token signs in to an extension:
+  the extension asks Control whose it is (`control_token_user` in an
+  extension's `app/core/security.py`).
+- **No second path.** The move removes the part from Control in the change
+  that follows the extension's first working deploy. Control keeps no copy
+  of a moved route, page or tool.
+
+## How a part is moved
+
+1. Deploy the web app template as `control-<part>` with the variable
+   `extension: true`.
+2. Move the routes, services, models and tests into its backend, the page
+   and its store into its frontend. Remove the template's demo tasks.
+3. Declare `access` and `filesystems` if it needs them. Set the title, the
+   icon and the navigation entries in `spec.extension`.
+4. If the part has tables in `thinkube_control`, write the copy of their
+   rows into the extension's database, and run it once.
+5. Add its MCP server and tools, and its entry in `agent_clients`.
+6. Push. The push builds, tests and deploys it. Use the page inside Control.
+7. Switch the callers (Forge, Tandem, the docs) to the extension.
+8. Remove the part from Control, deploy Control with `12_deploy_dev.yaml`,
+   and check what Control still needs from it.
+
+## What Control still holds for a moved part
+
+- **Storage.** Control mounts `thinkube-shared` and keeps
+  `app/services/shared_folder.py`, which finds the notebooks folder for a
+  notebook job. Both leave with Notebooks.
+  A cluster that ran Control before the move still has the claim
+  `storage-mlflow` and the volume `thinkube-control-storage-mlflow`, which
+  nothing mounts any more; the deploy does not remove them. Delete the claim,
+  then the volume. Both only point at the file system's root, with reclaim
+  policy Retain: the data stays.
+
+## Open
+
+- **Install.** Datasets, Forge and Storage exist only in the Gitea of the
+  cluster they were written on. A new install has none of them. Each needs a
+  source repository the install deploys from, as the inference servers have
+  (`template.url` in `optional_components.json` of thinkube-metadata).
+- **Template.** The web app template does not yet give an extension the
+  sign-in with a Control API token, the MCP server or `DOMAIN_NAME`; each
+  extension so far copied them from Datasets.
+- **Top bar.** An extension draws only its own pages. Models has an
+  indicator in Control's top bar (`DownloadIndicator`); the host needs a
+  place for it before Models moves.
