@@ -346,18 +346,35 @@ def test_an_extension_loses_its_own_objects_in_controls_namespace_and_nothing_el
         delete_namespaced_service_account=deleting("ServiceAccount"))
     teardown.batch_v1 = SimpleNamespace(
         list_namespaced_job=listing("Job", []), delete_namespaced_job=deleting("Job"))
+    def cluster_listing(names):
+        def list_objects(label_selector):
+            selector_seen.add(label_selector)
+            return SimpleNamespace(items=[SimpleNamespace(metadata=SimpleNamespace(name=n)) for n in names])
+        return list_objects
+
+    def cluster_deleting(kind):
+        return lambda name: deleted.append(f"{kind} {name}")
+
+    teardown.core_v1.list_persistent_volume = cluster_listing(["forge-backend-storage-mlflow"])
+    teardown.core_v1.delete_persistent_volume = cluster_deleting("PersistentVolume")
     teardown.rbac_v1 = SimpleNamespace(
         list_namespaced_role=listing("Role", []), delete_namespaced_role=deleting("Role"),
         list_namespaced_role_binding=listing("RoleBinding", []),
-        delete_namespaced_role_binding=deleting("RoleBinding"))
+        delete_namespaced_role_binding=deleting("RoleBinding"),
+        list_cluster_role=cluster_listing(["thinkube-extension-forge-backend"]),
+        delete_cluster_role=cluster_deleting("ClusterRole"),
+        list_cluster_role_binding=cluster_listing(["thinkube-extension-forge-backend"]),
+        delete_cluster_role_binding=cluster_deleting("ClusterRoleBinding"))
     teardown.custom = SimpleNamespace(
         list_namespaced_custom_object=lambda group, version, namespace, plural, label_selector=None: {"items": []},
         delete_namespaced_custom_object=None)
 
     teardown._extension_objects("forge", "thinkube-control")
-    assert selector_seen == {"app.kubernetes.io/name=forge"}
+    assert selector_seen == {"app.kubernetes.io/name=forge", "thinkube.io/extension=forge"}
     assert deleted == [
         "Deployment forge-backend", "Service forge-backend", "Secret forge-secrets",
+        "ClusterRoleBinding thinkube-extension-forge-backend", "ClusterRole thinkube-extension-forge-backend",
+        "PersistentVolume forge-backend-storage-mlflow",
         "ConfigMap forge-metadata", "ConfigMap forge-service-config",
         "Job forge-deployment-completed", "Job forge-deployment-failed",
     ]
@@ -381,9 +398,12 @@ def test_an_extension_loses_the_workflows_that_run_as_its_account_and_no_others(
         list_namespaced_config_map=nothing, delete_namespaced_config_map=no_named_object,
         list_namespaced_service_account=nothing, delete_namespaced_service_account=None)
     teardown.batch_v1 = SimpleNamespace(list_namespaced_job=nothing, delete_namespaced_job=no_named_object)
+    no_cluster_objects = lambda label_selector: SimpleNamespace(items=[])  # noqa: E731
+    teardown.core_v1.list_persistent_volume = no_cluster_objects
     teardown.rbac_v1 = SimpleNamespace(
         list_namespaced_role=nothing, delete_namespaced_role=None,
-        list_namespaced_role_binding=nothing, delete_namespaced_role_binding=None)
+        list_namespaced_role_binding=nothing, delete_namespaced_role_binding=None,
+        list_cluster_role=no_cluster_objects, list_cluster_role_binding=no_cluster_objects)
 
     workflows = [
         {"metadata": {"name": "datasets-run-abc"}, "spec": {"serviceAccountName": "datasets-workflows"}},

@@ -17,8 +17,18 @@ import {
 } from '@/lib/extensions';
 
 /** Draws an extension's pages inside Control's layout: loads its module and
- * stylesheet through Control, mounts it, and keeps it told where it is. */
-export default function ExtensionPage({ extensions }: { extensions: Extension[] }) {
+ * stylesheet through Control, mounts it, and keeps it told where it is.
+ * `read` says Control's list of extensions has arrived; until then nothing is
+ * drawn, so a direct link to a page does not first say the extension is missing. */
+export default function ExtensionPage({
+  extensions,
+  read,
+  listError,
+}: {
+  extensions: Extension[];
+  read: boolean;
+  listError: string | null;
+}) {
   const { name = '' } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -87,6 +97,14 @@ export default function ExtensionPage({ extensions }: { extensions: Extension[] 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [extension?.ui.module, extension?.ui.css, blocked, name, host]);
 
+  if (listError) {
+    return (
+      <TkPageWrapper>
+        <TkErrorAlert title="The extensions could not be listed">{listError}</TkErrorAlert>
+      </TkPageWrapper>
+    );
+  }
+  if (!read) return null;
   if (!extension) {
     return (
       <TkPageWrapper>

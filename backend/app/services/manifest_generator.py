@@ -28,10 +28,14 @@ from thinkube_yaml_validator import (
     validate_component_constraints as _validate_component_constraints,
     validate_replicas as _validate_replicas,
     validate_build_size as _validate_build_size,
+    validate_extension_access as _validate_extension_access,
 )
 from thinkube_yaml_placeholders import substitute as _substitute_placeholders
 from manifest_plan import (
+    EXTENSION_ACCESS_MANIFEST as _EXTENSION_ACCESS_MANIFEST,
+    EXTENSION_FILESYSTEMS as _EXTENSION_FILESYSTEMS,
     EXTENSION_NAMESPACE as _EXTENSION_NAMESPACE,
+    has_extension_access as _has_extension_access,
     NAMESPACE_RESOURCES as _NAMESPACE_RESOURCES,
     artifact_repository_name as _artifact_repository_name,
     is_extension as _is_extension,
@@ -275,6 +279,7 @@ class ManifestGenerator:
         violations.extend(_validate_component_constraints(self.thinkube_config))
         violations.extend(_validate_replicas(self.thinkube_config))
         violations.extend(_validate_build_size(self.thinkube_config))
+        violations.extend(_validate_extension_access(self.thinkube_config))
         if violations:
             msg = "thinkube.yaml validation failed:\n" + "\n".join(f"  - {v}" for v in violations)
             raise ValueError(msg)
@@ -336,6 +341,7 @@ class ManifestGenerator:
             'extension': self.is_extension,
             'artifact_repository': _artifact_repository_name(self.app_name, self.is_extension),
             'artifact_secret': _artifact_secret_name(self.app_name, self.is_extension),
+            'extension_filesystems': _EXTENSION_FILESYSTEMS,
         }
 
         k8s_dir = app_path / 'k8s'
@@ -442,6 +448,10 @@ data:
         if has_workflows:
             generated_files['workflows.yaml'] = env.get_template('workflows.j2').render(**template_vars)
 
+        has_access = _has_extension_access(self.thinkube_config)
+        if has_access:
+            generated_files[_EXTENSION_ACCESS_MANIFEST] = env.get_template('extension-access.j2').render(**template_vars)
+
         # build-workflow.yaml
         system_username = os.environ.get('SYSTEM_USERNAME')
         master_node_name = os.environ.get('MASTER_NODE_NAME')
@@ -482,6 +492,7 @@ data:
                 needs_storage=needs_storage,
                 has_workflows=has_workflows,
                 extension=self.is_extension,
+                has_access=has_access,
             ),
             has_workflows=has_workflows,
         )

@@ -386,6 +386,17 @@ class AppTeardown(ComponentTeardown):
             except ApiException as e:
                 if e.status != 404:
                     raise
+        # What extension-access.j2 made outside the namespace, by its own label
+        cluster_selector = f"thinkube.io/extension={name}"
+        cluster_kinds = [
+            ("ClusterRoleBinding", self.rbac_v1.list_cluster_role_binding, self.rbac_v1.delete_cluster_role_binding),
+            ("ClusterRole", self.rbac_v1.list_cluster_role, self.rbac_v1.delete_cluster_role),
+            ("PersistentVolume", self.core_v1.list_persistent_volume, self.core_v1.delete_persistent_volume),
+        ]
+        for kind, list_objects, delete in cluster_kinds:
+            for item in list_objects(label_selector=cluster_selector).items:
+                delete(item.metadata.name)
+                removed.append(f"{kind} {item.metadata.name}")
         named = [
             ("ConfigMap", self.core_v1.delete_namespaced_config_map, f"{name}-metadata"),
             ("ConfigMap", self.core_v1.delete_namespaced_config_map, f"{name}-service-config"),

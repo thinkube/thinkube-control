@@ -24,7 +24,12 @@ Gitea main, so a pushed change is seen without a redeploy. Control draws the
 extension's pages inside its own layout: it loads the module through
 /api/v1/x/<name>/ui/ and forwards the module's API calls through
 /api/v1/x/<name>/api/ to the extension's /api/v1/, with the user's token.
-An extension calls another one the same way, through Control.
+An extension's backend calls another one's directly, at its Service in
+Control's namespace (http://<name>-backend:<port>), with the user's token.
+
+A container of an extension may also declare `access`, the Kubernetes rules
+its pod gets in every namespace, and `filesystems`, the shared file systems
+mounted at their root (scripts/thinkube_yaml_validator.py).
 
 An extension built for another platform version, or one whose depends are not
 all installed, is listed with the problem and its pages are not loaded.

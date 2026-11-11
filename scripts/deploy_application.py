@@ -38,7 +38,10 @@ from build_architectures import (
 from checkout_state import STATUS_COMMAND, UNPUSHED_COMMAND, changed_files
 from checkout_state import refusal as checkout_refusal
 from component_checkout import check_declared_type, checkout_path, developer_commits, parse_log, refusal
-from manifest_plan import EXTENSION_NAMESPACE, NAMESPACE_RESOURCES, artifact_repository_name
+from manifest_plan import (
+    EXTENSION_ACCESS_MANIFEST, EXTENSION_FILESYSTEMS, EXTENSION_NAMESPACE, NAMESPACE_RESOURCES,
+    artifact_repository_name, has_extension_access,
+)
 from platform_credentials import artifact_secret_name
 from template_version import github_git_env, template_ref
 from thinkube_yaml_placeholders import substitute as substitute_placeholders
@@ -674,7 +677,7 @@ git fetch origin main
             validate_knative_constraints, validate_component_constraints,
             validate_replicas, validate_build_size,
             validate_test_size, validate_llm_backend, validate_startup_seconds,
-            validate_node_cache,
+            validate_node_cache, validate_extension_access,
         )
 
         config_path = Path(self.local_repo_path) / "thinkube.yaml"
@@ -695,6 +698,7 @@ git fetch origin main
             violations.extend(validate_llm_backend(self.thinkube_config))
             violations.extend(validate_startup_seconds(self.thinkube_config))
             violations.extend(validate_node_cache(self.thinkube_config))
+            violations.extend(validate_extension_access(self.thinkube_config))
             if violations:
                 msg = "thinkube.yaml validation failed:\n" + "\n".join(f"  - {v}" for v in violations)
                 DeploymentLogger.error(msg)
@@ -1225,6 +1229,7 @@ git fetch origin main
             'extension': self.is_extension,
             'artifact_repository': artifact_repository_name(self.app_name, self.is_extension),
             'artifact_secret': artifact_secret_name(self.app_name, self.is_extension),
+            'extension_filesystems': EXTENSION_FILESYSTEMS,
         }
 
         # 1. Generate namespace.yaml (not for an extension: Control owns its namespace)
@@ -1369,6 +1374,11 @@ data:
             workflows_content = workflows_template.render(**template_vars)
             write('workflows.yaml', workflows_content)
 
+        # 9c. Generate extension-access.yaml (an extension whose containers declare access or filesystems)
+        has_access = has_extension_access(self.thinkube_config)
+        if has_access:
+            write(EXTENSION_ACCESS_MANIFEST, env.get_template('extension-access.j2').render(**template_vars))
+
         # 10. Generate build-workflow.yaml
         workflow_template = env.get_template('build-workflow.j2')
         system_username = os.environ.get('SYSTEM_USERNAME')
@@ -1398,6 +1408,7 @@ data:
                 needs_storage=needs_storage,
                 has_workflows=has_workflows,
                 extension=self.is_extension,
+                has_access=has_access,
             ),
             has_workflows=has_workflows,
         ))

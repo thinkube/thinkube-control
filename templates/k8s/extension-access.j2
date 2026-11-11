@@ -1,0 +1,120 @@
+#jinja2: lstrip_blocks: True, trim_blocks: True
+# What {{ project_name }} declares beyond an extension's own objects:
+# containers[].access, the Kubernetes rules a container's pod gets in every
+# namespace, and containers[].filesystems, the shared file systems mounted at
+# their root. The cluster-wide objects carry thinkube.io/extension, by which
+# a delete of the extension finds them.
+{% for container in thinkube_spec.spec.containers %}
+{% if container.access is defined %}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ project_name }}-{{ container.name }}
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/component: {{ container.name }}
+    app.kubernetes.io/managed-by: argocd
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: thinkube-extension-{{ project_name }}-{{ container.name }}
+  labels:
+    thinkube.io/extension: {{ project_name }}
+    app.kubernetes.io/managed-by: argocd
+rules:
+{% for rule in container.access %}
+  - apiGroups: {{ rule.apiGroups | to_json }}
+    resources: {{ rule.resources | to_json }}
+    verbs: {{ rule.verbs | to_json }}
+{% if rule.resourceNames is defined and rule.resourceNames %}
+    resourceNames: {{ rule.resourceNames | to_json }}
+{% endif %}
+{% endfor %}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: thinkube-extension-{{ project_name }}-{{ container.name }}
+  labels:
+    thinkube.io/extension: {{ project_name }}
+    app.kubernetes.io/managed-by: argocd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: thinkube-extension-{{ project_name }}-{{ container.name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ project_name }}-{{ container.name }}
+    namespace: {{ k8s_namespace }}
+{% if thinkube_spec.spec.services is defined and 'workflows' in thinkube_spec.spec.services %}
+# The pod runs as its own account, so that account also gets the workflows
+# role the extension's other pods have through {{ project_name }}-workflows.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ project_name }}-{{ container.name }}-workflows
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/managed-by: argocd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ project_name }}-workflows
+subjects:
+  - kind: ServiceAccount
+    name: {{ project_name }}-{{ container.name }}
+    namespace: {{ k8s_namespace }}
+{% endif %}
+{% endif %}
+{% for fs in container.filesystems | default([]) %}
+# The root of the file system {{ fs }}: a static volume without a subPath or
+# a capacity attribute, so the JuiceFS driver mounts the root and sets no
+# quota for it. Retain: deleting the claim never touches the data.
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ project_name }}-{{ container.name }}-storage-{{ fs }}
+  labels:
+    thinkube.io/extension: {{ project_name }}
+    app.kubernetes.io/managed-by: argocd
+spec:
+  accessModes:
+    - ReadWriteMany
+  capacity:
+    storage: 1Ti
+  csi:
+    driver: csi.juicefs.com
+    fsType: juicefs
+    nodePublishSecretRef:
+      name: {{ extension_filesystems[fs] }}
+      namespace: juicefs
+    volumeHandle: {{ project_name }}-{{ container.name }}-storage-{{ fs }}
+  persistentVolumeReclaimPolicy: Retain
+  volumeMode: Filesystem
+  storageClassName: ""
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ project_name }}-{{ container.name }}-storage-{{ fs }}
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/component: {{ container.name }}
+    app.kubernetes.io/managed-by: argocd
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ""
+  volumeName: {{ project_name }}-{{ container.name }}-storage-{{ fs }}
+  resources:
+    requests:
+      storage: 1Ti
+{% endfor %}
+{% endfor %}

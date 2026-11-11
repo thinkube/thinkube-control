@@ -124,6 +124,14 @@ rules:
     - clusterrolebindings
   verbs: ["get", "list", "watch"]
 
+# Deleting an extension removes the cluster-wide role and binding its
+# containers[].access made (templates/k8s/extension-access.j2).
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources:
+    - clusterroles
+    - clusterrolebindings
+  verbs: ["delete"]
+
 # Custom Resource Definitions
 - apiGroups: ["apiextensions.k8s.io"]
   resources:

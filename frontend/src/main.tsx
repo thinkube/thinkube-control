@@ -110,6 +110,9 @@ function AppContent() {
   const { getCategories, fetchServices, services } = useServicesStore();
   const [navigationItems, setNavigationItems] = useState<TkNavItem[]>(baseNavigationItems);
   const [extensions, setExtensions] = useState<Extension[]>([]);
+  // Whether the list was read, and why not when it could not be
+  const [extensionsRead, setExtensionsRead] = useState(false);
+  const [extensionsError, setExtensionsError] = useState<string | null>(null);
 
   // Fetch services on mount
   useEffect(() => {
@@ -120,7 +123,8 @@ function AppContent() {
   useEffect(() => {
     listExtensions()
       .then(setExtensions)
-      .catch((e) => console.error('The extensions could not be listed:', e));
+      .catch((e) => setExtensionsError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setExtensionsRead(true));
   }, []);
 
   // Dynamically build navigation items with categories when services change
@@ -315,7 +319,7 @@ function AppContent() {
         <Route path="/news" element={<NewsAndFixesPage />} />
         <Route path="/harbor-images" element={<HarborImages />} />
         <Route path="/image-mirror/:source" element={<ImageMirrorDeployment />} />
-        <Route path="/x/:name/*" element={<ExtensionPage extensions={extensions} />} />
+        <Route path="/x/:name/*" element={<ExtensionPage extensions={extensions} read={extensionsRead} listError={extensionsError} />} />
       </Routes>
     </TkAppLayout>
   );

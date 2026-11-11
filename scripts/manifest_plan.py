@@ -52,6 +52,24 @@ def artifact_repository_name(app_name: str, extension: bool) -> str:
     return f'{app_name}-artifact-repositories' if extension else 'artifact-repositories'
 
 
+# The shared JuiceFS file systems an extension's container may mount at its
+# root, by the name of the file system, with the secret in namespace juicefs
+# the driver mounts it with.
+EXTENSION_FILESYSTEMS = {
+    'thinkube-shared': 'juicefs-secret',
+    'mlflow': 'juicefs-mlflow-secret',
+}
+EXTENSION_ACCESS_MANIFEST = 'extension-access.yaml'
+
+
+def has_extension_access(config: Dict[str, Any]) -> bool:
+    """Whether a container of the extension declares `access` (Kubernetes
+    rules for its pod) or `filesystems` (shared file systems mounted at
+    their root); either one adds extension-access.yaml."""
+    containers = config.get('spec', {}).get('containers', []) or []
+    return is_extension(config) and any(c.get('access') or c.get('filesystems') for c in containers)
+
+
 KNATIVE_RESOURCES = ['knative-service.yaml']
 
 APP_RESOURCES = ['deployments.yaml', 'services.yaml', 'ingress.yaml']
@@ -83,6 +101,7 @@ def kustomization_resources(
     needs_storage: bool,
     has_workflows: bool,
     extension: bool,
+    has_access: bool = False,
 ) -> List[str]:
     """The resources kustomization.yaml lists, in the order it lists them."""
     resources = [r for r in BASE_RESOURCES if not (extension and r in NAMESPACE_RESOURCES)]
@@ -91,6 +110,8 @@ def kustomization_resources(
         resources.append('storage-pvc.yaml')
     if has_workflows:
         resources.append('workflows.yaml')
+    if has_access:
+        resources.append(EXTENSION_ACCESS_MANIFEST)
     resources.append(POSTSYNC_HOOK)
     return resources
 

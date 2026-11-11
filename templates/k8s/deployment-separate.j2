@@ -31,7 +31,12 @@ spec:
       priorityClassName: thinkube-workload
       imagePullSecrets:
         - name: app-pull-secret
-{% if thinkube_spec.spec.services is defined and 'workflows' in thinkube_spec.spec.services %}
+{% if extension and container.access is defined %}
+      # containers[].access: the account that carries this container's
+      # Kubernetes rules (extension-access.yaml), and the workflows role when
+      # the extension declares the workflows service.
+      serviceAccountName: {{ project_name }}-{{ container.name }}
+{% elif thinkube_spec.spec.services is defined and 'workflows' in thinkube_spec.spec.services %}
       # The projected token of this account is what authorises the pod to
       # submit workflows into this namespace.
       serviceAccountName: {{ project_name }}-workflows
@@ -403,6 +408,14 @@ spec:
           volumeMounts:
             - name: app-storage
               mountPath: {{ container.volume }}
+{% elif extension and container.filesystems is defined %}
+
+          # containers[].filesystems: each shared file system, at its root
+          volumeMounts:
+{% for fs in container.filesystems %}
+            - name: storage-{{ fs }}
+              mountPath: /storage/{{ fs }}
+{% endfor %}
 {% elif container.gpu is defined and container.gpu.count is defined %}
           # Auto-add MLflow model storage for GPU containers (JuiceFS)
           volumeMounts:
@@ -443,5 +456,12 @@ spec:
             path: /var/lib/thinkube/node-cache/{{ project_name }}-{{ container.name }}
             type: DirectoryOrCreate
         {% endif %}
+      {% elif extension and container.filesystems is defined %}
+      volumes:
+        {% for fs in container.filesystems %}
+        - name: storage-{{ fs }}
+          persistentVolumeClaim:
+            claimName: {{ project_name }}-{{ container.name }}-storage-{{ fs }}
+        {% endfor %}
       {% endif %}
 {% endfor %}

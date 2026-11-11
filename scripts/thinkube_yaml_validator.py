@@ -11,6 +11,8 @@ Knative services must remain portable to cloud serverless platforms
 import re
 from typing import Any, Dict, List
 
+from manifest_plan import EXTENSION_FILESYSTEMS
+
 # Services that tie a workload to this cluster: storage to a volume that must
 # follow the pod, workflows to an Argo controller and a namespace of its own.
 # Neither survives the move to a cloud serverless platform.
@@ -284,4 +286,64 @@ def validate_test_size(config: Dict[str, Any]) -> List[str]:
                 f"Container '{c.get('name', 'unnamed')}': test.size '{test['size']}' "
                 f"is not one of {', '.join(TEST_SIZES)}."
             )
+    return errors
+
+
+ACCESS_RULE_KEYS = ('apiGroups', 'resources', 'verbs', 'resourceNames')
+
+
+def validate_extension_access(config: Dict[str, Any]) -> List[str]:
+    """Return a list of constraint violations for containers' access and filesystems.
+
+    Both are for an extension, a part of Thinkube Control. `access` lists the
+    Kubernetes rules the container's pod gets in every namespace; each rule
+    names its API groups, resources and verbs, never "*". `filesystems` lists
+    the shared file systems mounted at their root, at /storage/<name>; it
+    cannot be combined with `volume` or `gpu`, which mount volumes of their own.
+    """
+    spec = config.get('spec', {})
+    extension = (spec.get('deployment') or {}).get('type') == 'extension'
+    errors = []
+    for c in spec.get('containers', []) or []:
+        name = c.get('name', 'unnamed')
+        for field in ('access', 'filesystems'):
+            if field in c and not extension:
+                errors.append(f"Container '{name}': {field} is for deployment type extension only.")
+        if 'access' in c:
+            rules = c['access']
+            if not isinstance(rules, list) or not rules:
+                errors.append(f"Container '{name}': access must list at least one rule.")
+                rules = []
+            for i, rule in enumerate(rules):
+                where = f"Container '{name}': access[{i}]"
+                if not isinstance(rule, dict):
+                    errors.append(f"{where} must be a mapping with apiGroups, resources and verbs.")
+                    continue
+                unknown = sorted(set(rule) - set(ACCESS_RULE_KEYS))
+                if unknown:
+                    errors.append(f"{where} has unknown fields: {', '.join(unknown)}.")
+                for key in ('apiGroups', 'resources', 'verbs'):
+                    values = rule.get(key)
+                    if not isinstance(values, list) or not values or not all(isinstance(v, str) for v in values):
+                        errors.append(f"{where}.{key} must be a list of text with at least one entry.")
+                    elif '*' in values:
+                        errors.append(f"{where}.{key} must name each entry; '*' is not allowed.")
+                names = rule.get('resourceNames', [])
+                if not isinstance(names, list) or not all(isinstance(v, str) and v for v in names):
+                    errors.append(f"{where}.resourceNames must be a list of names.")
+        if 'filesystems' in c:
+            wanted = c['filesystems']
+            if not isinstance(wanted, list) or not wanted:
+                errors.append(f"Container '{name}': filesystems must list at least one file system.")
+                wanted = []
+            for fs in wanted:
+                if fs not in EXTENSION_FILESYSTEMS:
+                    errors.append(
+                        f"Container '{name}': filesystems names '{fs}', which is not one of "
+                        f"{', '.join(EXTENSION_FILESYSTEMS)}."
+                    )
+            if len(set(map(str, wanted))) != len(wanted):
+                errors.append(f"Container '{name}': filesystems names a file system twice.")
+            if 'volume' in c or c.get('gpu'):
+                errors.append(f"Container '{name}': filesystems cannot be combined with volume or gpu.")
     return errors
