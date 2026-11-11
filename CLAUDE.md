@@ -15,7 +15,7 @@ The pipeline is the build: the deploy below builds the backend and frontend imag
 Tests live in `backend/tests/`. Do not run them: a change to Thinkube Control is checked by deploying it (below) and using the deployed app, and the deploy does not run them either. When someone asks for a test run, it runs in the deployed backend pod, which has the backend's dependencies and mounts this checkout at `/home/thinkube`:
 
 ```bash
-POD=$(kubectl get pods -n thinkube-control -o name | grep backend | head -1 | cut -d/ -f2)
+POD=$(kubectl get pods -n thinkube-control -o name | grep thinkube-control-backend | head -1 | cut -d/ -f2)
 kubectl exec -n thinkube-control $POD -- sh -c "cd /home/thinkube/thinkube-platform/core/thinkube-control && PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider backend/tests/test_build_workflow.py"
 ```
 

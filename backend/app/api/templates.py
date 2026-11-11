@@ -40,6 +40,7 @@ from app.services.background_executor import background_executor
 from app.services.dependency_manager import DependencyManager
 from app.services.model_downloader import ModelDownloaderService
 from app.services.fixes_feed import FeedError, platform_version
+from app.services.hostname_claims import cluster_routes, other_claim
 from app.services.metadata_fetcher import CatalogUnavailableError, fetch_merged_catalog
 
 sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
@@ -486,6 +487,21 @@ async def _queue_template_deploy(
                 status_code=400,
                 detail=conflict_message
                 or f"Service name '{request.template_name}' is not available",
+            )
+
+        # The app is served at <name>.<domain>; a platform service may already be there
+        target_namespace = EXTENSION_NAMESPACE if is_extension else request.template_name
+        claim = other_claim(
+            await asyncio.to_thread(cluster_routes), request.template_name, target_namespace,
+            is_extension, settings.DOMAIN_NAME,
+        )
+        if claim:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"'{request.template_name}' cannot name this deploy: {request.template_name}."
+                    f"{settings.DOMAIN_NAME} is already served by the HTTPRoute {claim}. Choose another name."
+                ),
             )
 
         # What the deploy replaces in the checkout the developer works in; nothing when there is none.
