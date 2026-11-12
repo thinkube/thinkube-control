@@ -1,0 +1,210 @@
+{
+  "app": {
+    "title": "Datasets"
+  },
+  "nav": {
+    "workspace": "Datasets",
+    "home": "Datasets",
+    "settings": "Configuracion",
+    "apiTokens": "Tokens API",
+    "account": "Cuenta",
+    "logout": "Cerrar sesion"
+  },
+  "apiTokens": {
+    "title": "Tokens API",
+    "subtitle": "Los tokens permiten que scripts y herramientas llamen a la API de esta aplicacion en tu nombre",
+    "createToken": {
+      "title": "Crear nuevo token",
+      "nameLabel": "Nombre del token",
+      "namePlaceholder": "Mi token API",
+      "expiresLabel": "Expira en (dias)",
+      "expiresPlaceholder": "Dejar vacio para sin expiracion",
+      "createButton": "Crear token"
+    },
+    "tokenCreated": {
+      "title": "Token creado con exito!",
+      "message": "Copia este token ahora. No podras verlo de nuevo.",
+      "copyButton": "Copiar al portapapeles",
+      "copied": "Token copiado al portapapeles!"
+    },
+    "tokenList": {
+      "title": "Tus tokens",
+      "noTokens": "No hay tokens API todavia. Crea uno arriba!",
+      "table": {
+        "name": "Nombre",
+        "created": "Creado",
+        "expires": "Expira",
+        "lastUsed": "Ultimo uso",
+        "actions": "Acciones",
+        "never": "Nunca",
+        "revoke": "Revocar",
+        "revoked": "Revocado"
+      },
+      "confirmRevoke": "Estas seguro de que quieres revocar este token?",
+      "confirmRevokeTitle": "Revocar token"
+    },
+    "usage": {
+      "title": "Como usar los tokens API",
+      "cli": {
+        "title": "CLI / curl",
+        "description": "Incluye el token en el encabezado Authorization:"
+      },
+      "env": {
+        "title": "Variable de entorno",
+        "description": "Define el token una vez y deja que tus herramientas lo lean:"
+      }
+    },
+    "errors": {
+      "createFailed": "Error al crear el token",
+      "revokeFailed": "Error al revocar el token",
+      "loadFailed": "Error al cargar los tokens",
+      "nameMissing": "Por favor proporciona un nombre para el token"
+    },
+    "success": {
+      "created": "Token creado",
+      "revoked": "Token revocado"
+    }
+  },
+  "profile": {
+    "roles": "Roles"
+  },
+  "theme": {
+    "toggle": "Cambiar tema"
+  },
+  "language": {
+    "label": "Idioma"
+  },
+  "auth": {
+    "loginTitle": "Iniciar Sesion",
+    "loginMessage": "Por favor inicia sesion para acceder a la aplicacion",
+    "loginButton": "Iniciar sesion con Keycloak",
+    "loggingIn": "Completando autenticacion...",
+    "loginSuccess": "Autenticacion exitosa. Redirigiendo...",
+    "loginFailed": "Error de autenticacion",
+    "noCode": "No se recibio codigo de autorizacion",
+    "redirecting": "Redirigiendo al inicio de sesion...",
+    "redirectingMessage": "Por favor espera mientras te redirigimos a Keycloak.",
+    "configError": "Error de configuracion de autenticacion. Por favor revisa la consola para mas detalles.",
+    "tryAgain": "Reintentar"
+  },
+  "errors": {
+    "notFound": {
+      "title": "404",
+      "heading": "Pagina no encontrada",
+      "message": "La pagina que buscas no existe o ha sido movida.",
+      "backButton": "Volver al inicio"
+    },
+    "loadingApp": {
+      "title": "Error al cargar la aplicacion",
+      "message": "No se pudo cargar la informacion del usuario.",
+      "reload": "Recargar"
+    },
+    "general": {
+      "loading": "Cargando..."
+    }
+  },
+  "common": {
+    "open": "Abrir",
+    "close": "Cerrar",
+    "save": "Guardar",
+    "cancel": "Cancelar",
+    "delete": "Eliminar",
+    "edit": "Editar",
+    "create": "Crear",
+    "update": "Actualizar",
+    "back": "Atras",
+    "next": "Siguiente",
+    "yes": "Si",
+    "no": "No"
+  },
+  "datasets": {
+    "title": "Datasets",
+    "subtitle": "Datos de entrenamiento para Forge: archivos que subes y datasets de Hugging Face, guardados como Parquet en Thinkube Experiments.",
+    "uploadTitle": "Subir un archivo",
+    "uploadHelp": "Un archivo .jsonl, .json, .csv o .parquet de hasta 2 GB. Se convierte en el split train.",
+    "file": "Archivo",
+    "name": "Nombre (opcional)",
+    "upload": "Subir",
+    "uploaded": "{{name}} subido",
+    "uploadFailed": "La subida ha fallado",
+    "hubTitle": "Importar de Hugging Face",
+    "hubHelp": "Un dataset público del Hub de Hugging Face, con los archivos Parquet que el Hub publica para él. Como máximo 4 GB.",
+    "repo": "Dataset",
+    "config": "Config",
+    "configHint": "Necesaria si tiene varias",
+    "splits": "Splits",
+    "splitsHint": "Todos, o una lista: train, test",
+    "import": "Importar",
+    "importStarted": "Importando {{name}}",
+    "importFailed": "La importación no ha podido empezar",
+    "loadFailed": "No se han podido leer los datasets",
+    "none": "Aún no hay datasets.",
+    "rows_one": "{{count}} fila",
+    "rows_other": "{{count}} filas",
+    "noMapping": "Columnas sin asignar",
+    "open": "Abrir",
+    "deleteTitle": "Eliminar el dataset",
+    "deleteConfirm": "¿Eliminar {{name}} y sus archivos?",
+    "version_one": "v{{number}}",
+    "version_other": "v{{number}} de {{count}} versiones"
+  },
+  "dataset": {
+    "back": "Datasets",
+    "columns": "Columnas",
+    "mapping": "De columnas a ejemplos",
+    "mappingHelp": "Cómo cada fila se convierte en un ejemplo de entrenamiento. Los tipos de chat se convierten en turnos que el entrenador formatea con la plantilla de chat del modelo.",
+    "kind": "Tipo de filas",
+    "optional": "opcional",
+    "noColumn": "Ninguna",
+    "saveMapping": "Guardar la asignación",
+    "mappingSaved": "Asignación guardada",
+    "mappingFailed": "La asignación no se ha guardado",
+    "rows": "Filas",
+    "rowsHelp": "Cada fila y el ejemplo que el entrenador obtiene de ella.",
+    "showing": "Filas {{from}} a {{to}} de {{total}}",
+    "rowsFailed": "No se han podido leer las filas",
+    "mapFirst": "Asigna las columnas para ver los ejemplos.",
+    "rowDoesNotFit": "Esta fila no encaja con la asignación",
+    "loadFailed": "No se ha podido leer el dataset",
+    "versionShown": "versión {{number}}",
+    "versions": "Versiones",
+    "versionsHelp": "Cada versión conserva sus filas. Una versión nueva se hace a partir de otra, y guarda de cuál y qué la hizo.",
+    "version": "Versión",
+    "lineage": "Hecha por",
+    "rowCount": "Filas",
+    "splitRows": "Splits",
+    "created": "Creada",
+    "status": "Estado",
+    "shown": "Mostrada",
+    "show": "Mostrar",
+    "madeBy": {
+      "import": "Importación de Hugging Face",
+      "upload": "Subida"
+    },
+    "madeByRecipe": "Receta {{recipe}}, desde v{{from}}"
+  },
+  "kind": {
+    "messages": "Turnos de chat (role, content)",
+    "sharegpt": "Turnos ShareGPT (from, value)",
+    "prompt": "Prompt y respuesta",
+    "instruction": "Instrucción, entrada y salida",
+    "text": "Texto plano"
+  },
+  "part": {
+    "messages": "Turnos",
+    "conversations": "Turnos",
+    "prompt": "Prompt",
+    "completion": "Respuesta",
+    "system": "Prompt de sistema",
+    "instruction": "Instrucción",
+    "input": "Entrada",
+    "output": "Salida",
+    "text": "Texto"
+  },
+  "status": {
+    "ready": "Listo",
+    "importing": "Importando",
+    "failed": "Fallido",
+    "identifying": "Identificando filas"
+  }
+}

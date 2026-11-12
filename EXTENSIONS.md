@@ -6,6 +6,11 @@ a part of Control that is built and deployed on its own
 thinkube.yaml reference). This file says which part is where, the rules an
 extension follows, and how a part is moved.
 
+The source of every extension is a folder of this repository,
+`extensions/<name>`. An extension is still deployed on its own: it has its own
+pods, build, tests and Gitea repository, and a deploy of Control does not
+touch it.
+
 ## Where each part is
 
 | Part | Where | State |
@@ -50,22 +55,48 @@ The order is the order of the table. Each move ends before the next begins.
 - **Sign-in.** A Thinkube Control API token signs in to an extension:
   the extension asks Control whose it is (`control_token_user` in an
   extension's `app/core/security.py`).
+- **Source.** The folder `extensions/<name>` holds the extension as it is
+  built: no template variables. A deploy copies the folder over the checkout
+  `~/apps/<name>`, removes the files the folder no longer has, and pushes to
+  the Gitea repository `thinkube-deployments/<name>`, which builds it
+  (`scripts/template_folder.py`). The checkout and the Gitea repository are
+  deployed copies; a change is made in the folder. The extension has the
+  folder's name.
+- **Version.** An extension is read from this repository at the ref the
+  cluster deploys platform templates from: the head of the branch it follows
+  when it develops the platform, the newest release tag of the platform's
+  version otherwise. Extensions are tagged and released with Control.
 - **No second path.** The move removes the part from Control in the change
   that follows the extension's first working deploy. Control keeps no copy
   of a moved route, page or tool.
 
+## How an extension is deployed
+
+Push the folder to GitHub, then call `redeploy_template` (a first deploy:
+`deploy_template`) with:
+
+- `template_url`: `https://github.com/thinkube/thinkube-control`
+- `template_path`: `extensions/<name>`
+- `template_name`: `<name>`
+- `variables`: `{"extension": true}`
+
+The answer is a deployment id; `get_deployment_status` follows the deploy to
+the end of its build.
+
 ## How a part is moved
 
-1. Deploy the web app template as `control-<part>` with the variable
-   `extension: true`.
+1. Create the folder `extensions/control-<part>` from the folder of an
+   existing extension of the same shape: `thinkube.yaml`, `backend/`,
+   `frontend/`, `CLAUDE.md`, `README.md`.
 2. Move the routes, services, models and tests into its backend, the page
-   and its store into its frontend. Remove the template's demo tasks.
+   and its store into its frontend.
 3. Declare `access` and `filesystems` if it needs them. Set the title, the
    icon and the navigation entries in `spec.extension`.
 4. If the part has tables in `thinkube_control`, write the copy of their
    rows into the extension's database, and run it once.
 5. Add its MCP server and tools, and its entry in `agent_clients`.
-6. Push. The push builds, tests and deploys it. Use the page inside Control.
+6. Push, and deploy the folder. The deploy builds and tests it. Use the page
+   inside Control.
 7. Switch the callers (Forge, Tandem, the docs) to the extension.
 8. Remove the part from Control, deploy Control with `12_deploy_dev.yaml`,
    and check what Control still needs from it.
@@ -87,9 +118,6 @@ The order is the order of the table. Each move ends before the next begins.
   cluster they were written on. A new install has none of them. Each needs a
   source repository the install deploys from, as the inference servers have
   (`template.url` in `optional_components.json` of thinkube-metadata).
-- **Template.** The web app template does not yet give an extension the
-  sign-in with a Control API token, the MCP server or `DOMAIN_NAME`; each
-  extension so far copied them from Datasets.
 - **Top bar.** An extension draws only its own pages. Models has an
   indicator in Control's top bar (`DownloadIndicator`); the host needs a
   place for it before Models moves.

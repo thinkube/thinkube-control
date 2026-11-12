@@ -1,0 +1,2 @@
+# All common dependencies are already installed in the python-base:3.12-slim image
+# Only add application-specific packages here that are not in the base image

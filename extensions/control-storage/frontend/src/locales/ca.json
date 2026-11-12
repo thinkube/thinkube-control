@@ -1,0 +1,120 @@
+{
+  "app": {
+    "title": "Emmagatzematge"
+  },
+  "nav": {
+    "workspace": "Espai de treball",
+    "home": "Emmagatzematge",
+    "settings": "Configuracio",
+    "apiTokens": "Tokens API",
+    "account": "Compte",
+    "logout": "Tancar sessio"
+  },
+  "apiTokens": {
+    "title": "Tokens API",
+    "subtitle": "Els tokens permeten que scripts i eines cridin l'API d'aquesta aplicacio en nom teu",
+    "createToken": {
+      "title": "Crear nou token",
+      "nameLabel": "Nom del token",
+      "namePlaceholder": "El meu token API",
+      "expiresLabel": "Expira en (dies)",
+      "expiresPlaceholder": "Deixar buit per sense expiracio",
+      "createButton": "Crear token"
+    },
+    "tokenCreated": {
+      "title": "Token creat amb exit!",
+      "message": "Copia aquest token ara. No podras veure'l de nou.",
+      "copyButton": "Copiar al porta-retalls",
+      "copied": "Token copiat al porta-retalls!"
+    },
+    "tokenList": {
+      "title": "Els teus tokens",
+      "noTokens": "No hi ha tokens API encara. Crea'n un a dalt!",
+      "table": {
+        "name": "Nom",
+        "created": "Creat",
+        "expires": "Expira",
+        "lastUsed": "Ultim us",
+        "actions": "Accions",
+        "never": "Mai",
+        "revoke": "Revocar",
+        "revoked": "Revocat"
+      },
+      "confirmRevoke": "Estas segur que vols revocar aquest token?",
+      "confirmRevokeTitle": "Revocar token"
+    },
+    "usage": {
+      "title": "Com utilitzar els tokens API",
+      "cli": {
+        "title": "CLI / curl",
+        "description": "Inclou el token a la capcalera Authorization:"
+      },
+      "env": {
+        "title": "Variable d'entorn",
+        "description": "Defineix el token una vegada i deixa que les teves eines el llegeixin:"
+      }
+    },
+    "errors": {
+      "createFailed": "Error al crear el token",
+      "revokeFailed": "Error al revocar el token",
+      "loadFailed": "Error en carregar els tokens",
+      "nameMissing": "Si us plau proporciona un nom per al token"
+    },
+    "success": {
+      "created": "Token creat",
+      "revoked": "Token revocat"
+    }
+  },
+  "profile": {
+    "roles": "Rols"
+  },
+  "theme": {
+    "toggle": "Canviar tema"
+  },
+  "language": {
+    "label": "Idioma"
+  },
+  "auth": {
+    "loginTitle": "Iniciar Sessio",
+    "loginMessage": "Si us plau inicia sessio per accedir a l'aplicacio",
+    "loginButton": "Iniciar sessio amb Keycloak",
+    "loggingIn": "Completant autenticacio...",
+    "loginSuccess": "Autenticacio exitosa. Redirigint...",
+    "loginFailed": "Error d'autenticacio",
+    "noCode": "No s'ha rebut codi d'autoritzacio",
+    "redirecting": "Redirigint a l'inici de sessio...",
+    "redirectingMessage": "Si us plau espera mentre et redirigim a Keycloak.",
+    "configError": "Error de configuracio d'autenticacio. Si us plau revisa la consola per mes detalls.",
+    "tryAgain": "Tornar a provar"
+  },
+  "errors": {
+    "notFound": {
+      "title": "404",
+      "heading": "Pagina no trobada",
+      "message": "La pagina que cerques no existeix o ha estat moguda.",
+      "backButton": "Tornar a l'inici"
+    },
+    "loadingApp": {
+      "title": "Error al carregar l'aplicacio",
+      "message": "No s'ha pogut carregar la informacio de l'usuari.",
+      "reload": "Recarregar"
+    },
+    "general": {
+      "loading": "Carregant..."
+    }
+  },
+  "common": {
+    "open": "Obrir",
+    "close": "Tancar",
+    "save": "Desar",
+    "cancel": "Cancel-lar",
+    "delete": "Eliminar",
+    "edit": "Editar",
+    "create": "Crear",
+    "update": "Actualitzar",
+    "back": "Enrere",
+    "next": "Seguent",
+    "yes": "Si",
+    "no": "No"
+  }
+}

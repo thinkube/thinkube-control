@@ -1,0 +1,86 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: MIT
+
+apiVersion: thinkube.io/v1
+kind: ThinkubeDeployment
+metadata:
+  # The application's version; the generated app starts at it.
+  version: "0.1.2"
+
+spec:
+  deployment:
+    type: extension
+
+  # A part of Thinkube Control: Control lists it, draws its pages from the
+  # module the frontend builds, and forwards the module's API calls to /api/v1
+  extension:
+    title: Storage
+    description: "Shared folders and their quotas, node disks and volume claims"
+    icon: hard-drive
+    platform: "0.1"
+    ui:
+      module: /extension/index.js
+      css: /extension/index.css
+    nav:
+      - label: Storage
+        path: /
+        icon: hard-drive
+
+  containers:
+    - name: backend
+      build: ./backend
+      port: 8000
+      size: medium
+      health: /health
+      test:
+        enabled: true
+        image: "python-base:3.12-slim"
+        command: "./run_tests.sh"
+        one: "./run_tests.sh <file>"
+      migrations:
+        tool: alembic
+        auto: true
+      # What Storage reads and changes in the cluster: the JuiceFS secrets
+      # (the two file systems', and the per-volume ones in kube-system), the
+      # volumes whose capacity the driver turns into a folder quota, the
+      # SeaweedFS volume servers and the node-metrics pods, the kubelet's
+      # volume statistics on each node, and every volume claim
+      access:
+        - apiGroups: [""]
+          resources: [secrets]
+          verbs: [get]
+        - apiGroups: [""]
+          resources: [persistentvolumes]
+          verbs: [list, patch]
+        - apiGroups: [""]
+          resources: [persistentvolumeclaims, pods, nodes]
+          verbs: [list]
+        - apiGroups: [""]
+          resources: [nodes/proxy]
+          verbs: [get]
+      # The two shared file systems at their root, where sizes are read and
+      # files are deleted
+      filesystems: [thinkube-shared, mlflow]
+
+    - name: frontend
+      build: ./frontend
+      port: 80
+      size: small
+      health: /health
+      publicEnv:
+        - APP_TITLE
+      test:
+        enabled: true
+        # node-base carries git, which npm needs to install thinkube-style
+        image: "node-base:22-alpine"
+        command: "./run_tests.sh"
+        one: "./run_tests.sh <file>"
+
+  routes:
+    - path: /api
+      to: backend
+    - path: /
+      to: frontend
+
+  services:
+    - database

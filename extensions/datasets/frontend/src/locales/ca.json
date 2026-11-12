@@ -1,0 +1,210 @@
+{
+  "app": {
+    "title": "Datasets"
+  },
+  "nav": {
+    "workspace": "Datasets",
+    "home": "Datasets",
+    "settings": "Configuracio",
+    "apiTokens": "Tokens API",
+    "account": "Compte",
+    "logout": "Tancar sessio"
+  },
+  "apiTokens": {
+    "title": "Tokens API",
+    "subtitle": "Els tokens permeten que scripts i eines cridin l'API d'aquesta aplicacio en nom teu",
+    "createToken": {
+      "title": "Crear nou token",
+      "nameLabel": "Nom del token",
+      "namePlaceholder": "El meu token API",
+      "expiresLabel": "Expira en (dies)",
+      "expiresPlaceholder": "Deixar buit per sense expiracio",
+      "createButton": "Crear token"
+    },
+    "tokenCreated": {
+      "title": "Token creat amb exit!",
+      "message": "Copia aquest token ara. No podras veure'l de nou.",
+      "copyButton": "Copiar al porta-retalls",
+      "copied": "Token copiat al porta-retalls!"
+    },
+    "tokenList": {
+      "title": "Els teus tokens",
+      "noTokens": "No hi ha tokens API encara. Crea'n un a dalt!",
+      "table": {
+        "name": "Nom",
+        "created": "Creat",
+        "expires": "Expira",
+        "lastUsed": "Ultim us",
+        "actions": "Accions",
+        "never": "Mai",
+        "revoke": "Revocar",
+        "revoked": "Revocat"
+      },
+      "confirmRevoke": "Estas segur que vols revocar aquest token?",
+      "confirmRevokeTitle": "Revocar token"
+    },
+    "usage": {
+      "title": "Com utilitzar els tokens API",
+      "cli": {
+        "title": "CLI / curl",
+        "description": "Inclou el token a la capcalera Authorization:"
+      },
+      "env": {
+        "title": "Variable d'entorn",
+        "description": "Defineix el token una vegada i deixa que les teves eines el llegeixin:"
+      }
+    },
+    "errors": {
+      "createFailed": "Error al crear el token",
+      "revokeFailed": "Error al revocar el token",
+      "loadFailed": "Error en carregar els tokens",
+      "nameMissing": "Si us plau proporciona un nom per al token"
+    },
+    "success": {
+      "created": "Token creat",
+      "revoked": "Token revocat"
+    }
+  },
+  "profile": {
+    "roles": "Rols"
+  },
+  "theme": {
+    "toggle": "Canviar tema"
+  },
+  "language": {
+    "label": "Idioma"
+  },
+  "auth": {
+    "loginTitle": "Iniciar Sessio",
+    "loginMessage": "Si us plau inicia sessio per accedir a l'aplicacio",
+    "loginButton": "Iniciar sessio amb Keycloak",
+    "loggingIn": "Completant autenticacio...",
+    "loginSuccess": "Autenticacio exitosa. Redirigint...",
+    "loginFailed": "Error d'autenticacio",
+    "noCode": "No s'ha rebut codi d'autoritzacio",
+    "redirecting": "Redirigint a l'inici de sessio...",
+    "redirectingMessage": "Si us plau espera mentre et redirigim a Keycloak.",
+    "configError": "Error de configuracio d'autenticacio. Si us plau revisa la consola per mes detalls.",
+    "tryAgain": "Tornar a provar"
+  },
+  "errors": {
+    "notFound": {
+      "title": "404",
+      "heading": "Pagina no trobada",
+      "message": "La pagina que cerques no existeix o ha estat moguda.",
+      "backButton": "Tornar a l'inici"
+    },
+    "loadingApp": {
+      "title": "Error al carregar l'aplicacio",
+      "message": "No s'ha pogut carregar la informacio de l'usuari.",
+      "reload": "Recarregar"
+    },
+    "general": {
+      "loading": "Carregant..."
+    }
+  },
+  "common": {
+    "open": "Obrir",
+    "close": "Tancar",
+    "save": "Desar",
+    "cancel": "Cancel-lar",
+    "delete": "Eliminar",
+    "edit": "Editar",
+    "create": "Crear",
+    "update": "Actualitzar",
+    "back": "Enrere",
+    "next": "Seguent",
+    "yes": "Si",
+    "no": "No"
+  },
+  "datasets": {
+    "title": "Datasets",
+    "subtitle": "Dades d'entrenament per a Forge: fitxers que puges i datasets de Hugging Face, desats com a Parquet a Thinkube Experiments.",
+    "uploadTitle": "Pujar un fitxer",
+    "uploadHelp": "Un fitxer .jsonl, .json, .csv o .parquet de fins a 2 GB. Es converteix en el split train.",
+    "file": "Fitxer",
+    "name": "Nom (opcional)",
+    "upload": "Pujar",
+    "uploaded": "{{name}} pujat",
+    "uploadFailed": "La pujada ha fallat",
+    "hubTitle": "Importar de Hugging Face",
+    "hubHelp": "Un dataset públic del Hub de Hugging Face, amb els fitxers Parquet que el Hub hi publica. Com a màxim 4 GB.",
+    "repo": "Dataset",
+    "config": "Config",
+    "configHint": "Cal si en té diverses",
+    "splits": "Splits",
+    "splitsHint": "Tots, o una llista: train, test",
+    "import": "Importar",
+    "importStarted": "Important {{name}}",
+    "importFailed": "La importació no ha pogut començar",
+    "loadFailed": "No s'han pogut llegir els datasets",
+    "none": "Encara no hi ha datasets.",
+    "rows_one": "{{count}} fila",
+    "rows_other": "{{count}} files",
+    "noMapping": "Columnes sense assignar",
+    "open": "Obrir",
+    "deleteTitle": "Eliminar el dataset",
+    "deleteConfirm": "Vols eliminar {{name}} i els seus fitxers?",
+    "version_one": "v{{number}}",
+    "version_other": "v{{number}} de {{count}} versions"
+  },
+  "dataset": {
+    "back": "Datasets",
+    "columns": "Columnes",
+    "mapping": "De columnes a exemples",
+    "mappingHelp": "Com cada fila es converteix en un exemple d'entrenament. Els tipus de xat es converteixen en torns que l'entrenador formata amb la plantilla de xat del model.",
+    "kind": "Tipus de files",
+    "optional": "opcional",
+    "noColumn": "Cap",
+    "saveMapping": "Desar l'assignació",
+    "mappingSaved": "Assignació desada",
+    "mappingFailed": "L'assignació no s'ha desat",
+    "rows": "Files",
+    "rowsHelp": "Cada fila i l'exemple que l'entrenador n'obté.",
+    "showing": "Files {{from}} a {{to}} de {{total}}",
+    "rowsFailed": "No s'han pogut llegir les files",
+    "mapFirst": "Assigna les columnes per veure els exemples.",
+    "rowDoesNotFit": "Aquesta fila no encaixa amb l'assignació",
+    "loadFailed": "No s'ha pogut llegir el dataset",
+    "versionShown": "versió {{number}}",
+    "versions": "Versions",
+    "versionsHelp": "Cada versió conserva les seves files. Una versió nova es fa a partir d’una altra, i desa de quina i què la va fer.",
+    "version": "Versió",
+    "lineage": "Feta per",
+    "rowCount": "Files",
+    "splitRows": "Splits",
+    "created": "Creada",
+    "status": "Estat",
+    "shown": "Mostrada",
+    "show": "Mostra",
+    "madeBy": {
+      "import": "Importació de Hugging Face",
+      "upload": "Pujada"
+    },
+    "madeByRecipe": "Recepta {{recipe}}, des de v{{from}}"
+  },
+  "kind": {
+    "messages": "Torns de xat (role, content)",
+    "sharegpt": "Torns ShareGPT (from, value)",
+    "prompt": "Prompt i resposta",
+    "instruction": "Instrucció, entrada i sortida",
+    "text": "Text pla"
+  },
+  "part": {
+    "messages": "Torns",
+    "conversations": "Torns",
+    "prompt": "Prompt",
+    "completion": "Resposta",
+    "system": "Prompt de sistema",
+    "instruction": "Instrucció",
+    "input": "Entrada",
+    "output": "Sortida",
+    "text": "Text"
+  },
+  "status": {
+    "ready": "Llest",
+    "importing": "Important",
+    "failed": "Fallat",
+    "identifying": "Identificant files"
+  }
+}

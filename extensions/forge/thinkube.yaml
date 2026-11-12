@@ -1,0 +1,79 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: MIT
+
+apiVersion: thinkube.io/v1
+kind: ThinkubeDeployment
+metadata:
+  # The application's version; the generated app starts at it.
+  version: "0.1.2"
+
+spec:
+  deployment:
+    type: extension
+
+  # A web app with no GPU work of its own (its trainings are Control's notebook
+  # jobs): built on the control plane alone, so a build never takes a GPU node
+  architectures: [amd64]
+
+  # A part of Thinkube Control: Control lists it, draws its pages from the
+  # module the frontend builds, and forwards the module's API calls to /api/v1
+  extension:
+    title: Forge
+    description: "Fine-tune language models on your data"
+    icon: flame
+    platform: "0.1"
+    depends: [datasets]
+    ui:
+      module: /extension/index.js
+      css: /extension/index.css
+    nav:
+      - label: Runs
+        path: /
+        icon: list-checks
+      - label: New fine-tune
+        path: /runs/new
+        icon: plus
+      - label: Slots
+        path: /slots
+        icon: calendar-clock
+      - label: Priorities
+        path: /priorities
+        icon: gauge
+
+  containers:
+    - name: backend
+      build: ./backend
+      port: 8000
+      size: medium
+      health: /health
+      test:
+        enabled: true
+        image: "python-base:3.12-slim"
+        command: "./run_tests.sh"
+        one: "./run_tests.sh <file>"
+      migrations:
+        tool: alembic
+        auto: true
+
+    - name: frontend
+      build: ./frontend
+      port: 80
+      size: small
+      health: /health
+      publicEnv:
+        - APP_TITLE
+      test:
+        enabled: true
+        # node-base carries git, which npm needs to install thinkube-style
+        image: "node-base:22-alpine"
+        command: "./run_tests.sh"
+        one: "./run_tests.sh <file>"
+
+  routes:
+    - path: /api
+      to: backend
+    - path: /
+      to: frontend
+
+  services:
+    - database

@@ -1,0 +1,210 @@
+{
+  "app": {
+    "title": "Datasets"
+  },
+  "nav": {
+    "workspace": "Datasets",
+    "home": "Datasets",
+    "settings": "Settings",
+    "apiTokens": "API Tokens",
+    "account": "Account",
+    "logout": "Logout"
+  },
+  "apiTokens": {
+    "title": "API Tokens",
+    "subtitle": "Tokens let scripts and tools call this application's API on your behalf",
+    "createToken": {
+      "title": "Create New Token",
+      "nameLabel": "Token Name",
+      "namePlaceholder": "My API Token",
+      "expiresLabel": "Expires In (days)",
+      "expiresPlaceholder": "Leave empty for no expiration",
+      "createButton": "Create Token"
+    },
+    "tokenCreated": {
+      "title": "Token Created Successfully!",
+      "message": "Copy this token now. You won't be able to see it again.",
+      "copyButton": "Copy to Clipboard",
+      "copied": "Token copied to clipboard!"
+    },
+    "tokenList": {
+      "title": "Your Tokens",
+      "noTokens": "No API tokens yet. Create one above!",
+      "table": {
+        "name": "Name",
+        "created": "Created",
+        "expires": "Expires",
+        "lastUsed": "Last Used",
+        "actions": "Actions",
+        "never": "Never",
+        "revoke": "Revoke",
+        "revoked": "Revoked"
+      },
+      "confirmRevoke": "Are you sure you want to revoke this token?",
+      "confirmRevokeTitle": "Revoke token"
+    },
+    "usage": {
+      "title": "How to Use API Tokens",
+      "cli": {
+        "title": "CLI / curl",
+        "description": "Include the token in the Authorization header:"
+      },
+      "env": {
+        "title": "Environment variable",
+        "description": "Set the token once and let your tools read it:"
+      }
+    },
+    "errors": {
+      "createFailed": "Failed to create token",
+      "revokeFailed": "Failed to revoke token",
+      "loadFailed": "Failed to load tokens",
+      "nameMissing": "Please provide a name for the token"
+    },
+    "success": {
+      "created": "Token created",
+      "revoked": "Token revoked"
+    }
+  },
+  "profile": {
+    "roles": "Roles"
+  },
+  "theme": {
+    "toggle": "Toggle theme"
+  },
+  "language": {
+    "label": "Language"
+  },
+  "auth": {
+    "loginTitle": "Sign In",
+    "loginMessage": "Please sign in to access the application",
+    "loginButton": "Sign in with Keycloak",
+    "loggingIn": "Completing authentication...",
+    "loginSuccess": "Authentication successful. Redirecting...",
+    "loginFailed": "Authentication failed",
+    "noCode": "No authorization code received",
+    "redirecting": "Redirecting to login...",
+    "redirectingMessage": "Please wait while we redirect you to Keycloak.",
+    "configError": "Authentication configuration error. Please check the console for details.",
+    "tryAgain": "Try Again"
+  },
+  "errors": {
+    "notFound": {
+      "title": "404",
+      "heading": "Page Not Found",
+      "message": "The page you're looking for doesn't exist or has been moved.",
+      "backButton": "Return to Home"
+    },
+    "loadingApp": {
+      "title": "Error Loading Application",
+      "message": "Unable to load user information.",
+      "reload": "Reload"
+    },
+    "general": {
+      "loading": "Loading..."
+    }
+  },
+  "common": {
+    "open": "Open",
+    "close": "Close",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "update": "Update",
+    "back": "Back",
+    "next": "Next",
+    "yes": "Yes",
+    "no": "No"
+  },
+  "datasets": {
+    "title": "Datasets",
+    "subtitle": "Training data for Forge: files you upload and datasets from Hugging Face, kept as Parquet in Thinkube Experiments.",
+    "uploadTitle": "Upload a file",
+    "uploadHelp": "A .jsonl, .json, .csv or .parquet file of up to 2 GB. It becomes the split train.",
+    "file": "File",
+    "name": "Name (optional)",
+    "upload": "Upload",
+    "uploaded": "{{name}} uploaded",
+    "uploadFailed": "The upload failed",
+    "hubTitle": "Import from Hugging Face",
+    "hubHelp": "A public dataset of the Hugging Face Hub, as the Parquet files the Hub publishes for it. At most 4 GB.",
+    "repo": "Dataset",
+    "config": "Config",
+    "configHint": "Needed when it has several",
+    "splits": "Splits",
+    "splitsHint": "All, or a list: train, test",
+    "import": "Import",
+    "importStarted": "Importing {{name}}",
+    "importFailed": "The import could not start",
+    "loadFailed": "The datasets could not be read",
+    "none": "No datasets yet.",
+    "rows_one": "{{count}} row",
+    "rows_other": "{{count}} rows",
+    "noMapping": "Columns not mapped",
+    "open": "Open",
+    "deleteTitle": "Delete the dataset",
+    "deleteConfirm": "Delete {{name}} and its files?",
+    "version_one": "v{{number}}",
+    "version_other": "v{{number}} of {{count}} versions"
+  },
+  "dataset": {
+    "back": "Datasets",
+    "columns": "Columns",
+    "mapping": "Columns to examples",
+    "mappingHelp": "How each row becomes a training example. Chat kinds become turns that the trainer formats with the model's chat template.",
+    "kind": "Kind of rows",
+    "optional": "optional",
+    "noColumn": "None",
+    "saveMapping": "Save the mapping",
+    "mappingSaved": "Mapping saved",
+    "mappingFailed": "The mapping was not saved",
+    "rows": "Rows",
+    "rowsHelp": "Each row, and the example the trainer gets from it.",
+    "showing": "Rows {{from}} to {{to}} of {{total}}",
+    "rowsFailed": "The rows could not be read",
+    "mapFirst": "Map the columns to see the examples.",
+    "rowDoesNotFit": "This row does not fit the mapping",
+    "loadFailed": "The dataset could not be read",
+    "versionShown": "version {{number}}",
+    "versions": "Versions",
+    "versionsHelp": "Each version keeps its rows. A new version is made from another one, and records which one and what made it.",
+    "version": "Version",
+    "lineage": "Made by",
+    "rowCount": "Rows",
+    "splitRows": "Splits",
+    "created": "Created",
+    "status": "Status",
+    "shown": "Shown",
+    "show": "Show",
+    "madeBy": {
+      "import": "Import from Hugging Face",
+      "upload": "Upload"
+    },
+    "madeByRecipe": "Recipe {{recipe}}, from v{{from}}"
+  },
+  "kind": {
+    "messages": "Chat turns (role, content)",
+    "sharegpt": "ShareGPT turns (from, value)",
+    "prompt": "Prompt and completion",
+    "instruction": "Instruction, input and output",
+    "text": "Plain text"
+  },
+  "part": {
+    "messages": "Turns",
+    "conversations": "Turns",
+    "prompt": "Prompt",
+    "completion": "Completion",
+    "system": "System prompt",
+    "instruction": "Instruction",
+    "input": "Input",
+    "output": "Output",
+    "text": "Text"
+  },
+  "status": {
+    "ready": "Ready",
+    "importing": "Importing",
+    "failed": "Failed",
+    "identifying": "Identifying rows"
+  }
+}

@@ -1,0 +1,5 @@
+# All common dependencies are already installed in the python-base:3.12-slim image
+# Only add application-specific packages here that are not in the base image
+jinja2==3.1.6
+# The IANA time zone database, which zoneinfo reads for the slots' time zones
+tzdata==2026.4
