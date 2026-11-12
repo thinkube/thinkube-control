@@ -13,6 +13,7 @@ import base64
 import json
 import os
 import subprocess
+import tempfile
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -43,6 +44,7 @@ from manifest_plan import (
     artifact_repository_name, has_extension_access,
 )
 from platform_credentials import artifact_secret_name
+from template_folder import fetch_folder, folder_name, replace_checkout
 from template_version import github_git_env, template_ref
 from thinkube_yaml_placeholders import substitute as substitute_placeholders
 from deploy_log import build_line, format_line
@@ -100,6 +102,14 @@ class ApplicationDeployer:
         self.namespace = params['deployment_namespace']
         self.domain = params['domain_name']
         self.template_url = params['template_url']
+        # A folder of the template repository to copy as it is, in place of
+        # rendering the whole repository with Copier; the app has the folder's name
+        self.template_path = params.get('template_path')
+        if self.template_path and folder_name(self.template_path) != self.app_name:
+            raise ValueError(
+                f"{self.app_name} cannot be deployed from the folder {self.template_path}: an application "
+                f"deployed from a folder has the folder's name, {folder_name(self.template_path)}"
+            )
         # Inside container: /home/thinkube is mounted from host's /home/{ansible_user}/shared-code
         # Apps the user works on live under apps/; platform components live
         # under components/. The deploy request says which, from the template
@@ -122,7 +132,7 @@ class ApplicationDeployer:
         # Will be populated during deployment
         self.secrets = {}
         self.thinkube_config = {}
-        self.template_version = None  # Set by run_copier: the template ref used (release tag or commit)
+        self.template_version = None  # Set by the copy of the template: the ref used (release tag or commit)
         self.k8s_core = None
         self.k8s_custom = None
         self.build_architectures = None  # Set in phase 2 from the cluster's nodes and thinkube.yaml
@@ -175,8 +185,8 @@ class ApplicationDeployer:
         DeploymentLogger.success("Phase 1 complete")
 
     async def phase1b_copier(self):
-        """Phase 1B: Pull latest changes and run Copier."""
-        DeploymentLogger.phase("1B", "Copier & Repository Sync")
+        """Phase 1B: Pull latest changes, then copy the template: its folder as it is, or all of it with Copier."""
+        DeploymentLogger.phase("1B", "Template Copy & Repository Sync")
 
         # Load Gitea token if needed for pulling
         if not self.secrets.get('gitea'):
@@ -185,9 +195,39 @@ class ApplicationDeployer:
         # Pull latest changes from Gitea before running Copier
         await self.pull_latest_from_gitea()
 
-        await self.run_copier()
+        if self.template_path:
+            await self.copy_template_folder()
+        else:
+            await self.run_copier()
+
+        # A file whose content is the time of the deploy, so that the deploy
+        # always has a change to commit and its push starts a build
+        trigger_file = Path(self.local_repo_path) / '.deployment-trigger'
+        trigger_file.write_text(f"Deployment triggered at {datetime.utcnow().isoformat()}Z\n")
 
         DeploymentLogger.success("Phase 1B complete")
+
+    async def copy_template_folder(self):
+        """Replace the checkout's files with the folder template_path of the template repository.
+
+        The folder is read at the template's ref (template_ref in
+        scripts/template_version.py), the same ref a Copier deploy uses.
+        """
+        self.template_version = await asyncio.to_thread(template_ref, self.template_url)
+        DeploymentLogger.log(
+            f"Copying the folder {self.template_path} of {self.template_url} (ref {self.template_version}) "
+            f"over {self.local_repo_path}; files the folder no longer has are removed"
+        )
+
+        def copy():
+            with tempfile.TemporaryDirectory(prefix="template-folder-") as work_dir:
+                archive = fetch_folder(
+                    self.template_url, self.template_version, self.template_path, work_dir, github_git_env()
+                )
+                replace_checkout(self.local_repo_path, archive)
+
+        await asyncio.to_thread(copy)
+        DeploymentLogger.success("Folder copied")
 
     async def pull_latest_from_gitea(self):
         """Bring the checkout to the Gitea repository's main, after checking what a template deploy would replace.
@@ -367,12 +407,6 @@ git fetch origin main
         if returncode != 0:
             DeploymentLogger.error(f"Copier failed: {stderr}")
             raise RuntimeError("Copier execution failed")
-
-        # Add deployment trigger file with timestamp to ensure there's always a change to commit
-        # This ensures webhook triggers even when template hasn't changed
-        trigger_file = Path(self.local_repo_path) / '.deployment-trigger'
-        trigger_file.write_text(f"Deployment triggered at {datetime.utcnow().isoformat()}Z\n")
-        DeploymentLogger.debug(f" Created deployment trigger file")
 
         DeploymentLogger.success("Copier processing complete")
 

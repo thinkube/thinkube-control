@@ -105,7 +105,21 @@ container_registry:
   default: "{{ registry_subdomain }}.{{ domain_name }}"
   when: false  # Don't ask user
 
-# Files to skip
+# What Copier keeps out of the deployed copy of Thinkube Control: Copier's own
+# default list, and extensions/. Each folder of extensions/ is an application
+# of its own, deployed from the folder (scripts/template_folder.py); it is no
+# part of Control's build.
+_exclude:
+  - copier.yml
+  - copier.yaml
+  - "~*"
+  - "*.py[co]"
+  - __pycache__
+  - .git
+  - .DS_Store
+  - .svn
+  - extensions
+
 # Removed _skip_if_exists to allow updates during development
 
 # Post-generation message

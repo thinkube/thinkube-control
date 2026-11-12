@@ -45,6 +45,7 @@ from app.services.metadata_fetcher import CatalogUnavailableError, fetch_merged_
 
 sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
 from manifest_plan import EXTENSION_NAMESPACE, RESERVED_EXTENSION_NAMES  # noqa: E402
+from template_folder import folder_name, source_refusal  # noqa: E402
 from typing import List as TypingList
 import yaml
 import aiohttp
@@ -408,6 +409,11 @@ async def deploy_template_async(
 
     Optional components that are templates (vllm, tensorrt, text-embeddings) are refused
     here: install_optional_component installs them.
+
+    With template_path, the deploy takes one folder of the repository and copies it as it
+    is, with no template variables; template_name must be the folder's name. The extensions
+    of Thinkube Control are deployed this way, from extensions/<name> of
+    https://github.com/thinkube/thinkube-control, with the variable extension set to true.
     """
     return await _queue_template_deploy(request, db, current_user, first_deploy=True)
 
@@ -448,6 +454,23 @@ async def _queue_template_deploy(
                 ),
             )
         deploy_type = "extension" if is_extension else service_type
+
+        # A folder deploy copies one folder of the repository; the app has the folder's name
+        if request.template_path is not None:
+            if is_component:
+                raise HTTPException(status_code=400, detail="a component is deployed from its whole template")
+            try:
+                expected_name = folder_name(request.template_path)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            if request.template_name != expected_name:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"An application deployed from the folder {request.template_path} has the "
+                        f"folder's name: template_name must be '{expected_name}'"
+                    ),
+                )
         # The template writes the platform the extension is built for: this one, on every deploy
         if is_extension:
             try:
@@ -489,6 +512,24 @@ async def _queue_template_deploy(
                 or f"Service name '{request.template_name}' is not available",
             )
 
+        # An app deployed from a folder is deployed from that folder again, or deleted first
+        deployed = (
+            db.query(TemplateDeployment)
+            .filter(TemplateDeployment.name == request.template_name, TemplateDeployment.status == "success")
+            .order_by(desc(TemplateDeployment.created_at))
+            .first()
+        )
+        if deployed is not None:
+            refused = source_refusal(
+                request.template_name,
+                deployed.template_url,
+                (deployed.variables or {}).get("template_path"),
+                str(request.template_url),
+                request.template_path,
+            )
+            if refused:
+                raise HTTPException(status_code=409, detail=refused)
+
         # The app is served at <name>.<domain>; a platform service may already be there
         target_namespace = EXTENSION_NAMESPACE if is_extension else request.template_name
         claim = other_claim(
@@ -529,6 +570,7 @@ async def _queue_template_deploy(
         deployment_vars = {
             "template_url": str(request.template_url),
             "app_name": request.template_name,
+            **({"template_path": request.template_path} if request.template_path is not None else {}),
             # An app's namespace is its name; an extension runs in Control's
             "deployment_namespace": EXTENSION_NAMESPACE if is_extension else request.template_name,
             **request.variables,
@@ -630,6 +672,10 @@ async def redeploy_template_async(
 
     Use it after changing thinkube.yaml, or to render the app again from its template, and
     only on a checkout that is clean and fully pushed.
+
+    An app deployed from a folder (template_path) is the exception: its source is the
+    folder, and this redeploy is how a change to the folder ships. Step 2 then replaces the
+    checkout's files with the folder's, and removes the files the folder no longer has.
 
     Do NOT use it to ship code changes. For code, commit and push to the app's Gitea
     repository (git pull --rebase first: every build commits the new image tag): the push

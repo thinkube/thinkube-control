@@ -16,6 +16,9 @@ class TemplateDeployAsyncRequest(BaseModel):
 
     template_url: HttpUrl
     template_name: str
+    # A folder of the repository to deploy as it is, in place of the whole
+    # repository as a template; the application has the folder's name
+    template_path: Optional[str] = None
     variables: Dict[str, Any] = {}
     execution_mode: Optional[str] = "background"  # "websocket" or "background"
 
