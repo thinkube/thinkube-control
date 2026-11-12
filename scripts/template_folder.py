@@ -84,6 +84,23 @@ def fetch_folder(template_url: str, ref: str, template_path: str, work_dir: str,
     folder at that ref.
     """
     folder_segments(template_path)
+    repo = _fetch(template_url, ref, work_dir, env)
+    kind = subprocess.run(
+        ["git", "cat-file", "-t", f"FETCH_HEAD:{template_path}"],
+        cwd=repo, env=env, capture_output=True, text=True, timeout=60,
+    )
+    if kind.returncode != 0 or kind.stdout.strip() != "tree":
+        raise RuntimeError(f"{template_url} has no folder '{template_path}' at {ref}")
+    archive = str(Path(work_dir, "folder.tar"))
+    _git(
+        ["archive", "--format=tar", "-o", archive, f"FETCH_HEAD:{template_path}"],
+        repo, env, f"read the folder {template_path} of {template_url}",
+    )
+    return archive
+
+
+def _fetch(template_url: str, ref: str, work_dir: str, env: Dict[str, str]) -> str:
+    """Fetch the repository at ref into a new repository under work_dir; its path."""
     repo = Path(work_dir, "repo")
     repo.mkdir()
     _git(["init", "--quiet"], str(repo), env, f"prepare the fetch of {template_url}")
@@ -91,18 +108,32 @@ def fetch_folder(template_url: str, ref: str, template_path: str, work_dir: str,
         ["fetch", "--quiet", "--depth", "1", template_url, ref],
         str(repo), env, f"fetch {template_url} at {ref}",
     )
-    kind = subprocess.run(
-        ["git", "cat-file", "-t", f"FETCH_HEAD:{template_path}"],
-        cwd=str(repo), env=env, capture_output=True, text=True, timeout=60,
+    return str(repo)
+
+
+def application_folders(template_url: str, ref: str, parent: str, work_dir: str, env: Dict[str, str]) -> List[str]:
+    """The names of the folders of parent that hold an application (a thinkube.yaml), at ref, sorted.
+
+    Raises RuntimeError when the repository cannot be read or has no folder
+    parent at that ref.
+    """
+    folder_segments(parent)
+    repo = _fetch(template_url, ref, work_dir, env)
+    listed = subprocess.run(
+        ["git", "ls-tree", "-d", "--name-only", f"FETCH_HEAD:{parent}"],
+        cwd=repo, env=env, capture_output=True, text=True, timeout=60,
     )
-    if kind.returncode != 0 or kind.stdout.strip() != "tree":
-        raise RuntimeError(f"{template_url} has no folder '{template_path}' at {ref}")
-    archive = str(Path(work_dir, "folder.tar"))
-    _git(
-        ["archive", "--format=tar", "-o", archive, f"FETCH_HEAD:{template_path}"],
-        str(repo), env, f"read the folder {template_path} of {template_url}",
-    )
-    return archive
+    if listed.returncode != 0:
+        raise RuntimeError(f"{template_url} has no folder '{parent}' at {ref}")
+    names = []
+    for name in listed.stdout.splitlines():
+        declared = subprocess.run(
+            ["git", "cat-file", "-e", f"FETCH_HEAD:{parent}/{name}/thinkube.yaml"],
+            cwd=repo, env=env, capture_output=True, timeout=60,
+        )
+        if declared.returncode == 0:
+            names.append(name)
+    return sorted(names)
 
 
 def replace_checkout(checkout: str, archive: str) -> None:

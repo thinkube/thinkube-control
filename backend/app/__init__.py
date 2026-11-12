@@ -512,6 +512,7 @@ MCP_OPERATIONS = [
     "download_debug_log",          # Resource
     "deploy_template",             # Tool
     "redeploy_template",           # Tool
+    "deploy_extensions",           # Tool
     "cancel_deployment",           # Tool
     "list_deployed_apps",          # Resource
     "delete_app",                  # Tool

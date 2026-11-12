@@ -132,6 +132,10 @@ class ApplicationDeployer:
         # Will be populated during deployment
         self.secrets = {}
         self.thinkube_config = {}
+        # A folder deploy that fails before its push puts the checkout's tracked
+        # files back: the next deploy refuses a checkout with uncommitted changes
+        self.folder_copied = False
+        self.pushed = False
         self.template_version = None  # Set by the copy of the template: the ref used (release tag or commit)
         self.k8s_core = None
         self.k8s_custom = None
@@ -226,6 +230,7 @@ class ApplicationDeployer:
                 )
                 replace_checkout(self.local_repo_path, archive)
 
+        self.folder_copied = True
         await asyncio.to_thread(copy)
         DeploymentLogger.success("Folder copied")
 
@@ -265,7 +270,7 @@ git fetch origin main
             f"cd {self.local_repo_path} && {UNPUSHED_COMMAND}", "read the checkout's unpushed commits"
         )
         refused = checkout_refusal(
-            self.app_name, self.local_repo_path, changed_files(status), parse_log(unpushed)
+            self.app_name, self.local_repo_path, changed_files(status), parse_log(unpushed), self.template_path
         )
         if refused:
             raise RuntimeError(refused)
@@ -1595,6 +1600,7 @@ spec:
         DeploymentLogger.build("pushed_at", datetime.now(timezone.utc).isoformat())
 
         await self.git_commit_and_push()
+        self.pushed = True
 
         DeploymentLogger.success("Changes pushed to Gitea")
 
@@ -2333,6 +2339,15 @@ LIMIT 5;"
             DeploymentLogger.debug(f" Returning exit code 1")
             import traceback
             traceback.print_exc()
+            if self.folder_copied and not self.pushed and Path(self.local_repo_path, '.git', 'HEAD').exists():
+                await self._git_or_raise(
+                    f"cd {self.local_repo_path} && git reset --hard HEAD",
+                    "put the checkout's files back after the failed deploy",
+                )
+                DeploymentLogger.log(
+                    f"Put the tracked files of {self.local_repo_path} back as they were before the copy "
+                    f"(git reset --hard HEAD)"
+                )
             return 1
         finally:
             await self.cleanup_k8s_clients()

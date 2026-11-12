@@ -9,6 +9,10 @@ template over it with `copier copy --force`, and regenerates k8s/. Changes to
 tracked files that are not committed, and commits that are not pushed, exist
 only in that checkout: the reset destroys them. The deploy therefore stops
 when the checkout holds either, names them, and says to commit and push first.
+
+A deploy from a folder (scripts/template_folder.py) resets the checkout the
+same way and then replaces its files with the folder's. Its checkout is a
+deployed copy: work found there belongs in the folder.
 """
 
 from __future__ import annotations
@@ -26,8 +30,13 @@ def changed_files(porcelain: str) -> list[str]:
     return [line[3:] for line in porcelain.splitlines() if line.strip()]
 
 
-def refusal(app_name: str, checkout: str, changed: list[str], unpushed: list[Commit]) -> Optional[str]:
-    """Why the deploy stops before resetting the checkout, or None when the checkout holds nothing of its own."""
+def refusal(
+    app_name: str, checkout: str, changed: list[str], unpushed: list[Commit], folder: Optional[str] = None
+) -> Optional[str]:
+    """Why the deploy stops before resetting the checkout, or None when the checkout holds nothing of its own.
+
+    folder is the folder of the template repository the app is deployed from, when it is deployed from one.
+    """
     if not changed and not unpushed:
         return None
     parts = [
@@ -40,6 +49,13 @@ def refusal(app_name: str, checkout: str, changed: list[str], unpushed: list[Com
     if unpushed:
         parts.append(f"{len(unpushed)} commit(s) not pushed to Gitea:")
         parts.extend(f"  {c.sha[:10]} {c.author}: {c.subject}" for c in unpushed)
+    if folder:
+        parts.append(
+            f"{app_name} is deployed from the folder {folder} of its repository, and this checkout is a "
+            f"deployed copy. Make the change in that folder, push it, and discard it here "
+            f"(cd {checkout} && git reset --hard origin/main) before deploying again."
+        )
+        return "\n".join(parts)
     parts.append(
         f"Commit and push them first (cd {checkout} && git add <files> && git commit && git pull --rebase "
         f"&& git push). A push to Gitea builds and deploys the app by itself; redeploy only to apply a "
@@ -48,13 +64,21 @@ def refusal(app_name: str, checkout: str, changed: list[str], unpushed: list[Com
     return "\n".join(parts)
 
 
-def replacement_warning(checkout: str, checkout_exists: bool) -> Optional[str]:
-    """What a deploy replaces in an existing checkout, or None when there is no checkout to replace."""
+def replacement_warning(checkout: str, checkout_exists: bool, folder: Optional[str] = None) -> Optional[str]:
+    """What a deploy replaces in an existing checkout, or None when there is no checkout to replace.
+
+    folder is the folder of the template repository the app is deployed from, when it is deployed from one.
+    """
     if not checkout_exists:
         return None
+    copies = (
+        f"replaces its files with those of the folder {folder} (a file the folder no longer has is removed)"
+        if folder
+        else "copies the template's files over it (copier copy --force)"
+    )
     return (
         f"The deploy resets the checkout {checkout} to Gitea's main (git reset --hard; it refuses when the "
-        f"checkout has uncommitted changes or unpushed commits), copies the template's files over it "
-        f"(copier copy --force), regenerates k8s/ from thinkube.yaml, and commits and pushes the result. "
+        f"checkout has uncommitted changes or unpushed commits), {copies}, "
+        f"regenerates k8s/ from thinkube.yaml, and commits and pushes the result. "
         f"An existing database of the app is kept."
     )

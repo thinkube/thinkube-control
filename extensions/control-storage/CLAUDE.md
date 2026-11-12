@@ -7,7 +7,7 @@ name of the folder this file is in.
 The same files exist in two places:
 
 - `extensions/<name>` in the thinkube-control repository: the source. Change
-  it here.
+  it here. `manifest.yaml` names the secrets and parameters a deploy needs.
 - `~/apps/<name>`, with the Gitea repository `thinkube-deployments/<name>`:
   the deployed copy. A deploy writes it. Never edit it and never commit to it:
   the next deploy replaces what was pushed there.
@@ -23,12 +23,8 @@ The same files exist in two places:
    git push
    ```
 
-3. Deploy the folder with the thinkube-control MCP tool `redeploy_template`:
-
-   - `template_url`: `https://github.com/thinkube/thinkube-control`
-   - `template_path`: `extensions/<name>`
-   - `template_name`: `<name>`
-   - `variables`: `{"extension": true}`
+3. Deploy it with the thinkube-control MCP tool `deploy_extensions`, with
+   `names`: `["<name>"]`.
 
    The deploy copies the folder over `~/apps/<name>`, removes the files the
    folder no longer has, regenerates `k8s/` from `thinkube.yaml`, and pushes

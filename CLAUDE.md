@@ -33,7 +33,7 @@ Copier syncs from GitHub to the runtime location (`/home/thinkube/thinkube-contr
 
 ### Extensions (`extensions/`)
 
-Each folder of `extensions/` is an extension of Thinkube Control: an application of its own, with its own pods, build and tests (`EXTENSIONS.md`). Control's deploy does not include them. A change to `extensions/<name>` is pushed to GitHub and deployed with the MCP tool `redeploy_template` (`template_url` `https://github.com/thinkube/thinkube-control`, `template_path` `extensions/<name>`, `template_name` `<name>`, `variables` `{"extension": true}`); `12_deploy_dev.yaml` is not run for it. The checkout `~/apps/<name>` is the deployed copy: never edit it.
+Each folder of `extensions/` is an extension of Thinkube Control: an application of its own, with its own pods, build and tests (`EXTENSIONS.md`). Control's deploy does not include them. A change to `extensions/<name>` is pushed to GitHub and deployed with the MCP tool `deploy_extensions` (`names`: `["<name>"]`), or with `ansible/40_thinkube/core/thinkube-control/15_deploy_extensions.yaml -e extensions=<name>` of thinkube; `12_deploy_dev.yaml` is not run for it. The checkout `~/apps/<name>` is the deployed copy: never edit it.
 
 A change is finished when it is pushed to `main`, deployed with `12_deploy_dev.yaml` and seen working. Publishing it as a fix to `release-0.1` (tag, `VERSION` in `thinkube`, the `thinkube-fixes` entry) is the separate release process in `thinkube-release/VERSIONING.md`, done only when someone asks for a release.
 

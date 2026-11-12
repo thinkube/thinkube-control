@@ -45,7 +45,7 @@ from app.services.metadata_fetcher import CatalogUnavailableError, fetch_merged_
 
 sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
 from manifest_plan import EXTENSION_NAMESPACE, RESERVED_EXTENSION_NAMES  # noqa: E402
-from template_folder import folder_name, source_refusal  # noqa: E402
+from template_folder import application_folders, folder_name, source_refusal  # noqa: E402
 from typing import List as TypingList
 import yaml
 import aiohttp
@@ -551,7 +551,7 @@ async def _queue_template_deploy(
         from component_checkout import checkout_path
 
         checkout = checkout_path(APPS_DIR, COMPONENTS_DIR, request.template_name, deploy_type)
-        replaced = replacement_warning(checkout, Path(checkout, ".git").exists())
+        replaced = replacement_warning(checkout, Path(checkout, ".git").exists(), request.template_path)
 
         # Components auto-confirm overwrites; user apps need explicit confirmation
         if conflict_message and not is_component and not overwrite_confirmed:
@@ -684,6 +684,86 @@ async def redeploy_template_async(
     """
     request.variables["_overwrite_confirmed"] = True
     return await _queue_template_deploy(request, db, current_user, first_deploy=False)
+
+
+# Where the extensions of Thinkube Control have their source: one folder each
+CONTROL_REPOSITORY_URL = "https://github.com/thinkube/thinkube-control"
+EXTENSIONS_FOLDER = "extensions"
+
+
+class ExtensionsDeployRequest(BaseModel):
+    """Which extensions of Thinkube Control to deploy; none named is all of them."""
+
+    names: Optional[List[str]] = None
+
+
+@router.post("/extensions/deploy", operation_id="deploy_extensions")
+async def deploy_extensions(
+    request: ExtensionsDeployRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user_dual_auth),
+):
+    """
+    Deploy extensions of Thinkube Control from their source: the folders of extensions/
+    in https://github.com/thinkube/thinkube-control, at the version this cluster follows.
+
+    This is how a change to an extension ships: push the change to GitHub, then call this
+    with the extension's name. Without names, every extension of the repository is
+    deployed; one that is not on the cluster yet is created.
+
+    Each deploy copies the folder over the checkout /home/thinkube/apps/<name>, removes
+    the files the folder no longer has, regenerates k8s/ from thinkube.yaml, pushes to the
+    Gitea repository thinkube-deployments/<name>, and waits for the build, which runs the
+    extension's tests. The deploys wait in the run queue and run one at a time. The answer
+    gives a deployment_id per extension for get_deployment_status and get_deployment_logs,
+    or the reason one was not queued. A deploy of Thinkube Control itself is not part of this.
+    """
+    sys.path.insert(0, "/home/thinkube/thinkube-control/scripts")
+    from template_version import TemplateNotReleased, github_git_env, template_ref
+
+    def available_at_ref() -> Tuple[str, List[str]]:
+        ref = template_ref(CONTROL_REPOSITORY_URL)
+        with tempfile.TemporaryDirectory(prefix="extensions-") as work_dir:
+            return ref, application_folders(
+                CONTROL_REPOSITORY_URL, ref, EXTENSIONS_FOLDER, work_dir, github_git_env()
+            )
+
+    try:
+        ref, available = await asyncio.to_thread(available_at_ref)
+    except (TemplateNotReleased, RuntimeError) as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    wanted = request.names if request.names else available
+    unknown = sorted(set(wanted) - set(available))
+    if unknown:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"{CONTROL_REPOSITORY_URL} has no extension {', '.join(unknown)} in {EXTENSIONS_FOLDER}/ "
+                f"at {ref}. It has: {', '.join(available)}"
+            ),
+        )
+
+    deployments = []
+    for name in wanted:
+        entry = {"name": name, "template_path": f"{EXTENSIONS_FOLDER}/{name}"}
+        try:
+            queued = await _queue_template_deploy(
+                TemplateDeployAsyncRequest(
+                    template_url=CONTROL_REPOSITORY_URL,
+                    template_name=name,
+                    template_path=entry["template_path"],
+                    variables={"extension": True, "_overwrite_confirmed": True},
+                ),
+                db,
+                current_user,
+                first_deploy=False,
+            )
+            entry.update(deployment_id=queued.deployment_id, status=queued.status, message=queued.message)
+        except HTTPException as e:
+            entry.update(deployment_id=None, status="refused", message=str(e.detail))
+        deployments.append(entry)
+    return {"template_url": CONTROL_REPOSITORY_URL, "ref": ref, "deployments": deployments}
 
 
 @router.get(

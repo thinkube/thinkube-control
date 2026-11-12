@@ -15,6 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 from template_folder import (  # noqa: E402
+    application_folders,
     fetch_folder,
     folder_name,
     folder_segments,
@@ -128,6 +129,20 @@ def test_a_file_removed_from_the_folder_leaves_the_checkout_and_the_builds_files
     assert (checkout / "k8s/.argocd-source-control-storage.yaml").read_text() == "image tags\n"
     assert not (checkout / "k8s/deployments.yaml").exists()
     assert (checkout / "untracked.txt").exists()
+
+
+def test_the_applications_of_a_folder_are_its_folders_with_a_thinkube_yaml(source, tmp_path):
+    commit(source, {"extensions/notes/README.md": "no application here\n", "extensions/list.txt": "a file\n"})
+    work = tmp_path / "work"
+    work.mkdir()
+    assert application_folders(str(source), "main", "extensions", str(work), ENV) == ["control-storage", "forge"]
+
+
+def test_a_repository_without_the_parent_folder_is_named(source, tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    with pytest.raises(RuntimeError, match="has no folder 'parts' at main"):
+        application_folders(str(source), "main", "parts", str(work), ENV)
 
 
 def test_only_the_builds_image_tags_are_kept():

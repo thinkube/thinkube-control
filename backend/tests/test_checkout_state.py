@@ -84,3 +84,16 @@ def test_the_checkout_is_read_from_real_git(tmp_path):
     git("commit", "-q", "-am", "Second")
     changed, unpushed = state()
     assert changed == [] and [c.subject for c in unpushed] == ["Second"]
+
+
+def test_a_folder_deploy_says_it_replaces_the_files_with_the_folders():
+    warning = replacement_warning("/h/apps/forge", checkout_exists=True, folder="extensions/forge")
+    assert "replaces its files with those of the folder extensions/forge" in warning
+    assert "copier" not in warning
+
+
+def test_work_in_the_checkout_of_a_folder_deploy_belongs_in_the_folder():
+    refused = refusal("forge", "/h/apps/forge", ["backend/app/main.py"], [], folder="extensions/forge")
+    assert "backend/app/main.py" in refused
+    assert "Make the change in that folder" in refused
+    assert "git pull --rebase" not in refused

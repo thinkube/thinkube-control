@@ -72,22 +72,28 @@ The order is the order of the table. Each move ends before the next begins.
 
 ## How an extension is deployed
 
-Push the folder to GitHub, then call `redeploy_template` (a first deploy:
-`deploy_template`) with:
+Push the folder to GitHub, then ask Control to deploy it:
 
-- `template_url`: `https://github.com/thinkube/thinkube-control`
-- `template_path`: `extensions/<name>`
-- `template_name`: `<name>`
-- `variables`: `{"extension": true}`
+- the MCP tool `deploy_extensions` with `names`: `["<name>"]`
+  (`POST /api/v1/templates/extensions/deploy`), or
+- the playbook of thinkube
+  `ansible/40_thinkube/core/thinkube-control/15_deploy_extensions.yaml -e extensions=<name>`,
+  which also waits for the build to end.
 
-The answer is a deployment id; `get_deployment_status` follows the deploy to
-the end of its build.
+Without a name, every extension of the repository is deployed; one that is
+not on the cluster is created. The install runs the playbook this way after
+it deploys Control (`00_install.yaml`).
+
+The answer gives a deployment id per extension; `get_deployment_status`
+follows a deploy to the end of its build. Under it is a deploy request with
+`template_path`: `deploy_template` and `redeploy_template` take the same field
+for any repository.
 
 ## How a part is moved
 
 1. Create the folder `extensions/control-<part>` from the folder of an
-   existing extension of the same shape: `thinkube.yaml`, `backend/`,
-   `frontend/`, `CLAUDE.md`, `README.md`.
+   existing extension of the same shape: `thinkube.yaml`, `manifest.yaml`,
+   `backend/`, `frontend/`, `CLAUDE.md`, `README.md`.
 2. Move the routes, services, models and tests into its backend, the page
    and its store into its frontend.
 3. Declare `access` and `filesystems` if it needs them. Set the title, the
@@ -114,10 +120,6 @@ the end of its build.
 
 ## Open
 
-- **Install.** Datasets, Forge and Storage exist only in the Gitea of the
-  cluster they were written on. A new install has none of them. Each needs a
-  source repository the install deploys from, as the inference servers have
-  (`template.url` in `optional_components.json` of thinkube-metadata).
 - **Top bar.** An extension draws only its own pages. Models has an
   indicator in Control's top bar (`DownloadIndicator`); the host needs a
   place for it before Models moves.
