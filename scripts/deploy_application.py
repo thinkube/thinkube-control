@@ -1558,7 +1558,9 @@ spec:
         DeploymentLogger.phase(4, "Git Operations & Build Start")
 
         # Sequential order: generate manifests → migrations → git hooks → repo → webhook → ArgoCD app → push
-        await self.generate_migrations()
+        # The migrations of an app deployed from a folder are source, in the folder
+        if not self.template_path:
+            await self.generate_migrations()
         await self.setup_git_hooks()
         await self.ensure_api_token_file()
 

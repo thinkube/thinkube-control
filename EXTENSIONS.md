@@ -62,6 +62,8 @@ The order is the order of the table. Each move ends before the next begins.
   (`scripts/template_folder.py`). The checkout and the Gitea repository are
   deployed copies; a change is made in the folder. The extension has the
   folder's name.
+  A deploy generates nothing into the source: the Alembic migrations are
+  written by hand in the folder, like the rest.
 - **Version.** An extension is read from this repository at the ref the
   cluster deploys platform templates from: the head of the branch it follows
   when it develops the platform, the newest release tag of the platform's
