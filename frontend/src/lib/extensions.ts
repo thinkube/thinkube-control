@@ -16,6 +16,8 @@ export interface Extension {
   depends: string[];
   ui: { module: string; css: string | null; folder: string };
   nav: { label: string; path: string; icon: string | null }[];
+  /** A count in Control's top bar: `api` answers {count}, `path` is the page a click opens. */
+  indicator: { api: string; path: string; icon: string; title: string } | null;
   /** Why its pages cannot be loaded: another platform version, or depends not installed. */
   problems: string[];
 }

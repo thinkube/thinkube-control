@@ -24,6 +24,14 @@ def test_a_complete_declaration_is_taken_with_the_module_folder():
     assert extension["ui"] == {"module": "/extension/index.js", "css": "/extension/index.css", "folder": "/extension/"}
     assert [e["path"] for e in extension["nav"]] == ["/", "/runs/new"]
     assert extension["nav"][1]["icon"] is None
+    assert extension["indicator"] is None
+
+
+def test_an_indicator_is_taken_with_its_four_fields():
+    indicator = {"api": "/mirrors/active", "path": "/", "icon": "download", "title": "Active mirrors"}
+    extension, error = check_extension({**DECLARED, "indicator": indicator})
+    assert error is None
+    assert extension["indicator"] == indicator
 
 
 @pytest.mark.parametrize("change, field", [
@@ -35,6 +43,9 @@ def test_a_complete_declaration_is_taken_with_the_module_folder():
     ({"nav": [{"label": "Runs", "path": "/../admin"}]}, "spec.extension.nav[0].path"),
     ({"platform": "0.1.3"}, "spec.extension.platform"),
     ({"depends": ["Datasets"]}, "spec.extension.depends"),
+    ({"indicator": "/mirrors/active"}, "spec.extension.indicator"),
+    ({"indicator": {"api": "mirrors", "path": "/", "icon": "download", "title": "Mirrors"}}, "spec.extension.indicator.api"),
+    ({"indicator": {"api": "/mirrors/active", "path": "/", "icon": "download"}}, "spec.extension.indicator.title"),
 ])
 def test_a_declaration_with_a_wrong_field_is_refused_naming_it(change, field):
     extension, error = check_extension({**DECLARED, **change})

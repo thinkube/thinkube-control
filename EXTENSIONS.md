@@ -57,6 +57,18 @@ The order is the order of the table. Each move ends before the next begins.
   tools are named `<part>_<verb>...` (`storage_get`, `forge_list_runs`). The
   server is listed in `ansible/roles/agent_clients/vars/main.yaml` of
   thinkube, with its read-only tools.
+- **Top bar.** An extension draws only its own pages. A count in Control's
+  top bar is declared, not drawn: `spec.extension.indicator` names an API
+  path that answers `{"count": n}`, and Control shows it while it is above
+  zero (`frontend/src/components/ExtensionIndicators.tsx`).
+- **Control's settings.** `deploy_extensions` gives an extension the
+  settings of Control named in `CONTROL_SETTINGS`
+  (`backend/app/api/templates.py`), when its `spec.env` declares them.
+- **Reads by Control.** A read Control's backend makes without a user, in
+  the background, goes to a route of the extension outside `/api`
+  (`/internal/...`): only pods of the cluster reach it, and it needs no
+  sign-in. It returns what the extension shows its users anyway, nothing
+  more.
 - **Sign-in.** A Thinkube Control API token signs in to an extension:
   the extension asks Control whose it is (`control_token_user` in an
   extension's `app/core/security.py`).
@@ -132,8 +144,3 @@ for any repository.
   extension's `python -m app.jobs.copy_from_control`, run once in its
   backend's pod, copies their rows; after that nothing reads them.
 
-## Open
-
-- **Top bar.** An extension draws only its own pages. Models has an
-  indicator in Control's top bar (`DownloadIndicator`); the host needs a
-  place for it before Models moves.

@@ -18,6 +18,14 @@ An extension declares itself in its thinkube.yaml, under spec.extension:
         - label: Runs
           path: /
           icon: list-checks
+      indicator:                     # optional: a count in Control's top bar
+        api: /runs/active            # GET on the extension's /api/v1; answers {"count": n}
+        path: /                      # the extension's page a click opens
+        icon: loader                 # a lucide icon name
+        title: Active runs           # the text shown on hover
+
+Control polls the indicator's api every 10 seconds and shows the icon with
+the count while it is above zero.
 
 Service discovery reads the declaration from the app's thinkube.yaml on its
 Gitea main, so a pushed change is seen without a redeploy. Control draws the
@@ -80,6 +88,17 @@ def check_extension(declared: Any) -> Tuple[Optional[Dict[str, Any]], Optional[s
                 "path": _path(entry.get("path"), f"spec.extension.nav[{i}].path"),
                 "icon": _text(entry["icon"], f"spec.extension.nav[{i}].icon") if "icon" in entry else None,
             })
+        indicator = None
+        if "indicator" in declared:
+            given = declared["indicator"]
+            if not isinstance(given, dict):
+                raise ValueError("spec.extension.indicator must be a mapping with api, path, icon and title")
+            indicator = {
+                "api": _path(given.get("api"), "spec.extension.indicator.api"),
+                "path": _path(given.get("path"), "spec.extension.indicator.path"),
+                "icon": _text(given.get("icon"), "spec.extension.indicator.icon"),
+                "title": _text(given.get("title"), "spec.extension.indicator.title"),
+            }
         platform = str(declared.get("platform", ""))
         if not PLATFORM_VERSION.match(platform):
             raise ValueError('spec.extension.platform must be the platform MAJOR.MINOR it is built for, as "0.1"')
@@ -94,6 +113,7 @@ def check_extension(declared: Any) -> Tuple[Optional[Dict[str, Any]], Optional[s
             "icon": _text(declared["icon"], "spec.extension.icon") if "icon" in declared else None,
             "ui": {"module": module, "css": css, "folder": folder},
             "nav": entries,
+            "indicator": indicator,
         }, None
     except ValueError as e:
         return None, str(e)

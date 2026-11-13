@@ -19,6 +19,7 @@ import { ThemeToggle } from './components/ThemeToggle';
 import { UserMenu } from './components/UserMenu';
 import ErrorBoundary from './components/ErrorBoundary';
 import { DownloadIndicator } from './components/DownloadIndicator';
+import { ExtensionIndicators } from './components/ExtensionIndicators';
 import { RunsIndicator } from './components/RunsIndicator';
 import { FixesIndicator } from './components/FixesIndicator';
 
@@ -283,6 +284,7 @@ function AppContent() {
         <div className="flex items-center gap-3">
           <FixesIndicator />
           <RunsIndicator />
+          <ExtensionIndicators extensions={extensions} />
           <DownloadIndicator />
           <ThemeToggle />
           <UserMenu />

@@ -690,6 +690,16 @@ async def redeploy_template_async(
 CONTROL_REPOSITORY_URL = "https://github.com/thinkube/thinkube-control"
 EXTENSIONS_FOLDER = "extensions"
 
+# Settings of Control an extension receives when its thinkube.yaml declares
+# them in spec.env: the branch of the platform this cluster follows, and the
+# GitHub account whose metadata repository holds the user's catalogues
+CONTROL_SETTINGS = ("THINKUBE_BRANCH", "GITHUB_USERNAME")
+
+
+def control_settings() -> Dict[str, str]:
+    """The values of CONTROL_SETTINGS in Control's environment; those Control has no value for are left out."""
+    return {name: os.environ[name] for name in CONTROL_SETTINGS if os.environ.get(name)}
+
 
 class ExtensionsDeployRequest(BaseModel):
     """Which extensions of Thinkube Control to deploy; none named is all of them."""
@@ -753,7 +763,7 @@ async def deploy_extensions(
                     template_url=CONTROL_REPOSITORY_URL,
                     template_name=name,
                     template_path=entry["template_path"],
-                    variables={"extension": True, "_overwrite_confirmed": True},
+                    variables={**control_settings(), "extension": True, "_overwrite_confirmed": True},
                 ),
                 db,
                 current_user,
