@@ -30,8 +30,8 @@ async def list_models(
 ):
     """The mirrored models the gateway can serve, with their state.
 
-    A model appears here once mirrored into MLflow (see get_model_catalog for
-    the whole catalog and submit_model_mirror). Its server_type names the
+    A model appears here once mirrored into MLflow (see models_get_catalog of
+    control-models for the whole catalog, and models_mirror). Its server_type names the
     backend types it runs on (get_llm_backend_types lists the installed ones):
     a per-model-pod backend gets one pod per model, created by the load; an
     ollama backend serves several models in one pod per node.

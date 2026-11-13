@@ -71,11 +71,6 @@ class EndpointClassifier:
         "list_secrets",
         "get_secret",
         "get_secret_apps",
-        # Models
-        "get_model_catalog",
-        "list_mirror_jobs",
-        "get_mirror_status",
-        "check_mlflow_status",
         # Jupyter venvs
         "list_jupyter_venvs",
         "get_jupyter_venv",

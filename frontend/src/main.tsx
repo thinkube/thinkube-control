@@ -18,7 +18,6 @@ import { ThemeProvider } from './components/ThemeProvider';
 import { ThemeToggle } from './components/ThemeToggle';
 import { UserMenu } from './components/UserMenu';
 import ErrorBoundary from './components/ErrorBoundary';
-import { DownloadIndicator } from './components/DownloadIndicator';
 import { ExtensionIndicators } from './components/ExtensionIndicators';
 import { RunsIndicator } from './components/RunsIndicator';
 import { FixesIndicator } from './components/FixesIndicator';
@@ -39,7 +38,6 @@ import OptionalComponentsPage from './pages/OptionalComponentsPage';
 import JupyterHubConfigPage from './pages/JupyterHubConfigPage';
 import JupyterKernelsPage from './pages/JupyterKernelsPage';
 import Templates from './pages/Templates';
-import ModelsPage from './pages/ModelsPage';
 import KnativeServicesPage from './pages/KnativeServicesPage';
 import NodesPage from './pages/NodesPage';
 import LLMGatewayPage from './pages/LLMGatewayPage';
@@ -79,7 +77,6 @@ const baseNavigationItems: TkNavItem[] = [
     isGroup: true,
     children: [
       { id: "llm-gateway", label: "LLM Gateway", lucideIcon: Radio, href: "/llm-gateway" },
-      { id: "models", label: "AI Models", lucideIcon: Database, href: "/models" },
       { id: "templates", label: "Templates", lucideIcon: Layers, href: "/templates" },
       { id: "optional-components", label: "Optional Components", lucideIcon: Puzzle, href: "/optional-components" },
       { id: "nodes", label: "Cluster Nodes", lucideIcon: Server, href: "/nodes" },
@@ -182,7 +179,6 @@ function AppContent() {
       favorites: '/dashboard/favorites',
       'all-services': '/dashboard/all',
       'llm-gateway': '/llm-gateway',
-      models: '/models',
       templates: '/templates',
       'knative-services': '/knative-services',
       'optional-components': '/optional-components',
@@ -227,7 +223,6 @@ function AppContent() {
       return `category-${category}`;
     }
     if (path.startsWith('/llm-gateway')) return 'llm-gateway';
-    if (path.startsWith('/models')) return 'models';
     if (path.startsWith('/templates')) return 'templates';
     if (path.startsWith('/knative-services')) return 'knative-services';
     if (path.startsWith('/optional-components')) return 'optional-components';
@@ -260,7 +255,6 @@ function AppContent() {
       return `Dashboard - ${formatted}`;
     }
     if (path.startsWith('/llm-gateway')) return 'LLM Gateway';
-    if (path.startsWith('/models')) return 'AI Models';
     if (path.startsWith('/templates')) return 'Templates';
     if (path.startsWith('/knative-services')) return 'Knative Services';
     if (path.startsWith('/optional-components')) return 'Optional Components';
@@ -285,7 +279,6 @@ function AppContent() {
           <FixesIndicator />
           <RunsIndicator />
           <ExtensionIndicators extensions={extensions} />
-          <DownloadIndicator />
           <ThemeToggle />
           <UserMenu />
         </div>
@@ -299,7 +292,6 @@ function AppContent() {
         <Route path="/services/:id" element={<ErrorBoundary><ServiceDetailsPage /></ErrorBoundary>} />
         <Route path="/services/:id/pods/:podName" element={<PodDetailsPage />} />
         <Route path="/llm-gateway" element={<LLMGatewayPage />} />
-        <Route path="/models" element={<ModelsPage />} />
         <Route path="/tokens" element={<ApiTokensPage />} />
         <Route path="/secrets" element={<SecretsPage />} />
         <Route path="/optional-components" element={<OptionalComponentsPage />} />

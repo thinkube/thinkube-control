@@ -41,13 +41,14 @@ Rules that the tools do not state:
 - Never unload a model you did not load in this task. Other people may be using it.
 
 Steps:
-1. `get_model_catalog`: find the model. Note is_downloaded, server_type, size and gated.
-   A model not in the catalog cannot be mirrored or served; stop and say so.
-2. If is_downloaded is false, `submit_model_mirror` with model_id. It answers with
-   workflow_id; poll `get_mirror_status` with that workflow_id (not job_id) every 30 seconds
+1. `models_get_catalog` (MCP server control-models): find the model. Note is_downloaded,
+   server_type, size and gated. A model not in the catalog cannot be mirrored or served;
+   stop and say so.
+2. If is_downloaded is false, `models_mirror` with model_id. It answers with
+   workflow_id; poll `models_get_mirror` with that workflow_id (not job_id) every 30 seconds
    until is_complete or is_failed (error_message says why). A mirror pulls the weights from
    Hugging Face into MLflow and takes minutes to hours by size. HTTP 409 means a mirror of
-   this model is already running: follow it with `list_mirror_jobs`. When it succeeds, call
+   this model is already running: follow it with `models_list_mirrors`. When it succeeds, call
    `refresh_llm_registry`; the registry otherwise notices the new mirror on its next refresh
    (every 60 seconds).
 3. `get_llm_models`: the model must be listed with state "deployable" (mirrored, not loaded).

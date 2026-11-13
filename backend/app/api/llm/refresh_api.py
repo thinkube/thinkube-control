@@ -27,7 +27,7 @@ async def refresh_registry():
     entry pushed to a metadata repository is seen at once.
     """
     invalidate_catalogs()
-    models_count = await llm_model_registry.refresh()
+    models_count = await llm_model_registry.refresh(fresh=True)
     backends_count = await llm_backend_discovery.refresh()
     nodes_count = llm_gpu_tracker.refresh_nodes()
     return RefreshResponse(

@@ -38,7 +38,7 @@ from app.models.deployment_schemas import (
 from pathlib import Path
 from app.services.background_executor import background_executor
 from app.services.dependency_manager import DependencyManager
-from app.services.model_downloader import ModelDownloaderService
+from app.services.models_catalog import catalogue
 from app.services.fixes_feed import FeedError, platform_version
 from app.services.hostname_claims import cluster_routes, other_claim
 from app.services.metadata_fetcher import CatalogUnavailableError, fetch_merged_catalog
@@ -306,9 +306,8 @@ async def get_template_metadata(
             if dynamic_source == "model_catalog":
                 # Fetch models from catalog and apply filters
                 try:
-                    model_service = ModelDownloaderService()
-                    available_models = model_service.get_available_models()
-                    downloaded_models = model_service.check_all_models_exist()
+                    available_models = catalogue()
+                    downloaded_models = {m["id"]: m["is_downloaded"] for m in available_models}
 
                     # Apply filters
                     filtered_models = []

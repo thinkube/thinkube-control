@@ -20,7 +20,6 @@ from app.api import (
     optional_components,
     cluster_resources,
     jupyterhub_config,
-    model_mirrors,
     gpu_metrics,
     jupyter_venvs,
     jupyter_notebooks,
@@ -55,7 +54,6 @@ api_router.include_router(runs.router, prefix="/runs", tags=["runs"])
 api_router.include_router(fixes.router, prefix="/fixes", tags=["fixes"])
 api_router.include_router(cluster_resources.router, tags=["cluster-resources"])
 api_router.include_router(jupyterhub_config.router, tags=["jupyterhub-config"])
-api_router.include_router(model_mirrors.router, prefix="/models", tags=["models"])
 api_router.include_router(gpu_metrics.router, tags=["gpu-metrics"])
 api_router.include_router(jupyter_venvs.router, tags=["jupyter-venvs"])
 api_router.include_router(jupyter_servers.router, tags=["jupyter-server"])

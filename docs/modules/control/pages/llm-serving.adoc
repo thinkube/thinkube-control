@@ -6,7 +6,7 @@ _How Thinkube Control turns the model catalogue and your GPU nodes into served m
 .TL;DR
 For most work, one sentence is enough: "load Qwen/Qwen3-8B on tkspark". This page says what each step means: the states a model passes through, how the platform sizes it to a node, how a request is routed to the right backend, and how a client authenticates at `llm.<your domain>`.
 
-The *LLM Gateway* and *AI Models* pages of xref:index.adoc[Thinkube Control] offer the same operations.
+The *LLM Gateway* page and the *Models* extension of xref:index.adoc[Thinkube Control] offer the same operations.
 
 image::control-llm-gateway.png[The LLM Gateway page with two backends discovered and two models loaded: Qwen3.5-4B on the DGX Spark through vLLM, Qwen3-Embedding-0.6B on the RTX 3090 node through text-embeddings]
 
@@ -68,7 +68,7 @@ Each backend declares itself in its component's `thinkube.yaml` with `spec.llm_b
 
 == Mirroring
 
-A model must be in the catalogue shown on *AI Models* before it can be mirrored. Mirroring downloads the weights from Hugging Face once into Thinkube Storage, and registers the model in Thinkube Experiments. Submit it from *AI Models* or with `submit_model_mirror`; follow it with `get_mirror_status`. A gated model needs its licence accepted on Hugging Face by the account whose token the installer stored.
+A model must be in the catalogue shown on *Models* before it can be mirrored. Mirroring downloads the weights from Hugging Face once into Thinkube Storage, and registers the model in Thinkube Experiments. Submit it from *Models* or with `models_mirror` of the MCP server `control-models`; follow it with `models_get_mirror`. A gated model needs its licence accepted on Hugging Face by the account whose token the installer stored.
 
 == Loading
 

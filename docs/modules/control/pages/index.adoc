@@ -35,9 +35,9 @@ Every card's *details* page shows the service's health status and the health his
 | Page | What it does
 
 | LLM Gateway | The gateway endpoint, the GPU nodes with their slots and memory, the inference backends it has discovered, and every model in the registry with a *Load* and *Unload* control. xref:llm-serving.adoc[LLM serving and models] describes the mechanics.
-| AI Models | The model catalogue. Mirror a model from Hugging Face into Thinkube Storage; watch the mirror job; delete a mirrored model.
+| Models | The model catalogue, an extension (`control-models`). Mirror a model from Hugging Face into Thinkube Storage; watch the mirror job; delete a mirrored model.
 | Templates | The template catalogue. Deploy a template by name or from a GitHub URL, follow a deployment's progress, publish one of your applications as a template, and delete one of your applications (see <<delete-app>>).
-| Harbor Images | Two tabs. *Mirrored Images*: the public images the platform mirrored into Thinkube Registry, with their mirror date and per-architecture tags, and a control to mirror one again. *Custom Images*: images you define from a build file and build here.
+| Images | An extension (`control-images`), with two tabs. *Mirrored Images*: the public images the platform mirrored into Thinkube Registry, with their mirror date and per-architecture tags, and a control to mirror one again. *Custom Images*: images you define from a build file and build here.
 | Optional Components | The catalogue of optional components with their requirements and whether each is installed. Install one; remove one. An installed component is switched off and on from its card's details page.
 | Cluster Nodes | Every node with its role, architecture, memory, GPUs and version. Add nodes and remove nodes; see xref:install:adding-nodes.adoc[Add more nodes].
 |===

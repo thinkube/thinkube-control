@@ -25,7 +25,7 @@ touch it.
 | Forge | extension `forge` | done |
 | Storage | extension `control-storage` | done |
 | Images (Harbor images, custom images, Jupyter images, mirror) | extension `control-images` | done |
-| Models (catalogue, mirrors, fine-tuned models) | Control | to move, as `control-models` |
+| Models (catalogue, mirrors, fine-tuned models) | extension `control-models` | done |
 | LLM Gateway (`api/llm`, `services/llm_*`) | Control | to move, as `control-llm`, after Models |
 | Notebooks (kernels, servers, notebook jobs, JupyterHub config, training mode, GPU metrics) | Control | to move, as `control-notebooks`, last |
 
@@ -143,4 +143,12 @@ for any repository.
   `image_mirror_jobs` and `custom_image_builds` in `thinkube_control`. The
   extension's `python -m app.jobs.copy_from_control`, run once in its
   backend's pod, copies their rows; after that nothing reads them.
+
+- **Models.** Control reads the catalogue, with each model's mirror state,
+  from the extension (`app/services/models_catalog.py`): the LLM Gateway's
+  registry and the template parameters whose choices are catalogue models.
+  `app/services/metadata_fetcher.py` stays for Control's other catalogues.
+  A cluster that ran Control before the move still has the table
+  `model_mirror_jobs` in `thinkube_control`; the extension's
+  `python -m app.jobs.copy_from_control` copies its rows once.
 

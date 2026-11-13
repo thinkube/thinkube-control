@@ -204,15 +204,16 @@ class LLMModelRegistry:
 
         return None
 
-    async def refresh(self) -> int:
+    async def refresh(self, fresh: bool = False) -> int:
+        """Read the catalogue again; fresh reads it from the metadata repositories, not a cached copy."""
         async with self._lock:
-            return self._poll_catalog()
+            return await asyncio.to_thread(self._poll_catalog, fresh)
 
-    def _poll_catalog(self) -> int:
-        from app.services.model_downloader import get_model_catalog, ModelDownloaderService
+    def _poll_catalog(self, fresh: bool = False) -> int:
+        from app.services.models_catalog import catalogue
 
-        catalog = get_model_catalog()
-        mirrored = ModelDownloaderService().check_all_models_exist()
+        catalog = catalogue(fresh)
+        mirrored = {entry["id"]: entry["is_downloaded"] for entry in catalog}
 
         catalog_by_id = {entry["id"]: entry for entry in catalog}
         updated = {}
@@ -230,11 +231,6 @@ class LLMModelRegistry:
                 initial_state = ModelState.deployable
 
             size = entry.get("size")
-            if not size and entry.get("params_b"):
-                from app.api.model_mirrors import estimate_size_from_params
-                size = estimate_size_from_params(
-                    entry["params_b"], entry.get("quantization", "BF16")
-                )
 
             model = ModelEntry(
                 id=model_id,
@@ -332,7 +328,7 @@ class LLMModelRegistry:
         )
 
         try:
-            self._poll_catalog()
+            await asyncio.to_thread(self._poll_catalog)
         except Exception as e:
             logger.error(f"Model registry poll failed: {e}")
 
@@ -344,7 +340,7 @@ class LLMModelRegistry:
             try:
                 await asyncio.sleep(self._refresh_interval)
                 if self._is_running:
-                    self._poll_catalog()
+                    await asyncio.to_thread(self._poll_catalog)
                     await self._refresh_backends()
                     self._reconcile_states()
             except asyncio.CancelledError:

@@ -19,7 +19,6 @@ from app import create_app
 from app.core.api_tokens import get_current_user_dual_auth
 from app.db.session import get_db
 from app.services import metadata_fetcher as mf
-from app.services import model_downloader
 from app.services import optional_components as oc
 from app.services.metadata_fetcher import CatalogUnavailableError
 
@@ -195,22 +194,6 @@ def test_optional_components_list_answers_502_naming_the_url(monkeypatch, api):
 
     assert r.status_code == 502
     assert mf.platform_metadata_url("optional_components.json") in r.json()["detail"]
-
-
-def test_model_catalog_answers_502_naming_the_url(monkeypatch, api):
-    import app.api.model_mirrors as model_mirrors
-
-    class Downloader:
-        def get_available_models(self):
-            return model_downloader.get_model_catalog()
-
-    monkeypatch.setattr(model_mirrors, "ModelDownloaderService", Downloader)
-    all_fetches_fail(monkeypatch)
-
-    r = api.get("/api/v1/models/catalog")
-
-    assert r.status_code == 502
-    assert mf._github_raw_url("thinkube", "thinkube-metadata", PLATFORM_REF, "models.json") in r.json()["detail"]
 
 
 def test_the_platform_catalog_without_thinkube_branch_is_an_error_naming_it(monkeypatch):
