@@ -1,0 +1,180 @@
+{
+  "app": {
+    "title": "Models"
+  },
+  "nav": {
+    "workspace": "Espai de treball",
+    "home": "Models",
+    "settings": "Configuracio",
+    "apiTokens": "Tokens API",
+    "account": "Compte",
+    "logout": "Tancar sessio"
+  },
+  "models": {
+    "description": "Replica models preoptimitzats de HuggingFace al registre d'Experiments",
+    "errorTitle": "Error",
+    "mirrorsReadFailed": "No s'han pogut llegir les feines de rèplica",
+    "mlflowStatusFailed": "No s'ha pogut llegir l'estat d'Experiments",
+    "checkingMlflow": "Comprovant l'estat d'Experiments...",
+    "checkingMlflowMessage": "Espera mentre comprovem que Experiments està inicialitzat",
+    "init": {
+      "title": "Cal inicialitzar Experiments",
+      "message": "Abans de replicar models d'IA, inicialitza Experiments iniciant la sessió des del navegador. Així es crea el teu compte d'usuari a Experiments i l'autenticació funciona sense més passos.",
+      "error": "Error: {{error}}",
+      "button": "Inicialitza Experiments"
+    },
+    "active": {
+      "title_one": "{{count}} rèplica en curs",
+      "title_other": "{{count}} rèpliques en curs",
+      "message": "Els models es repliquen en segon pla. La taula s'actualitza sola."
+    },
+    "tableTitle": "Models disponibles",
+    "col": {
+      "model": "Model",
+      "params": "Paràmetres",
+      "quantization": "Quantització",
+      "serverType": "Tipus de servidor",
+      "status": "Estat",
+      "actions": "Accions"
+    },
+    "badge": {
+      "finetuned": "Ajustat",
+      "tools": "eines",
+      "gated": "restringit"
+    },
+    "activeParams": "{{main}} / {{active}} actius",
+    "context": "{{value}} ctx",
+    "status": {
+      "registered": "Registrat",
+      "mirrored": "Replicat",
+      "mirroring": "Replicant",
+      "failed": "Fallit",
+      "pending": "Pendent",
+      "notMirrored": "No replicat"
+    },
+    "ready": "Llest",
+    "reset": "Restableix",
+    "delete": "Elimina",
+    "monitor": "Segueix",
+    "retry": "Torna-ho a provar",
+    "mirror": "Replica",
+    "empty": "No hi ha models disponibles",
+    "deleteTitle": "Elimina el model",
+    "deleteConfirm": "Segur que vols eliminar {{name}} de MLflow? Després el podràs replicar de nou.",
+    "toast": {
+      "mirrorStarted": "Rèplica iniciada: {{name}}",
+      "mirrored": "{{name}} s'ha replicat",
+      "mirrorFailed": "La rèplica de {{name}} ha fallat",
+      "cancelled": "Rèplica cancel·lada",
+      "reset": "Feina de rèplica restablerta: ja ho pots tornar a provar",
+      "deleted": "{{name}} eliminat d'Experiments"
+    }
+  },
+  "apiTokens": {
+    "title": "Tokens API",
+    "subtitle": "Els tokens permeten que scripts i eines cridin l'API d'aquesta aplicacio en nom teu",
+    "createToken": {
+      "title": "Crear nou token",
+      "nameLabel": "Nom del token",
+      "namePlaceholder": "El meu token API",
+      "expiresLabel": "Expira en (dies)",
+      "expiresPlaceholder": "Deixar buit per sense expiracio",
+      "createButton": "Crear token"
+    },
+    "tokenCreated": {
+      "title": "Token creat amb exit!",
+      "message": "Copia aquest token ara. No podras veure'l de nou.",
+      "copyButton": "Copiar al porta-retalls",
+      "copied": "Token copiat al porta-retalls!"
+    },
+    "tokenList": {
+      "title": "Els teus tokens",
+      "noTokens": "No hi ha tokens API encara. Crea'n un a dalt!",
+      "table": {
+        "name": "Nom",
+        "created": "Creat",
+        "expires": "Expira",
+        "lastUsed": "Ultim us",
+        "actions": "Accions",
+        "never": "Mai",
+        "revoke": "Revocar",
+        "revoked": "Revocat"
+      },
+      "confirmRevoke": "Estas segur que vols revocar aquest token?",
+      "confirmRevokeTitle": "Revocar token"
+    },
+    "usage": {
+      "title": "Com utilitzar els tokens API",
+      "cli": {
+        "title": "CLI / curl",
+        "description": "Inclou el token a la capcalera Authorization:"
+      },
+      "env": {
+        "title": "Variable d'entorn",
+        "description": "Defineix el token una vegada i deixa que les teves eines el llegeixin:"
+      }
+    },
+    "errors": {
+      "createFailed": "Error al crear el token",
+      "revokeFailed": "Error al revocar el token",
+      "loadFailed": "Error en carregar els tokens",
+      "nameMissing": "Si us plau proporciona un nom per al token"
+    },
+    "success": {
+      "created": "Token creat",
+      "revoked": "Token revocat"
+    }
+  },
+  "profile": {
+    "roles": "Rols"
+  },
+  "theme": {
+    "toggle": "Canviar tema"
+  },
+  "language": {
+    "label": "Idioma"
+  },
+  "auth": {
+    "loginTitle": "Iniciar Sessio",
+    "loginMessage": "Si us plau inicia sessio per accedir a l'aplicacio",
+    "loginButton": "Iniciar sessio amb Keycloak",
+    "loggingIn": "Completant autenticacio...",
+    "loginSuccess": "Autenticacio exitosa. Redirigint...",
+    "loginFailed": "Error d'autenticacio",
+    "noCode": "No s'ha rebut codi d'autoritzacio",
+    "redirecting": "Redirigint a l'inici de sessio...",
+    "redirectingMessage": "Si us plau espera mentre et redirigim a Keycloak.",
+    "configError": "Error de configuracio d'autenticacio. Si us plau revisa la consola per mes detalls.",
+    "tryAgain": "Tornar a provar"
+  },
+  "errors": {
+    "notFound": {
+      "title": "404",
+      "heading": "Pagina no trobada",
+      "message": "La pagina que cerques no existeix o ha estat moguda.",
+      "backButton": "Tornar a l'inici"
+    },
+    "loadingApp": {
+      "title": "Error al carregar l'aplicacio",
+      "message": "No s'ha pogut carregar la informacio de l'usuari.",
+      "reload": "Recarregar"
+    },
+    "general": {
+      "loading": "Carregant..."
+    }
+  },
+  "common": {
+    "open": "Obrir",
+    "close": "Tancar",
+    "save": "Desar",
+    "cancel": "Cancel-lar",
+    "delete": "Eliminar",
+    "edit": "Editar",
+    "create": "Crear",
+    "update": "Actualitzar",
+    "back": "Enrere",
+    "next": "Seguent",
+    "yes": "Si",
+    "no": "No"
+  }
+}

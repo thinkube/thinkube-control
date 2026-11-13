@@ -1,9 +1,9 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 
 """Publishing a fine-tuned model: its catalogue entry in the user's metadata
-repository, <GitHub user>/<GitHub user>-metadata, which thinkube-control
-merges over the platform catalogue.
+repository, <GitHub user>/<GitHub user>-metadata, which the catalogue
+(app/services/metadata.py) merges over the platform's.
 
 The weights are already in MLflow when this runs: the training merged the
 adapter into a 16-bit checkpoint, uploaded it to the model folder of its run
@@ -18,7 +18,7 @@ from typing import Any, Dict
 
 import httpx
 
-from app.services.metadata_fetcher import _get_github_config
+from app.services.metadata import _get_github_config
 
 GITHUB_API = "https://api.github.com"
 
@@ -69,7 +69,7 @@ def write_entry(entry: Dict[str, Any]) -> str:
     of an entry with the same id. Returns the repository."""
     username, token = _get_github_config()
     if not username or not token:
-        raise FinetunedModelError("thinkube-control has no GITHUB_USERNAME and GITHUB_TOKEN to write the catalogue with", 503)
+        raise FinetunedModelError("control-models has no GITHUB_USERNAME and GITHUB_TOKEN to write the catalogue with: Thinkube Control passes GITHUB_USERNAME when it deploys the extension, and GITHUB_TOKEN is the Secret github-token", 503)
     repo = f"{username}/{username}-metadata"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
     url = f"{GITHUB_API}/repos/{repo}/contents/models.json"

@@ -1,5 +1,5 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 
 """A mirror job follows its Argo workflow, and a model delete reaches MLflow.
 
@@ -70,7 +70,6 @@ def test_unreadable_argo_raises_and_leaves_the_job():
 # delete_model: the delete is sent to MLflow with a Keycloak token.
 
 MLFLOW_ENV = {
-    "MLFLOW_TRACKING_URI": "http://mlflow.test:5000",
     "MLFLOW_KEYCLOAK_TOKEN_URL": "https://auth.test/token",
     "MLFLOW_KEYCLOAK_CLIENT_ID": "mlflow",
     "MLFLOW_CLIENT_SECRET": "s",
@@ -106,7 +105,7 @@ def test_delete_sends_the_registry_name_with_the_token(monkeypatch):
     delete()
     sent = seen[-1]
     assert sent.method == "DELETE"
-    assert str(sent.url) == "http://mlflow.test:5000/api/2.0/mlflow/registered-models/delete"
+    assert str(sent.url) == f"{md.settings.MLFLOW_TRACKING_URI}/api/2.0/mlflow/registered-models/delete"
     assert sent.headers["Authorization"] == "Bearer tok"
     assert b'"Qwen-Qwen3.5-4B"' in sent.content
 

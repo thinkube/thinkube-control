@@ -1,5 +1,5 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 
 """A fine-tune's catalogue entry is checked, then written to the user's
 metadata repository in place of an entry with the same id."""

@@ -1,27 +1,25 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 
 """
 Model Downloader Service
 
-Manages HuggingFace model downloads to JuiceFS using Argo Workflows via Hera.
+Mirrors catalogue models into MLflow with Argo Workflows, written with Hera
+and created through the Kubernetes API in the namespace argo.
 """
 
 import os
 import json
 import logging
-import time
 from typing import List, Dict, Optional
-from datetime import datetime
 
-import aiohttp
 
-from hera.workflows import Workflow, Container, models as hera_models, WorkflowsService
+from hera.workflows import Workflow, Container, models as hera_models
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 import httpx
 
-from app.services.metadata_fetcher import CatalogUnavailableError, fetch_merged_catalog
+from app.services.metadata import CatalogUnavailableError, fetch_merged_catalog, invalidate_catalogs
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -121,7 +119,6 @@ def catalog_entry(model_id: str) -> Dict:
     """
     model_info = next((m for m in get_model_catalog() if m["id"] == model_id), None)
     if not model_info:
-        from app.services.metadata_fetcher import invalidate_catalogs
         invalidate_catalogs()
         model_info = next((m for m in get_model_catalog() if m["id"] == model_id), None)
     if not model_info:
@@ -137,7 +134,7 @@ def _required_env(name: str) -> str:
     value = os.environ.get(name)
     if not value:
         raise MlflowDeleteError(
-            f"{name} is not set; the thinkube-control backend Deployment provides it"
+            f"{name} is not set; the deploy gives every app its MLflow account (the Secret <app>-mlflow-credentials)"
         )
     return value
 
@@ -170,12 +167,7 @@ class ModelDownloaderService:
 
     def __init__(self):
         """Initialize the model downloader service"""
-        # Load in-cluster Kubernetes config
-        try:
-            config.load_incluster_config()
-        except config.ConfigException:
-            # Fallback to kubeconfig for local development
-            config.load_kube_config()
+        config.load_incluster_config()
 
         self.core_v1 = client.CoreV1Api()
         self.custom_api = client.CustomObjectsApi()
@@ -184,25 +176,18 @@ class ModelDownloaderService:
         self.workflow_namespace = "argo"  # Run workflows in argo namespace
         self.parallelism = 3  # Max concurrent downloads
 
-        # Get MLflow URI from environment
-        self.mlflow_uri = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow.mlflow.svc.cluster.local:5000")
+        self.mlflow_uri = settings.MLFLOW_TRACKING_URI
 
-        # Configure Hera workflows service for in-cluster Argo Workflows access
-        # Read service account token for authentication
-        token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
-        try:
-            with open(token_path, "r") as f:
-                token = f.read().strip()
-        except Exception as e:
-            logger.warning(f"Could not read service account token: {e}")
-            token = None
-
-        self.workflows_service = WorkflowsService(
-            host="http://argo-workflows-server.argo.svc.cluster.local:2746",
-            verify_ssl=False,
-            token=token,
-            namespace=self.workflow_namespace
+    def _create(self, w: Workflow) -> str:
+        """Create the workflow through the Kubernetes API; its generated name."""
+        created = self.custom_api.create_namespaced_custom_object(
+            group="argoproj.io",
+            version="v1alpha1",
+            namespace=self.workflow_namespace,
+            plural="workflows",
+            body=w.to_dict(),
         )
+        return created["metadata"]["name"]
 
     def get_available_models(self) -> List[Dict]:
         """The model catalogue: the platform's models.json merged with the user's."""
@@ -254,7 +239,6 @@ class ModelDownloaderService:
         with Workflow(
             generate_name="model-dl-",
             namespace=self.workflow_namespace,
-            workflows_service=self.workflows_service,
             service_account_name="thinkube-control",
             entrypoint="download",
             parallelism=self.parallelism,
@@ -856,8 +840,7 @@ except Exception as e:
             )
 
         # Submit workflow to Argo
-        result = w.create()
-        workflow_name = result.metadata.name
+        workflow_name = self._create(w)
 
         logger.info(f"Workflow submitted: {workflow_name}")
         return workflow_name
@@ -889,15 +872,11 @@ except Exception as e:
             f"(serving_name: {serving_name})"
         )
 
-        ollama_url = os.getenv(
-            "LLM_OLLAMA_URL",
-            "http://ollama.ollama.svc.cluster.local:11434",
-        )
+        ollama_url = settings.OLLAMA_URL
 
         with Workflow(
             generate_name="model-dl-",
             namespace=self.workflow_namespace,
-            workflows_service=self.workflows_service,
             service_account_name="thinkube-control",
             entrypoint="ollama-pull",
             parallelism=self.parallelism,
@@ -1223,8 +1202,7 @@ print(f'  - Registered in MLflow (metadata-only)', flush=True)
                 ),
             )
 
-        result = w.create()
-        workflow_name = result.metadata.name
+        workflow_name = self._create(w)
         logger.info(f"Ollama pull workflow submitted: {workflow_name}")
         return workflow_name
 
@@ -1284,38 +1262,6 @@ print(f'  - Registered in MLflow (metadata-only)', flush=True)
                 }
             raise
 
-    def list_active_downloads(self) -> List[Dict]:
-        """
-        List all active (running or pending) download workflows
-
-        Returns:
-            List of workflow status dictionaries
-        """
-        try:
-            workflows = self.custom_api.list_namespaced_custom_object(
-                group="argoproj.io",
-                version="v1alpha1",
-                namespace=self.workflow_namespace,
-                plural="workflows",
-                label_selector="workflows.argoproj.io/phase in (Pending,Running)"
-            )
-
-            active = []
-            for wf in workflows.get("items", []):
-                wf_name = wf.get("metadata", {}).get("name")
-                if not wf_name:
-                    continue
-                # Filter for model download workflows (generated with "model-dl-" prefix)
-                if wf_name.startswith("model-dl-"):
-                    status = self.get_download_status(wf_name)
-                    active.append(status)
-
-            return active
-
-        except ApiException as e:
-            logger.error(f"Failed to list workflows: {e}")
-            return []
-
     def sync_mirror_job(self, job) -> None:
         """Set a pending or running mirror job's status from its Argo workflow.
 
@@ -1343,11 +1289,10 @@ print(f'  - Registered in MLflow (metadata-only)', flush=True)
         Returns:
             Dictionary mapping model_id to existence status
         """
-        from app.db.session import SessionLocal
+        from app.db.session import get_session_local
         from app.models.model_mirrors import ModelMirrorJob
 
-        session_factory = SessionLocal()
-        db = session_factory()
+        db = get_session_local()()
         try:
             # Sync running jobs with Argo workflow status
             running_jobs = db.query(ModelMirrorJob).filter(
@@ -1451,7 +1396,7 @@ print(f'  - Registered in MLflow (metadata-only)', flush=True)
             MlflowDeleteError: MLflow refused the delete or could not be reached.
         """
         model_name = model_id.replace('/', '-')
-        mlflow_uri = _required_env("MLFLOW_TRACKING_URI")
+        mlflow_uri = settings.MLFLOW_TRACKING_URI
         token = await mlflow_token()
 
         async with httpx.AsyncClient(timeout=30.0) as http:

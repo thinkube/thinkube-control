@@ -1,0 +1,16 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: MIT
+
+# What a deploy of this extension asks for: the parameters it is given and
+# the secrets it reads from Thinkube Control's Secrets store.
+apiVersion: thinkube.io/v1
+kind: TemplateManifest
+metadata:
+  name: control-models
+  title: Models
+  description: "The model catalogue, mirrors of catalogue models into MLflow, and fine-tuned models"
+  version: 1.0.0
+  author: Alejandro Martínez Corriá
+  tags: ["extension", "thinkube-control"]
+
+parameters: []

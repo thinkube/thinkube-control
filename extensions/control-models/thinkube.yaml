@@ -1,0 +1,93 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: MIT
+
+apiVersion: thinkube.io/v1
+kind: ThinkubeDeployment
+metadata:
+  # The application's version; the generated app starts at it.
+  version: "0.1.0"
+
+spec:
+  deployment:
+    type: extension
+
+  # A part of Thinkube Control: Control lists it, draws its pages from the
+  # module the frontend builds, and forwards the module's API calls to /api/v1
+  extension:
+    title: Models
+    description: "The model catalogue, mirrors of catalogue models into MLflow, and fine-tuned models"
+    icon: brain
+    platform: "0.1"
+    ui:
+      module: /extension/index.js
+      css: /extension/index.css
+    nav:
+      - label: Models
+        path: /
+        icon: brain
+    # The mirrors still running, in Control's top bar
+    indicator:
+      api: /models/mirrors/active
+      path: /
+      icon: download
+      title: Active model mirrors
+
+  # Settings of Thinkube Control that deploy_extensions passes: the branch of
+  # the platform this cluster follows, at which the platform's catalogue is
+  # read, and the GitHub account whose metadata repository holds the user's
+  # entries (none: the user has no catalogue of their own)
+  env:
+    - name: THINKUBE_BRANCH
+    - name: GITHUB_USERNAME
+      default: ""
+
+  containers:
+    - name: backend
+      build: ./backend
+      port: 8000
+      size: medium
+      health: /health
+      test:
+        enabled: true
+        image: "python-base:3.12-slim"
+        command: "./run_tests.sh"
+        one: "./run_tests.sh <file>"
+      migrations:
+        tool: alembic
+        auto: true
+      # The token of the GitHub account, to read and write the user's catalogue
+      environment:
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: github-token
+              key: token
+      # The workflows that mirror models, which run in the namespace argo:
+      # created, followed, and terminated when a mirror is cancelled
+      access:
+        - apiGroups: [argoproj.io]
+          resources: [workflows]
+          verbs: [create, get, list, patch]
+
+    - name: frontend
+      build: ./frontend
+      port: 80
+      size: small
+      health: /health
+      publicEnv:
+        - APP_TITLE
+      test:
+        enabled: true
+        # node-base carries git, which npm needs to install thinkube-style
+        image: "node-base:22-alpine"
+        command: "./run_tests.sh"
+        one: "./run_tests.sh <file>"
+
+  routes:
+    - path: /api
+      to: backend
+    - path: /
+      to: frontend
+
+  services:
+    - database

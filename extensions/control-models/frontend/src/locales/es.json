@@ -1,0 +1,180 @@
+{
+  "app": {
+    "title": "Modelos"
+  },
+  "nav": {
+    "workspace": "Espacio de trabajo",
+    "home": "Modelos",
+    "settings": "Configuracion",
+    "apiTokens": "Tokens API",
+    "account": "Cuenta",
+    "logout": "Cerrar sesion"
+  },
+  "models": {
+    "description": "Replica modelos preoptimizados de HuggingFace en el registro de Experiments",
+    "errorTitle": "Error",
+    "mirrorsReadFailed": "No se pudieron leer los trabajos de réplica",
+    "mlflowStatusFailed": "No se pudo leer el estado de Experiments",
+    "checkingMlflow": "Comprobando el estado de Experiments...",
+    "checkingMlflowMessage": "Espera mientras comprobamos que Experiments está inicializado",
+    "init": {
+      "title": "Hay que inicializar Experiments",
+      "message": "Antes de replicar modelos de IA, inicializa Experiments iniciando sesión desde el navegador. Así se crea tu cuenta de usuario en Experiments y la autenticación funciona sin más pasos.",
+      "error": "Error: {{error}}",
+      "button": "Inicializar Experiments"
+    },
+    "active": {
+      "title_one": "{{count}} réplica en curso",
+      "title_other": "{{count}} réplicas en curso",
+      "message": "Los modelos se replican en segundo plano. La tabla se actualiza sola."
+    },
+    "tableTitle": "Modelos disponibles",
+    "col": {
+      "model": "Modelo",
+      "params": "Parámetros",
+      "quantization": "Cuantización",
+      "serverType": "Tipo de servidor",
+      "status": "Estado",
+      "actions": "Acciones"
+    },
+    "badge": {
+      "finetuned": "Ajustado",
+      "tools": "herramientas",
+      "gated": "restringido"
+    },
+    "activeParams": "{{main}} / {{active}} activos",
+    "context": "{{value}} ctx",
+    "status": {
+      "registered": "Registrado",
+      "mirrored": "Replicado",
+      "mirroring": "Replicando",
+      "failed": "Fallido",
+      "pending": "Pendiente",
+      "notMirrored": "No replicado"
+    },
+    "ready": "Listo",
+    "reset": "Restablecer",
+    "delete": "Eliminar",
+    "monitor": "Seguir",
+    "retry": "Reintentar",
+    "mirror": "Replicar",
+    "empty": "No hay modelos disponibles",
+    "deleteTitle": "Eliminar modelo",
+    "deleteConfirm": "¿Seguro que quieres eliminar {{name}} de MLflow? Después podrás replicarlo de nuevo.",
+    "toast": {
+      "mirrorStarted": "Réplica iniciada: {{name}}",
+      "mirrored": "{{name}} se ha replicado",
+      "mirrorFailed": "La réplica de {{name}} ha fallado",
+      "cancelled": "Réplica cancelada",
+      "reset": "Trabajo de réplica restablecido: ya puedes reintentarlo",
+      "deleted": "{{name}} eliminado de Experiments"
+    }
+  },
+  "apiTokens": {
+    "title": "Tokens API",
+    "subtitle": "Los tokens permiten que scripts y herramientas llamen a la API de esta aplicacion en tu nombre",
+    "createToken": {
+      "title": "Crear nuevo token",
+      "nameLabel": "Nombre del token",
+      "namePlaceholder": "Mi token API",
+      "expiresLabel": "Expira en (dias)",
+      "expiresPlaceholder": "Dejar vacio para sin expiracion",
+      "createButton": "Crear token"
+    },
+    "tokenCreated": {
+      "title": "Token creado con exito!",
+      "message": "Copia este token ahora. No podras verlo de nuevo.",
+      "copyButton": "Copiar al portapapeles",
+      "copied": "Token copiado al portapapeles!"
+    },
+    "tokenList": {
+      "title": "Tus tokens",
+      "noTokens": "No hay tokens API todavia. Crea uno arriba!",
+      "table": {
+        "name": "Nombre",
+        "created": "Creado",
+        "expires": "Expira",
+        "lastUsed": "Ultimo uso",
+        "actions": "Acciones",
+        "never": "Nunca",
+        "revoke": "Revocar",
+        "revoked": "Revocado"
+      },
+      "confirmRevoke": "Estas seguro de que quieres revocar este token?",
+      "confirmRevokeTitle": "Revocar token"
+    },
+    "usage": {
+      "title": "Como usar los tokens API",
+      "cli": {
+        "title": "CLI / curl",
+        "description": "Incluye el token en el encabezado Authorization:"
+      },
+      "env": {
+        "title": "Variable de entorno",
+        "description": "Define el token una vez y deja que tus herramientas lo lean:"
+      }
+    },
+    "errors": {
+      "createFailed": "Error al crear el token",
+      "revokeFailed": "Error al revocar el token",
+      "loadFailed": "Error al cargar los tokens",
+      "nameMissing": "Por favor proporciona un nombre para el token"
+    },
+    "success": {
+      "created": "Token creado",
+      "revoked": "Token revocado"
+    }
+  },
+  "profile": {
+    "roles": "Roles"
+  },
+  "theme": {
+    "toggle": "Cambiar tema"
+  },
+  "language": {
+    "label": "Idioma"
+  },
+  "auth": {
+    "loginTitle": "Iniciar Sesion",
+    "loginMessage": "Por favor inicia sesion para acceder a la aplicacion",
+    "loginButton": "Iniciar sesion con Keycloak",
+    "loggingIn": "Completando autenticacion...",
+    "loginSuccess": "Autenticacion exitosa. Redirigiendo...",
+    "loginFailed": "Error de autenticacion",
+    "noCode": "No se recibio codigo de autorizacion",
+    "redirecting": "Redirigiendo al inicio de sesion...",
+    "redirectingMessage": "Por favor espera mientras te redirigimos a Keycloak.",
+    "configError": "Error de configuracion de autenticacion. Por favor revisa la consola para mas detalles.",
+    "tryAgain": "Reintentar"
+  },
+  "errors": {
+    "notFound": {
+      "title": "404",
+      "heading": "Pagina no encontrada",
+      "message": "La pagina que buscas no existe o ha sido movida.",
+      "backButton": "Volver al inicio"
+    },
+    "loadingApp": {
+      "title": "Error al cargar la aplicacion",
+      "message": "No se pudo cargar la informacion del usuario.",
+      "reload": "Recargar"
+    },
+    "general": {
+      "loading": "Cargando..."
+    }
+  },
+  "common": {
+    "open": "Abrir",
+    "close": "Cerrar",
+    "save": "Guardar",
+    "cancel": "Cancelar",
+    "delete": "Eliminar",
+    "edit": "Editar",
+    "create": "Crear",
+    "update": "Actualizar",
+    "back": "Atras",
+    "next": "Siguiente",
+    "yes": "Si",
+    "no": "No"
+  }
+}

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: MIT
 
 """Each gateway alias, and the agent default, belongs to one model of the catalog.
 
@@ -12,7 +12,7 @@ source are an error that names both entries.
 
 import pytest
 
-from app.services.metadata_fetcher import CatalogUnavailableError
+from app.services.metadata import CatalogUnavailableError
 from app.services.model_downloader import resolve_names
 
 
