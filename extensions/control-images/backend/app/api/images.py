@@ -49,7 +49,7 @@ def _registry() -> str:
 
 def parse_source(source_url: str) -> tuple[str, str]:
     """The name and the tag of an image address; the name is its last path element, the tag latest when it has none."""
-    last = source_url.rstrip("/").split("/")[-1]
+    last = source_url.split("/")[-1]
     if not last or "@" in last:
         raise ValueError(f"'{source_url}' is not an image with a tag: write registry/path/name:tag")
     name, _, tag = last.partition(":")
