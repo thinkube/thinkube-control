@@ -1,0 +1,296 @@
+{
+  "app": {
+    "title": "Imatges"
+  },
+  "nav": {
+    "workspace": "Espai de treball",
+    "home": "Imatges",
+    "settings": "Configuracio",
+    "apiTokens": "Tokens API",
+    "account": "Compte",
+    "logout": "Tancar sessio"
+  },
+  "images": {
+    "description": "Imatges de contenidor al registre de Thinkube",
+    "loadFailed": "No s'han pogut llegir les imatges",
+    "colActions": "Accions",
+    "base": "Base",
+    "markBase": "Marca com a imatge base",
+    "unmarkBase": "Treu la marca d'imatge base",
+    "tabs": {
+      "mirrored": "Imatges replicades",
+      "custom": "Imatges personalitzades"
+    },
+    "status": {
+      "pending": "Pendent",
+      "not_built": "Sense construir",
+      "running": "En curs",
+      "building": "Construint",
+      "success": "Correcte",
+      "failed": "Fallit",
+      "cancelled": "Cancel·lat"
+    },
+    "severity": {
+      "critical": "crítiques",
+      "high": "altes",
+      "medium": "mitjanes",
+      "low": "baixes"
+    },
+    "progress": {
+      "status": "Estat:",
+      "reading": "Llegint",
+      "succeeded": "Acabat",
+      "failed": "Ha fallat",
+      "seeLog": "El registre de sota mostra què ha fallat.",
+      "readFailed": "No s'ha pogut llegir el progrés",
+      "noLog": "Encara no hi ha registre.",
+      "mirroring": "Replicant {{name}}",
+      "mirrored": "{{name}} ja és a Harbor.",
+      "building": "Construint {{name}}",
+      "built": "{{name}} s'ha construït i enviat a Harbor.",
+      "buildLog": "Registre de construcció de {{name}}"
+    },
+    "add": {
+      "title": "Replica una imatge",
+      "sourceLabel": "Imatge d'origen",
+      "invalidSource": "Això no és una imatge amb etiqueta. Escriu registre/camí/nom:etiqueta.",
+      "sourceHelp": "Exemples: docker.io/library/alpine:3.20, quay.io/prometheus/prometheus:latest",
+      "descriptionLabel": "Descripció",
+      "descriptionPlaceholder": "Per a què serveix aquesta imatge",
+      "note": "La imatge es copia a Harbor com a library/<nom>:<etiqueta>. Si la rèplica falla, la imatge es treu de la llista.",
+      "failed": "No s'ha pogut iniciar la rèplica",
+      "submit": "Replica la imatge"
+    },
+    "details": {
+      "title": "Detalls de la imatge",
+      "name": "Nom",
+      "tag": "Etiqueta",
+      "category": "Categoria",
+      "protection": "Protecció",
+      "protected": "Protegida contra l'esborrat",
+      "notProtected": "Sense protecció",
+      "registryUrl": "Adreça a Harbor",
+      "sourceUrl": "Origen",
+      "description": "Descripció",
+      "mirrorDate": "Data de rèplica",
+      "lastSynced": "Darrera sincronització",
+      "never": "Mai",
+      "digest": "Digest",
+      "size": "Mida",
+      "vulnerabilities": "Vulnerabilitats",
+      "metadata": "Altres camps"
+    },
+    "mirrored": {
+      "sync": "Sincronitza amb la plataforma",
+      "add": "Afegeix una imatge",
+      "statTotal": "Imatges en total",
+      "statSystem": "Imatges del sistema",
+      "statSystemHelp": "Les pròpies de la plataforma",
+      "statUser": "Imatges d'usuari",
+      "statUserHelp": "Replicades per un usuari",
+      "statProtected": "Imatges protegides",
+      "statProtectedHelp": "No es poden esborrar",
+      "allCategories": "Totes les categories",
+      "system": "Sistema",
+      "user": "Usuari",
+      "allImages": "Totes les imatges",
+      "protectedOnly": "Només protegides",
+      "unprotectedOnly": "Només sense protecció",
+      "searchPlaceholder": "Cerca imatges...",
+      "clearFilters": "Treu els filtres",
+      "colName": "Imatge",
+      "colTag": "Etiqueta",
+      "colCategory": "Categoria",
+      "colDescription": "Descripció",
+      "colMirrorDate": "Data de rèplica",
+      "colScan": "Vulnerabilitats",
+      "notScanned": "Sense analitzar",
+      "noneSerious": "Cap de crítica ni alta",
+      "view": "Mostra els detalls",
+      "editTemplate": "Edita la plantilla de Dockerfile a Thinkube IDE",
+      "remirror": "Replica de nou",
+      "delete": "Treu de la llista",
+      "previousPage": "Pàgina anterior",
+      "nextPage": "Pàgina següent",
+      "page": "Pàgina {{page}} de {{pages}}",
+      "empty": "No s'han trobat imatges",
+      "emptyFiltered": "Prova amb altres filtres.",
+      "emptyHint": "Afegeix una imatge, o sincronitza amb la plataforma per llegir les seves pròpies imatges.",
+      "synced": "Les imatges de la plataforma s'han llegit a la llista.",
+      "markedBase": "{{name}} és ara una imatge base.",
+      "unmarkedBase": "{{name}} ja no és una imatge base.",
+      "deleted": "{{name}} s'ha tret de la llista. La imatge continua a Harbor, a {{url}}.",
+      "remirrorTitle": "Replica de nou",
+      "remirrorConfirm": "Vols replicar {{name}} de nou des del seu origen, per obtenir el que la seva etiqueta anomena ara?",
+      "deleteTitle": "Treu la imatge",
+      "deleteConfirm": "Vols treure {{name}} de la llista? La imatge continua a Harbor."
+    },
+    "custom": {
+      "create": "Crea una imatge personalitzada",
+      "refresh": "Actualitza",
+      "allScopes": "Tots els àmbits",
+      "baseOnly": "Només imatges base",
+      "treeView": "Vista en arbre",
+      "colName": "Imatge",
+      "colScope": "Àmbit",
+      "colType": "Tipus",
+      "colStatus": "Estat",
+      "colRegistry": "Adreça a Harbor",
+      "colCreated": "Creada",
+      "extended": "Feta a partir d'una altra imatge personalitzada",
+      "typeExtended": "Estesa",
+      "typeStandard": "Estàndard",
+      "openIde": "Obre a Thinkube IDE",
+      "build": "Construeix la imatge",
+      "log": "Mostra el registre de construcció",
+      "delete": "Esborra la imatge",
+      "empty": "Encara no hi ha imatges personalitzades",
+      "emptyFiltered": "Cap imatge personalitzada coincideix amb els filtres",
+      "emptyHint": "Crea'n una a partir d'una imatge base; el seu Dockerfile s'edita a Thinkube IDE.",
+      "created": "{{name}} s'ha creat. Construeix-la quan el seu Dockerfile estigui a punt.",
+      "markedBase": "{{name}} és ara una imatge base.",
+      "unmarkedBase": "{{name}} ja no és una imatge base.",
+      "deleted": "{{name}} s'ha esborrat.",
+      "deleteTitle": "Esborra la imatge personalitzada",
+      "deleteConfirm": "Vols esborrar {{name}}, la seva carpeta a ~/dockerfiles/custom i les seves construccions? La imatge continua a Harbor."
+    },
+    "create": {
+      "title": "Crea una imatge personalitzada",
+      "mode": "Parteix de",
+      "fromBase": "Una imatge base",
+      "extend": "Una altra imatge personalitzada",
+      "name": "Nom de la imatge",
+      "nameHelp": "Només lletres minúscules, números i guions. És el nom de la imatge a Harbor.",
+      "baseImage": "Imatge base",
+      "groupJupyter": "Imatges de Jupyter",
+      "groupStandard": "Imatges estàndard",
+      "otherBase": "Una altra imatge...",
+      "otherBaseLabel": "Adreça de la imatge base",
+      "type": "Tipus d'imatge",
+      "typeStandard": "Estàndard",
+      "typeJupyter": "Quadern de Jupyter",
+      "typeAuto": "El fixa la imatge base.",
+      "typeHelp": "Tria Jupyter si la imatge és per a servidors de quaderns.",
+      "parent": "Imatge pare",
+      "noParents": "Encara no hi ha cap imatge personalitzada construïda o marcada com a base.",
+      "parentPlaceholder": "Tria una imatge pare...",
+      "copyParent": "Comença amb una còpia del Dockerfile de la imatge pare",
+      "copyParentHelp": "Sense la còpia, el Dockerfile comença amb FROM i l'adreça de la imatge pare a Harbor.",
+      "description": "Descripció",
+      "descriptionPlaceholder": "Per a què serveix aquesta imatge",
+      "isBase": "Marca com a imatge base, perquè altres imatges personalitzades en puguin partir",
+      "dockerfile": "Dockerfile",
+      "dockerfilePlaceholder": "Deixa'l buit per començar amb una línia FROM de la imatge base",
+      "dockerfileHelp": "El pots editar després a Thinkube IDE.",
+      "failed": "No s'ha pogut crear la imatge",
+      "submit": "Crea la imatge"
+    }
+  },
+  "apiTokens": {
+    "title": "Tokens API",
+    "subtitle": "Els tokens permeten que scripts i eines cridin l'API d'aquesta aplicacio en nom teu",
+    "createToken": {
+      "title": "Crear nou token",
+      "nameLabel": "Nom del token",
+      "namePlaceholder": "El meu token API",
+      "expiresLabel": "Expira en (dies)",
+      "expiresPlaceholder": "Deixar buit per sense expiracio",
+      "createButton": "Crear token"
+    },
+    "tokenCreated": {
+      "title": "Token creat amb exit!",
+      "message": "Copia aquest token ara. No podras veure'l de nou.",
+      "copyButton": "Copiar al porta-retalls",
+      "copied": "Token copiat al porta-retalls!"
+    },
+    "tokenList": {
+      "title": "Els teus tokens",
+      "noTokens": "No hi ha tokens API encara. Crea'n un a dalt!",
+      "table": {
+        "name": "Nom",
+        "created": "Creat",
+        "expires": "Expira",
+        "lastUsed": "Ultim us",
+        "actions": "Accions",
+        "never": "Mai",
+        "revoke": "Revocar",
+        "revoked": "Revocat"
+      },
+      "confirmRevoke": "Estas segur que vols revocar aquest token?",
+      "confirmRevokeTitle": "Revocar token"
+    },
+    "usage": {
+      "title": "Com utilitzar els tokens API",
+      "cli": {
+        "title": "CLI / curl",
+        "description": "Inclou el token a la capcalera Authorization:"
+      },
+      "env": {
+        "title": "Variable d'entorn",
+        "description": "Defineix el token una vegada i deixa que les teves eines el llegeixin:"
+      }
+    },
+    "errors": {
+      "createFailed": "Error al crear el token",
+      "revokeFailed": "Error al revocar el token",
+      "loadFailed": "Error en carregar els tokens",
+      "nameMissing": "Si us plau proporciona un nom per al token"
+    },
+    "success": {
+      "created": "Token creat",
+      "revoked": "Token revocat"
+    }
+  },
+  "profile": {
+    "roles": "Rols"
+  },
+  "theme": {
+    "toggle": "Canviar tema"
+  },
+  "language": {
+    "label": "Idioma"
+  },
+  "auth": {
+    "loginTitle": "Iniciar Sessio",
+    "loginMessage": "Si us plau inicia sessio per accedir a l'aplicacio",
+    "loginButton": "Iniciar sessio amb Keycloak",
+    "loggingIn": "Completant autenticacio...",
+    "loginSuccess": "Autenticacio exitosa. Redirigint...",
+    "loginFailed": "Error d'autenticacio",
+    "noCode": "No s'ha rebut codi d'autoritzacio",
+    "redirecting": "Redirigint a l'inici de sessio...",
+    "redirectingMessage": "Si us plau espera mentre et redirigim a Keycloak.",
+    "configError": "Error de configuracio d'autenticacio. Si us plau revisa la consola per mes detalls.",
+    "tryAgain": "Tornar a provar"
+  },
+  "errors": {
+    "notFound": {
+      "title": "404",
+      "heading": "Pagina no trobada",
+      "message": "La pagina que cerques no existeix o ha estat moguda.",
+      "backButton": "Tornar a l'inici"
+    },
+    "loadingApp": {
+      "title": "Error al carregar l'aplicacio",
+      "message": "No s'ha pogut carregar la informacio de l'usuari.",
+      "reload": "Recarregar"
+    },
+    "general": {
+      "loading": "Carregant..."
+    }
+  },
+  "common": {
+    "open": "Obrir",
+    "close": "Tancar",
+    "save": "Desar",
+    "cancel": "Cancel-lar",
+    "delete": "Eliminar",
+    "edit": "Editar",
+    "create": "Crear",
+    "update": "Actualitzar",
+    "back": "Enrere",
+    "next": "Seguent",
+    "yes": "Si",
+    "no": "No"
+  }
+}

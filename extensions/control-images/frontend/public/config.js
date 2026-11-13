@@ -1,0 +1,6 @@
+/*
+ * Copyright Alejandro Martínez Corriá and the Thinkube contributors
+ * SPDX-License-Identifier: MIT
+ */
+
+window.__PUBLIC_CONFIG__ = {};

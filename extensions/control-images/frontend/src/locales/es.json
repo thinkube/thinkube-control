@@ -1,0 +1,296 @@
+{
+  "app": {
+    "title": "Imágenes"
+  },
+  "nav": {
+    "workspace": "Espacio de trabajo",
+    "home": "Imágenes",
+    "settings": "Configuracion",
+    "apiTokens": "Tokens API",
+    "account": "Cuenta",
+    "logout": "Cerrar sesion"
+  },
+  "images": {
+    "description": "Imágenes de contenedor en el registro de Thinkube",
+    "loadFailed": "No se pudieron leer las imágenes",
+    "colActions": "Acciones",
+    "base": "Base",
+    "markBase": "Marcar como imagen base",
+    "unmarkBase": "Quitar la marca de imagen base",
+    "tabs": {
+      "mirrored": "Imágenes replicadas",
+      "custom": "Imágenes personalizadas"
+    },
+    "status": {
+      "pending": "Pendiente",
+      "not_built": "Sin construir",
+      "running": "En curso",
+      "building": "Construyendo",
+      "success": "Correcto",
+      "failed": "Fallido",
+      "cancelled": "Cancelado"
+    },
+    "severity": {
+      "critical": "críticas",
+      "high": "altas",
+      "medium": "medias",
+      "low": "bajas"
+    },
+    "progress": {
+      "status": "Estado:",
+      "reading": "Leyendo",
+      "succeeded": "Terminado",
+      "failed": "Ha fallado",
+      "seeLog": "El registro de abajo muestra qué ha fallado.",
+      "readFailed": "No se pudo leer el progreso",
+      "noLog": "Aún no hay registro.",
+      "mirroring": "Replicando {{name}}",
+      "mirrored": "{{name}} ya está en Harbor.",
+      "building": "Construyendo {{name}}",
+      "built": "{{name}} se ha construido y enviado a Harbor.",
+      "buildLog": "Registro de construcción de {{name}}"
+    },
+    "add": {
+      "title": "Replicar una imagen",
+      "sourceLabel": "Imagen de origen",
+      "invalidSource": "Esto no es una imagen con etiqueta. Escribe registro/ruta/nombre:etiqueta.",
+      "sourceHelp": "Ejemplos: docker.io/library/alpine:3.20, quay.io/prometheus/prometheus:latest",
+      "descriptionLabel": "Descripción",
+      "descriptionPlaceholder": "Para qué sirve esta imagen",
+      "note": "La imagen se copia a Harbor como library/<nombre>:<etiqueta>. Si la réplica falla, la imagen se quita de la lista.",
+      "failed": "No se pudo iniciar la réplica",
+      "submit": "Replicar imagen"
+    },
+    "details": {
+      "title": "Detalles de la imagen",
+      "name": "Nombre",
+      "tag": "Etiqueta",
+      "category": "Categoría",
+      "protection": "Protección",
+      "protected": "Protegida contra el borrado",
+      "notProtected": "Sin protección",
+      "registryUrl": "Dirección en Harbor",
+      "sourceUrl": "Origen",
+      "description": "Descripción",
+      "mirrorDate": "Fecha de réplica",
+      "lastSynced": "Última sincronización",
+      "never": "Nunca",
+      "digest": "Digest",
+      "size": "Tamaño",
+      "vulnerabilities": "Vulnerabilidades",
+      "metadata": "Otros campos"
+    },
+    "mirrored": {
+      "sync": "Sincronizar con la plataforma",
+      "add": "Añadir imagen",
+      "statTotal": "Imágenes en total",
+      "statSystem": "Imágenes del sistema",
+      "statSystemHelp": "Las propias de la plataforma",
+      "statUser": "Imágenes de usuario",
+      "statUserHelp": "Replicadas por un usuario",
+      "statProtected": "Imágenes protegidas",
+      "statProtectedHelp": "No se pueden borrar",
+      "allCategories": "Todas las categorías",
+      "system": "Sistema",
+      "user": "Usuario",
+      "allImages": "Todas las imágenes",
+      "protectedOnly": "Solo protegidas",
+      "unprotectedOnly": "Solo sin protección",
+      "searchPlaceholder": "Buscar imágenes...",
+      "clearFilters": "Quitar filtros",
+      "colName": "Imagen",
+      "colTag": "Etiqueta",
+      "colCategory": "Categoría",
+      "colDescription": "Descripción",
+      "colMirrorDate": "Fecha de réplica",
+      "colScan": "Vulnerabilidades",
+      "notScanned": "Sin analizar",
+      "noneSerious": "Ninguna crítica ni alta",
+      "view": "Ver detalles",
+      "editTemplate": "Editar la plantilla de Dockerfile en Thinkube IDE",
+      "remirror": "Replicar de nuevo",
+      "delete": "Quitar de la lista",
+      "previousPage": "Página anterior",
+      "nextPage": "Página siguiente",
+      "page": "Página {{page}} de {{pages}}",
+      "empty": "No se han encontrado imágenes",
+      "emptyFiltered": "Prueba con otros filtros.",
+      "emptyHint": "Añade una imagen, o sincroniza con la plataforma para leer sus propias imágenes.",
+      "synced": "Las imágenes de la plataforma se han leído en la lista.",
+      "markedBase": "{{name}} es ahora una imagen base.",
+      "unmarkedBase": "{{name}} ya no es una imagen base.",
+      "deleted": "{{name}} se ha quitado de la lista. La imagen sigue en Harbor, en {{url}}.",
+      "remirrorTitle": "Replicar de nuevo",
+      "remirrorConfirm": "¿Replicar {{name}} de nuevo desde su origen, para obtener lo que su etiqueta nombra ahora?",
+      "deleteTitle": "Quitar imagen",
+      "deleteConfirm": "¿Quitar {{name}} de la lista? La imagen sigue en Harbor."
+    },
+    "custom": {
+      "create": "Crear imagen personalizada",
+      "refresh": "Actualizar",
+      "allScopes": "Todos los ámbitos",
+      "baseOnly": "Solo imágenes base",
+      "treeView": "Vista en árbol",
+      "colName": "Imagen",
+      "colScope": "Ámbito",
+      "colType": "Tipo",
+      "colStatus": "Estado",
+      "colRegistry": "Dirección en Harbor",
+      "colCreated": "Creada",
+      "extended": "Hecha a partir de otra imagen personalizada",
+      "typeExtended": "Extendida",
+      "typeStandard": "Estándar",
+      "openIde": "Abrir en Thinkube IDE",
+      "build": "Construir la imagen",
+      "log": "Ver el registro de construcción",
+      "delete": "Borrar la imagen",
+      "empty": "Aún no hay imágenes personalizadas",
+      "emptyFiltered": "Ninguna imagen personalizada coincide con los filtros",
+      "emptyHint": "Crea una a partir de una imagen base; su Dockerfile se edita en Thinkube IDE.",
+      "created": "{{name}} se ha creado. Constrúyela cuando su Dockerfile esté listo.",
+      "markedBase": "{{name}} es ahora una imagen base.",
+      "unmarkedBase": "{{name}} ya no es una imagen base.",
+      "deleted": "{{name}} se ha borrado.",
+      "deleteTitle": "Borrar imagen personalizada",
+      "deleteConfirm": "¿Borrar {{name}}, su carpeta en ~/dockerfiles/custom y sus construcciones? La imagen sigue en Harbor."
+    },
+    "create": {
+      "title": "Crear una imagen personalizada",
+      "mode": "Partir de",
+      "fromBase": "Una imagen base",
+      "extend": "Otra imagen personalizada",
+      "name": "Nombre de la imagen",
+      "nameHelp": "Solo letras minúsculas, números y guiones. Es el nombre de la imagen en Harbor.",
+      "baseImage": "Imagen base",
+      "groupJupyter": "Imágenes de Jupyter",
+      "groupStandard": "Imágenes estándar",
+      "otherBase": "Otra imagen...",
+      "otherBaseLabel": "Dirección de la imagen base",
+      "type": "Tipo de imagen",
+      "typeStandard": "Estándar",
+      "typeJupyter": "Cuaderno de Jupyter",
+      "typeAuto": "Lo fija la imagen base.",
+      "typeHelp": "Elige Jupyter si la imagen es para servidores de cuadernos.",
+      "parent": "Imagen padre",
+      "noParents": "Aún no hay ninguna imagen personalizada construida o marcada como base.",
+      "parentPlaceholder": "Elige una imagen padre...",
+      "copyParent": "Empezar con una copia del Dockerfile de la imagen padre",
+      "copyParentHelp": "Sin la copia, el Dockerfile empieza con FROM y la dirección de la imagen padre en Harbor.",
+      "description": "Descripción",
+      "descriptionPlaceholder": "Para qué sirve esta imagen",
+      "isBase": "Marcar como imagen base, para que otras imágenes personalizadas puedan partir de ella",
+      "dockerfile": "Dockerfile",
+      "dockerfilePlaceholder": "Déjalo vacío para empezar con una línea FROM de la imagen base",
+      "dockerfileHelp": "Puedes editarlo después en Thinkube IDE.",
+      "failed": "No se pudo crear la imagen",
+      "submit": "Crear imagen"
+    }
+  },
+  "apiTokens": {
+    "title": "Tokens API",
+    "subtitle": "Los tokens permiten que scripts y herramientas llamen a la API de esta aplicacion en tu nombre",
+    "createToken": {
+      "title": "Crear nuevo token",
+      "nameLabel": "Nombre del token",
+      "namePlaceholder": "Mi token API",
+      "expiresLabel": "Expira en (dias)",
+      "expiresPlaceholder": "Dejar vacio para sin expiracion",
+      "createButton": "Crear token"
+    },
+    "tokenCreated": {
+      "title": "Token creado con exito!",
+      "message": "Copia este token ahora. No podras verlo de nuevo.",
+      "copyButton": "Copiar al portapapeles",
+      "copied": "Token copiado al portapapeles!"
+    },
+    "tokenList": {
+      "title": "Tus tokens",
+      "noTokens": "No hay tokens API todavia. Crea uno arriba!",
+      "table": {
+        "name": "Nombre",
+        "created": "Creado",
+        "expires": "Expira",
+        "lastUsed": "Ultimo uso",
+        "actions": "Acciones",
+        "never": "Nunca",
+        "revoke": "Revocar",
+        "revoked": "Revocado"
+      },
+      "confirmRevoke": "Estas seguro de que quieres revocar este token?",
+      "confirmRevokeTitle": "Revocar token"
+    },
+    "usage": {
+      "title": "Como usar los tokens API",
+      "cli": {
+        "title": "CLI / curl",
+        "description": "Incluye el token en el encabezado Authorization:"
+      },
+      "env": {
+        "title": "Variable de entorno",
+        "description": "Define el token una vez y deja que tus herramientas lo lean:"
+      }
+    },
+    "errors": {
+      "createFailed": "Error al crear el token",
+      "revokeFailed": "Error al revocar el token",
+      "loadFailed": "Error al cargar los tokens",
+      "nameMissing": "Por favor proporciona un nombre para el token"
+    },
+    "success": {
+      "created": "Token creado",
+      "revoked": "Token revocado"
+    }
+  },
+  "profile": {
+    "roles": "Roles"
+  },
+  "theme": {
+    "toggle": "Cambiar tema"
+  },
+  "language": {
+    "label": "Idioma"
+  },
+  "auth": {
+    "loginTitle": "Iniciar Sesion",
+    "loginMessage": "Por favor inicia sesion para acceder a la aplicacion",
+    "loginButton": "Iniciar sesion con Keycloak",
+    "loggingIn": "Completando autenticacion...",
+    "loginSuccess": "Autenticacion exitosa. Redirigiendo...",
+    "loginFailed": "Error de autenticacion",
+    "noCode": "No se recibio codigo de autorizacion",
+    "redirecting": "Redirigiendo al inicio de sesion...",
+    "redirectingMessage": "Por favor espera mientras te redirigimos a Keycloak.",
+    "configError": "Error de configuracion de autenticacion. Por favor revisa la consola para mas detalles.",
+    "tryAgain": "Reintentar"
+  },
+  "errors": {
+    "notFound": {
+      "title": "404",
+      "heading": "Pagina no encontrada",
+      "message": "La pagina que buscas no existe o ha sido movida.",
+      "backButton": "Volver al inicio"
+    },
+    "loadingApp": {
+      "title": "Error al cargar la aplicacion",
+      "message": "No se pudo cargar la informacion del usuario.",
+      "reload": "Recargar"
+    },
+    "general": {
+      "loading": "Cargando..."
+    }
+  },
+  "common": {
+    "open": "Abrir",
+    "close": "Cerrar",
+    "save": "Guardar",
+    "cancel": "Cancelar",
+    "delete": "Eliminar",
+    "edit": "Editar",
+    "create": "Crear",
+    "update": "Actualizar",
+    "back": "Atras",
+    "next": "Siguiente",
+    "yes": "Si",
+    "no": "No"
+  }
+}
