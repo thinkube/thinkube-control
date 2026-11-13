@@ -41,6 +41,13 @@ spec:
       # submit workflows into this namespace.
       serviceAccountName: {{ project_name }}-workflows
 {% endif %}
+{% set home_folders = (container.filesystems | default([]) | select('in', extension_home_folders) | list) if extension else [] %}
+{% if home_folders %}
+      # containers[].filesystems names a folder of the IDE's home, which is
+      # on this node
+      nodeSelector:
+        kubernetes.io/hostname: {{ home_node }}
+{% endif %}
 {% set gpu_affinity = container.gpu is defined and container.gpu.memory is defined %}
 {% set arch_affinity = thinkube_spec.spec.architectures is defined %}
 {% if gpu_affinity or arch_affinity %}
@@ -410,7 +417,8 @@ spec:
               mountPath: {{ container.volume }}
 {% elif extension and container.filesystems is defined %}
 
-          # containers[].filesystems: each shared file system, at its root
+          # containers[].filesystems: each shared file system at its root,
+          # each folder of the IDE's home
           volumeMounts:
 {% for fs in container.filesystems %}
             - name: storage-{{ fs }}
@@ -460,8 +468,14 @@ spec:
       volumes:
         {% for fs in container.filesystems %}
         - name: storage-{{ fs }}
+          {% if fs in extension_home_folders %}
+          hostPath:
+            path: {{ home_host_path }}/{{ extension_home_folders[fs] }}
+            type: DirectoryOrCreate
+          {% else %}
           persistentVolumeClaim:
             claimName: {{ project_name }}-{{ container.name }}-storage-{{ fs }}
+          {% endif %}
         {% endfor %}
       {% endif %}
 {% endfor %}

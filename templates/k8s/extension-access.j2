@@ -2,7 +2,8 @@
 # What {{ project_name }} declares beyond an extension's own objects:
 # containers[].access, the Kubernetes rules a container's pod gets in every
 # namespace, and containers[].filesystems, the shared file systems mounted at
-# their root. The cluster-wide objects carry thinkube.io/extension, by which
+# their root (a folder of the IDE's home, also declared there, is a volume of
+# the pod and has no object here). The cluster-wide objects carry thinkube.io/extension, by which
 # a delete of the extension finds them.
 {% for container in thinkube_spec.spec.containers %}
 {% if container.access is defined %}
@@ -71,7 +72,7 @@ subjects:
     namespace: {{ k8s_namespace }}
 {% endif %}
 {% endif %}
-{% for fs in container.filesystems | default([]) %}
+{% for fs in container.filesystems | default([]) if fs in extension_filesystems %}
 # The root of the file system {{ fs }}: a static volume without a subPath or
 # a capacity attribute, so the JuiceFS driver mounts the root and sets no
 # quota for it. Retain: deleting the claim never touches the data.

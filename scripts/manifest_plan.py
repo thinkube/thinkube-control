@@ -59,7 +59,31 @@ EXTENSION_FILESYSTEMS = {
     'thinkube-shared': 'juicefs-secret',
     'mlflow': 'juicefs-mlflow-secret',
 }
+# The folders of the IDE's home (the shared-code folder on the control plane
+# node, /home/thinkube in Thinkube IDE) an extension's container may mount,
+# by the name it declares, with the folder's path under the home. The pod
+# then runs on the node that holds the home.
+EXTENSION_HOME_FOLDERS = {
+    'dockerfiles': 'dockerfiles',
+}
 EXTENSION_ACCESS_MANIFEST = 'extension-access.yaml'
+
+
+def home_folder_vars(environ: Dict[str, str]) -> Dict[str, Any]:
+    """What the manifests of an extension that mounts a home folder are rendered with:
+    the folders, the home's path on its node, and the node. Thinkube Control
+    has both in its environment, from its own deploy."""
+    missing = [name for name in ('SYSTEM_USERNAME', 'MASTER_NODE_NAME') if not environ.get(name)]
+    if missing:
+        raise RuntimeError(
+            f"{', '.join(missing)} not set; thinkube-control receives them from the system_username "
+            f"and master_node_name answers of its deploy"
+        )
+    return {
+        'extension_home_folders': EXTENSION_HOME_FOLDERS,
+        'home_host_path': f"/home/{environ['SYSTEM_USERNAME']}/shared-code",
+        'home_node': environ['MASTER_NODE_NAME'],
+    }
 
 
 def has_extension_access(config: Dict[str, Any]) -> bool:

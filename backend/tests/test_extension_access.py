@@ -27,6 +27,7 @@ from manifest_plan import (  # noqa: E402
     EXTENSION_NAMESPACE,
     artifact_repository_name,
     has_extension_access,
+    home_folder_vars,
     kustomization_resources,
 )
 from platform_credentials import artifact_secret_name  # noqa: E402
@@ -79,6 +80,7 @@ def render(name, config):
         artifact_repository=artifact_repository_name(EXTENSION, True),
         artifact_secret=artifact_secret_name(EXTENSION, True),
         extension_filesystems=EXTENSION_FILESYSTEMS,
+        **home_folder_vars({"SYSTEM_USERNAME": "tkuser", "MASTER_NODE_NAME": "node1"}),
     )
     return [d for d in yaml.safe_load_all(docs) if d]
 
@@ -217,3 +219,46 @@ def test_only_the_container_that_declares_filesystems_mounts_them():
     frontend = pod(docs, "frontend")
     assert "volumes" not in frontend
     assert "volumeMounts" not in frontend["containers"][0]
+
+
+# --- a folder of the IDE's home ----------------------------------------------
+
+
+def test_a_home_folder_is_a_file_system_an_extension_may_declare():
+    assert validate_extension_access(spec({"filesystems": ["dockerfiles"]})) == []
+
+
+def test_a_home_folder_is_a_volume_of_the_pod_on_the_node_that_holds_the_home():
+    docs = render("deployment-separate.j2", spec({"filesystems": ["dockerfiles", "mlflow"]}))
+    backend = pod(docs, "backend")
+    assert backend["nodeSelector"] == {"kubernetes.io/hostname": "node1"}
+    assert backend["containers"][0]["volumeMounts"] == [
+        {"name": "storage-dockerfiles", "mountPath": "/storage/dockerfiles"},
+        {"name": "storage-mlflow", "mountPath": "/storage/mlflow"},
+    ]
+    assert backend["volumes"] == [
+        {"name": "storage-dockerfiles",
+         "hostPath": {"path": "/home/tkuser/shared-code/dockerfiles", "type": "DirectoryOrCreate"}},
+        {"name": "storage-mlflow", "persistentVolumeClaim": {"claimName": "storage-backend-storage-mlflow"}},
+    ]
+    assert "nodeSelector" not in pod(docs, "frontend")
+
+
+def test_a_home_folder_has_no_volume_object_or_claim():
+    docs = render("extension-access.j2", spec({"filesystems": ["dockerfiles"]}))
+    assert by_kind(docs, "PersistentVolume") == []
+    assert by_kind(docs, "PersistentVolumeClaim") == []
+
+
+def test_a_shared_file_system_alone_does_not_bind_the_pod_to_a_node():
+    docs = render("deployment-separate.j2", spec({"filesystems": ["mlflow"]}))
+    assert "nodeSelector" not in pod(docs, "backend")
+
+
+def test_the_homes_place_comes_from_controls_environment():
+    try:
+        home_folder_vars({"SYSTEM_USERNAME": "tkuser"})
+    except RuntimeError as e:
+        assert "MASTER_NODE_NAME not set" in str(e)
+    else:
+        raise AssertionError("a missing MASTER_NODE_NAME was accepted")

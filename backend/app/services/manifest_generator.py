@@ -34,6 +34,7 @@ from thinkube_yaml_placeholders import substitute as _substitute_placeholders
 from manifest_plan import (
     EXTENSION_ACCESS_MANIFEST as _EXTENSION_ACCESS_MANIFEST,
     EXTENSION_FILESYSTEMS as _EXTENSION_FILESYSTEMS,
+    home_folder_vars as _home_folder_vars,
     EXTENSION_NAMESPACE as _EXTENSION_NAMESPACE,
     has_extension_access as _has_extension_access,
     NAMESPACE_RESOURCES as _NAMESPACE_RESOURCES,
@@ -342,6 +343,7 @@ class ManifestGenerator:
             'artifact_repository': _artifact_repository_name(self.app_name, self.is_extension),
             'artifact_secret': _artifact_secret_name(self.app_name, self.is_extension),
             'extension_filesystems': _EXTENSION_FILESYSTEMS,
+            **_home_folder_vars(os.environ),
         }
 
         k8s_dir = app_path / 'k8s'

@@ -11,7 +11,7 @@ Knative services must remain portable to cloud serverless platforms
 import re
 from typing import Any, Dict, List
 
-from manifest_plan import EXTENSION_FILESYSTEMS
+from manifest_plan import EXTENSION_FILESYSTEMS, EXTENSION_HOME_FOLDERS
 
 # Services that tie a workload to this cluster: storage to a volume that must
 # follow the pod, workflows to an Argo controller and a namespace of its own.
@@ -298,8 +298,9 @@ def validate_extension_access(config: Dict[str, Any]) -> List[str]:
     Both are for an extension, a part of Thinkube Control. `access` lists the
     Kubernetes rules the container's pod gets in every namespace; each rule
     names its API groups, resources and verbs, never "*". `filesystems` lists
-    the shared file systems mounted at their root, at /storage/<name>; it
-    cannot be combined with `volume` or `gpu`, which mount volumes of their own.
+    what is mounted at /storage/<name>: a shared file system at its root, or a
+    folder of the IDE's home; it cannot be combined with `volume` or `gpu`,
+    which mount volumes of their own.
     """
     spec = config.get('spec', {})
     extension = (spec.get('deployment') or {}).get('type') == 'extension'
@@ -337,10 +338,10 @@ def validate_extension_access(config: Dict[str, Any]) -> List[str]:
                 errors.append(f"Container '{name}': filesystems must list at least one file system.")
                 wanted = []
             for fs in wanted:
-                if fs not in EXTENSION_FILESYSTEMS:
+                if fs not in EXTENSION_FILESYSTEMS and fs not in EXTENSION_HOME_FOLDERS:
                     errors.append(
                         f"Container '{name}': filesystems names '{fs}', which is not one of "
-                        f"{', '.join(EXTENSION_FILESYSTEMS)}."
+                        f"{', '.join([*EXTENSION_FILESYSTEMS, *EXTENSION_HOME_FOLDERS])}."
                     )
             if len(set(map(str, wanted))) != len(wanted):
                 errors.append(f"Container '{name}': filesystems names a file system twice.")

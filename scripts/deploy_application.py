@@ -41,7 +41,7 @@ from checkout_state import refusal as checkout_refusal
 from component_checkout import check_declared_type, checkout_path, developer_commits, parse_log, refusal
 from manifest_plan import (
     EXTENSION_ACCESS_MANIFEST, EXTENSION_FILESYSTEMS, EXTENSION_NAMESPACE, NAMESPACE_RESOURCES,
-    artifact_repository_name, has_extension_access,
+    artifact_repository_name, has_extension_access, home_folder_vars,
 )
 from platform_credentials import artifact_secret_name
 from template_folder import fetch_folder, folder_name, replace_checkout
@@ -1269,6 +1269,7 @@ git fetch origin main
             'artifact_repository': artifact_repository_name(self.app_name, self.is_extension),
             'artifact_secret': artifact_secret_name(self.app_name, self.is_extension),
             'extension_filesystems': EXTENSION_FILESYSTEMS,
+            **home_folder_vars(os.environ),
         }
 
         # 1. Generate namespace.yaml (not for an extension: Control owns its namespace)
