@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Thinkube Control is the management interface for the Thinkube platform -- a Kubernetes-based infrastructure for AI/ML workloads. It provides a web UI for managing services, deploying templates, mirroring container images, configuring JupyterHub, managing AI models, and more. The application is a Copier template that gets deployed into a Kubernetes cluster.
+Thinkube Control is the management interface for the Thinkube platform -- a Kubernetes-based infrastructure for AI/ML workloads. It provides a web UI for managing services, deploying templates, configuring JupyterHub, managing AI models, and more. The application is a Copier template that gets deployed into a Kubernetes cluster.
 
 ## Development Commands
 
@@ -43,11 +43,11 @@ A change is finished when it is pushed to `main`, deployed with `12_deploy_dev.y
 
 FastAPI application using the factory pattern (`create_app()` in `app/__init__.py`).
 
-- **`app/api/`** -- API route handlers. Each file is a router module (auth, services, templates, harbor_images, etc.) aggregated in `router.py`. Includes WebSocket endpoints for real-time execution streaming (`websocket_executor.py`, `websocket_harbor.py`).
+- **`app/api/`** -- API route handlers. Each file is a router module (auth, services, templates, secrets, etc.) aggregated in `router.py`. Includes WebSocket endpoints for real-time execution streaming (`websocket_executor.py`, `websocket_harbor.py`).
 - **`app/services/`** -- Business logic layer. Key services: `K8sServiceManager` (Kubernetes operations), `ServiceDiscovery` (discovers cluster services), `HealthCheckService` (background health monitoring), `BackgroundExecutor` (async task execution), `HarborClient` (Harbor registry API), `ModelDownloader` (AI model management).
-- **`app/models/`** -- SQLAlchemy ORM models and Pydantic schemas. Models cover services, container images, deployments, favorites, Jupyter venvs.
+- **`app/models/`** -- SQLAlchemy ORM models and Pydantic schemas. Models cover services, deployments, favorites, Jupyter venvs.
 - **`app/core/`** -- Configuration (`config.py` uses pydantic-settings), security/auth (`security.py`), API token management.
-- **`app/db/`** -- Database session management. Uses PostgreSQL (`thinkube_control`) for app data. `init_services.py`/`init_images.py`/`init_venvs.py` seed initial data on startup.
+- **`app/db/`** -- Database session management. Uses PostgreSQL (`thinkube_control`) for app data. `init_services.py`/`init_venvs.py` seed initial data on startup.
 - **`fastapi-mcp-extended/`** -- Custom MCP (Model Context Protocol) server integration. Exposes API endpoints as MCP resources and tools at `/mcp`.
 
 Configuration is driven entirely by environment variables (see `app/core/config.py` for required vars). Auth is Keycloak OAuth2/OIDC.
@@ -57,9 +57,9 @@ Configuration is driven entirely by environment variables (see `app/core/config.
 React 19 SPA built with Vite, using `thinkube-style` design system library.
 
 - **`src/main.tsx`** -- App entry point with route definitions. Uses `BrowserRouter`, `RequireAuth` wrapper for protected routes, and `TkAppLayout` from thinkube-style for navigation shell.
-- **`src/pages/`** -- Page components: Dashboard, Templates, HarborImages, ModelsPage, SecretsPage, OptionalComponentsPage, JupyterHubConfigPage, etc.
-- **`src/components/`** -- Shared UI components: PlaybookExecutor/BuildExecutor (WebSocket-based execution UIs), ServiceCard, TemplateParameterForm, RequireAuth, ErrorBoundary.
-- **`src/stores/`** -- Zustand stores for state management: useServicesStore, useHarborStore, useAuthStore, useComponentsStore, useModelDownloadsStore, etc.
+- **`src/pages/`** -- Page components: Dashboard, Templates, ModelsPage, SecretsPage, OptionalComponentsPage, JupyterHubConfigPage, etc.
+- **`src/components/`** -- Shared UI components: PlaybookExecutor (WebSocket-based execution UI), ServiceCard, TemplateParameterForm, RequireAuth, ErrorBoundary.
+- **`src/stores/`** -- Zustand stores for state management: useServicesStore, useAuthStore, useComponentsStore, useModelDownloadsStore, etc.
 - **`src/lib/`** -- Utilities: `axios.ts` (API client with token refresh interceptor, base URL `/api/v1`), `auth.ts` (Keycloak OAuth flow), `tokenManager.ts` (localStorage token management).
 
 Path alias: `@/` maps to `src/`. Styling: Tailwind CSS v4 + Radix UI primitives.
@@ -72,16 +72,11 @@ Keycloak OAuth2/OIDC flow. See `AUTHENTICATION.md` for full details. Key pattern
 
 Minimal Ansible roles still used at runtime:
 
-- **`roles/container_deployment/image_mirror/`** -- Harbor image mirroring (used by `mirror-image.yaml` playbook).
 - **`roles/keycloak/`** -- Keycloak client/user/realm configuration for deployed apps.
 - **`roles/gitea/`** -- Gitea repository management.
 - **`roles/common/`** -- Shared utilities.
 
 Template deployment is handled entirely by `scripts/deploy_application.py` (Python), not Ansible. The old Ansible deployment playbook and its roles have been removed.
-
-### Playbooks (`playbooks/`)
-
-- **`mirror-image.yaml`** -- Harbor image mirroring playbook (the only remaining playbook).
 
 ### Templates (`templates/`)
 
@@ -100,8 +95,8 @@ This repo is a Copier template (`copier.yaml`). Variables like `domain_name`, `n
 ## Key Patterns
 
 - **Single database**: Main app DB (`thinkube_control`) with SQLAlchemy ORM. CI/CD data is queried directly from Kubernetes (Argo Workflows).
-- **WebSocket execution**: Template deployments and image mirroring stream output via WebSocket to the frontend (`websocket_executor.py`, `websocket_harbor.py`); `PlaybookExecutor` consumes these streams.
-- **Detached runs**: Custom image builds, venv builds and adding nodes run on the server as tasks started with `app/services/detached.py`; the request answers at once with an id, and a closed tab does not end the run. The panels poll: `BuildExecutor` reads the image record and its build log, the kernels page reads the venv status, and `PlaybookExecutor.followRun` reads the events of an add-nodes job (`GET /nodes/add-batch/{job_id}`).
+- **WebSocket execution**: Template deployments stream output via WebSocket to the frontend (`websocket_executor.py`); `PlaybookExecutor` consumes these streams.
+- **Detached runs**: Venv builds and adding nodes run on the server as tasks started with `app/services/detached.py`; the request answers at once with an id, and a closed tab does not end the run. The panels poll: the kernels page reads the venv status, and `PlaybookExecutor.followRun` reads the events of an add-nodes job (`GET /nodes/add-batch/{job_id}`).
 - **Background tasks**: Lifespan-managed background tasks for health checks (every service, periodic) and service discovery (every 5 minutes).
 - **MLflow injection**: All deployed applications automatically receive MLflow auth credentials as environment variables.
 - **Base images**: `backend/Containerfile` starts from `python-base:3.12-slim` and `frontend/Containerfile` from `node-base:22-alpine`, both from the cluster registry; each then installs its own dependencies (`pip install -r requirements.txt`, `npm ci`).

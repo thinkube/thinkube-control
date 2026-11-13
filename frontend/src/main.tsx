@@ -7,7 +7,7 @@ import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { TkAppLayout, type TkNavItem } from 'thinkube-style';
-import { LayoutDashboard, Boxes, Layers, Container, Puzzle, Shield, Sliders, Lock, Key, Star, Grid2X2, Server, Code, BarChart3, Database, Cpu, FileText, Box, Zap, Radio, Bell } from 'lucide-react';
+import { LayoutDashboard, Boxes, Layers, Puzzle, Shield, Sliders, Lock, Key, Star, Grid2X2, Server, Code, BarChart3, Database, Cpu, FileText, Box, Zap, Radio, Bell } from 'lucide-react';
 import { Toaster } from 'sonner';
 import './globals.css';
 import 'thinkube-style/styles.css';
@@ -39,8 +39,6 @@ import JupyterHubConfigPage from './pages/JupyterHubConfigPage';
 import JupyterKernelsPage from './pages/JupyterKernelsPage';
 import Templates from './pages/Templates';
 import ModelsPage from './pages/ModelsPage';
-import { HarborImages } from './pages/HarborImages';
-import { ImageMirrorDeployment } from './pages/ImageMirrorDeployment';
 import KnativeServicesPage from './pages/KnativeServicesPage';
 import NodesPage from './pages/NodesPage';
 import LLMGatewayPage from './pages/LLMGatewayPage';
@@ -82,7 +80,6 @@ const baseNavigationItems: TkNavItem[] = [
       { id: "llm-gateway", label: "LLM Gateway", lucideIcon: Radio, href: "/llm-gateway" },
       { id: "models", label: "AI Models", lucideIcon: Database, href: "/models" },
       { id: "templates", label: "Templates", lucideIcon: Layers, href: "/templates" },
-      { id: "harbor-images", label: "Harbor Images", lucideIcon: Container, href: "/harbor-images" },
       { id: "optional-components", label: "Optional Components", lucideIcon: Puzzle, href: "/optional-components" },
       { id: "nodes", label: "Cluster Nodes", lucideIcon: Server, href: "/nodes" },
     ],
@@ -187,7 +184,6 @@ function AppContent() {
       models: '/models',
       templates: '/templates',
       'knative-services': '/knative-services',
-      'harbor-images': '/harbor-images',
       'optional-components': '/optional-components',
       'nodes': '/nodes',
       'jupyter-kernels': '/jupyter-kernels',
@@ -233,7 +229,6 @@ function AppContent() {
     if (path.startsWith('/models')) return 'models';
     if (path.startsWith('/templates')) return 'templates';
     if (path.startsWith('/knative-services')) return 'knative-services';
-    if (path.startsWith('/harbor-images')) return 'harbor-images';
     if (path.startsWith('/optional-components')) return 'optional-components';
     if (path.startsWith('/nodes')) return 'nodes';
     if (path.startsWith('/jupyter-kernels')) return 'jupyter-kernels';
@@ -267,7 +262,6 @@ function AppContent() {
     if (path.startsWith('/models')) return 'AI Models';
     if (path.startsWith('/templates')) return 'Templates';
     if (path.startsWith('/knative-services')) return 'Knative Services';
-    if (path.startsWith('/harbor-images')) return 'Harbor Images';
     if (path.startsWith('/optional-components')) return 'Optional Components';
     if (path.startsWith('/nodes')) return 'Cluster Nodes';
     if (path.startsWith('/jupyter-kernels')) return 'Jupyter Kernels';
@@ -313,8 +307,6 @@ function AppContent() {
         <Route path="/knative-services" element={<KnativeServicesPage />} />
         <Route path="/nodes" element={<NodesPage />} />
         <Route path="/news" element={<NewsAndFixesPage />} />
-        <Route path="/harbor-images" element={<HarborImages />} />
-        <Route path="/image-mirror/:source" element={<ImageMirrorDeployment />} />
         <Route path="/x/:name/*" element={<ExtensionPage extensions={extensions} read={extensionsRead} listError={extensionsError} />} />
       </Routes>
     </TkAppLayout>

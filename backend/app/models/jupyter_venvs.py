@@ -3,7 +3,7 @@
 
 """
 SQLAlchemy models for Jupyter virtualenv management
-Following the exact same pattern as CustomImageBuild
+One row per virtualenv, with the state of its build
 """
 
 from sqlalchemy import Column, String, Text, DateTime, JSON, Boolean, ForeignKey
@@ -16,7 +16,7 @@ from app.db.session import Base
 
 
 class JupyterVenv(Base):
-    """Track Jupyter virtualenvs - similar to CustomImageBuild"""
+    """A Jupyter virtualenv and the state of its build"""
 
     __tablename__ = "jupyter_venvs"
 

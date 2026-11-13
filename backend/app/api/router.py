@@ -9,7 +9,6 @@ from app.api import (
     cicd,
     tokens,
     websocket_executor,
-    websocket_harbor,
     templates,
     stacks,
     knative_services,
@@ -19,10 +18,7 @@ from app.api import (
     secrets,
     resource_status,
     optional_components,
-    harbor_images,
-    jupyter_images,
     cluster_resources,
-    custom_images,
     jupyterhub_config,
     model_mirrors,
     gpu_metrics,
@@ -57,10 +53,7 @@ api_router.include_router(optional_components.router, prefix="/optional-componen
 api_router.include_router(code_server.router, prefix="/code-server", tags=["code-server"])
 api_router.include_router(runs.router, prefix="/runs", tags=["runs"])
 api_router.include_router(fixes.router, prefix="/fixes", tags=["fixes"])
-api_router.include_router(harbor_images.router, tags=["harbor-images"])
-api_router.include_router(jupyter_images.router, tags=["jupyter-images"])
 api_router.include_router(cluster_resources.router, tags=["cluster-resources"])
-api_router.include_router(custom_images.router, tags=["custom-images"])
 api_router.include_router(jupyterhub_config.router, tags=["jupyterhub-config"])
 api_router.include_router(model_mirrors.router, prefix="/models", tags=["models"])
 api_router.include_router(gpu_metrics.router, tags=["gpu-metrics"])
@@ -78,4 +71,3 @@ api_router.include_router(llm_router, prefix="/llm", tags=["llm"])
 
 # Include WebSocket routes (no prefix for WebSocket endpoints)
 api_router.include_router(websocket_executor.router)
-api_router.include_router(websocket_harbor.router)

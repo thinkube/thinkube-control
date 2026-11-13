@@ -24,7 +24,7 @@ touch it.
 | Datasets | extension `datasets` | done |
 | Forge | extension `forge` | done |
 | Storage | extension `control-storage` | done |
-| Images (Harbor images, custom images, Jupyter images, mirror) | Control | to move, as `control-images` |
+| Images (Harbor images, custom images, Jupyter images, mirror) | extension `control-images` | done |
 | Models (catalogue, mirrors, fine-tuned models) | Control | to move, as `control-models` |
 | LLM Gateway (`api/llm`, `services/llm_*`) | Control | to move, as `control-llm`, after Models |
 | Notebooks (kernels, servers, notebook jobs, JupyterHub config, training mode, GPU metrics) | Control | to move, as `control-notebooks`, last |
@@ -40,8 +40,13 @@ The order is the order of the table. Each move ends before the next begins.
   is the part's plain name.
 - **Cluster access.** What a container needs from the cluster beyond its own
   objects it declares in thinkube.yaml: `access` (Kubernetes rules) and
-  `filesystems` (shared file systems at their root). Name each resource and
+  `filesystems` (shared file systems at their root, or the folder
+  `dockerfiles` of the IDE's home, which keeps the pod on the control plane
+  node). Name each resource and
   verb; `*` is refused.
+- **Budget.** Every extension runs in Control's namespace, whose budget is
+  the tier `control` of the role `thinkube_namespace` in thinkube (16 CPU in
+  limits). An extension takes 1.5 (a medium backend, a small frontend).
 - **Long work.** The proxy answers within 300 s and carries no WebSocket. A
   run that takes longer is started on the server and answers at once with an
   id; the page polls it (`app/services/detached.py` is Control's form of it).
@@ -119,6 +124,13 @@ for any repository.
   nothing mounts any more; the deploy does not remove them. Delete the claim,
   then the volume. Both only point at the file system's root, with reclaim
   policy Retain: the data stays.
+
+- **Images.** Control keeps `app/services/harbor_client.py`, which the
+  delete of an app uses to remove its repositories from Harbor. A cluster
+  that ran Control before the move still has the tables `container_images`,
+  `image_mirror_jobs` and `custom_image_builds` in `thinkube_control`. The
+  extension's `python -m app.jobs.copy_from_control`, run once in its
+  backend's pod, copies their rows; after that nothing reads them.
 
 ## Open
 

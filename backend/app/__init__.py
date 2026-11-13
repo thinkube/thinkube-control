@@ -29,8 +29,6 @@ from app.db.session import Base, get_engine, SessionLocal
 from app.core.api_tokens import APIToken
 from app.models.services import Service, ServiceHealth, ServiceAction, ServiceEndpoint
 from app.models.favorites import UserFavorite
-from app.models.container_images import ContainerImage, ImageMirrorJob
-from app.models.custom_images import CustomImageBuild
 from app.models.jupyter_venvs import JupyterVenv
 from app.services import health_checker, ServiceDiscovery
 from app.services.llm_model_registry import llm_model_registry
@@ -170,16 +168,6 @@ async def app_lifespan(app: FastAPI):
         else:
             logger.error(f"Failed to initialize services: {e}")
 
-    # Initialize container images in database
-    try:
-        from app.db.init_images import init_images
-
-        init_images()
-    except Exception as e:
-        # Log but don't fail startup - images can be synced later via API
-        logger.warning(f"Failed to initialize container images: {e}")
-        logger.info("Container images can be synced later via /api/v1/harbor/images/sync")
-
     # Initialize Jupyter venv templates
     try:
         from app.db.init_venvs import init_venvs, mark_orphaned_builds
@@ -188,13 +176,6 @@ async def app_lifespan(app: FastAPI):
         mark_orphaned_builds()
     except Exception as e:
         logger.warning(f"Failed to initialize Jupyter venv templates: {e}")
-
-    try:
-        from app.api.custom_images import mark_orphaned_image_builds
-
-        mark_orphaned_image_builds()
-    except Exception as e:
-        logger.warning(f"Could not mark interrupted custom image builds: {e}")
 
     # Start health check background task
     health_check_task = asyncio.create_task(health_checker.start())
@@ -311,15 +292,12 @@ async def app_lifespan(app: FastAPI):
     from app.services.run_queue import run_queue
     run_queue.start()
 
-    # A venv build or a custom image build lives as a task in one backend
-    # process. When a rollout replaces the pod under a build, the new pod never
+    # A venv build lives as a task in one backend process. When a rollout replaces the pod under a build, the new pod never
     # had the task, so the record would say building for ever; this loop marks
     # such records failed.
     async def reconcile_venv_builds():
         from app.db.init_venvs import mark_orphaned_builds
-        from app.api.custom_images import mark_orphaned_image_builds
         from app.api.jupyter_venvs import venv_task_running
-        from app.services import detached
 
         while True:
             await asyncio.sleep(60)
@@ -327,12 +305,6 @@ async def app_lifespan(app: FastAPI):
                 mark_orphaned_builds(still_running=venv_task_running)
             except Exception as e:
                 logger.debug(f"venv build reconciliation: {e}")
-            try:
-                mark_orphaned_image_builds(
-                    still_running=lambda build_id: detached.running(f"image-build:{build_id}")
-                )
-            except Exception as e:
-                logger.warning(f"custom image build reconciliation: {e}")
             try:
                 from app.db.init_deployments import mark_interrupted_runs, runs_to_follow
                 from app.services.background_executor import background_executor
@@ -519,19 +491,6 @@ MCP_OPERATIONS = [
     "publish_template",            # Tool
     "get_commit_rollout",          # Resource
 
-    # === Harbor Images ===
-    "list_harbor_images",          # Resource
-    "get_harbor_image",            # Resource
-    "get_image_statistics",        # Resource
-    "list_harbor_jobs",            # Resource
-    "get_harbor_job_status",       # Resource
-    "list_harbor_projects",        # Resource
-    "check_harbor_health",         # Resource
-    "register_harbor_image",       # Tool
-    "remirror_harbor_image",       # Tool
-    "bulk_mirror_images",          # Tool
-    "delete_image",                # Tool
-
     # === Secrets ===
     "list_secrets",                # Resource
     "get_secret",                  # Resource
@@ -539,17 +498,6 @@ MCP_OPERATIONS = [
     "create_secret",               # Tool
     "update_secret",               # Tool
     "delete_secret",               # Tool
-
-    # === Custom Images ===
-    "list_custom_images",          # Resource
-    "get_custom_image",            # Resource
-    "get_base_registry",           # Resource
-    "get_image_dockerfile",        # Resource
-    "get_build_logs",              # Resource
-    "download_build_log",          # Resource
-    "create_custom_image",         # Tool
-    "build_custom_image",          # Tool
-    "delete_custom_image",         # Tool
 
     # === Models ===
     "get_model_catalog",           # Resource

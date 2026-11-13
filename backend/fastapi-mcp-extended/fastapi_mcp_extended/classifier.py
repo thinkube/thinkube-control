@@ -38,8 +38,6 @@ class EndpointClassifier:
     TOOL_OPERATION_IDS = {
         "restart_service",
         "toggle_service",
-        "remirror_harbor_image",
-        "bulk_mirror_images",
         "redeploy_code_server",
         "cancel_queued_run",
     }
@@ -69,25 +67,10 @@ class EndpointClassifier:
         "get_deployment_logs",
         "get_deployment_debug_logs",
         "download_debug_log",
-        # Harbor images
-        "list_harbor_images",
-        "get_harbor_image",
-        "get_image_statistics",
-        "list_harbor_jobs",
-        "get_harbor_job_status",
-        "list_harbor_projects",
-        "check_harbor_health",
         # Secrets
         "list_secrets",
         "get_secret",
         "get_secret_apps",
-        # Custom images
-        "list_custom_images",
-        "get_custom_image",
-        "get_base_registry",
-        "get_image_dockerfile",
-        "get_build_logs",
-        "download_build_log",
         # Models
         "get_model_catalog",
         "list_mirror_jobs",
