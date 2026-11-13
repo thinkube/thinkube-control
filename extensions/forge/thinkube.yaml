@@ -22,7 +22,7 @@ spec:
     description: "Fine-tune language models on your data"
     icon: flame
     platform: "0.1"
-    depends: [datasets]
+    depends: [datasets, control-models]
     ui:
       module: /extension/index.js
       css: /extension/index.css

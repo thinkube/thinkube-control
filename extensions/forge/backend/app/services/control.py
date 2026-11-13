@@ -14,6 +14,9 @@ from app.core.config import settings
 
 TIMEOUT = httpx.Timeout(60.0)
 
+# The extension Models (control-models), at its Service in Control's namespace: the model catalogue
+MODELS_API_URL = "http://control-models-backend:8000/api/v1"
+
 
 class ControlError(Exception):
     """Thinkube Control refused or failed a call; `status` is its HTTP status."""
@@ -25,10 +28,11 @@ class ControlError(Exception):
 
 
 async def call(token: str, method: str, path: str, body: Optional[Dict[str, Any]] = None,
-               params: Optional[Dict[str, Any]] = None) -> Any:
+               params: Optional[Dict[str, Any]] = None, base: Optional[str] = None) -> Any:
+    """A call to Control's API, or to base: the API of an extension of Control."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         try:
-            r = await client.request(method, f"{settings.CONTROL_API_URL}{path}", json=body, params=params,
+            r = await client.request(method, f"{base or settings.CONTROL_API_URL}{path}", json=body, params=params,
                                      headers={"Authorization": f"Bearer {token}"})
         except httpx.HTTPError as e:
             raise ControlError(502, f"Thinkube Control did not answer {method} {path}: {e}")
@@ -42,7 +46,7 @@ async def call(token: str, method: str, path: str, body: Optional[Dict[str, Any]
 
 
 async def catalog(token: str) -> Dict[str, Any]:
-    return await call(token, "GET", "/models/catalog")
+    return await call(token, "GET", "/models/catalog", base=MODELS_API_URL)
 
 
 async def nodes_choices(token: str) -> Dict[str, Dict[str, list]]:

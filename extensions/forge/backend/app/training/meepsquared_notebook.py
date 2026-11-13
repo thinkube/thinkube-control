@@ -305,7 +305,7 @@ if MODE == "train" and FINAL == "completed" and P["register"]:
     print(f"MLflow model {registered_name} version {version.version}")
 
     published = requests.post(
-        f"https://control.{os.environ['DOMAIN_NAME']}/api/v1/models/finetuned",
+        f"https://control.{os.environ['DOMAIN_NAME']}/api/v1/x/control-models/api/models/finetuned",
         json={"catalog_entry": entry},
         headers={"Authorization": f"Bearer {os.environ['THINKUBE_API_TOKEN']}"},
         timeout=120,
