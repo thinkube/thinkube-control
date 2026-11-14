@@ -62,6 +62,49 @@ def deployment_gpu_request(deployment) -> int:
     return total
 
 
+def unmet_required_affinity(affinity: Optional[dict], node_labels: Dict[str, str]) -> Optional[str]:
+    """Why a node cannot take a pod whose template has this affinity, or None when it can.
+
+    Evaluates the required node affinity the scheduler enforces
+    (requiredDuringSchedulingIgnoredDuringExecution): the node must match one of the
+    nodeSelectorTerms, and a term matches when all its matchExpressions do. The affinity
+    is the camelCase form of the Kubernetes API. A term with matchFields is not decided
+    here and counts as matching.
+    """
+    required = ((affinity or {}).get("nodeAffinity") or {}).get("requiredDuringSchedulingIgnoredDuringExecution")
+    terms = (required or {}).get("nodeSelectorTerms") or []
+    if not terms:
+        return None
+
+    def unmet(expr: dict) -> Optional[str]:
+        key, op, values = expr["key"], expr["operator"], list(expr.get("values") or [])
+        has = key in node_labels
+        value = node_labels.get(key)
+        if op == "In" and value in values or op == "NotIn" and value not in values:
+            return None
+        if op == "Exists" and has or op == "DoesNotExist" and not has:
+            return None
+        if op in ("Gt", "Lt") and has:
+            try:
+                n, bound = int(value), int(values[0])
+            except (ValueError, IndexError):
+                return f"{key} {op} {values}: the node's {key} is '{value}'"
+            if (n > bound) if op == "Gt" else (n < bound):
+                return None
+        shown = f"{key} {op} {values}" if values else f"{key} {op}"
+        return f"{shown}, and the node's {key} is {repr(value) if has else 'not set'}"
+
+    reasons = []
+    for term in terms:
+        if term.get("matchFields"):
+            return None
+        failed = [r for r in (unmet(e) for e in term.get("matchExpressions") or []) if r]
+        if not failed:
+            return None
+        reasons.append("; ".join(failed))
+    return " or ".join(reasons)
+
+
 class ManagedPod:
     """Tracks a gateway-created Deployment."""
 
@@ -142,6 +185,30 @@ class LLMPodManager:
             self._get_namespace(backend_type),
         )
         return deployment_gpu_request(deployment)
+
+    def node_refusal(self, backend_type: str, node_name: str) -> Optional[str]:
+        """Why the backend's pods cannot be scheduled on the node, or None when they can.
+
+        The per-model Deployment copies the base Deployment's pod template, affinity
+        included, so a node its required node affinity excludes (an architecture the
+        backend's image is not built for) would leave the pod Pending.
+        """
+        from kubernetes import client, config as k8s_config
+
+        try:
+            k8s_config.load_incluster_config()
+        except k8s_config.ConfigException:
+            k8s_config.load_kube_config()
+        base = client.AppsV1Api().read_namespaced_deployment(
+            self._get_base_deployment_name(backend_type), self._get_namespace(backend_type)
+        )
+        affinity = client.ApiClient().sanitize_for_serialization(base.spec.template.spec.affinity)
+        labels = client.CoreV1Api().read_node(node_name).metadata.labels or {}
+        unmet = unmet_required_affinity(affinity, labels)
+        if unmet is None:
+            return None
+        name = llm_backend_types.require(backend_type).display_name
+        return f"{name} pods cannot run on {node_name}: its Deployment requires {unmet}"
 
     def _make_deployment_name(self, backend_type: str, node_name: str, model_id: Optional[str] = None) -> str:
         base = self._get_base_deployment_name(backend_type)

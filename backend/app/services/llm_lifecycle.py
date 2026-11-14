@@ -203,6 +203,10 @@ class LLMLifecycleManager:
         refusal = self._gpu_refusal(backend_type, node, entry)
         if refusal:
             return ModelLoadResponse(model_id=model_id, state=entry.state, message=refusal)
+        from app.services.llm_pod_manager import llm_pod_manager
+        refusal = await asyncio.to_thread(llm_pod_manager.node_refusal, backend_type.type, node)
+        if refusal:
+            return ModelLoadResponse(model_id=model_id, state=entry.state, message=refusal)
 
         # The serving context when the caller does not say: the largest of
         # 32k, 16k, 8k that the model allows and the node has memory for.
@@ -263,13 +267,15 @@ class LLMLifecycleManager:
         return None
 
     async def _pick_node(self, backend_type, entry) -> Optional[str]:
-        """The GPU node, among those the backend and the model's weights run on, with the most AI memory left and a
-        free slot, else the most memory."""
+        """The GPU node, among those the backend's pods can be scheduled on and the backend and the model's weights
+        run on, with the most AI memory left and a free slot, else the most memory."""
         from app.services.llm_gpu_tracker import llm_gpu_tracker
+        from app.services.llm_pod_manager import llm_pod_manager
 
         status = await llm_gpu_tracker.get_status()
         nodes = [n for n in status.nodes
-                 if backend_type.runs_on(n.compute_capability) and weights_run_on(entry.quantization, n.compute_capability)]
+                 if backend_type.runs_on(n.compute_capability) and weights_run_on(entry.quantization, n.compute_capability)
+                 and await asyncio.to_thread(llm_pod_manager.node_refusal, backend_type.type, n.name) is None]
         if not nodes:
             return None
         free = [n for n in nodes if n.available_slots > 0]

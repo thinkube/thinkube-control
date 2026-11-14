@@ -78,6 +78,11 @@ def world(monkeypatch):
 
     monkeypatch.setattr(llm_lifecycle, "_load_performance", fake_performance)
     monkeypatch.setattr(llm_lifecycle, "_load_ollama", fake_ollama)
+    import app.services.llm_pod_manager as pods
+    state["excluded"] = set()
+    monkeypatch.setattr(pods.llm_pod_manager, "node_refusal", lambda backend_type, node_name: (
+        f"vLLM pods cannot run on {node_name}: its Deployment requires kubernetes.io/arch In ['amd64']"
+        if node_name in state["excluded"] else None))
     return SimpleNamespace(model=model, state=state, captured=captured)
 
 
@@ -261,3 +266,16 @@ def test_weights_run_on():
     assert lifecycle_module.weights_run_on("NVFP4", "12.1") and lifecycle_module.weights_run_on("NVFP4", "10.0")
     assert not lifecycle_module.weights_run_on("NVFP4", "8.9")
     assert not lifecycle_module.weights_run_on("NVFP4", None)
+
+
+def test_a_node_the_backend_deployment_excludes_is_refused(world):
+    world.state["excluded"].add("tkspark")
+    out = asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3-8B", backend="vllm", node="tkspark"))
+    assert "cannot run on tkspark" in out.message
+    assert "node" not in world.captured
+
+
+def test_without_a_node_an_excluded_node_is_not_picked(world):
+    world.state["excluded"].add("tkspark")
+    asyncio.run(llm_lifecycle.load_model("Qwen/Qwen3-8B", backend="vllm"))
+    assert world.captured["node"] == "tkamd2"
