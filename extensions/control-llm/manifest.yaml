@@ -1,0 +1,16 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: MIT
+
+# What a deploy of this extension asks for: the parameters it is given and
+# the secrets it reads from Thinkube Control's Secrets store.
+apiVersion: thinkube.io/v1
+kind: TemplateManifest
+metadata:
+  name: control-llm
+  title: LLM Gateway
+  description: "The mirrored models with their state, the GPU nodes, the inference backends, and loading a model on a node"
+  version: 1.0.0
+  author: Alejandro Martínez Corriá
+  tags: ["extension", "thinkube-control"]
+
+parameters: []

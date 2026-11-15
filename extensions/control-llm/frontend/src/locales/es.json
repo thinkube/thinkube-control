@@ -1,0 +1,229 @@
+{
+  "app": {
+    "title": "Pasarela LLM"
+  },
+  "nav": {
+    "workspace": "Espacio de trabajo",
+    "home": "Pasarela LLM",
+    "settings": "Configuracion",
+    "apiTokens": "Tokens API",
+    "account": "Cuenta",
+    "logout": "Cerrar sesion"
+  },
+  "llm": {
+    "description": "Pasarela de API unificada para la inferencia local de LLM — compatible con OpenAI y Anthropic",
+    "errorTitle": "Error",
+    "endpoint": {
+      "title": "Punto de acceso de la pasarela",
+      "copy": "Copiar URL",
+      "copied": "Copiada"
+    },
+    "stats": {
+      "availableModels": "Modelos disponibles",
+      "availableModelsDescription": "{{loadable}} cargables, {{total}} en total en el registro",
+      "backends": "Backends",
+      "backendsDescription": "{{total}} en total, {{active}} activos",
+      "gpuMemory": "Memoria de GPU",
+      "used": "{{pct}}% en uso",
+      "loading": "Cargando...",
+      "canLoadMore": "Admite más modelos",
+      "threshold": "Umbral: {{pct}}%"
+    },
+    "gpu": {
+      "unknownProduct": "GPU desconocida",
+      "timeSliced": "Tiempo compartido",
+      "slots": "Ranuras: {{available}} / {{total}} disponibles",
+      "totalMemory": "{{used}} / {{total}} GB en total",
+      "sharedMemory": "Memoria compartida",
+      "memory": "Memoria de GPU",
+      "index": "GPU {{index}}"
+    },
+    "backends": {
+      "title": "Backends de inferencia",
+      "refresh": "Actualizar",
+      "empty": "No se ha descubierto ningún backend",
+      "none": "Ninguno",
+      "col": {
+        "backend": "Backend",
+        "type": "Tipo",
+        "status": "Estado",
+        "loadedModels": "Modelos cargados"
+      },
+      "status": {
+        "healthy": "En buen estado",
+        "provisioning": "Preparando",
+        "idle": "Inactivo",
+        "unavailable": "No disponible"
+      }
+    },
+    "models": {
+      "title": "Modelos",
+      "empty": "No hay modelos cargables en el registro",
+      "col": {
+        "model": "Modelo",
+        "params": "Parámetros",
+        "quantization": "Cuantización",
+        "backendType": "Tipo de backend",
+        "state": "Estado",
+        "runningOn": "Se ejecuta en",
+        "actions": "Acciones"
+      },
+      "load": "Cargar",
+      "unload": "Descargar",
+      "loadingAction": "Cargando...",
+      "unloadingAction": "Descargando...",
+      "requires": "Requiere {{types}}"
+    },
+    "badge": {
+      "finetuned": "Ajustado",
+      "tools": "herramientas",
+      "gated": "restringido"
+    },
+    "activeParams": "{{main}} / {{active}} activos",
+    "context": "{{value}} de contexto",
+    "state": {
+      "available": "Disponible",
+      "loading": "Cargando",
+      "unloading": "Descargando",
+      "deployable": "Desplegable",
+      "registered": "Registrado"
+    },
+    "nonLoadable": {
+      "unsloth": "Ajuste fino"
+    },
+    "dialog": {
+      "title": "Cargar modelo",
+      "load": "Cargar modelo",
+      "tokens": "{{value}} tokens",
+      "tokensMax": "{{value}} tokens (máx.)",
+      "estimatedMemory": "Memoria estimada: {{value}} GB",
+      "targetNode": "Nodo GPU de destino",
+      "noNodes": "No se ha descubierto ningún nodo GPU",
+      "selectNode": "Selecciona un nodo GPU",
+      "memory": "{{value}} GB",
+      "memoryEach": "{{value}} GB cada una",
+      "backendType": "Tipo de backend",
+      "selectBackendType": "Selecciona un tipo de backend",
+      "contextLength": "Longitud de contexto",
+      "selectContext": "Selecciona la longitud de contexto",
+      "largeContext": "Los contextos grandes necesitan mucha más memoria de GPU para la caché KV. Se recomienda entre 8K y 16K para la mayoría de los usos.",
+      "reducedContext": "Un contexto reducido usa menos memoria de GPU (menos caché KV)",
+      "specTokens": "Tokens especulativos (k)",
+      "specTokensPlaceholder": "predeterminado",
+      "specTokensHelp": "Profundidad del borrador en la decodificación especulativa. Un valor mayor puede ser más rápido cuando se aceptan los borradores, pero necesita más memoria. Déjalo vacío para usar el valor del catálogo del modelo.",
+      "requiresGpus_one": "Requiere {{count}} GPU (paralelismo de tensores)",
+      "requiresGpus_other": "Requiere {{count}} GPU (paralelismo de tensores)",
+      "notEnoughGpus_one": "No hay suficientes GPU disponibles ({{count}} libre)",
+      "notEnoughGpus_other": "No hay suficientes GPU disponibles ({{count}} libres)",
+      "modelMemory": "Modelo: {{value}} GB",
+      "gpusAvailable": "GPU: {{available}} / {{total}} disponibles"
+    }
+  },
+  "apiTokens": {
+    "title": "Tokens API",
+    "subtitle": "Los tokens permiten que scripts y herramientas llamen a la API de esta aplicacion en tu nombre",
+    "createToken": {
+      "title": "Crear nuevo token",
+      "nameLabel": "Nombre del token",
+      "namePlaceholder": "Mi token API",
+      "expiresLabel": "Expira en (dias)",
+      "expiresPlaceholder": "Dejar vacio para sin expiracion",
+      "createButton": "Crear token"
+    },
+    "tokenCreated": {
+      "title": "Token creado con exito!",
+      "message": "Copia este token ahora. No podras verlo de nuevo.",
+      "copyButton": "Copiar al portapapeles",
+      "copied": "Token copiado al portapapeles!"
+    },
+    "tokenList": {
+      "title": "Tus tokens",
+      "noTokens": "No hay tokens API todavia. Crea uno arriba!",
+      "table": {
+        "name": "Nombre",
+        "created": "Creado",
+        "expires": "Expira",
+        "lastUsed": "Ultimo uso",
+        "actions": "Acciones",
+        "never": "Nunca",
+        "revoke": "Revocar",
+        "revoked": "Revocado"
+      },
+      "confirmRevoke": "Estas seguro de que quieres revocar este token?",
+      "confirmRevokeTitle": "Revocar token"
+    },
+    "usage": {
+      "title": "Como usar los tokens API",
+      "cli": {
+        "title": "CLI / curl",
+        "description": "Incluye el token en el encabezado Authorization:"
+      },
+      "env": {
+        "title": "Variable de entorno",
+        "description": "Define el token una vez y deja que tus herramientas lo lean:"
+      }
+    },
+    "errors": {
+      "createFailed": "Error al crear el token",
+      "revokeFailed": "Error al revocar el token",
+      "loadFailed": "Error al cargar los tokens",
+      "nameMissing": "Por favor proporciona un nombre para el token"
+    },
+    "success": {
+      "created": "Token creado",
+      "revoked": "Token revocado"
+    }
+  },
+  "profile": {
+    "roles": "Roles"
+  },
+  "theme": {
+    "toggle": "Cambiar tema"
+  },
+  "language": {
+    "label": "Idioma"
+  },
+  "auth": {
+    "loginTitle": "Iniciar Sesion",
+    "loginMessage": "Por favor inicia sesion para acceder a la aplicacion",
+    "loginButton": "Iniciar sesion con Keycloak",
+    "loggingIn": "Completando autenticacion...",
+    "loginSuccess": "Autenticacion exitosa. Redirigiendo...",
+    "loginFailed": "Error de autenticacion",
+    "noCode": "No se recibio codigo de autorizacion",
+    "redirecting": "Redirigiendo al inicio de sesion...",
+    "redirectingMessage": "Por favor espera mientras te redirigimos a Keycloak.",
+    "configError": "Error de configuracion de autenticacion. Por favor revisa la consola para mas detalles.",
+    "tryAgain": "Reintentar"
+  },
+  "errors": {
+    "notFound": {
+      "title": "404",
+      "heading": "Pagina no encontrada",
+      "message": "La pagina que buscas no existe o ha sido movida.",
+      "backButton": "Volver al inicio"
+    },
+    "loadingApp": {
+      "title": "Error al cargar la aplicacion",
+      "message": "No se pudo cargar la informacion del usuario.",
+      "reload": "Recargar"
+    },
+    "general": {
+      "loading": "Cargando..."
+    }
+  },
+  "common": {
+    "open": "Abrir",
+    "close": "Cerrar",
+    "save": "Guardar",
+    "cancel": "Cancelar",
+    "delete": "Eliminar",
+    "edit": "Editar",
+    "create": "Crear",
+    "update": "Actualizar",
+    "back": "Atras",
+    "next": "Siguiente",
+    "yes": "Si",
+    "no": "No"
+  }
+}

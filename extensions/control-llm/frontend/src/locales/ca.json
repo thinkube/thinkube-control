@@ -1,0 +1,229 @@
+{
+  "app": {
+    "title": "Passarel·la LLM"
+  },
+  "nav": {
+    "workspace": "Espai de treball",
+    "home": "Passarel·la LLM",
+    "settings": "Configuracio",
+    "apiTokens": "Tokens API",
+    "account": "Compte",
+    "logout": "Tancar sessio"
+  },
+  "llm": {
+    "description": "Passarel·la d'API unificada per a la inferència local de LLM — compatible amb OpenAI i Anthropic",
+    "errorTitle": "Error",
+    "endpoint": {
+      "title": "Punt d'accés de la passarel·la",
+      "copy": "Copia l'URL",
+      "copied": "Copiada"
+    },
+    "stats": {
+      "availableModels": "Models disponibles",
+      "availableModelsDescription": "{{loadable}} carregables, {{total}} en total al registre",
+      "backends": "Backends",
+      "backendsDescription": "{{total}} en total, {{active}} actius",
+      "gpuMemory": "Memòria de GPU",
+      "used": "{{pct}}% en ús",
+      "loading": "Carregant...",
+      "canLoadMore": "Admet més models",
+      "threshold": "Llindar: {{pct}}%"
+    },
+    "gpu": {
+      "unknownProduct": "GPU desconeguda",
+      "timeSliced": "Temps compartit",
+      "slots": "Ranures: {{available}} / {{total}} disponibles",
+      "totalMemory": "{{used}} / {{total}} GB en total",
+      "sharedMemory": "Memòria compartida",
+      "memory": "Memòria de GPU",
+      "index": "GPU {{index}}"
+    },
+    "backends": {
+      "title": "Backends d'inferència",
+      "refresh": "Actualitza",
+      "empty": "No s'ha descobert cap backend",
+      "none": "Cap",
+      "col": {
+        "backend": "Backend",
+        "type": "Tipus",
+        "status": "Estat",
+        "loadedModels": "Models carregats"
+      },
+      "status": {
+        "healthy": "En bon estat",
+        "provisioning": "Preparant",
+        "idle": "Inactiu",
+        "unavailable": "No disponible"
+      }
+    },
+    "models": {
+      "title": "Models",
+      "empty": "No hi ha models carregables al registre",
+      "col": {
+        "model": "Model",
+        "params": "Paràmetres",
+        "quantization": "Quantització",
+        "backendType": "Tipus de backend",
+        "state": "Estat",
+        "runningOn": "S'executa a",
+        "actions": "Accions"
+      },
+      "load": "Carrega",
+      "unload": "Descarrega",
+      "loadingAction": "Carregant...",
+      "unloadingAction": "Descarregant...",
+      "requires": "Requereix {{types}}"
+    },
+    "badge": {
+      "finetuned": "Ajustat",
+      "tools": "eines",
+      "gated": "restringit"
+    },
+    "activeParams": "{{main}} / {{active}} actius",
+    "context": "{{value}} de context",
+    "state": {
+      "available": "Disponible",
+      "loading": "Carregant",
+      "unloading": "Descarregant",
+      "deployable": "Desplegable",
+      "registered": "Registrat"
+    },
+    "nonLoadable": {
+      "unsloth": "Ajust fi"
+    },
+    "dialog": {
+      "title": "Carrega el model",
+      "load": "Carrega el model",
+      "tokens": "{{value}} tokens",
+      "tokensMax": "{{value}} tokens (màx.)",
+      "estimatedMemory": "Memòria estimada: {{value}} GB",
+      "targetNode": "Node GPU de destinació",
+      "noNodes": "No s'ha descobert cap node GPU",
+      "selectNode": "Selecciona un node GPU",
+      "memory": "{{value}} GB",
+      "memoryEach": "{{value}} GB cadascuna",
+      "backendType": "Tipus de backend",
+      "selectBackendType": "Selecciona un tipus de backend",
+      "contextLength": "Longitud de context",
+      "selectContext": "Selecciona la longitud de context",
+      "largeContext": "Els contextos grans necessiten molta més memòria de GPU per a la memòria cau KV. Es recomana entre 8K i 16K per a la majoria d'usos.",
+      "reducedContext": "Un context reduït fa servir menys memòria de GPU (menys memòria cau KV)",
+      "specTokens": "Tokens especulatius (k)",
+      "specTokensPlaceholder": "predeterminat",
+      "specTokensHelp": "Profunditat de l'esborrany en la descodificació especulativa. Un valor més alt pot ser més ràpid quan s'accepten els esborranys, però necessita més memòria. Deixa-ho buit per fer servir el valor del catàleg del model.",
+      "requiresGpus_one": "Requereix {{count}} GPU (paral·lelisme de tensors)",
+      "requiresGpus_other": "Requereix {{count}} GPU (paral·lelisme de tensors)",
+      "notEnoughGpus_one": "No hi ha prou GPU disponibles ({{count}} lliure)",
+      "notEnoughGpus_other": "No hi ha prou GPU disponibles ({{count}} lliures)",
+      "modelMemory": "Model: {{value}} GB",
+      "gpusAvailable": "GPU: {{available}} / {{total}} disponibles"
+    }
+  },
+  "apiTokens": {
+    "title": "Tokens API",
+    "subtitle": "Els tokens permeten que scripts i eines cridin l'API d'aquesta aplicacio en nom teu",
+    "createToken": {
+      "title": "Crear nou token",
+      "nameLabel": "Nom del token",
+      "namePlaceholder": "El meu token API",
+      "expiresLabel": "Expira en (dies)",
+      "expiresPlaceholder": "Deixar buit per sense expiracio",
+      "createButton": "Crear token"
+    },
+    "tokenCreated": {
+      "title": "Token creat amb exit!",
+      "message": "Copia aquest token ara. No podras veure'l de nou.",
+      "copyButton": "Copiar al porta-retalls",
+      "copied": "Token copiat al porta-retalls!"
+    },
+    "tokenList": {
+      "title": "Els teus tokens",
+      "noTokens": "No hi ha tokens API encara. Crea'n un a dalt!",
+      "table": {
+        "name": "Nom",
+        "created": "Creat",
+        "expires": "Expira",
+        "lastUsed": "Ultim us",
+        "actions": "Accions",
+        "never": "Mai",
+        "revoke": "Revocar",
+        "revoked": "Revocat"
+      },
+      "confirmRevoke": "Estas segur que vols revocar aquest token?",
+      "confirmRevokeTitle": "Revocar token"
+    },
+    "usage": {
+      "title": "Com utilitzar els tokens API",
+      "cli": {
+        "title": "CLI / curl",
+        "description": "Inclou el token a la capcalera Authorization:"
+      },
+      "env": {
+        "title": "Variable d'entorn",
+        "description": "Defineix el token una vegada i deixa que les teves eines el llegeixin:"
+      }
+    },
+    "errors": {
+      "createFailed": "Error al crear el token",
+      "revokeFailed": "Error al revocar el token",
+      "loadFailed": "Error en carregar els tokens",
+      "nameMissing": "Si us plau proporciona un nom per al token"
+    },
+    "success": {
+      "created": "Token creat",
+      "revoked": "Token revocat"
+    }
+  },
+  "profile": {
+    "roles": "Rols"
+  },
+  "theme": {
+    "toggle": "Canviar tema"
+  },
+  "language": {
+    "label": "Idioma"
+  },
+  "auth": {
+    "loginTitle": "Iniciar Sessio",
+    "loginMessage": "Si us plau inicia sessio per accedir a l'aplicacio",
+    "loginButton": "Iniciar sessio amb Keycloak",
+    "loggingIn": "Completant autenticacio...",
+    "loginSuccess": "Autenticacio exitosa. Redirigint...",
+    "loginFailed": "Error d'autenticacio",
+    "noCode": "No s'ha rebut codi d'autoritzacio",
+    "redirecting": "Redirigint a l'inici de sessio...",
+    "redirectingMessage": "Si us plau espera mentre et redirigim a Keycloak.",
+    "configError": "Error de configuracio d'autenticacio. Si us plau revisa la consola per mes detalls.",
+    "tryAgain": "Tornar a provar"
+  },
+  "errors": {
+    "notFound": {
+      "title": "404",
+      "heading": "Pagina no trobada",
+      "message": "La pagina que cerques no existeix o ha estat moguda.",
+      "backButton": "Tornar a l'inici"
+    },
+    "loadingApp": {
+      "title": "Error al carregar l'aplicacio",
+      "message": "No s'ha pogut carregar la informacio de l'usuari.",
+      "reload": "Recarregar"
+    },
+    "general": {
+      "loading": "Carregant..."
+    }
+  },
+  "common": {
+    "open": "Obrir",
+    "close": "Tancar",
+    "save": "Desar",
+    "cancel": "Cancel-lar",
+    "delete": "Eliminar",
+    "edit": "Editar",
+    "create": "Crear",
+    "update": "Actualitzar",
+    "back": "Enrere",
+    "next": "Seguent",
+    "yes": "Si",
+    "no": "No"
+  }
+}

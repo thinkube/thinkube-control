@@ -1,0 +1,85 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: MIT
+
+apiVersion: thinkube.io/v1
+kind: ThinkubeDeployment
+metadata:
+  # The application's version; the generated app starts at it.
+  version: "0.1.0"
+
+spec:
+  deployment:
+    type: extension
+
+  # A part of Thinkube Control: Control lists it, draws its pages from the
+  # module the frontend builds, and forwards the module's API calls to /api/v1
+  extension:
+    title: LLM Gateway
+    description: "The mirrored models with their state, the GPU nodes, the inference backends, and loading a model on a node"
+    icon: radio
+    platform: "0.1"
+    ui:
+      module: /extension/index.js
+      css: /extension/index.css
+    nav:
+      - label: LLM Gateway
+        path: /
+        icon: radio
+    # The model catalogue comes from Models
+    depends: [control-models]
+
+  containers:
+    - name: backend
+      build: ./backend
+      port: 8000
+      size: medium
+      health: /health
+      test:
+        enabled: true
+        image: "python-base:3.12-slim"
+        command: "./run_tests.sh"
+        one: "./run_tests.sh <file>"
+      migrations:
+        tool: alembic
+        auto: true
+      # What the gateway reads and changes in the cluster: the backend types
+      # declared in the service ConfigMaps; the nodes, their GPUs and labels;
+      # the pods of the backends and of node-metrics; the per-model
+      # Deployments it creates, scales and deletes in the backends'
+      # namespaces; and Ollama's pods, where it runs ollama to pull a model
+      access:
+        - apiGroups: [""]
+          resources: [configmaps, pods]
+          verbs: [list]
+        - apiGroups: [""]
+          resources: [nodes]
+          verbs: [get, list]
+        - apiGroups: [apps]
+          resources: [deployments]
+          verbs: [create, get, list, patch, delete]
+        - apiGroups: [""]
+          resources: [pods/exec]
+          verbs: [create, get]
+
+    - name: frontend
+      build: ./frontend
+      port: 80
+      size: small
+      health: /health
+      publicEnv:
+        - APP_TITLE
+      test:
+        enabled: true
+        # node-base carries git, which npm needs to install thinkube-style
+        image: "node-base:22-alpine"
+        command: "./run_tests.sh"
+        one: "./run_tests.sh <file>"
+
+  routes:
+    - path: /api
+      to: backend
+    - path: /
+      to: frontend
+
+  services:
+    - database
