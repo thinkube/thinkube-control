@@ -22,11 +22,11 @@ running mirrors in its top bar.
 - **Fine-tuned models.** `POST /api/v1/models/finetuned` publishes a
   fine-tune whose weights are already a model version in MLflow: it writes
   the entry to the user's metadata repository, records the model as
-  mirrored, and asks Control's LLM Gateway to read the catalogue again.
+  mirrored, and asks the LLM Gateway (control-llm) to read the catalogue again.
 
 ## Who reads it
 
-- **Control's LLM Gateway** reads the catalogue with each model's mirror
+- **The LLM Gateway** (control-llm) reads the catalogue with each model's mirror
   state at `http://control-models-backend:8000/internal/models` (`?fresh=true`
   reads the metadata repositories again). The route is outside `/api`, so
   neither the extension's address nor Control's proxy reaches it: only

@@ -170,8 +170,8 @@ def test_a_fine_tune_is_written_recorded_and_read_by_the_gateway(client, test_db
     assert r.json() == {"model_id": "forge/greeter", "repository": "alice/alice-metadata", "state": "deployable"}
     assert test_db.query(ModelMirrorJob).filter_by(model_id="forge/greeter").one().status == "succeeded"
     assert [str(c.url) for c in control] == [
-        f"{models_api.settings.CONTROL_API_URL}/llm/refresh/",
-        f"{models_api.settings.CONTROL_API_URL}/llm/models/forge/greeter/status",
+        f"{models_api.LLM_API_URL}/llm/refresh/",
+        f"{models_api.LLM_API_URL}/llm/models/forge/greeter/status",
     ]
     assert all(c.headers["authorization"] == "Bearer tk_user" for c in control)
 

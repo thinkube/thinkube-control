@@ -24,8 +24,10 @@ from app.services.model_downloader import ModelDownloaderService, MlflowDeleteEr
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/models")
 
-# Control's LLM Gateway answers within this; it reads the catalogue from this extension while it refreshes
-CONTROL_TIMEOUT = httpx.Timeout(120.0)
+# The LLM Gateway (control-llm), at its Service in Control's namespace; it answers a refresh
+# within this, reading the catalogue from this extension
+LLM_API_URL = "http://control-llm-backend:8000/api/v1"
+LLM_TIMEOUT = httpx.Timeout(120.0)
 
 
 class ModelInfo(BaseModel):
@@ -269,9 +271,9 @@ async def check_mlflow_status(current_user: User = Depends(get_current_user)):
             "error": f"MLflow answered HTTP {r.status_code}: {r.text[:300]}"}
 
 
-async def _control(token: str, method: str, path: str) -> httpx.Response:
-    async with httpx.AsyncClient(timeout=CONTROL_TIMEOUT) as http:
-        return await http.request(method, f"{settings.CONTROL_API_URL}{path}",
+async def _gateway(token: str, method: str, path: str) -> httpx.Response:
+    async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as http:
+        return await http.request(method, f"{LLM_API_URL}{path}",
                                   headers={"Authorization": f"Bearer {token}"})
 
 
@@ -308,13 +310,13 @@ async def register_finetuned_model(
     invalidate_catalogs()
 
     try:
-        refreshed = await _control(token, "POST", "/llm/refresh/")
+        refreshed = await _gateway(token, "POST", "/llm/refresh/")
         if refreshed.status_code >= 400:
             raise HTTPException(status_code=502, detail=f"The entry is in {repository}, but the LLM Gateway did not "
                                 f"read the catalogue again: HTTP {refreshed.status_code}: {refreshed.text[:300]}")
-        status = await _control(token, "GET", f"/llm/models/{entry['id']}/status")
+        status = await _gateway(token, "GET", f"/llm/models/{entry['id']}/status")
     except httpx.HTTPError as e:
-        raise HTTPException(status_code=502, detail=f"The entry is in {repository}, but Thinkube Control did not "
+        raise HTTPException(status_code=502, detail=f"The entry is in {repository}, but the LLM Gateway did not "
                             f"answer: {e}")
     state = status.json()["model"]["state"] if status.status_code == 200 else None
     return {"model_id": entry["id"], "repository": repository, "state": state}

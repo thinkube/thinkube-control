@@ -16,6 +16,8 @@ TIMEOUT = httpx.Timeout(60.0)
 
 # The extension Models (control-models), at its Service in Control's namespace: the model catalogue
 MODELS_API_URL = "http://control-models-backend:8000/api/v1"
+# The extension LLM Gateway (control-llm), at its Service: the GPU nodes and loading a model
+LLM_API_URL = "http://control-llm-backend:8000/api/v1"
 
 
 class ControlError(Exception):
@@ -64,7 +66,7 @@ async def node_choices(token: str, node: str) -> Dict[str, list]:
 
 
 async def gpu_status(token: str) -> Dict[str, Any]:
-    return await call(token, "GET", "/llm/gpu/status/")
+    return await call(token, "GET", "/llm/gpu/status/", base=LLM_API_URL)
 
 
 async def run_job(token: str, request: Dict[str, Any]) -> Dict[str, Any]:
@@ -126,12 +128,12 @@ async def revoke_api_token(token: str, token_id: str) -> Dict[str, Any]:
 
 
 async def model_status(token: str, model_id: str) -> Dict[str, Any]:
-    return await call(token, "GET", f"/llm/models/{model_id}/status")
+    return await call(token, "GET", f"/llm/models/{model_id}/status", base=LLM_API_URL)
 
 
 async def load_model(token: str, model_id: str, node: Optional[str]) -> Dict[str, Any]:
-    return await call(token, "POST", f"/llm/models/{model_id}/load", {"node": node} if node else {})
+    return await call(token, "POST", f"/llm/models/{model_id}/load", {"node": node} if node else {}, base=LLM_API_URL)
 
 
 async def unload_model(token: str, model_id: str) -> Dict[str, Any]:
-    return await call(token, "POST", f"/llm/models/{model_id}/unload")
+    return await call(token, "POST", f"/llm/models/{model_id}/unload", base=LLM_API_URL)
