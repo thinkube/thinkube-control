@@ -7,7 +7,7 @@ import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { TkAppLayout, type TkNavItem } from 'thinkube-style';
-import { LayoutDashboard, Boxes, Layers, Puzzle, Shield, Sliders, Lock, Key, Star, Grid2X2, Server, Code, BarChart3, Database, Cpu, FileText, Box, Zap, Radio, Bell } from 'lucide-react';
+import { LayoutDashboard, Boxes, Layers, Puzzle, Shield, Sliders, Lock, Key, Star, Grid2X2, Server, Code, BarChart3, Database, Cpu, FileText, Box, Zap, Bell } from 'lucide-react';
 import { Toaster } from 'sonner';
 import './globals.css';
 import 'thinkube-style/styles.css';
@@ -40,7 +40,6 @@ import JupyterKernelsPage from './pages/JupyterKernelsPage';
 import Templates from './pages/Templates';
 import KnativeServicesPage from './pages/KnativeServicesPage';
 import NodesPage from './pages/NodesPage';
-import LLMGatewayPage from './pages/LLMGatewayPage';
 import NewsAndFixesPage from './pages/NewsAndFixesPage';
 
 // Store
@@ -76,7 +75,6 @@ const baseNavigationItems: TkNavItem[] = [
     lucideIcon: Boxes,
     isGroup: true,
     children: [
-      { id: "llm-gateway", label: "LLM Gateway", lucideIcon: Radio, href: "/llm-gateway" },
       { id: "templates", label: "Templates", lucideIcon: Layers, href: "/templates" },
       { id: "optional-components", label: "Optional Components", lucideIcon: Puzzle, href: "/optional-components" },
       { id: "nodes", label: "Cluster Nodes", lucideIcon: Server, href: "/nodes" },
@@ -178,7 +176,6 @@ function AppContent() {
     const routes: Record<string, string> = {
       favorites: '/dashboard/favorites',
       'all-services': '/dashboard/all',
-      'llm-gateway': '/llm-gateway',
       templates: '/templates',
       'knative-services': '/knative-services',
       'optional-components': '/optional-components',
@@ -222,7 +219,6 @@ function AppContent() {
       const category = path.split('/').pop();
       return `category-${category}`;
     }
-    if (path.startsWith('/llm-gateway')) return 'llm-gateway';
     if (path.startsWith('/templates')) return 'templates';
     if (path.startsWith('/knative-services')) return 'knative-services';
     if (path.startsWith('/optional-components')) return 'optional-components';
@@ -254,7 +250,6 @@ function AppContent() {
       ).join(' ');
       return `Dashboard - ${formatted}`;
     }
-    if (path.startsWith('/llm-gateway')) return 'LLM Gateway';
     if (path.startsWith('/templates')) return 'Templates';
     if (path.startsWith('/knative-services')) return 'Knative Services';
     if (path.startsWith('/optional-components')) return 'Optional Components';
@@ -291,7 +286,6 @@ function AppContent() {
         <Route path="/dashboard/category/:category" element={<DashboardPage />} />
         <Route path="/services/:id" element={<ErrorBoundary><ServiceDetailsPage /></ErrorBoundary>} />
         <Route path="/services/:id/pods/:podName" element={<PodDetailsPage />} />
-        <Route path="/llm-gateway" element={<LLMGatewayPage />} />
         <Route path="/tokens" element={<ApiTokensPage />} />
         <Route path="/secrets" element={<SecretsPage />} />
         <Route path="/optional-components" element={<OptionalComponentsPage />} />

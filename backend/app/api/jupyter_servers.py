@@ -159,7 +159,7 @@ async def resolve_placement(
             problems.append(
                 f"{node} has {free_gpus} GPU slots free of {int(info['capacity'].get('gpu', 0))}; "
                 f"{placement.gpus} GPUs need {placement.gpu_slots}; a served model may be holding the rest "
-                "(unload_llm_model frees one)"
+                "(llm_unload_model frees one)"
             )
     if problems:
         raise HTTPException(status_code=422, detail="; ".join(problems))

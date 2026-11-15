@@ -30,7 +30,7 @@ A notebook runs in one server pod on one node, with the CPU, memory and GPUs cho
 | Stops the server and frees its node, memory and GPUs. Kernels are shut down; notebook files keep their outputs.
 |===
 
-A refusal says why in one sentence, for example `tkspark has 0 GPU slots free of 4; a served model may be holding the rest (unload_llm_model frees one)`.
+A refusal says why in one sentence, for example `tkspark has 0 GPU slots free of 4; a served model may be holding the rest (llm_unload_model frees one)`.
 
 To use a GPU on another node, start an unattended run there, or stop the server and start it on that node.
 

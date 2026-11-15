@@ -193,7 +193,7 @@ func (r *Resolver) fetch(ctx context.Context, model, tier string) (*ResolveResul
 		params.Set("tier", tier)
 	}
 
-	reqURL := fmt.Sprintf("%s/api/v1/llm/models/resolve?%s", r.backendURL, params.Encode())
+	reqURL := fmt.Sprintf("%s/internal/llm/models/resolve?%s", r.backendURL, params.Encode())
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create resolve request: %w", err)
@@ -265,7 +265,7 @@ func (r *Resolver) StartSnapshotSync(ctx context.Context) {
 // loadSnapshot fetches the control plane's full resolution table once and
 // atomically swaps it in, keyed by model id, serving name and each alias.
 func (r *Resolver) loadSnapshot(ctx context.Context) error {
-	reqURL := r.backendURL + "/api/v1/llm/models/resolve-all"
+	reqURL := r.backendURL + "/internal/llm/models/resolve-all"
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return fmt.Errorf("create resolve-all request: %w", err)

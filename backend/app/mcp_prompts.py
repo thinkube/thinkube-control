@@ -26,6 +26,8 @@ SERVE_MODEL = """\
 Serve the model {{model_id}} through the Thinkube LLM gateway and leave it ready to call.
 Target node: {{node}} (when this says "choose", pick a node in step 4).
 
+The llm_* tools are on the MCP server control-llm, the models_* tools on control-models.
+
 Rules that the tools do not state:
 - A pod of a per-model-pod backend (vLLM, TensorRT-LLM, text-embeddings) serves ONE model. Each model loaded on a node
   gets its own pod there, created on load and deleted on unload, so several models can
@@ -33,10 +35,10 @@ Rules that the tools do not state:
   reason; a loaded model is never replaced. Models on one node start one at a time: while
   one is loading, a second load on that node is refused; load it once the first is
   available. An ollama-driver backend is different: one Ollama pod per node serves several models.
-- `get_llm_load_options` lists in compatible_backends only the pods running NOW. An empty
+- `llm_get_load_options` lists in compatible_backends only the pods running NOW. An empty
   list, or a node that has no pod, does not mean the node cannot serve the model: the load
   creates the pod there. Choose by gpu_nodes, not by compatible_backends.
-- `load_llm_model` answers HTTP 200 whether it accepts or refuses. Read the state in its
+- `llm_load_model` answers HTTP 200 whether it accepts or refuses. Read the state in its
   answer: "loading" means accepted; any other state means refused, and the message says why.
 - Never unload a model you did not load in this task. Other people may be using it.
 
@@ -49,12 +51,12 @@ Steps:
    until is_complete or is_failed (error_message says why). A mirror pulls the weights from
    Hugging Face into MLflow and takes minutes to hours by size. HTTP 409 means a mirror of
    this model is already running: follow it with `models_list_mirrors`. When it succeeds, call
-   `refresh_llm_registry`; the registry otherwise notices the new mirror on its next refresh
+   `llm_refresh`; the registry otherwise notices the new mirror on its next refresh
    (every 60 seconds).
-3. `get_llm_models`: the model must be listed with state "deployable" (mirrored, not loaded).
+3. `llm_list_models`: the model must be listed with state "deployable" (mirrored, not loaded).
    "available" means it is already served: skip to step 7. "loading" means someone else is
    loading it: wait with step 6. The model's server_type names the backend types it runs
-   on. `get_llm_backend_types` lists the installed ones with their driver: per-model-pod
+   on. `llm_list_backend_types` lists the installed ones with their driver: per-model-pod
    (vllm, tensorrt-llm, text-embeddings) is a one-model pod; ollama is the shared pod.
    The backend type must appear in installed_backend_types. If it does not, install it with
    `install_optional_component` (component names: vllm, tensorrt, text-embeddings, ollama)
@@ -62,23 +64,23 @@ Steps:
    The backend must also be enabled: `list_services_minimal` with service_type "component"
    (or "optional" for ollama) shows is_enabled; a disabled backend refuses every placement.
    Enable it with `toggle_service` only if the user agrees.
-4. `get_llm_load_options` with model_id. Read estimated_memory_gb (for the default context,
+4. `llm_get_load_options` with model_id. Read estimated_memory_gb (for the default context,
    the largest of 32768, 16384 and 8192 the model allows) and gpu_nodes. A node fits when
    ai_remaining_gb is at least estimated_memory_gb and available_slots is above 0. For a
    one-model backend, a node whose allocations already hold a backend_id of the same type
    (for example vllm-<node>) is taken; pick another node or stop. Say which node you chose
    and why; if the target node was given, check it against these rules.
-5. `load_llm_model` with model_id and node. Optional: backend (a type such as vllm, or a
+5. `llm_load_model` with model_id and node. Optional: backend (a type such as vllm, or a
    backend id such as vllm-tkspark, which also names the node) and max_context_length
    (otherwise the largest of 32768, 16384, 8192 that fits the node). If the answer's state
    is not "loading", report the message and stop; do not retry on another node without
    saying so.
-6. Poll `get_llm_model_status` with model_id every 30 seconds. state "available" with a
+6. Poll `llm_get_model_status` with model_id every 30 seconds. state "available" with a
    backend_id means served. state "deployable" with last_error means the load failed;
    report last_error. A load can stay "loading" for many minutes (image pull, weights, engine
-   start); the registry gives up after 32 minutes. `get_llm_backends` shows the pod once it
+   start); the registry gives up after 32 minutes. `llm_list_backends` shows the pod once it
    answers, with the models it serves.
-7. Confirm the route with `resolve_llm_model` (model = the model id). It answers with the
+7. Confirm the route with `llm_resolve_model` (model = the model id). It answers with the
    backend and serving_name, or with an error when the gateway cannot route it yet.
 8. Tell the user how to call it. Gateway: https://llm.{{domain}}
    OpenAI style: POST /v1/chat/completions with "model": "{{model_id}}";
@@ -87,7 +89,7 @@ Steps:
    works. The model field takes the model id; its catalog name or the last part of the id
    also resolve.
 9. Only when the user asked to stop serving, or the model was loaded for a test that is
-   over: `unload_llm_model` with model_id. It frees the GPU memory and deletes a one-model
+   over: `llm_unload_model` with model_id. It frees the GPU memory and deletes a one-model
    pod that is now empty.
 
 Report: model id, state, backend_id and node, the context length loaded, the memory it
@@ -279,9 +281,9 @@ Steps:
      ready_condition say why a revision is not ready.
    - optional or component: `get_component_status` with the component name (pods running,
      failed) and `get_component_info` (installed, requirements, missing_requirements).
-   - vllm, tensorrt, text-embeddings or ollama: also `get_llm_backends` (which pods answer
-     and what they serve), `get_llm_gpu_status` (memory and slots per node) and
-     `get_llm_models` (a model's last_error names a failed load). These pods rest at zero
+   - vllm, tensorrt, text-embeddings or ollama: also `llm_list_backends` (which pods answer
+     and what they serve), `llm_get_gpu_status` (memory and slots per node) and
+     `llm_list_models` (a model's last_error names a failed load). These pods rest at zero
      replicas and exist only while a model is loaded; no pod is not a fault.
    - core: `get_service_details` is the evidence there is; say what it shows.
 4. If the docs may explain the symptom, `search_thinkube_docs` with the service name and

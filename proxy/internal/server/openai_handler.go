@@ -192,7 +192,7 @@ func (h *OpenAIHandler) forwardStream(r *http.Request, w http.ResponseWriter, ba
 // follow redirects, so the exact path matters. A backend answer that is not
 // 200 or not the expected shape is reported, never shown as an empty list.
 func (h *OpenAIHandler) ListModels(w http.ResponseWriter, r *http.Request) {
-	modelsURL := fmt.Sprintf("%s/api/v1/llm/models/", h.resolver.BackendURL())
+	modelsURL := fmt.Sprintf("%s/internal/llm/models/", h.resolver.BackendURL())
 	resp, err := h.forwarder.ForwardGet(r.Context(), modelsURL)
 	if err != nil {
 		WriteError(w, "openai", http.StatusBadGateway, "backend_error", "Failed to fetch models")

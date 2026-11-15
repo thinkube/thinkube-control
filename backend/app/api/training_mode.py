@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.core.api_tokens import get_current_user_dual_auth
 from app.services import training_mode
+from app.services import llm_gateway
 
 router = APIRouter()
 
@@ -43,13 +44,15 @@ async def training_mode_on(
         return await training_mode.turn_on(request.node, request.reason)
     except training_mode.TrainingModeError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except llm_gateway.GatewayError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @router.post("/training-mode/off", operation_id="training_mode_off")
 async def training_mode_off(current_user: dict = Depends(get_current_user_dual_auth)) -> Dict[str, Any]:
     """End training mode: restore every workload it scaled to 0 to the replicas it had, open the node again
     and load again the models it unloaded, on the nodes they were on, one after another (models_loading;
-    the loads run on after the answer, follow them with get_llm_model_status). A workload changed since is
+    the loads run on after the answer, follow them with llm_get_model_status of control-llm). A workload changed since is
     left as it is and named in not_restored. Refused when training mode is not on."""
     try:
         return await training_mode.turn_off()

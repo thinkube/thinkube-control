@@ -34,8 +34,8 @@ router = APIRouter(prefix="/cluster", tags=["cluster-resources"])
 # running (e.g. in tests). _REFRESH_INTERVAL_SECONDS is the proactive cadence.
 # Cluster resource availability changes slowly, and each refresh deserialises
 # the whole pod list (CPU/GIL-bound). Refresh infrequently so the periodic
-# refresh doesn't repeatedly stall the event loop and starve latency-critical
-# in-memory endpoints like /llm/models/resolve under load.
+# refresh doesn't repeatedly stall the event loop and starve the other
+# endpoints under load.
 _CACHE_TTL_SECONDS = 120
 _REFRESH_INTERVAL_SECONDS = 60
 _cache: Dict[str, Any] = {"data": None, "updated_at": 0.0}

@@ -28,7 +28,7 @@ func mediaBackend(t *testing.T) *httptest.Server {
 	t.Helper()
 	var srv *httptest.Server
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/llm/models/resolve", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/internal/llm/models/resolve", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(resolver.ResolveResult{
 			BackendURL: srv.URL, APIPath: "/v1",
 			ModelID: "org/media", ServingName: "org/media",

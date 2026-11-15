@@ -4,6 +4,7 @@
 """Training mode stops what it finds on the training node outside the kept
 namespaces, records it, and restores exactly that record."""
 
+import asyncio
 from types import SimpleNamespace as NS
 from unittest.mock import MagicMock
 
@@ -76,21 +77,28 @@ def test_a_workload_whose_pods_are_on_other_nodes_or_finished_is_left_running():
 
 
 def test_only_the_models_on_the_training_node_are_unloaded(monkeypatch):
-    import asyncio
-    import sys
-    import types
+    status = {"nodes": [{"name": "tkspark", "allocations": [{"model_id": "a"}]},
+                        {"name": "tkamd2", "allocations": [{"model_id": "b"}]}]}
+    asked = []
 
-    status = NS(nodes=[NS(name="tkspark", allocations=[NS(model_id="a")]),
-                       NS(name="tkamd2", allocations=[NS(model_id="b")])])
-
-    async def get_status():
+    async def call(method, path, body=None):
+        asked.append((method, path))
         return status
 
-    fake = types.ModuleType("app.services.llm_gpu_tracker")
-    fake.llm_gpu_tracker = NS(get_status=get_status)
-    monkeypatch.setitem(sys.modules, "app.services.llm_gpu_tracker", fake)
+    monkeypatch.setattr(tm.llm_gateway, "_call", call)
 
     assert asyncio.run(tm._loaded_models("tkspark")) == [{"model_id": "a", "node": "tkspark"}]
+    assert asked == [("GET", "/gpu/status/")]
+
+
+def test_a_gateway_that_does_not_answer_names_the_model_it_did_not_unload(monkeypatch):
+    async def call(method, path, body=None):
+        raise tm.llm_gateway.GatewayError("The LLM Gateway (control-llm) did not answer")
+
+    monkeypatch.setattr(tm.llm_gateway, "_call", call)
+
+    assert asyncio.run(tm._unload([{"model_id": "a", "node": "tkspark"}])) == [
+        "a: The LLM Gateway (control-llm) did not answer"]
 
 
 def test_the_training_node_gets_the_taint_and_the_label_and_loses_both():

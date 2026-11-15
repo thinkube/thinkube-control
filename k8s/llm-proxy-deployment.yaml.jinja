@@ -31,6 +31,8 @@ spec:
         env:
         - name: BACKEND_URL
           value: "http://backend.{{ namespace }}.svc.cluster.local:8000"
+        - name: GATEWAY_URL
+          value: "http://control-llm-backend.{{ namespace }}.svc.cluster.local:8000"
         - name: LOG_LEVEL
           value: "info"
         - name: REQUEST_TIMEOUT_SECONDS

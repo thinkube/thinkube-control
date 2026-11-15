@@ -12,7 +12,11 @@ import (
 )
 
 type Config struct {
+	// Thinkube Control's backend: it checks the API tokens
 	BackendURL            string
+	// The LLM Gateway's backend (the extension control-llm): it says which
+	// backend serves a model, and lists the models
+	GatewayURL            string
 	LogLevel              string
 	RequestTimeout        time.Duration
 	KeycloakURL           string
@@ -25,6 +29,7 @@ type Config struct {
 func Load() *Config {
 	cfg := &Config{
 		BackendURL:          envOrDefault("BACKEND_URL", "http://backend.thinkube-control.svc.cluster.local:8000"),
+		GatewayURL:          os.Getenv("GATEWAY_URL"),
 		LogLevel:            envOrDefault("LOG_LEVEL", "info"),
 		RequestTimeout:      envDurationSeconds("REQUEST_TIMEOUT_SECONDS", 300),
 		KeycloakURL:         envOrDefault("KEYCLOAK_URL", ""),

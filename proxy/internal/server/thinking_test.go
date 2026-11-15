@@ -26,7 +26,7 @@ func chatBackend(t *testing.T, answer string, stream bool, requests chan<- map[s
 	t.Helper()
 	var srv *httptest.Server
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/llm/models/resolve", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/internal/llm/models/resolve", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(resolver.ResolveResult{
 			BackendURL: srv.URL, APIPath: "/v1",
 			ModelID: "Qwen/Qwen3.6-35B-A3B", ServingName: "Qwen/Qwen3.6-35B-A3B",

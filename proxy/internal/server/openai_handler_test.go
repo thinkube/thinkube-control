@@ -22,10 +22,10 @@ import (
 func modelBackend(t *testing.T, models string) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/llm/models", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/api/v1/llm/models/", http.StatusTemporaryRedirect)
+	mux.HandleFunc("/internal/llm/models", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/internal/llm/models/", http.StatusTemporaryRedirect)
 	})
-	mux.HandleFunc("/api/v1/llm/models/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/internal/llm/models/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(models))
 	})

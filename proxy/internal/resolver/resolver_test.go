@@ -147,10 +147,10 @@ func resolveAllBody(modelID, servingName string) string {
 func TestSnapshotHitAvoidsLiveCall(t *testing.T) {
 	var liveCalls int32
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/llm/models/resolve-all", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/internal/llm/models/resolve-all", func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte(resolveAllBody("m", "m-serve")))
 	})
-	mux.HandleFunc("/api/v1/llm/models/resolve", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/internal/llm/models/resolve", func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&liveCalls, 1)
 		w.Write([]byte(okBody("m")))
 	})
@@ -188,10 +188,10 @@ func TestSnapshotHitAvoidsLiveCall(t *testing.T) {
 func TestSnapshotMissFallsBackToLive(t *testing.T) {
 	var liveCalls int32
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/llm/models/resolve-all", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/internal/llm/models/resolve-all", func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte(resolveAllBody("known", "known")))
 	})
-	mux.HandleFunc("/api/v1/llm/models/resolve", func(w http.ResponseWriter, req *http.Request) {
+	mux.HandleFunc("/internal/llm/models/resolve", func(w http.ResponseWriter, req *http.Request) {
 		atomic.AddInt32(&liveCalls, 1)
 		w.Write([]byte(okBody(req.URL.Query().Get("model"))))
 	})

@@ -26,7 +26,8 @@ touch it.
 | Storage | extension `control-storage` | done |
 | Images (Harbor images, custom images, Jupyter images, mirror) | extension `control-images` | done |
 | Models (catalogue, mirrors, fine-tuned models) | extension `control-models` | done |
-| LLM Gateway (`api/llm`, `services/llm_*`) | Control | to move, as `control-llm`, after Models |
+| LLM Gateway (`api/llm`, `services/llm_*`) | extension `control-llm` | done |
+| LLM proxy at `llm.<domain>` (`proxy/`) | Control | stays: the platform's address for models, installed with Control; it checks tokens with Control and asks `control-llm` which backend serves a model |
 | Notebooks (kernels, servers, notebook jobs, JupyterHub config, training mode, GPU metrics) | Control | to move, as `control-notebooks`, last |
 
 The order is the order of the table. Each move ends before the next begins.
@@ -64,11 +65,14 @@ The order is the order of the table. Each move ends before the next begins.
 - **Control's settings.** `deploy_extensions` gives an extension the
   settings of Control named in `CONTROL_SETTINGS`
   (`backend/app/api/templates.py`), when its `spec.env` declares them.
-- **Reads by Control.** A read Control's backend makes without a user, in
-  the background, goes to a route of the extension outside `/api`
-  (`/internal/...`): only pods of the cluster reach it, and it needs no
-  sign-in. It returns what the extension shows its users anyway, nothing
-  more.
+- **Calls without a user.** A call one part makes to another in the
+  background, with no user's token to pass on, goes to a route outside
+  `/api` (`/internal/...`), of an extension or of Control's backend: only
+  pods of the cluster reach it, and it needs no sign-in. It offers only
+  operations the part already offers its users. Examples: the LLM proxy
+  resolves a model at `control-llm`; the gateway reads the catalogue at
+  `control-models` and a service's on/off state at Control; training mode
+  loads models again at `control-llm`.
 - **Sign-in.** A Thinkube Control API token signs in to an extension:
   the extension asks Control whose it is (`control_token_user` in an
   extension's `app/core/security.py`).
@@ -143,6 +147,14 @@ for any repository.
   `image_mirror_jobs` and `custom_image_builds` in `thinkube_control`. The
   extension's `python -m app.jobs.copy_from_control`, run once in its
   backend's pod, copies their rows; after that nothing reads them.
+
+- **LLM Gateway.** The proxy at `llm.<domain>` (`proxy/`, the Deployment
+  `thinkube-control-llm-proxy`) stays with Control; `GATEWAY_URL` names the
+  extension's backend. Training mode calls the extension
+  (`app/services/llm_gateway.py`), and `k8s_manager` keeps the label of the
+  gateway's Deployments, to switch a backend off. The gateway has no
+  tables. Control's `/api/v1/llm` answered without a sign-in; the
+  extension's `/api/v1/llm` needs one.
 
 - **Models.** Control reads the catalogue, with each model's mirror state,
   from the extension (`app/services/models_catalog.py`): the LLM Gateway's

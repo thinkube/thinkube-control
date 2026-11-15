@@ -32,8 +32,14 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
 
+	if cfg.GatewayURL == "" {
+		logger.Error("GATEWAY_URL is not set: the address of the LLM Gateway's backend, which the deployment gives")
+		os.Exit(1)
+	}
+
 	logger.Info("LLM proxy starting",
 		"backend_url", cfg.BackendURL,
+		"gateway_url", cfg.GatewayURL,
 		"keycloak_url", cfg.KeycloakURL,
 		"keycloak_realm", cfg.KeycloakRealm,
 		"log_level", cfg.LogLevel,

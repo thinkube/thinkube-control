@@ -67,7 +67,7 @@ export function GPUMetricsCard() {
     try {
       const [metricsRes, gpuRes] = await Promise.all([
         api.get<NodeMetrics>('/gpu/metrics'),
-        api.get<GPUStatus>('/llm/gpu/status/'),
+        api.get<GPUStatus>('/x/control-llm/api/llm/gpu/status/'),
       ]);
       setMetrics(metricsRes.data);
       setGpuStatus(gpuRes.data);

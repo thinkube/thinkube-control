@@ -8,7 +8,8 @@
 A gateway-managed backend rests at zero replicas and serves from per-node
 Deployments the gateway creates, so scaling the base Deployment reports success
 and stops nothing. Placement has to honour the disabled state too, or the next
-model load puts the pods straight back.
+model load puts the pods straight back; the gateway reads that state from
+Control (tests/test_internal.py).
 """
 
 from unittest.mock import MagicMock
@@ -16,12 +17,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.models.services import Service
-from app.services.k8s_manager import K8sServiceManager
-from app.services.llm_pod_manager import (
-    GATEWAY_LABEL,
-    GATEWAY_LABEL_VALUE,
-    LLMPodManager,
-)
+from app.services.k8s_manager import GATEWAY_LABEL, GATEWAY_LABEL_VALUE, K8sServiceManager
 
 
 def deployment(name):
@@ -123,26 +119,3 @@ def test_enable_restores_an_ordinary_service(manager):
     K8sServiceManager.enable_service(manager, todo)
 
     manager.scale_workload.assert_called_once_with("todo", "deployment", "todo-backend", True)
-
-
-@pytest.mark.asyncio
-async def test_placement_is_refused_while_the_backend_is_disabled(monkeypatch):
-    pods = LLMPodManager()
-    monkeypatch.setattr(pods, "_is_disabled", lambda backend_type: True)
-
-    ok, managed = await pods.ensure_pod("vllm", "tkamd2")
-
-    assert ok is False
-    assert managed is None
-
-
-def test_a_lookup_failure_does_not_block_placement(monkeypatch):
-    """A database problem must not silently stop the gateway working."""
-    pods = LLMPodManager()
-
-    def boom():
-        raise RuntimeError("db down")
-
-    monkeypatch.setattr("app.db.session.SessionLocal", boom)
-
-    assert pods._is_disabled("vllm") is False

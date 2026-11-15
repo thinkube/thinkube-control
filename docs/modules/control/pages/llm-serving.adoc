@@ -6,13 +6,13 @@ _How Thinkube Control turns the model catalogue and your GPU nodes into served m
 .TL;DR
 For most work, one sentence is enough: "load Qwen/Qwen3-8B on tkspark". This page says what each step means: the states a model passes through, how the platform sizes it to a node, how a request is routed to the right backend, and how a client authenticates at `llm.<your domain>`.
 
-The *LLM Gateway* page and the *Models* extension of xref:index.adoc[Thinkube Control] offer the same operations.
+The *LLM Gateway* and *Models* pages of xref:index.adoc[Thinkube Control] offer the same operations. They are extensions of Control: `control-llm` loads models and follows the GPU nodes; `control-models` holds the catalogue and the mirrors. Their agent tools are on the MCP servers of the same names (`llm_*`, `models_*`), and their APIs are under `/api/v1/x/control-llm/api/llm` and `/api/v1/x/control-models/api/models` of Control's address, with a Thinkube API token.
 
 image::control-llm-gateway.png[The LLM Gateway page with two backends discovered and two models loaded: Qwen3.5-4B on the DGX Spark through vLLM, Qwen3-Embedding-0.6B on the RTX 3090 node through text-embeddings]
 
 == The endpoint
 
-Clients call one address, the gateway at `https://llm.<your domain>`: it checks the caller's token and sends each request to the backend serving the model. Thinkube Control decides where each model runs and sizes it to its node. The gateway serves:
+Clients call one address, the gateway at `https://llm.<your domain>`: it checks the caller's token and sends each request to the backend serving the model. The LLM Gateway extension decides where each model runs and sizes it to its node. The gateway serves:
 
 [cols="1,2",options="header"]
 |===
@@ -31,7 +31,7 @@ A client written for either API works unchanged with the base URL changed to the
 
 An alias such as `thinkube-fast` names a model, and the model it names can change. `GET /v1/models` lists each alias with `root`, the model it names now, so an app that keeps results can record which model made them, and can tell when an alias has moved to another model.
 
-Aliases are defined in the model catalog: a model's `aliases` list. An alias in your own metadata repository wins over the platform's. The gateway reads them when the catalog is read, so a changed alias works after `refresh_llm_registry`, with no deploy.
+Aliases are defined in the model catalog: a model's `aliases` list. An alias in your own metadata repository wins over the platform's. The gateway reads them when the catalog is read, so a changed alias works after `llm_refresh`, with no deploy.
 
 The `thinkube` object of each entry in `GET /v1/models` gives what an agent client needs: `state`, `aliases`, `capabilities` (`agent`: fit to drive a coding or office agent; `vision`: it reads images), `default_agent`, `input`, `context_window` (the context its backend serves, when the backend reports it) and `max_output` (the answer budget agents reserve).
 
@@ -64,7 +64,7 @@ Ollama:: Quantised GGUF models; one pod hosts several models.
 text-embeddings:: Text Embeddings Inference, for embedding models.
 Flare:: NVIDIA's inference server for Blackwell GPUs (DGX Spark, RTX PRO 6000), one pod per model. It serves signed runtime packages prepared for one GPU type; a catalogue entry names the package's hardware revision and the publisher whose key the mirror checks. Models load only on nodes whose GPU it runs on. It answers Anthropic requests itself, so the gateway forwards them to it without translating them.
 
-Each backend declares itself in its component's `thinkube.yaml` with `spec.llm_backend`: its type, its driver and its tier. Thinkube Control reads the installed backend types from the components' service ConfigMaps; `get_llm_backend_types` lists them. A model's `server_type` in the catalogue names the backend types it runs on. A new inference server is added as a template that declares `spec.llm_backend`, with no change to Thinkube Control. See the `thinkube.yaml` reference for the fields.
+Each backend declares itself in its component's `thinkube.yaml` with `spec.llm_backend`: its type, its driver and its tier. Thinkube Control reads the installed backend types from the components' service ConfigMaps; `llm_list_backend_types` lists them. A model's `server_type` in the catalogue names the backend types it runs on. A new inference server is added as a template that declares `spec.llm_backend`, with no change to Thinkube Control. See the `thinkube.yaml` reference for the fields.
 
 == Mirroring
 
@@ -72,17 +72,17 @@ A model must be in the catalogue shown on *Models* before it can be mirrored. Mi
 
 == Loading
 
-Load from the *Load* dialog on the LLM Gateway page or with `load_llm_model`. The options:
+Load from the *Load* dialog on the LLM Gateway page or with `llm_load_model`. The options:
 
 [horizontal]
 node:: The GPU node. Without it, the node with the most AI memory left and a free slot takes the model.
 tier:: `flexible` loads through a flexible backend (Ollama) when the model has one: quick, quantised, smaller. `performance` loads through a performance backend, such as vLLM or TensorRT-LLM. Without a tier, a performance backend is used when the model has one.
-backend:: A backend type instead of a tier, or a backend by id as `get_llm_load_options` lists them, such as `vllm-tkspark`; an id names its node too. Other values are refused, and the error lists the accepted forms.
+backend:: A backend type instead of a tier, or a backend by id as `llm_get_load_options` lists them, such as `vllm-tkspark`; an id names its node too. Other values are refused, and the error lists the accepted forms.
 max_context_length:: Caps the context window. The KV cache grows with it, so a serving-sized value such as 8k to 32k uses far less memory than the model's full window. Without it, Thinkube Control picks the largest of 32k, 16k or 8k that the model supports and the node has memory for. The answer names the node and the context chosen.
 keep_alive:: Ollama only: how long the model stays loaded after its last request.
 num_speculative_tokens:: For models with a speculative-decoding configuration, the draft depth for this load.
 
-`get_llm_load_options` answers before anything is loaded: the compatible backends, the GPU nodes with their free slots and remaining budget, and the estimated memory.
+`llm_get_load_options` answers before anything is loaded: the compatible backends, the GPU nodes with their free slots and remaining budget, and the estimated memory.
 
 A vLLM, TensorRT-LLM or embeddings deployment serves one model per node. A load of a second model onto a node whose deployment already serves one is refused, naming the model: unload it, or choose another node.
 

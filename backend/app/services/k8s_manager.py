@@ -13,6 +13,11 @@ from kubernetes.client.rest import ApiException
 from app.models.services import Service as ServiceModel, ServiceAction
 from app.models.service_schemas import ServiceType
 
+# The label the LLM Gateway (the extension control-llm) puts on the per-model
+# Deployments it creates in a backend's namespace
+GATEWAY_LABEL = "thinkube.io/managed-by"
+GATEWAY_LABEL_VALUE = "llm-gateway"
+
 
 logger = logging.getLogger(__name__)
 
@@ -662,8 +667,6 @@ class K8sServiceManager:
         self, namespace: str
     ) -> Tuple[bool, Optional[str]]:
         """Scale every gateway-created Deployment in a namespace to zero."""
-        from app.services.llm_pod_manager import GATEWAY_LABEL, GATEWAY_LABEL_VALUE
-
         try:
             deployments = self.apps_v1.list_namespaced_deployment(
                 namespace,

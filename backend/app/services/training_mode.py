@@ -33,6 +33,8 @@ from typing import Any, Dict, List, Optional
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 
+from app.services import llm_gateway
+
 logger = logging.getLogger(__name__)
 
 RECORD_NAMESPACE = "thinkube-control"
@@ -253,20 +255,19 @@ def _move_kept_pods(core, node: str) -> List[str]:
 
 async def _loaded_models(node: str) -> List[Dict[str, str]]:
     """The served models allocated on the node."""
-    from app.services.llm_gpu_tracker import llm_gpu_tracker
-
-    status = await llm_gpu_tracker.get_status()
-    return [{"model_id": a.model_id, "node": n.name} for n in status.nodes if n.name == node for a in n.allocations]
+    return await llm_gateway.allocations(node)
 
 
 async def _unload(models: List[Dict[str, str]]) -> List[str]:
-    from app.services.llm_lifecycle import llm_lifecycle
-
     refused = []
     for m in models:
-        r = await llm_lifecycle.unload_model(m["model_id"], False)
-        if r.state.value != "deployable":
-            refused.append(f"{m['model_id']}: {r.state.value} — {r.message}")
+        try:
+            r = await llm_gateway.unload(m["model_id"])
+        except llm_gateway.GatewayError as e:
+            refused.append(f"{m['model_id']}: {e}")
+            continue
+        if r["state"] != "deployable":
+            refused.append(f"{m['model_id']}: {r['state']} — {r['message']}")
     return refused
 
 
@@ -299,9 +300,6 @@ async def _load_one_after_another(apps, restored: List[Dict[str, Any]], models: 
     available or has failed: a node refuses a load while another starts.
     The loads begin once the restored workloads are ready: a serving pod
     looks its model up in MLflow when it starts."""
-    from app.services.llm_lifecycle import llm_lifecycle
-    from app.services.llm_model_registry import llm_model_registry
-
     waited, waiting = 0, await asyncio.to_thread(_not_ready, apps, restored)
     while waiting and waited < READY_SECONDS:
         await asyncio.sleep(LOAD_POLL_SECONDS)
@@ -311,20 +309,28 @@ async def _load_one_after_another(apps, restored: List[Dict[str, Any]], models: 
         logger.error("training mode off: not ready after %d s, the models load anyway: %s", READY_SECONDS, waiting)
 
     for m in models:
-        r = await llm_lifecycle.load_model(m["model_id"], node=m["node"])
-        if r.state.value != "loading":
+        try:
+            r = await llm_gateway.load(m["model_id"], m["node"])
+        except llm_gateway.GatewayError as e:
+            logger.error("training mode off: %s on %s was not loaded: %s", m["model_id"], m["node"], e)
+            continue
+        if r["state"] != "loading":
             logger.error("training mode off: %s on %s was not loaded: %s — %s",
-                         m["model_id"], m["node"], r.state.value, r.message)
+                         m["model_id"], m["node"], r["state"], r["message"])
             continue
         waited = 0
         while waited < LOAD_SECONDS:
             await asyncio.sleep(LOAD_POLL_SECONDS)
             waited += LOAD_POLL_SECONDS
-            entry = llm_model_registry.get_model(m["model_id"])
-            if entry.state.value == "available":
+            try:
+                current = await llm_gateway.state(m["model_id"])
+            except llm_gateway.GatewayError as e:
+                logger.error("training mode off: the state of %s was not read: %s", m["model_id"], e)
+                continue
+            if current == "available":
                 logger.info("training mode off: %s is available on %s", m["model_id"], m["node"])
                 break
-            if entry.state.value == "deployable":
+            if current == "deployable":
                 logger.error("training mode off: the load of %s on %s failed", m["model_id"], m["node"])
                 break
         else:
@@ -401,7 +407,7 @@ async def turn_off() -> Dict[str, Any]:
 
     result = await asyncio.to_thread(restore)
     await asyncio.to_thread(core.delete_namespaced_config_map, RECORD_NAME, RECORD_NAMESPACE)
-    # The loads run on after this answers; get_llm_model_status follows each.
+    # The loads run on after this answers; llm_get_model_status of control-llm follows each.
     asyncio.create_task(_load_one_after_another(apps, result["back"], record["models"]))
     report = {"node": record["node"], "started": record["started"], "ended": _now(),
               "restored": result["restored"], "not_restored": result["left"],
