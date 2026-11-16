@@ -59,7 +59,7 @@ function answers(state: string, canStop: boolean) {
       return Promise.resolve({
         data: {
           latest: [{ n: 43, at: 'x', fields: { input: { text: ' raw text ' }, output: 'clean text' } }],
-          spaced: [{ n: 1, at: 'x', fields: { input: { text: ' first ' }, output: 'first' } }],
+          spaced: [{ n: 1, at: 'x', fields: { input: { text: ' first ' }, output: 'first, trimmed' } }],
         },
       });
     }
@@ -104,7 +104,7 @@ describe('RunPage', () => {
     expect(screen.queryByText('Stop')).toBeNull();
 
     fireEvent.click(screen.getByText('Across the run'));
-    expect(await screen.findByText('first')).toBeTruthy();
+    expect(await screen.findByText('first, trimmed')).toBeTruthy();
   });
 
   it('shows the error of a failed run', async () => {
