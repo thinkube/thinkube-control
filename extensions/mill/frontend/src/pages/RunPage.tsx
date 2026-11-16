@@ -14,26 +14,11 @@ import { TkTable, TkTableBody, TkTableCell, TkTableHead, TkTableHeader, TkTableR
 import api from '@/lib/axios';
 import { RunStateBadge } from '@/components/RunStateBadge';
 import { StageBars } from '@/components/StageBars';
-import { duration, failureText, valueText, type Failure, type Port, type RunDetail, type Sample } from '@/lib/mill';
+import { ItemTable } from '@/components/ItemTable';
+import { duration, failureText, type Failure, type Port, type RunDetail, type Sample } from '@/lib/mill';
 
 const POLL_MS = 2000;
 const LOG_LINES = 200;
-
-function Fields({ fields }: { fields: Record<string, unknown> }) {
-  const names = Object.keys(fields);
-  return (
-    <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.max(1, names.length)}, minmax(0, 1fr))` }}>
-      {names.map((name) => (
-        <div key={name} className="min-w-0">
-          <div className="text-xs font-medium text-muted-foreground mb-1">{name}</div>
-          <pre className="text-xs whitespace-pre-wrap break-words rounded bg-muted p-2 max-h-64 overflow-auto">
-            {valueText(fields[name])}
-          </pre>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 function Ports({ title, ports }: { title: string; ports: Record<string, Port> | undefined }) {
   const names = Object.keys(ports || {});
@@ -253,15 +238,10 @@ export default function RunPage() {
               {status.failures} failed. The first {failures.length} are shown.
             </TkCardDescription>
           </TkCardHeader>
-          <TkCardContent className="space-y-4">
-            {failures.map((failure) => (
-              <div key={failure.n} className="space-y-1">
-                <div className="text-sm font-medium">
-                  #{failure.n} · {failure.error}
-                </div>
-                <Fields fields={failure.fields} />
-              </div>
-            ))}
+          <TkCardContent>
+            <ItemTable
+              items={failures.map((f) => ({ key: f.n, lead: { '#': String(f.n), error: f.error }, fields: f.fields }))}
+            />
           </TkCardContent>
         </TkCard>
       )}
@@ -284,14 +264,9 @@ export default function RunPage() {
             </TkButton>
           </div>
         </TkCardHeader>
-        <TkCardContent className="space-y-4">
+        <TkCardContent>
           {!shown.length && <p className="text-sm text-muted-foreground">No sample yet.</p>}
-          {shown.map((sample) => (
-            <div key={sample.n} className="space-y-1">
-              <div className="text-xs text-muted-foreground">#{sample.n}</div>
-              <Fields fields={sample.fields} />
-            </div>
-          ))}
+          <ItemTable items={shown.map((sample) => ({ key: sample.n, lead: { '#': String(sample.n) }, fields: sample.fields }))} />
         </TkCardContent>
       </TkCard>
 

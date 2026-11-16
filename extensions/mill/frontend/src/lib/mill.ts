@@ -129,7 +129,9 @@ export function secondsLeft(stage: Stage, now: number): number | null {
   return ((stage.total - stage.done) * elapsed) / stage.done;
 }
 
-/** A value of a sample as text: a string as it is, anything else as JSON. */
-export function valueText(value: unknown): string {
-  return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+/** A value in a table cell: a string as it is, nothing for a missing value, anything else as compact JSON. */
+export function cellText(value: unknown): string {
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'string') return value;
+  return JSON.stringify(value);
 }

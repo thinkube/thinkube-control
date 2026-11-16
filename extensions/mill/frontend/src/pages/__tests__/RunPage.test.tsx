@@ -99,7 +99,7 @@ describe('RunPage', () => {
     expect(screen.getByText('dropped: too short')).toBeTruthy();
     expect(screen.getByText('12.000')).toBeTruthy();
     expect(await screen.findByText('clean text')).toBeTruthy();
-    expect(await screen.findByText(/#1 · no text/)).toBeTruthy();
+    expect(await screen.findByText('no text')).toBeTruthy();
     expect(await screen.findByText('cleaning starts')).toBeTruthy();
     expect(screen.queryByText('Stop')).toBeNull();
 
