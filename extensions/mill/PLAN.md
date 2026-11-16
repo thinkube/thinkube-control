@@ -96,3 +96,24 @@ class that reports to the control center.
 
 - Whether an extension's `thinkube.yaml` can use the AI base image and
   mount a shared volume. If it cannot, the platform needs that first.
+
+## Progress
+
+Step 1, in order:
+
+- [x] The tasks repository exists: `<GITHUB_USERNAME>/mill-tasks` on
+  GitHub, private, empty.
+- [x] The playbook `jupyterhub/16_configure_code_server_storage.yaml` of
+  thinkube mounts the folder `mill` of the shared file system in the IDE at
+  `~/thinkube-ai/mill`.
+- [ ] Run that playbook on the development cluster. It restarts the IDE
+  pod. Then check that `~/thinkube-ai/mill` exists and that the IDE user
+  can write to it.
+- [ ] Clone the tasks repository into `~/thinkube-ai/mill`.
+- [ ] Start a pod on another node that mounts the shared file system, and
+  check that it sees a file edited in the IDE.
+
+Found while preparing step 3: an extension can already mount the shared
+file system (`filesystems: thinkube-shared` in `thinkube.yaml`, at
+`/storage/thinkube-shared`), so the Mill pod reads the tasks repository at
+`/storage/thinkube-shared/mill`.
