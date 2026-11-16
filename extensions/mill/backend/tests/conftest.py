@@ -144,31 +144,59 @@ def api_token_headers():
 # 🤖 Generated with Claude
 
 @pytest.fixture(autouse=True)
-def repository(tmp_path, monkeypatch):
-    """A tasks repository of the test's own, with tasks run as the user the tests run as."""
-    from app.services import runs
+def repository(tmp_path, monkeypatch, db_engine):
+    """A tasks repository of the test's own, tasks run as the user the tests run as, and subjects
+    of the test's own on the platform's NATS, so nothing here reaches the real control center."""
+    import asyncio
+
+    import nats
+
+    from app.services import consumer, runs
 
     root = tmp_path / "mill"
     root.mkdir()
+    prefix = f"milltest-{uuid.uuid4().hex[:10]}"
     monkeypatch.setattr(settings, "MILL_REPOSITORY", str(root))
     monkeypatch.setattr(settings, "MILL_TASK_UID", os.geteuid())
     monkeypatch.setattr(settings, "MILL_TASK_GID", os.getegid())
     monkeypatch.setattr(settings, "MILL_TASK_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(settings, "MILL_SUBJECTS", prefix)
     yield root
     for child in list(runs._children.values()):
-        if child.poll() is None:
-            child.kill()
-        child.wait()
+        if child.process.poll() is None:
+            child.process.kill()
+        child.process.wait()
     runs._children.clear()
+
+    async def delete_stream():
+        nc = await nats.connect(settings.MILL_NATS_URL, connect_timeout=5)
+        try:
+            await nc.jetstream().delete_stream(consumer.stream_name(prefix))
+        except nats.js.errors.NotFoundError:
+            # A test that never started the app made no stream
+            pass
+        finally:
+            await nc.close()
+
+    asyncio.run(delete_stream())
+    with db_engine.begin() as connection:
+        connection.execute(text("TRUNCATE mill_runs, mill_failures, mill_logs"))
 
 
 @pytest.fixture
 def signed_in(client, mock_user):
-    """The client, with every request made as a signed-in user."""
+    """The client, with every request made as a signed-in user, once the control center reads its stream."""
+    import time
+
     from app.core.security import get_current_user
+    from app.services import consumer
 
     async def user():
         return mock_user
 
     client.app.dependency_overrides[get_current_user] = user
+    deadline = time.monotonic() + 30
+    while consumer.consumer.problem is not None:
+        assert time.monotonic() < deadline, consumer.consumer.problem
+        time.sleep(0.1)
     return client

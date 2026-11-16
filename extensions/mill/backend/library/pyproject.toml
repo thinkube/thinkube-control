@@ -12,7 +12,7 @@ description = "The task standard of Thinkube Mill: declared inputs and outputs, 
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["nats-py>=2.7"]
 
 [project.optional-dependencies]
 test = ["pytest>=8.0", "tqdm>=4.60"]

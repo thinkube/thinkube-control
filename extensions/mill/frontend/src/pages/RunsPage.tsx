@@ -24,12 +24,14 @@ export default function RunsPage() {
   const [total, setTotal] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       const { data } = await api.get('/runs');
       setRuns(data.runs as RunSummary[]);
       setTotal(data.total as number);
+      setProblem((data.problem as string | null | undefined) || null);
       setError(null);
     } catch (err) {
       setError(failureText(err));
@@ -47,6 +49,11 @@ export default function RunsPage() {
   return (
     <TkPageWrapper>
       {error && <TkErrorAlert title="The runs could not be read">{error}</TkErrorAlert>}
+      {problem && (
+        <TkErrorAlert title="The runs are not being received">
+          {problem}. The runs below are as they were when they were last received.
+        </TkErrorAlert>
+      )}
       <TkCard>
         <TkCardHeader className="flex flex-row items-center justify-between">
           <div>
@@ -64,8 +71,8 @@ export default function RunsPage() {
         <TkCardContent>
           {loaded && !runs.length && !error ? (
             <p className="text-sm text-muted-foreground py-6">
-              No run yet. A run appears here when a task is started, from the IDE with the command
-              mill run, or by an agent.
+              No run yet. A run appears here when a task is started: by an agent, or with the command
+              mill run, in the IDE or in any pod.
             </p>
           ) : (
             <TkTable>

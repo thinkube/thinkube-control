@@ -299,9 +299,7 @@ export default function RunPage() {
         <TkCardHeader>
           <TkCardTitle>Log</TkCardTitle>
           <TkCardDescription>
-            {detail.has_log
-              ? `The last ${LOG_LINES} lines the run printed.`
-              : 'This run was started outside the control center, which keeps the log only of the runs it starts.'}
+            {detail.has_log ? `The last ${LOG_LINES} lines the run printed.` : 'The run has printed nothing.'}
           </TkCardDescription>
         </TkCardHeader>
         {detail.has_log && (

@@ -1,58 +1,52 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
 # SPDX-License-Identifier: MIT
 
-"""The record of a run, and the functions a task reports with.
+"""The state of a run, and the functions a task reports with.
 
-A run keeps its record in one folder, as files the control center reads:
+A run sends what it knows as messages, through the function it is given:
 
-  run.json        what was run: the task, its inputs, outputs and settings,
-                  the commit, the host. Written once.
-  status.json     the state, the stages with their progress, the counts and
-                  the measures. Replaced a few times a second while it changes.
-  samples.json    samples of processed items: the latest ones, and ones
-                  spaced across the run. Replaced with status.json.
-  failures.jsonl  the items the task reported as failed, one per line.
+  started   what was run. Once.
+  status    the state, the stages with their progress, the counts and the
+            measures. The whole status each time it changed, at most a few
+            times a second.
+  samples   the samples the run keeps: the latest ones, and ones spaced
+            across the run. The whole set, with the status, when it changed.
+  failure   one item the task reported as failed.
 
-Every file is replaced whole (written beside, then renamed), so a reader
-never sees half a file.
+_report says where the messages go.
 """
 
 import collections
 import datetime
 import json
-import os
-import pathlib
 import time
-from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional
+from typing import Any, Callable, Deque, Dict, Iterable, Iterator, List, Optional
 
-FORMAT = "thinkube-mill/1"
-
-# Seconds between two writes of status.json and samples.json
+# Seconds between two status messages
 WRITE_INTERVAL = 0.5
 
 # How many samples a record keeps: the latest, and ones spaced across the run
 LATEST_KEPT = 10
 SPACED_KEPT = 20
 
-# How many failed items failures.jsonl keeps; status.json counts them all
+# How many failed items are sent; the status counts them all
 FAILURES_KEPT = 200
 
-# How many stages status.json keeps; the oldest finished ones leave first
+# How many stages the status keeps; the oldest finished ones leave first
 STAGES_KEPT = 30
 
 # The longest text a sample keeps of one value; the rest is cut and counted
 SAMPLE_TEXT_LIMIT = 2000
 
+# The longest a whole sample may be as JSON text. A samples message holds
+# up to 30 samples and NATS takes messages up to 1 MB.
+SAMPLE_SIZE_LIMIT = 20_000
+
+Send = Callable[[str, Dict[str, Any]], None]
+
 
 def now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds")
-
-
-def write_json(path: pathlib.Path, value: Any) -> None:
-    """Replace a file with a JSON value, whole."""
-    beside = path.with_name(path.name + ".tmp")
-    beside.write_text(json.dumps(value, ensure_ascii=False, default=str), encoding="utf-8")
-    os.replace(beside, path)
 
 
 def _shorten(value: Any, depth: int = 0) -> Any:
@@ -73,6 +67,15 @@ def _shorten(value: Any, depth: int = 0) -> Any:
             items.append(f"… [{len(value) - 50} more items]")
         return items
     return _shorten(repr(value), depth)
+
+
+def _fit(fields: Dict[str, Any]) -> Dict[str, Any]:
+    """The fields of a sample, shortened; a sample still too long is kept as the start of its JSON text."""
+    short = _shorten(fields)
+    text = json.dumps(short, ensure_ascii=False, default=str)
+    if len(text) <= SAMPLE_SIZE_LIMIT:
+        return short
+    return {"sample": text[:SAMPLE_SIZE_LIMIT] + f"… [{len(text) - SAMPLE_SIZE_LIMIT} more characters]"}
 
 
 class Stage:
@@ -112,11 +115,11 @@ class Stage:
 
 
 class Run:
-    """The record of one run of a task."""
+    """One run of a task: what it knows, and the sending of it."""
 
-    def __init__(self, run_dir: pathlib.Path, info: Dict[str, Any]) -> None:
-        self.dir = run_dir
-        self.dir.mkdir(parents=True, exist_ok=False)
+    def __init__(self, info: Dict[str, Any], send: Send) -> None:
+        self.id = info["id"]
+        self._send = send
         self.state = "running"
         self.error: Optional[str] = None
         self.started_at = now()
@@ -131,9 +134,10 @@ class Run:
         self._latest: Deque[Dict[str, Any]] = collections.deque(maxlen=LATEST_KEPT)
         self._spaced: List[Dict[str, Any]] = []
         self._spacing = 1
-        self._changed = False
+        self._seq = 0
+        self._samples_changed = False
         self._written_at = 0.0
-        write_json(self.dir / "run.json", {"format": FORMAT, **info, "started_at": self.started_at})
+        self._send("started", {**info, "started_at": self.started_at})
         self.write()
 
     # -- stages ----------------------------------------------------------
@@ -175,7 +179,7 @@ class Run:
     def sample(self, fields: Dict[str, Any]) -> None:
         """Keep a sample: always among the latest, and among the spaced ones every so often."""
         self.shown += 1
-        entry = {"n": self.shown, "at": now(), "fields": _shorten(fields)}
+        entry = {"n": self.shown, "at": now(), "fields": _fit(fields)}
         self._latest.append(entry)
         if (self.shown - 1) % self._spacing == 0:
             self._spaced.append(entry)
@@ -183,30 +187,23 @@ class Run:
                 # Twice the distance between kept samples, so they still span the run
                 self._spaced = self._spaced[::2]
                 self._spacing *= 2
+        self._samples_changed = True
         self.changed()
 
     def failure(self, error: str, fields: Dict[str, Any]) -> None:
         self.failures += 1
         if self.failures <= FAILURES_KEPT:
-            line = json.dumps(
-                {"n": self.failures, "at": now(), "error": error, "fields": _shorten(fields)},
-                ensure_ascii=False,
-                default=str,
-            )
-            with open(self.dir / "failures.jsonl", "a", encoding="utf-8") as f:
-                f.write(line + "\n")
+            self._send("failure", {"n": self.failures, "at": now(), "error": error, "fields": _fit(fields)})
         self.changed(at_once=True)
 
-    # -- writing ---------------------------------------------------------
+    # -- sending ---------------------------------------------------------
 
     def changed(self, at_once: bool = False) -> None:
-        self._changed = True
         if at_once or time.monotonic() - self._written_at >= WRITE_INTERVAL:
             self.write()
 
     def status(self) -> Dict[str, Any]:
         return {
-            "format": FORMAT,
             "state": self.state,
             "error": self.error,
             "started_at": self.started_at,
@@ -220,12 +217,12 @@ class Run:
         }
 
     def write(self) -> None:
-        write_json(self.dir / "status.json", self.status())
-        write_json(
-            self.dir / "samples.json",
-            {"format": FORMAT, "latest": list(self._latest), "spaced": list(self._spaced)},
-        )
-        self._changed = False
+        """Send the status, and the samples when they changed. seq orders a run's messages."""
+        self._seq += 1
+        self._send("status", {"seq": self._seq, **self.status()})
+        if self._samples_changed:
+            self._send("samples", {"seq": self._seq, "latest": list(self._latest), "spaced": list(self._spaced)})
+            self._samples_changed = False
         self._written_at = time.monotonic()
 
     def finish(self, state: str, error: Optional[str] = None) -> None:

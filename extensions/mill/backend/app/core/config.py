@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     # The home folder of a task's process
     MILL_TASK_HOME: str = "/tmp/mill-home"
 
+    # The platform's NATS, at the address its playbook gives it
+    # (ansible/40_thinkube/optional/nats/10_deploy.yaml of thinkube), and the
+    # prefix of the subjects the runs publish on
+    MILL_NATS_URL: str = "nats://nats.nats.svc.cluster.local:4222"
+    MILL_SUBJECTS: str = "mill"
+
     # Allow DATABASE_URL to be overridden by environment
     DATABASE_URL: Optional[str] = None
 

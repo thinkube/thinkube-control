@@ -18,13 +18,8 @@ import traceback
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from . import _run
+from ._report import ReportError
 from ._task import OUTPUTS_PARAMETER, SETTINGS_PARAMETER, Task, TaskError
-
-# The folder of a tasks repository that holds the records of its runs
-RUNS_FOLDER = ".mill/runs"
-
-# The variable that names another folder for the records
-RUNS_DIR_VARIABLE = "MILL_RUNS_DIR"
 
 # What a file being written is called until its run completes
 PARTIAL = ".partial"
@@ -32,6 +27,8 @@ PARTIAL = ".partial"
 EXIT_COMPLETED = 0
 EXIT_FAILED = 1
 EXIT_STOPPED = 143
+# The run ended, and its last record could not be sent
+EXIT_UNREPORTED = 4
 
 
 class Stopped(BaseException):
@@ -176,21 +173,6 @@ def repository_of(file: pathlib.Path) -> Optional[Dict[str, Any]]:
     return {"root": root, "commit": git("rev-parse", "HEAD"), "dirty": bool(changes)}
 
 
-def runs_dir(given: Optional[str], repository: Optional[Dict[str, Any]], file: pathlib.Path) -> pathlib.Path:
-    """Where the records of runs are kept: the folder given, the one MILL_RUNS_DIR names, or the repository's."""
-    if given:
-        return pathlib.Path(given)
-    named = os.environ.get(RUNS_DIR_VARIABLE)
-    if named:
-        return pathlib.Path(named)
-    if repository is not None:
-        return pathlib.Path(repository["root"]) / RUNS_FOLDER
-    raise TaskError(
-        f"{file} is not in a git repository, so there is no folder for the run's record. "
-        f"Give one with --runs-dir, or set {RUNS_DIR_VARIABLE}."
-    )
-
-
 def resolve_settings(task: Task, given: Dict[str, Any]) -> Dict[str, Any]:
     """The task's settings with the given values in place of their defaults."""
     unknown = sorted(set(given) - set(task.settings))
@@ -248,6 +230,16 @@ def new_run_id(task: Task) -> str:
     return f"{stamp}-{task.name}-{secrets.token_hex(2)}"
 
 
+def _end(run: _run.Run, state: str, error: Optional[str], code: int) -> int:
+    """End the run and send its last record. Returns the exit code."""
+    try:
+        run.finish(state, error)
+    except ReportError as e:
+        print(f"mill: the run {state}, but its last record could not be sent: {e}", file=sys.stderr)
+        return EXIT_UNREPORTED
+    return code
+
+
 def execute(
     file: pathlib.Path,
     task: Task,
@@ -255,17 +247,13 @@ def execute(
     outputs: Dict[str, str],
     given_settings: Dict[str, Any],
     limit: Optional[int],
-    records: pathlib.Path,
     repository: Optional[Dict[str, Any]],
-    run_id: Optional[str] = None,
+    run_id: str,
+    send: _run.Send,
 ) -> Tuple[int, _run.Run]:
-    """Run a task and keep its record. Returns the exit code and the run."""
+    """Run a task and report it through ``send``. Returns the exit code and the run."""
     check_paths(task, inputs, outputs)
     settings = resolve_settings(task, given_settings)
-    run_id = run_id or new_run_id(task)
-    run_dir = records / run_id
-    if run_dir.exists():
-        raise TaskError(f"there is already a run {run_id} in {records}")
 
     root = pathlib.Path(repository["root"]) if repository else None
     try:
@@ -294,12 +282,13 @@ def execute(
     def stop(signum: int, frame: Any) -> None:
         raise Stopped()
 
-    # In place before the run's first record, so a run that shows as running can always be stopped
+    # In place before the run's first message, so a run that shows as running can always be stopped
     earlier = signal.signal(signal.SIGTERM, stop)
-    run = _run.Run(run_dir, info)
-    _run.set_current(run)
     opened: List[Output] = []
+    run: Optional[_run.Run] = None
     try:
+        run = _run.Run(info, send)
+        _run.set_current(run)
         kwargs: Dict[str, Any] = {}
         parameters = inspect.signature(task.fn).parameters
         for name, kind in task.inputs.items():
@@ -333,19 +322,20 @@ def execute(
             )
         for output in opened:
             output.complete()
-        run.finish("completed")
-        return EXIT_COMPLETED, run
+        return _end(run, "completed", None, EXIT_COMPLETED), run
     except Stopped:
         for output in opened:
             output.close()
-        run.finish("stopped", "the run was asked to stop")
-        return EXIT_STOPPED, run
+        if run is None:
+            raise
+        return _end(run, "stopped", "the run was asked to stop", EXIT_STOPPED), run
     except Exception as e:
         for output in opened:
             output.close()
+        if run is None:
+            raise
         traceback.print_exc()
-        run.finish("failed", f"{type(e).__name__}: {e}")
-        return EXIT_FAILED, run
+        return _end(run, "failed", f"{type(e).__name__}: {e}", EXIT_FAILED), run
     finally:
         signal.signal(signal.SIGTERM, earlier)
         _run.set_current(None)

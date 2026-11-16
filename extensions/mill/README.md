@@ -24,9 +24,17 @@ what is built and what is not yet.
 - **The main pod** (the backend). It runs the tasks that need no GPU, as
   processes of `mill run`, as the user that owns the tasks repository.
 - **The control center** (the frontend, and the API in
-  `backend/app/api/runs.py`). It reads the records under `.mill/runs` of the
-  tasks repository, so it shows a run wherever it executes: the main pod,
-  the IDE, or a pod on a GPU node.
+  `backend/app/api/runs.py`). A run reports through NATS wherever it
+  executes: the main pod, the IDE, or a pod on a GPU node. The backend reads
+  the runs' messages from a JetStream stream and keeps each run's record in
+  its database (`backend/app/services/consumer.py`, `store.py`), so it shows
+  every run.
+
+## What it needs
+
+The optional component NATS, with JetStream, at
+`nats://nats.nats.svc.cluster.local:4222`. Without it no run can start, and
+the Runs page says what is wrong.
 
 ## What the backend does
 
@@ -39,21 +47,22 @@ what is built and what is not yet.
 | `GET /api/v1/runs/{id}/log` | `mill_get_run_log` | the last lines the run printed |
 | `GET /api/v1/tasks?file=` | `mill_describe_tasks` | the tasks a file declares |
 | `POST /api/v1/runs` | `mill_start_run` | start a run in the main pod |
-| `POST /api/v1/runs/{id}/stop` | `mill_stop_run` | stop a run the main pod executes |
+| `POST /api/v1/runs/{id}/stop` | `mill_stop_run` | stop a run, wherever it executes |
 
 The tools are the MCP server at `/api/v1/mcp`.
 
 A path of an input or an output is relative to the root of the tasks
-repository, or absolute. The repository's `.gitignore` keeps `.mill/` (the
-records and logs) and `data/` (working data) out of git.
+repository, or absolute. The repository's `.gitignore` keeps `data/`
+(working data) out of git.
 
-A run the main pod started keeps its log in `.mill/logs/<run id>.log`. A
-run started elsewhere has no log here. When the main pod stops, the runs it
-was executing end with it; the backend marks them as failed the next time
-it starts or lists the runs (`reconcile` in `backend/app/services/runs.py`).
+Stopping a run is a request through NATS that the run's process answers, so
+a run is stopped wherever it executes. A running run that sends nothing for
+90 seconds (a run sends a heartbeat every 10) is marked as failed: its
+process ended without finishing it.
 
 ## Tests
 
 `backend/run_tests.sh` runs the library's tests and the backend's; the
-backend's start real runs. `frontend/run_tests.sh` runs the pages' tests.
+backend's start real runs, which report through the platform's NATS on
+subjects of their own. `frontend/run_tests.sh` runs the pages' tests.
 The build runs both on every deploy.

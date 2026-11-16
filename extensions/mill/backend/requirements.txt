@@ -3,3 +3,6 @@
 
 # Progress bars of libraries a task uses report to its run through tqdm
 tqdm>=4.60
+
+# The runs report, and are asked to stop, through NATS
+nats-py>=2.7

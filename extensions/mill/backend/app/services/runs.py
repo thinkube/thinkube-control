@@ -1,41 +1,43 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
 # SPDX-License-Identifier: MIT
 
-"""The runs of Mill tasks: starting one in this pod, stopping it, and reading
-the record any run keeps.
+"""The runs of Mill tasks: starting one in this pod, and reading the record
+of any run.
 
-The tasks repository is a folder of the shared file system, mounted here and
-in the IDE. A run's record is a folder of files the thinkube-mill library
-writes under .mill/runs of the repository, wherever the run executes: this
-pod, the IDE, or a pod on a GPU node. This module only reads those files,
-except for a run this pod started and lost, which it marks as failed.
+A run reports through NATS wherever it executes: this pod, the IDE, or a
+pod on a GPU node. The consumer stores what it reports (app/services/store),
+and this module reads that. The tasks repository is a folder of the shared
+file system, mounted here and in the IDE.
 """
 
+import collections
 import datetime
 import json
 import os
 import secrets
-import signal
-import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
+
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.models.runs import MillFailure, MillLog, MillRun
 
 # What the library names the runner of the runs this pod starts
 RUNNER = "mill"
 
-# Seconds a new run has to write its first record or end
-START_WAIT = 15.0
+# Seconds a new run has to send its first status or end
+START_WAIT = 20.0
 
 # The longest a description of a file's tasks may take
 DESCRIBE_TIMEOUT = 60
 
-# The processes of the runs this pod started, by run id
-_children: Dict[str, subprocess.Popen] = {}
+# How many of the last lines a child process printed are kept, to say why it could not start
+LINES_KEPT = 200
 
 
 class RunsError(Exception):
@@ -46,16 +48,27 @@ class RunNotFound(RunsError):
     """No run has that id."""
 
 
+class Child:
+    """The process of a run this pod started, with the last lines it printed."""
+
+    def __init__(self, process: subprocess.Popen) -> None:
+        self.process = process
+        self.lines: Deque[str] = collections.deque(maxlen=LINES_KEPT)
+        threading.Thread(target=self._drain, daemon=True, name="mill-child-output").start()
+
+    def _drain(self) -> None:
+        assert self.process.stdout is not None
+        for line in self.process.stdout:
+            self.lines.append(line.rstrip("\n"))
+        self.process.wait()
+
+
+# The processes of the runs this pod started, by run id
+_children: Dict[str, Child] = {}
+
+
 def repository() -> Path:
     return Path(settings.MILL_REPOSITORY)
-
-
-def runs_dir() -> Path:
-    return repository() / ".mill" / "runs"
-
-
-def logs_dir() -> Path:
-    return repository() / ".mill" / "logs"
 
 
 def _as_task_user() -> Dict[str, Any]:
@@ -65,39 +78,23 @@ def _as_task_user() -> Dict[str, Any]:
     return {"user": settings.MILL_TASK_UID, "group": settings.MILL_TASK_GID}
 
 
-def _own(path: Path) -> None:
-    """Give a file or folder this process made to the owner of the tasks repository."""
-    if os.geteuid() != settings.MILL_TASK_UID:
-        os.chown(path, settings.MILL_TASK_UID, settings.MILL_TASK_GID)
-
-
 def _task_env() -> Dict[str, str]:
     home = Path(settings.MILL_TASK_HOME)
     home.mkdir(parents=True, exist_ok=True)
-    _own(home)
+    if os.geteuid() != settings.MILL_TASK_UID:
+        os.chown(home, settings.MILL_TASK_UID, settings.MILL_TASK_GID)
     env = {
         "PATH": os.environ["PATH"],
         "HOME": str(home),
         "PYTHONUNBUFFERED": "1",
         "MILL_RUNNER": RUNNER,
+        "MILL_NATS_URL": settings.MILL_NATS_URL,
+        "MILL_SUBJECTS": settings.MILL_SUBJECTS,
     }
     node = os.environ.get("NODE_NAME")
     if node:
         env["NODE_NAME"] = node
     return env
-
-
-def _read(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _run_dir(run_id: str) -> Path:
-    if not run_id or "/" in run_id or run_id.startswith("."):
-        raise RunNotFound(f"'{run_id}' is not a run id")
-    run_dir = runs_dir() / run_id
-    if not (run_dir / "status.json").is_file():
-        raise RunNotFound(f"there is no run {run_id}")
-    return run_dir
 
 
 def _file_in_repository(file: str) -> Path:
@@ -110,12 +107,20 @@ def _file_in_repository(file: str) -> Path:
     return path
 
 
-def _summary(run_dir: Path) -> Dict[str, Any]:
-    info = _read(run_dir / "run.json")
-    status = _read(run_dir / "status.json")
+def _run(db: Session, run_id: str) -> MillRun:
+    # Read again even when this session has read the run before: the consumer changes it
+    run = db.query(MillRun).filter(MillRun.id == run_id).populate_existing().first()
+    # A run whose first status has not arrived is still starting
+    if run is None or run.status_seq == 0:
+        raise RunNotFound(f"there is no run {run_id}")
+    return run
+
+
+def _summary(run: MillRun) -> Dict[str, Any]:
+    info, status = run.info, run.status
     repo = info.get("repository") or {}
     return {
-        "id": info["id"],
+        "id": run.id,
         "task": info["task"],
         "file": info["file"],
         "limit": info.get("limit"),
@@ -135,113 +140,49 @@ def _summary(run_dir: Path) -> Dict[str, Any]:
     }
 
 
-def _alive_here(run_id: str) -> bool:
-    child = _children.get(run_id)
-    return child is not None and child.poll() is None
-
-
-def reconcile() -> List[str]:
-    """Mark as failed the running runs this pod's runner started and that no process runs any more.
-
-    Such a run was cut short: its pod stopped, or its container started
-    again. Its record still says "running", and nothing will change it.
-    Returns the ids marked.
-    """
-    for run_id in [i for i, child in _children.items() if child.poll() is not None]:
+def _reap() -> None:
+    for run_id in [i for i, child in _children.items() if child.process.poll() is not None]:
         del _children[run_id]
-    marked = []
-    folder = runs_dir()
-    if not folder.is_dir():
-        return marked
-    here = socket.gethostname()
-    for run_dir in folder.iterdir():
-        status_file = run_dir / "status.json"
-        if not status_file.is_file():
-            continue
-        status = _read(status_file)
-        if status["state"] != "running":
-            continue
-        info = _read(run_dir / "run.json")
-        if info.get("runner") != RUNNER:
-            continue
-        if info.get("host") == here and _alive_here(info["id"]):
-            continue
-        ended = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds")
-        status.update(
-            state="failed",
-            error=f"the process of this run ended without finishing it: its pod ({info.get('host')}) stopped or started again",
-            ended_at=ended,
-            updated_at=ended,
-        )
-        for stage in status["stages"]:
-            if stage["ended_at"] is None:
-                stage["ended_at"] = ended
-        beside = status_file.with_name("status.json.tmp")
-        beside.write_text(json.dumps(status, ensure_ascii=False), encoding="utf-8")
-        _own(beside)
-        os.replace(beside, status_file)
-        marked.append(info["id"])
-    return marked
 
 
-def list_runs(limit: int = 50) -> Dict[str, Any]:
+def list_runs(db: Session, limit: int = 50) -> Dict[str, Any]:
     """The newest runs, newest first."""
-    reconcile()
-    folder = runs_dir()
-    if not folder.is_dir():
-        return {"runs": [], "total": 0}
-    started = []
-    for run_dir in folder.iterdir():
-        # A folder whose first record is not written yet is a run that is still starting
-        if (run_dir / "status.json").is_file():
-            started.append(((run_dir / "run.json").stat().st_mtime, run_dir))
-    started.sort(key=lambda pair: pair[0], reverse=True)
-    return {"runs": [_summary(run_dir) for _, run_dir in started[:limit]], "total": len(started)}
+    _reap()
+    started = db.query(MillRun).filter(MillRun.status_seq > 0)
+    newest = started.order_by(MillRun.started_at.desc()).limit(limit).populate_existing().all()
+    return {"runs": [_summary(run) for run in newest], "total": started.count()}
 
 
-def get_run(run_id: str) -> Dict[str, Any]:
+def get_run(db: Session, run_id: str) -> Dict[str, Any]:
     """A run: what was run, and its status."""
-    run_dir = _run_dir(run_id)
-    info = _read(run_dir / "run.json")
-    status = _read(run_dir / "status.json")
+    run = _run(db, run_id)
     return {
-        "run": info,
-        "status": status,
-        # A run that wrote its last record may still have a process for an instant
-        "can_stop": status["state"] == "running" and info.get("host") == socket.gethostname() and _alive_here(run_id),
-        "has_log": (logs_dir() / f"{run_id}.log").is_file(),
+        "run": run.info,
+        "status": run.status,
+        "can_stop": run.state == "running",
+        "has_log": db.query(MillLog).filter(MillLog.run_id == run_id).first() is not None,
     }
 
 
-def samples(run_id: str) -> Dict[str, Any]:
-    kept = _read(_run_dir(run_id) / "samples.json")
-    return {"latest": kept["latest"], "spaced": kept["spaced"]}
+def samples(db: Session, run_id: str) -> Dict[str, Any]:
+    kept = _run(db, run_id).samples
+    return kept if kept else {"latest": [], "spaced": []}
 
 
-def failures(run_id: str, limit: int = 50) -> Dict[str, Any]:
-    run_dir = _run_dir(run_id)
-    total = _read(run_dir / "status.json")["failures"]
-    file = run_dir / "failures.jsonl"
-    items = []
-    if file.is_file():
-        with open(file, encoding="utf-8") as f:
-            for line in f:
-                if len(items) >= limit:
-                    break
-                items.append(json.loads(line))
-    return {"failures": items, "total": total}
+def failures(db: Session, run_id: str, limit: int = 50) -> Dict[str, Any]:
+    run = _run(db, run_id)
+    first = db.query(MillFailure).filter(MillFailure.run_id == run_id).order_by(MillFailure.n).limit(limit).all()
+    return {
+        "failures": [{"n": f.n, "at": f.at, "error": f.error, "fields": f.fields} for f in first],
+        "total": run.status["failures"],
+    }
 
 
-def log(run_id: str, lines: int = 200) -> Dict[str, Any]:
-    """The last lines of what a run printed. Only a run this pod started has a log here."""
-    _run_dir(run_id)
-    file = logs_dir() / f"{run_id}.log"
-    if not file.is_file():
-        raise RunsError(
-            f"run {run_id} has no log here: the control center keeps the log of the runs it starts, "
-            "and this one was started elsewhere"
-        )
-    text = file.read_text(encoding="utf-8", errors="replace").splitlines()
+def log(db: Session, run_id: str, lines: int = 200) -> Dict[str, Any]:
+    """The last lines of what a run printed."""
+    _run(db, run_id)
+    pieces = db.query(MillLog).filter(MillLog.run_id == run_id).order_by(MillLog.seq).all()
+    text = "".join(piece.text for piece in pieces).splitlines()
     return {"lines": text[-lines:], "total_lines": len(text)}
 
 
@@ -262,6 +203,7 @@ def describe(file: str) -> Dict[str, Any]:
 
 
 def start(
+    db: Session,
     file: str,
     task: Optional[str],
     inputs: Dict[str, str],
@@ -269,7 +211,7 @@ def start(
     task_settings: Dict[str, Any],
     limit: Optional[int],
 ) -> Dict[str, Any]:
-    """Start a run of a task in this pod. Answers once the run has its first record.
+    """Start a run of a task in this pod. Answers once the run's first status is stored.
 
     A path of an input or an output is relative to the root of the tasks
     repository, or absolute.
@@ -287,51 +229,36 @@ def start(
         command += ["--set", f"{name}={value if isinstance(value, str) else json.dumps(value)}"]
     if limit is not None:
         command += ["--limit", str(limit)]
-    command += ["--runs-dir", str(runs_dir()), "--run-id", run_id]
+    command += ["--run-id", run_id]
 
-    for folder in (runs_dir().parent, runs_dir(), logs_dir()):
-        if not folder.is_dir():
-            folder.mkdir(parents=True)
-            _own(folder)
-    log_file = logs_dir() / f"{run_id}.log"
-    with open(log_file, "w", encoding="utf-8") as out:
-        _own(log_file)
-        child = subprocess.Popen(
-            command, cwd=repository(), env=_task_env(), stdout=out, stderr=subprocess.STDOUT,
-            start_new_session=True, **_as_task_user(),
-        )
+    child = Child(subprocess.Popen(
+        command, cwd=repository(), env=_task_env(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        errors="replace", start_new_session=True, **_as_task_user(),
+    ))
     _children[run_id] = child
 
-    status_file = runs_dir() / run_id / "status.json"
+    def stored() -> Optional[MillRun]:
+        run = db.query(MillRun).filter(MillRun.id == run_id).populate_existing().first()
+        return run if run is not None and run.status_seq > 0 else None
+
     deadline = time.monotonic() + START_WAIT
     while time.monotonic() < deadline:
-        if status_file.is_file():
-            return {"id": run_id, "state": _read(status_file)["state"]}
-        if child.poll() is not None:
+        run = stored()
+        if run is not None:
+            return {"id": run_id, "state": run.state}
+        if child.process.poll() is not None:
             break
-        time.sleep(0.1)
-    if status_file.is_file():
-        return {"id": run_id, "state": _read(status_file)["state"]}
-    if child.poll() is None:
+        time.sleep(0.2)
+    run = stored()
+    if run is not None:
+        return {"id": run_id, "state": run.state}
+    if child.process.poll() is None:
         raise RunsError(
-            f"run {run_id} did not write its first record within {int(START_WAIT)} seconds; "
-            f"it is still starting. Its log is {log_file}"
+            f"run {run_id} is still starting: its first status did not reach the control center within "
+            f"{int(START_WAIT)} seconds. It printed: " + (" / ".join(child.lines) or "nothing")
         )
     del _children[run_id]
-    said = log_file.read_text(encoding="utf-8", errors="replace").strip()
-    raise RunsError(said or f"the run ended with code {child.returncode} before it wrote a record")
-
-
-def stop(run_id: str) -> Dict[str, Any]:
-    """Ask a run this pod started to stop. The task ends at once, as stopped."""
-    run_dir = _run_dir(run_id)
-    info = _read(run_dir / "run.json")
-    state = _read(run_dir / "status.json")["state"]
-    if state != "running":
-        raise RunsError(f"run {run_id} is {state}; only a running run is stopped")
-    if info.get("host") != socket.gethostname() or not _alive_here(run_id):
-        raise RunsError(
-            f"run {run_id} runs on {info.get('host')}, not in the control center's pod, and is stopped there"
-        )
-    os.killpg(_children[run_id].pid, signal.SIGTERM)
-    return {"id": run_id, "asked": "stop"}
+    # Let the output thread take the last lines
+    time.sleep(0.2)
+    said = "\n".join(child.lines).strip()
+    raise RunsError(said or f"the run ended with code {child.process.returncode} before it sent a status")

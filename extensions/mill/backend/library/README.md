@@ -66,33 +66,55 @@ reporting class in tqdm's place before it loads the task.
 mill run clean.py --in rows=in.jsonl --out cleaned=out.jsonl --limit 50
 mill run clean.py --in rows=in.jsonl --out cleaned=out.jsonl --set min_words=8
 mill run tasks.py:clean ...          # a file with several tasks
-mill status <run folder> --samples
 ```
 
 `--limit N` reads only the first N items of each jsonl input: a way to try
-a task in seconds. The command prints the run's folder when it starts and
-the last status, as JSON, when it ends. Exit code 0 is completed, 1 failed,
-143 stopped, 2 a wrong command or declaration.
+a task in seconds. The command prints the run's id when it starts and the
+last status, as JSON, when it ends.
+
+| Exit code | Means |
+|---|---|
+| 0 | completed |
+| 1 | failed |
+| 143 | stopped |
+| 2 | the command or the declaration is wrong, or NATS cannot be reached |
+| 4 | the run ended, and its last record could not be sent |
 
 An output is written beside its path, as `<name>.partial`, and takes its
 name when the run completes. A run that fails or is stopped leaves the
 partial file.
 
-## The record of a run
+## How a run reports
 
-Each run has a folder `<runs>/<run id>/`. `<runs>` is the folder given with
-`--runs-dir`, else the one `MILL_RUNS_DIR` names, else `.mill/runs` at the
-root of the git repository the task is in.
+A run reports through NATS, wherever it executes, and the Mill control
+center keeps its record. The server is the platform's NATS
+(`nats://nats.nats.svc.cluster.local:4222`) unless `MILL_NATS_URL` names
+another. A run publishes on `<subjects>.runs.<run id>.<kind>`; `<subjects>`
+is `mill` unless `MILL_SUBJECTS` names another prefix.
 
-| File | Holds |
-|---|---|
-| `run.json` | the task, its inputs, outputs and settings, the commit, the host |
-| `status.json` | the state (running, completed, failed, stopped), the stages, the counts and measures |
-| `samples.json` | the latest 10 samples, and up to 20 spaced across the run |
-| `failures.jsonl` | the first 200 failed items; `status.json` counts them all |
+| Kind | Holds | Sent |
+|---|---|---|
+| `started` | the task, its inputs, outputs and settings, the commit, the host | once |
+| `status` | the state (running, completed, failed, stopped), the stages, the counts and measures | the whole status, at most twice a second while it changes |
+| `samples` | the latest 10 samples, and up to 20 spaced across the run | the whole set, when it changed |
+| `failure` | one failed item | for the first 200; the status counts them all |
+| `log` | a piece of what the run printed, libraries and child processes included | every second while there is output |
+| `alive` | nothing | every 10 seconds |
 
-Text in a sample is cut at 2000 characters, with the rest counted.
+A JetStream stream named after the subjects (`MILL`) keeps the messages.
+The control center creates it; a run started while it does not exist is
+refused. A run waits until the stream has each message. While NATS cannot
+be reached it tries again for 60 seconds, so a restart of NATS does not end
+the runs in progress.
+
+A run is asked to stop with a request on
+`<subjects>.control.<run id>.stop`, which its process answers before it
+stops.
+
+Text in a sample is cut at 2000 characters, and a whole sample at 20,000,
+with the rest counted.
 
 ## Tests
 
-`./run_tests.sh`. The build of the Mill extension runs them.
+`./run_tests.sh`. The build of the Mill extension runs them. `tests/test_nats.py`
+uses the platform's NATS, with subjects and a stream of its own for each test.

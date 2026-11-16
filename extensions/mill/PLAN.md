@@ -46,9 +46,18 @@ Work done in a notebook has three problems:
 
 ## How progress reaches the control center
 
-The library writes small progress and sample records to the shared volume.
-The control center reads them. A task needs no network setup, and it works
-the same in the main pod and in a Forge run on any node.
+A run publishes what it does on NATS: its start, its status (stages, counts
+and measures), its samples, its failed items, its log and a heartbeat. A
+JetStream stream keeps the messages. The control center reads the stream
+and keeps each run's record in its database. A run needs only the network
+to report, and it works the same in the main pod, in the IDE and in a Forge
+run on any node. The control center asks a run to stop with a request on
+NATS that the run's process answers.
+
+The first version wrote the record as files on the shared volume, which the
+control center read. NATS replaced it before step 5: it stops a run on any
+node, it tells when a run's process died (the heartbeats stop), and it does
+not rewrite small files on the shared file system twice a second.
 
 The library keeps samples small: the latest few items, one item every so
 often across the run, and the items that failed. The full output goes where
@@ -56,6 +65,10 @@ the task declared it.
 
 For frameworks that draw their own tqdm bars, the library supplies a tqdm
 class that reports to the control center.
+
+Mill needs the optional component NATS with JetStream. The playbook of
+thinkube deployed NATS with JetStream off; it is fixed
+(`optional/nats/10_deploy.yaml`).
 
 ## Steps
 

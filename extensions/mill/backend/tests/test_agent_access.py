@@ -31,7 +31,7 @@ def control(monkeypatch):
 
     real = httpx.AsyncClient
     monkeypatch.setattr(security.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
-    monkeypatch.setattr(runs, "list_runs", lambda limit: {"runs": [], "total": 0})
+    monkeypatch.setattr(runs, "list_runs", lambda db, limit: {"runs": [], "total": 0})
     state["seen"] = seen
     return state
 
@@ -39,7 +39,7 @@ def control(monkeypatch):
 def test_control_token_signs_in(client, control):
     r = client.get("/api/v1/runs", headers={"Authorization": f"Bearer {TOKEN}"})
     assert r.status_code == 200, r.text
-    assert r.json() == {"runs": [], "total": 0}
+    assert r.json()["runs"] == [] and r.json()["total"] == 0
     asked = control["seen"][0]
     assert str(asked.url) == f"{security.settings.CONTROL_API_URL}/auth/userinfo"
     assert asked.headers["authorization"] == f"Bearer {TOKEN}"
@@ -64,12 +64,12 @@ def test_no_token_is_401(client):
 
 
 def test_a_refused_operation_is_409_with_its_reason(client, control, monkeypatch):
-    def refuse(run_id):
-        raise runs.RunsError("run r1 is completed; only a running run is stopped")
-    monkeypatch.setattr(runs, "stop", refuse)
-    r = client.post("/api/v1/runs/r1/stop", headers={"Authorization": f"Bearer {TOKEN}"})
+    def refuse(file):
+        raise runs.RunsError("the tasks repository has no file demo/none.py")
+    monkeypatch.setattr(runs, "describe", refuse)
+    r = client.get("/api/v1/tasks", params={"file": "demo/none.py"}, headers={"Authorization": f"Bearer {TOKEN}"})
     assert r.status_code == 409
-    assert r.json()["detail"] == "run r1 is completed; only a running run is stopped"
+    assert r.json()["detail"] == "the tasks repository has no file demo/none.py"
 
 
 def test_mcp_offers_every_tool():

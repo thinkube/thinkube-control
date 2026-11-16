@@ -71,6 +71,19 @@ describe('RunsPage', () => {
     expect(await screen.findByText(/No run yet/)).toBeTruthy();
   });
 
+  it('says so when the control center receives nothing from the runs', async () => {
+    mockedApi.get.mockResolvedValue({
+      data: { runs: [run], total: 1, problem: 'the control center cannot read the runs\' messages from NATS' },
+    });
+    render(
+      <MemoryRouter>
+        <RunsPage />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(/cannot read the runs' messages from NATS/)).toBeTruthy();
+    expect(screen.getByText('clean')).toBeTruthy();
+  });
+
   it('shows why the runs could not be read', async () => {
     mockedApi.get.mockRejectedValue({ response: { data: { detail: 'the shared file system is not mounted' } } });
     render(

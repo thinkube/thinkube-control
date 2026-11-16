@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.api.router import api_router
 # Import models to ensure they're registered with Base
 from app.core.api_tokens import APIToken
+from app.models.runs import MillFailure, MillLog, MillRun  # noqa: F401
 
 
 @asynccontextmanager
@@ -16,11 +17,15 @@ async def lifespan(app: FastAPI):
     # Startup: Database tables are now managed by Alembic migrations
     # which run in start.sh before the app starts
 
-    # A run this pod started before it stopped still says "running"
-    from app.services import runs
-    runs.reconcile()
+    # The runs report through NATS; the consumer stores what they send
+    from app.services import consumer
+    consumer.consumer = consumer.Consumer()
+    consumer.consumer.start()
 
     yield
+
+    await consumer.consumer.stop()
+    consumer.consumer = None
     # Shutdown: Clean up resources if needed
 
 # Initialize FastAPI app
