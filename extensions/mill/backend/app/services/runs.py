@@ -203,10 +203,12 @@ def get_run(run_id: str) -> Dict[str, Any]:
     """A run: what was run, and its status."""
     run_dir = _run_dir(run_id)
     info = _read(run_dir / "run.json")
+    status = _read(run_dir / "status.json")
     return {
         "run": info,
-        "status": _read(run_dir / "status.json"),
-        "can_stop": info.get("host") == socket.gethostname() and _alive_here(run_id),
+        "status": status,
+        # A run that wrote its last record may still have a process for an instant
+        "can_stop": status["state"] == "running" and info.get("host") == socket.gethostname() and _alive_here(run_id),
         "has_log": (logs_dir() / f"{run_id}.log").is_file(),
     }
 
