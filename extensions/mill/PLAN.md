@@ -148,6 +148,11 @@ Steps 2 and 3 are done, seen on the development cluster:
   its bar advance with the time left; the run's page showed its totals,
   failed items, samples and log; the output file belongs to the IDE user.
 
+The change to NATS is done, seen on the development cluster: a run of the
+sample task started through the API showed its bar and totals on the run's
+page; a second one was stopped through the API and ended as stopped; a
+second request to stop it was refused with the reason.
+
 Step 4 is half done:
 
 - The backend's MCP server answers at `/api/v1/mcp`, and the role
