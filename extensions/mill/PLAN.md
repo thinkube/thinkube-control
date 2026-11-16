@@ -87,9 +87,45 @@ thinkube deployed NATS with JetStream off; it is fixed
 4. **Tools for agents.** MCP tools to start a run, stop it, and read its
    progress and samples.
    Done when: an agent starts a run and it appears on the page.
-5. **The generic run in Forge.** Forge starts a pod for it directly.
+5. **The generic run in Forge.** A run that must wait its turn or execute
+   on a chosen node goes through Forge's queue of that node, with or
+   without a GPU. Mill has no queue of its own; its main pod keeps only
+   quick tries.
    Done when: a script trains on a chosen node, and its bars are seen in
    the control center.
+
+   Forge starts its work as Control's notebook jobs: Control starts a pod
+   of the notebook image on the node, with the node's resources, GPUs,
+   Python environments and shared folders, and stops it at the end. The
+   generic run uses the same pod, with a notebook that Forge gives the job
+   and that only runs `mill run`: the task is a file of the tasks
+   repository, and its record is in the Mill control center. Starting the
+   pod without a notebook belongs to the same later change as moving
+   Forge's fine-tunes off notebook jobs (see "Not in this plan").
+
+   In parts, each seen before the next:
+
+   1. `thinkube-mill` is in the platform's package index. Done: the
+      playbook `thinkube-control/16_publish_packages.yaml` of thinkube
+      publishes it from this folder; the index has 0.1.0.
+   2. A pod of the notebook image can run a task: it mounts the tasks
+      repository, and its Python environments have `thinkube-mill`.
+      Seen when: `mill run` of the sample task, typed in such a pod on a
+      GPU node, appears in the control center with that node's name.
+   3. Forge has the run kind "task": a file of the tasks repository with
+      its inputs, outputs and settings, a node, GPUs, memory, a priority
+      and a Python environment. It skips preprocessing and the plan, waits
+      in the node's queue like a fine-tune, and has no checkpoint: when
+      higher work needs the node it is stopped, and starts again from the
+      beginning when it gets the node back.
+      Seen when: two task runs queued on one node execute one after the
+      other, and a third on another node executes at the same time.
+   4. Mill's start takes a node: with one, it creates the Forge run; with
+      none, it runs the task in the main pod, which is for quick tries. The
+      Runs page shows the waiting runs of each node, with what they wait
+      for.
+      Seen when: an agent starts a task on a node through Mill, and stops
+      it there.
 6. **A first real case.** `kubexlat/notes-kftt` as standard tasks: corpus,
    label, resolve, score.
    Done when: the four tasks run one after another, each reading the output
@@ -160,7 +196,7 @@ Step 4 is half done:
 - Left: run `code-server/15_configure_environment.yaml`, so the IDE's
   agents get the tools, and start a run with them from a new session.
 
-Next: step 5.
+Step 5 is started: its part 1 is done. Next: its part 2.
 
 Open point, to settle in step 5 or 6: a task reads the platform's datasets
 and models at paths that differ between the IDE, the main pod and a
