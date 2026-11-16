@@ -119,4 +119,20 @@ file system (`filesystems: thinkube-shared` in `thinkube.yaml`, at
 `/storage/thinkube-shared`), so the Mill pod reads the tasks repository at
 `/storage/thinkube-shared/mill`.
 
-Next: step 2.
+Steps 2, 3 and 4 are written and wait for their first deploy:
+
+- The library is `backend/library`, with its tests. It lives in the
+  backend's folder because the backend's image installs it and the
+  backend's build runs its tests. Publishing it to the platform's package
+  index and installing it in the AI base image belong to step 5, where a
+  pod other than the main pod first needs it.
+- The main pod is the extension's backend, on the platform's `python-base`
+  image, which has pandas and httpx. A library a task needs is added to
+  `backend/requirements.txt`.
+- The control center is the extension's frontend and `backend/app/api/runs.py`.
+- The agents' tools are the backend's MCP server.
+
+Open point, to settle in step 5 or 6: a task reads the platform's datasets
+and models at paths that differ between the IDE, the main pod and a
+notebook server. Working data under `data/` of the tasks repository has the
+same path everywhere.

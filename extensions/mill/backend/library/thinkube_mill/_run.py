@@ -1,0 +1,307 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: MIT
+
+"""The record of a run, and the functions a task reports with.
+
+A run keeps its record in one folder, as files the control center reads:
+
+  run.json        what was run: the task, its inputs, outputs and settings,
+                  the commit, the host. Written once.
+  status.json     the state, the stages with their progress, the counts and
+                  the measures. Replaced a few times a second while it changes.
+  samples.json    samples of processed items: the latest ones, and ones
+                  spaced across the run. Replaced with status.json.
+  failures.jsonl  the items the task reported as failed, one per line.
+
+Every file is replaced whole (written beside, then renamed), so a reader
+never sees half a file.
+"""
+
+import collections
+import datetime
+import json
+import os
+import pathlib
+import time
+from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional
+
+FORMAT = "thinkube-mill/1"
+
+# Seconds between two writes of status.json and samples.json
+WRITE_INTERVAL = 0.5
+
+# How many samples a record keeps: the latest, and ones spaced across the run
+LATEST_KEPT = 10
+SPACED_KEPT = 20
+
+# How many failed items failures.jsonl keeps; status.json counts them all
+FAILURES_KEPT = 200
+
+# How many stages status.json keeps; the oldest finished ones leave first
+STAGES_KEPT = 30
+
+# The longest text a sample keeps of one value; the rest is cut and counted
+SAMPLE_TEXT_LIMIT = 2000
+
+
+def now() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds")
+
+
+def write_json(path: pathlib.Path, value: Any) -> None:
+    """Replace a file with a JSON value, whole."""
+    beside = path.with_name(path.name + ".tmp")
+    beside.write_text(json.dumps(value, ensure_ascii=False, default=str), encoding="utf-8")
+    os.replace(beside, path)
+
+
+def _shorten(value: Any, depth: int = 0) -> Any:
+    """A value as a sample keeps it: long text cut, with what was cut counted."""
+    if isinstance(value, str):
+        if len(value) > SAMPLE_TEXT_LIMIT:
+            return value[:SAMPLE_TEXT_LIMIT] + f"… [{len(value) - SAMPLE_TEXT_LIMIT} more characters]"
+        return value
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if depth >= 6:
+        return _shorten(repr(value), depth)
+    if isinstance(value, dict):
+        return {str(k): _shorten(v, depth + 1) for k, v in list(value.items())[:50]}
+    if isinstance(value, (list, tuple)):
+        items = [_shorten(v, depth + 1) for v in value[:50]]
+        if len(value) > 50:
+            items.append(f"… [{len(value) - 50} more items]")
+        return items
+    return _shorten(repr(value), depth)
+
+
+class Stage:
+    """One named piece of a run's work, with how much of it is done."""
+
+    def __init__(self, run: "Run", name: str, total: Optional[int]) -> None:
+        self._run = run
+        self.name = name
+        self.total = total
+        self.done = 0
+        self.started_at = now()
+        self.ended_at: Optional[str] = None
+
+    def advance(self, n: int = 1) -> None:
+        self.done += n
+        self._run.changed()
+
+    def set(self, done: int, total: Optional[int] = None) -> None:
+        self.done = done
+        if total is not None:
+            self.total = total
+        self._run.changed()
+
+    def end(self) -> None:
+        if self.ended_at is None:
+            self.ended_at = now()
+            self._run.changed(at_once=True)
+
+    def record(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "total": self.total,
+            "done": self.done,
+            "started_at": self.started_at,
+            "ended_at": self.ended_at,
+        }
+
+
+class Run:
+    """The record of one run of a task."""
+
+    def __init__(self, run_dir: pathlib.Path, info: Dict[str, Any]) -> None:
+        self.dir = run_dir
+        self.dir.mkdir(parents=True, exist_ok=False)
+        self.state = "running"
+        self.error: Optional[str] = None
+        self.started_at = now()
+        self.ended_at: Optional[str] = None
+        self.stages: List[Stage] = []
+        self.counters: Dict[str, float] = {}
+        self.measures: Dict[str, Dict[str, float]] = {}
+        self.shown = 0
+        self.failures = 0
+        self.explicit_samples = False
+        self.last_input: Any = None
+        self._latest: Deque[Dict[str, Any]] = collections.deque(maxlen=LATEST_KEPT)
+        self._spaced: List[Dict[str, Any]] = []
+        self._spacing = 1
+        self._changed = False
+        self._written_at = 0.0
+        write_json(self.dir / "run.json", {"format": FORMAT, **info, "started_at": self.started_at})
+        self.write()
+
+    # -- stages ----------------------------------------------------------
+
+    def stage(self, name: str, total: Optional[int] = None) -> Stage:
+        """A new stage. A name already in use gets a number: 'labelling (2)'."""
+        names = {s.name for s in self.stages}
+        unique, n = name, 1
+        while unique in names:
+            n += 1
+            unique = f"{name} ({n})"
+        stage = Stage(self, unique, total)
+        self.stages.append(stage)
+        while len(self.stages) > STAGES_KEPT:
+            finished = next((s for s in self.stages if s.ended_at is not None), None)
+            self.stages.remove(finished if finished is not None else self.stages[0])
+        self.changed(at_once=True)
+        return stage
+
+    # -- totals ----------------------------------------------------------
+
+    def count(self, name: str, n: float = 1) -> None:
+        self.counters[name] = self.counters.get(name, 0) + n
+        self.changed()
+
+    def measure(self, name: str, value: float) -> None:
+        m = self.measures.get(name)
+        if m is None:
+            self.measures[name] = {"count": 1, "sum": value, "min": value, "max": value}
+        else:
+            m["count"] += 1
+            m["sum"] += value
+            m["min"] = min(m["min"], value)
+            m["max"] = max(m["max"], value)
+        self.changed()
+
+    # -- samples and failures ----------------------------------------------
+
+    def sample(self, fields: Dict[str, Any]) -> None:
+        """Keep a sample: always among the latest, and among the spaced ones every so often."""
+        self.shown += 1
+        entry = {"n": self.shown, "at": now(), "fields": _shorten(fields)}
+        self._latest.append(entry)
+        if (self.shown - 1) % self._spacing == 0:
+            self._spaced.append(entry)
+            if len(self._spaced) > SPACED_KEPT:
+                # Twice the distance between kept samples, so they still span the run
+                self._spaced = self._spaced[::2]
+                self._spacing *= 2
+        self.changed()
+
+    def failure(self, error: str, fields: Dict[str, Any]) -> None:
+        self.failures += 1
+        if self.failures <= FAILURES_KEPT:
+            line = json.dumps(
+                {"n": self.failures, "at": now(), "error": error, "fields": _shorten(fields)},
+                ensure_ascii=False,
+                default=str,
+            )
+            with open(self.dir / "failures.jsonl", "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        self.changed(at_once=True)
+
+    # -- writing ---------------------------------------------------------
+
+    def changed(self, at_once: bool = False) -> None:
+        self._changed = True
+        if at_once or time.monotonic() - self._written_at >= WRITE_INTERVAL:
+            self.write()
+
+    def status(self) -> Dict[str, Any]:
+        return {
+            "format": FORMAT,
+            "state": self.state,
+            "error": self.error,
+            "started_at": self.started_at,
+            "updated_at": now(),
+            "ended_at": self.ended_at,
+            "stages": [s.record() for s in self.stages],
+            "counters": dict(self.counters),
+            "measures": {k: dict(v) for k, v in self.measures.items()},
+            "samples": self.shown,
+            "failures": self.failures,
+        }
+
+    def write(self) -> None:
+        write_json(self.dir / "status.json", self.status())
+        write_json(
+            self.dir / "samples.json",
+            {"format": FORMAT, "latest": list(self._latest), "spaced": list(self._spaced)},
+        )
+        self._changed = False
+        self._written_at = time.monotonic()
+
+    def finish(self, state: str, error: Optional[str] = None) -> None:
+        """End the run as completed, failed or stopped. Open stages end with it."""
+        self.state = state
+        self.error = error
+        self.ended_at = now()
+        for stage in self.stages:
+            if stage.ended_at is None:
+                stage.ended_at = self.ended_at
+        self.write()
+
+
+# The run the current process reports to; None when a task's function is
+# called as plain Python
+_current: Optional[Run] = None
+
+
+def current() -> Optional[Run]:
+    return _current
+
+
+def set_current(run: Optional[Run]) -> None:
+    global _current
+    _current = run
+
+
+def track(items: Iterable[Any], name: str, total: Optional[int] = None) -> Iterator[Any]:
+    """Go through ``items`` and report how far the run is, as the stage ``name``.
+
+    ``total`` is the number of items when ``items`` cannot say it itself.
+    """
+    run = _current
+    if run is None:
+        yield from items
+        return
+    if total is None:
+        try:
+            total = len(items)  # type: ignore[arg-type]
+        except TypeError:
+            total = None
+    stage = run.stage(name, total)
+    try:
+        for item in items:
+            run.last_input = item
+            yield item
+            stage.advance()
+    finally:
+        stage.end()
+
+
+def show(**fields: Any) -> None:
+    """Send a sample to the control center: ``show(input=row, output=cleaned)``."""
+    run = _current
+    if run is None:
+        return
+    run.explicit_samples = True
+    run.sample(fields)
+
+
+def count(name: str, n: float = 1) -> None:
+    """Add to a running count: ``count("dropped: too short")``."""
+    if _current is not None:
+        _current.count(name, n)
+
+
+def measure(name: str, value: float) -> None:
+    """Add a value to a running measure, which keeps its count, mean, least and most."""
+    if _current is not None:
+        _current.measure(name, value)
+
+
+def fail(error: str, **fields: Any) -> None:
+    """Record an item that went wrong, and go on: ``fail("no answer", input=row)``.
+
+    The run does not stop. A task that must stop raises an exception.
+    """
+    if _current is not None:
+        _current.failure(error, fields)

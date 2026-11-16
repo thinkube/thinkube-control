@@ -1,0 +1,5 @@
+# All common dependencies are already installed in the python-base:3.12-slim image
+# Only add application-specific packages here that are not in the base image
+
+# Progress bars of libraries a task uses report to its run through tqdm
+tqdm>=4.60

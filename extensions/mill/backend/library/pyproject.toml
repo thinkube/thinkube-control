@@ -1,0 +1,27 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: MIT
+
+[build-system]
+requires = ["hatchling>=1.5.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "thinkube-mill"
+version = "0.1.0"
+description = "The task standard of Thinkube Mill: declared inputs and outputs, progress and samples"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=8.0", "tqdm>=4.60"]
+
+[project.scripts]
+mill = "thinkube_mill._cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["thinkube_mill"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
