@@ -94,24 +94,26 @@ thinkube deployed NATS with JetStream off; it is fixed
    Done when: a script trains on a chosen node, and its bars are seen in
    the control center.
 
-   Forge starts its work as Control's notebook jobs: Control starts a pod
-   of the notebook image on the node, with the node's resources, GPUs,
-   Python environments and shared folders, and stops it at the end. The
-   generic run uses the same pod, with a notebook that Forge gives the job
-   and that only runs `mill run`: the task is a file of the tasks
-   repository, and its record is in the Mill control center. Starting the
-   pod without a notebook belongs to the same later change as moving
-   Forge's fine-tunes off notebook jobs (see "Not in this plan").
+   Forge starts the pod of a task run itself, as a Kubernetes job: on
+   the run's node, with its GPUs and memory, on an AI base image of the
+   node's architecture, with the shared file system mounted (the tasks
+   repository, the datasets and the models). It does not use JupyterHub,
+   notebook servers or notebook jobs. Forge's own fine-tunes keep their
+   notebook jobs until they move to the same kind of pod (see "Not in this
+   plan").
 
    In parts, each seen before the next:
 
    1. `thinkube-mill` is in the platform's package index. Done: the
       playbook `thinkube-control/16_publish_packages.yaml` of thinkube
       publishes it from this folder; the index has 0.1.0.
-   2. A pod of the notebook image can run a task: it mounts the tasks
-      repository, and its Python environments have `thinkube-mill`.
-      Seen when: `mill run` of the sample task, typed in such a pod on a
-      GPU node, appears in the control center with that node's name.
+   2. A pod that Forge can start runs a task: the AI base image of the
+      node's architecture with `thinkube-mill` installed, the GPUs asked
+      for, and the shared file system mounted where the main pod has it,
+      so a path means the same in both.
+      Seen when: such a pod, started by hand on a GPU node, runs the
+      sample task, and the run appears in the control center with that
+      node's name.
    3. Forge has the run kind "task": a file of the tasks repository with
       its inputs, outputs and settings, a node, GPUs, memory, a priority
       and a Python environment. It skips preprocessing and the plan, waits
