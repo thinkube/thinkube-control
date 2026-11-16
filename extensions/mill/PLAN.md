@@ -198,7 +198,13 @@ Step 4 is half done:
 - Left: run `code-server/15_configure_environment.yaml`, so the IDE's
   agents get the tools, and start a run with them from a new session.
 
-Step 5 is started: its part 1 is done. Next: its part 2.
+Step 5, part 2 is done: a pod started by hand on tkspark (arm64), on
+`ai-inference-base:cuda13.0-torch2.9-py3.12` with one GPU (torch saw it),
+the claim `mill-backend-storage-thinkube-shared` mounted at
+`/storage/thinkube-shared`, and `thinkube-mill` installed from the package
+index, ran the sample task. The run reached the control center through
+NATS with node tkspark. No JupyterHub. The image does not carry
+`thinkube-mill` yet; the pod installed it at start. Next: part 3.
 
 Open point, to settle in step 5 or 6: a task reads the platform's datasets
 and models at paths that differ between the IDE, the main pod and a
