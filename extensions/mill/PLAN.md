@@ -204,7 +204,26 @@ the claim `mill-backend-storage-thinkube-shared` mounted at
 `/storage/thinkube-shared`, and `thinkube-mill` installed from the package
 index, ran the sample task. The run reached the control center through
 NATS with node tkspark. No JupyterHub. The image does not carry
-`thinkube-mill` yet; the pod installed it at start. Next: part 3.
+`thinkube-mill` yet; the pod installed it at start. 
+Step 5, part 3 is done, seen on the development cluster. Three task runs
+without a GPU were created in Forge: two on tkspark, one on tkamd2. The
+first of tkspark and the one of tkamd2 started at once; the second of
+tkspark waited, saying "waiting for run lane-check-a on tkspark", and
+started when the first completed. All three appeared in Mill as completed,
+with their node and runner forge. The text-embeddings model served on
+tkamd2 stayed loaded throughout.
+
+Found while preparing it, and part of it:
+
+- The pods run in the namespace mill-runs, made by the playbook
+  `thinkube-control/14_configure_mill_runs.yaml` of thinkube: the namespace
+  of Control's extensions has a budget of 32 GiB for all of them, too
+  little for one training.
+- A task without a GPU takes its node's CPU lane: it waits only for other
+  such tasks. Without the lane, a cleaning task on a node that serves a
+  model would have turned training mode on and unloaded the model.
+
+Next: part 4.
 
 Open point, to settle in step 5 or 6: a task reads the platform's datasets
 and models at paths that differ between the IDE, the main pod and a
