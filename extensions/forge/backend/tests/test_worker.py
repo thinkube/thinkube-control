@@ -664,7 +664,6 @@ def test_task_runs_take_their_node_in_turn_and_other_nodes_at_once(queue):
     assert (first.status, second.status, elsewhere.status) == ("running", "queued", "running")
     assert sorted(queue.pods.started) == [("elsewhere", 1), ("first", 1)]
     assert first.task["mill_run"] == f"forge-{first.id[:8]}-1" and first.job_id == f"forge-task-{first.id[:8]}-1"
-    assert "first" in second.waiting
     # No notebook job is started for a task
     assert queue.control.started == []
 

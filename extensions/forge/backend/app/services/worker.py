@@ -171,7 +171,9 @@ class Worker:
         open_runs = db.query(Run).filter(Run.status.in_(("preprocessing", "planning") + runs.WAITING
                                                         + runs.TRAINING)).all()
         for run in open_runs:
-            run.waiting = None
+            # A running task's line says why its pod waits, as _follow_task read it this tick
+            if not (run.kind == "task" and run.status in runs.TRAINING):
+                run.waiting = None
         nodes = sorted(set(by_node) | {r.node for r in open_runs})
         windows = {node: slot_windows.active(by_node.get(node, []), now) for node in nodes}
         held = await self._end_slots(db, windows, held)
