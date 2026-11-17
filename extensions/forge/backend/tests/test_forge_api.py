@@ -560,3 +560,74 @@ def test_planning_again_changes_or_removes_the_milestones_and_keeps_them_otherwi
     removed = api.post(f"/api/v1/runs/{run['id']}/plan", json={"milestones": None}).json()
     assert removed["milestones"] is None and "milestones" not in removed["job_spec"]
 
+
+
+# --- Mill's task runs ------------------------------------------------------
+
+TASK = {"name": "clean on tkspark", "file": "demo/clean.py", "inputs": {"rows": "data/rows.jsonl"},
+        "outputs": {"cleaned": "data/cleaned.jsonl"}, "node": "tkspark", "gpus": 1, "memory_gb": 16, "cpu_cores": 4}
+
+
+@pytest.fixture
+def nodes(monkeypatch):
+    async def choices(token):
+        return {"tkspark": {"memory_gb": [8, 16, 32, 64], "cpu_cores": [1, 2, 4, 8]}}
+    monkeypatch.setattr(control, "nodes_choices", choices)
+
+
+def test_a_task_run_is_queued_on_its_node_at_once(api, nodes):
+    r = api.post("/api/v1/tasks/runs", json=TASK)
+    assert r.status_code == 200, r.text
+    run = r.json()
+    assert (run["kind"], run["status"], run["node"], run["position"], run["when"]) == \
+        ("task", "queued", "tkspark", 1, "now")
+    assert run["task"]["file"] == "demo/clean.py" and run["task"]["gpus"] == 1 and run["task"]["mill_run"] is None
+    assert (run["memory_gb"], run["cpu_cores"], run["base_model"], run["plan"]) == (16, 4, None, None)
+    second = api.post("/api/v1/tasks/runs", json={**TASK, "name": "again"}).json()
+    assert second["position"] == 2
+    assert api.get(f"/api/v1/runs/{run['id']}").json()["job"] is None
+
+
+def test_a_task_run_asks_no_more_than_its_node_gives(api, nodes):
+    r = api.post("/api/v1/tasks/runs", json={**TASK, "memory_gb": 128})
+    assert r.status_code == 422 and "at most 64 GiB" in r.json()["detail"]
+    r = api.post("/api/v1/tasks/runs", json={**TASK, "cpu_cores": 16})
+    assert r.status_code == 422 and "at most 8 CPU" in r.json()["detail"]
+    r = api.post("/api/v1/tasks/runs", json={**TASK, "node": "tkfar"})
+    assert r.status_code == 422 and "tkfar is not a node" in r.json()["detail"]
+
+
+def test_a_task_run_has_no_plan_and_no_slots(api, nodes):
+    run = api.post("/api/v1/tasks/runs", json=TASK).json()
+    r = api.post(f"/api/v1/runs/{run['id']}/plan", json={})
+    assert r.status_code == 409 and "has no plan" in r.json()["detail"]
+    r = api.post(f"/api/v1/runs/{run['id']}/queue", json={"when": "slots"})
+    assert r.status_code == 422 and "runs now" in r.json()["detail"]
+
+
+def test_a_running_task_run_is_paused_and_cancelled_by_deleting_its_job(api, nodes, monkeypatch):
+    from app.services import taskpods
+
+    stopped = []
+
+    class Pods:
+        async def stop(self, name):
+            stopped.append(name)
+
+    monkeypatch.setattr(taskpods, "TaskPods", Pods)
+    run = api.post("/api/v1/tasks/runs", json=TASK).json()
+    put(api, run["id"], status="running", job_id="forge-task-x-1")
+    paused = api.post(f"/api/v1/runs/{run['id']}/pause").json()
+    assert paused["status"] == "stopping" and stopped == ["forge-task-x-1"]
+    # A file of stops is for fine-tunes; a task's pod is deleted instead
+    assert api.files.stops == []
+    put(api, run["id"], status="running", job_id="forge-task-x-2")
+    assert api.post(f"/api/v1/runs/{run['id']}/cancel").json()["status"] == "cancelled"
+    assert stopped == ["forge-task-x-1", "forge-task-x-2"]
+    assert api.fake.cancelled == []
+
+
+def test_a_failed_task_run_is_resumed(api, nodes):
+    run = api.post("/api/v1/tasks/runs", json=TASK).json()
+    put(api, run["id"], status="failed", position=None)
+    assert api.post(f"/api/v1/runs/{run['id']}/resume").json()["status"] == "queued"

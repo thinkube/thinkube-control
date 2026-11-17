@@ -42,11 +42,20 @@ class Run(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(255), nullable=False)
+    # "finetune": a Meep² training, as described above. "task": a task of
+    # Mill's tasks repository (`task`), run as a pod Forge starts in the
+    # namespace mill-runs (`job_id` is its Kubernetes job). A task run is
+    # queued at once, has no plan, no preprocessing and no checkpoint:
+    # stopping it ends its pod, and it starts again from the beginning when
+    # it resumes. The fields of a fine-tune's dataset, model and method are
+    # empty for it.
+    kind = Column(String(16), nullable=False, server_default="finetune")
+    task = Column(JSON, nullable=True)
     # A dataset of the Datasets extension, the version the run trains on, and
     # what the run read of it: name, format, mapping and the file of the split
     # it trains on
-    dataset_id = Column(String(36), nullable=False)
-    dataset_version = Column(Integer, nullable=False)
+    dataset_id = Column(String(36), nullable=True)
+    dataset_version = Column(Integer, nullable=True)
     dataset = Column(JSON, nullable=True)
     # {"split": name} or {"holdout": share of the training split}, or null for none
     evaluation = Column(JSON, nullable=True)
@@ -54,10 +63,10 @@ class Run(Base):
     # (a version of a dataset of Datasets: its split's file and mapping, the columns that group its rows and hold
     # each source) or null, "metrics": what the scoring service computes on each group's answers}
     milestones = Column(JSON, nullable=True)
-    base_model = Column(String(255), nullable=False)
-    method = Column(String(16), nullable=False)
+    base_model = Column(String(255), nullable=True)
+    method = Column(String(16), nullable=True)
     node = Column(String(255), nullable=False)
-    register = Column(Boolean, nullable=False)
+    register = Column(Boolean, nullable=True)
     # The Meep² training job Forge decides: task, method, steps or epochs,
     # report_to, recipe and overrides; the notebook adds the model, the data
     # and the output folder, which are paths on the notebook's side
@@ -113,6 +122,8 @@ class Run(Base):
         return {
             "id": self.id,
             "name": self.name,
+            "kind": self.kind,
+            "task": self.task,
             "dataset_id": self.dataset_id,
             "dataset_version": self.dataset_version,
             "dataset": self.dataset,

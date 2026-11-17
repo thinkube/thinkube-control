@@ -16,7 +16,7 @@ from app.core.security import User, get_current_user, oauth2_scheme
 from app.db.session import get_db
 from app.models.forge import NodeState, Run, Slot, WorkerCredential
 from app.services import (chat_template, control, datasets, gateway, mlflow, priorities, runfiles, runs,
-                          slots, worker)
+                          slots, taskpods, worker)
 
 router = APIRouter()
 
@@ -272,6 +272,66 @@ async def create_run(new: NewRun, user: User = Depends(get_current_user), token:
     return _run_dict(run)
 
 
+class NewTaskRun(BaseModel):
+    """A task of Mill's tasks repository, to run on a node in its turn. The paths are relative to the root of
+    the tasks repository, or absolute, as Mill's main pod sees them."""
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(..., min_length=1, max_length=255, description="the run's name in Forge's queue")
+    file: str = Field(..., min_length=1, description="the task's file, relative to the root of the tasks repository")
+    task: Optional[str] = Field(None, description="the task's name, when the file declares several")
+    inputs: Dict[str, str] = Field(default_factory=dict, description="the path of each input, by its name")
+    outputs: Dict[str, str] = Field(default_factory=dict, description="the path of each output, by its name")
+    settings: Dict[str, Any] = Field(default_factory=dict, description="values for the task's settings")
+    limit: Optional[int] = Field(None, ge=1, description="read only the first N items of each jsonl input")
+    node: str = Field(..., description="the node the task runs on")
+    gpus: int = Field(0, ge=0, le=8, description="the GPUs the task's pod gets; 0 for none")
+    memory_gb: int = Field(..., ge=1, le=1024, description="the memory the task's pod gets, in GiB")
+    cpu_cores: int = Field(..., ge=1, le=256, description="the CPU cores the task's pod gets")
+    priority: Optional[int] = Field(None, ge=1, le=5, description="1 (highest) to 5 (lowest); Forge runs' "
+                                                                  "priority when not given")
+
+
+def _task_only_fields(run: Run, what: str) -> None:
+    if run.kind == "task":
+        raise HTTPException(status_code=409, detail=f"run {run.name} is a task of Mill, which {what}")
+
+
+@router.post("/tasks/runs", operation_id="forge_create_task_run")
+async def create_task_run(new: NewTaskRun, user: User = Depends(get_current_user),
+                          token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """A task of Mill's tasks repository, queued on a node: it runs in a pod of its own when its turn comes, by
+    the same priorities, queue order and training mode as a fine-tune. It has no plan and no checkpoint: when
+    work of a higher priority needs the node it is stopped, and it starts again from the beginning when it gets
+    the node back. Its progress, samples and log are in Mill, under the run id in its task's mill_run."""
+    _queue_connected(db)
+    try:
+        nodes = await control.nodes_choices(token)
+    except control.ControlError as e:
+        raise _control_failed(e)
+    if new.node not in nodes:
+        raise HTTPException(status_code=422, detail=f"{new.node} is not a node Forge can use; the nodes are "
+                                                    f"{', '.join(sorted(nodes))}")
+    choices = nodes[new.node]
+    if new.memory_gb > max(choices["memory_gb"]):
+        raise HTTPException(status_code=422, detail=f"{new.node} gives at most {max(choices['memory_gb'])} GiB "
+                                                    f"to a job; the task asks for {new.memory_gb}")
+    if new.cpu_cores > max(choices["cpu_cores"]):
+        raise HTTPException(status_code=422, detail=f"{new.node} gives at most {max(choices['cpu_cores'])} CPU "
+                                                    f"cores to a job; the task asks for {new.cpu_cores}")
+    task = {"file": new.file, "task": new.task, "inputs": new.inputs, "outputs": new.outputs,
+            "settings": new.settings, "limit": new.limit, "gpus": new.gpus, "attempts": 0, "mill_run": None}
+    run = Run(id=str(uuid.uuid4()), name=new.name, kind="task", task=task, node=new.node, when="now",
+              memory_gb=new.memory_gb, cpu_cores=new.cpu_cores,
+              priority=new.priority if new.priority is not None else priorities.table(db)["forge_run"],
+              status="queued", created_by=user.preferred_username)
+    db.add(run)
+    db.flush()
+    worker.enqueue(db, run)
+    db.commit()
+    db.refresh(run)
+    return _run_dict(run)
+
+
 def _run(db: Session, run_id: str) -> Run:
     run = db.query(Run).filter(Run.id == run_id).first()
     if run is None:
@@ -308,6 +368,8 @@ async def get_run(run_id: str, user: User = Depends(get_current_user), token: st
     """The run, with its notebook job now: the preprocessing job while its data is preprocessed, the plan job
     while it plans, else its training's."""
     run = _run(db, run_id)
+    if run.kind == "task":
+        return {**_run_dict(run), "job": None}
     await _refresh_export(db, run, token)
     job_id = ((run.preprocess or {}).get("job_id") if run.status == "preprocessing"
               else run.plan_job_id if run.status == "planning" else run.job_id)
@@ -348,6 +410,7 @@ async def replan(run_id: str, request: Replan, user: User = Depends(get_current_
     as the person's. The data is preprocessed again first (found at once when nothing that made it changed).
     The new plan is in the run once its status is planned again."""
     run = _run(db, run_id)
+    _task_only_fields(run, "has no plan")
     if run.job_id is not None or run.status not in ("planned", "queued", "failed"):
         raise HTTPException(status_code=409, detail=f"run {run.name} is {run.status}; only a run that has not trained "
                                                     "is planned again")
@@ -389,6 +452,9 @@ async def queue_run(run_id: str, request: QueueRequest, user: User = Depends(get
         run.across_slots = request.across_slots
     if run.when == "now" and run.across_slots:
         raise HTTPException(status_code=422, detail="across_slots is for a run that waits for slots")
+    if run.kind == "task" and run.when == "slots":
+        raise HTTPException(status_code=422, detail=f"run {run.name} is a task of Mill, which runs now: a slot "
+                                                    "needs a run's time left, and a task does not know it")
     if run.status == "planned":
         if not runs.sized(run):
             raise HTTPException(status_code=409, detail=f"run {run.name} cannot be queued: Meep²'s plan does not size "
@@ -436,6 +502,9 @@ async def set_run_resources(run_id: str, request: ResourcesRequest, user: User =
     if run.status not in runs.BEFORE_PLAN + ("planned",) + runs.WAITING:
         raise HTTPException(status_code=409, detail=f"run {run.name} is {run.status}; its memory and cores are "
                                                     "changed while it waits, queued or paused")
+    if run.kind == "task" and (request.memory_gb is None or request.cpu_cores is None):
+        raise HTTPException(status_code=422, detail=f"run {run.name} is a task of Mill, whose pod is given its "
+                                                    "memory and cores: give both")
     run.memory_gb, run.cpu_cores = request.memory_gb, request.cpu_cores
     db.commit()
     db.refresh(run)
@@ -448,6 +517,12 @@ async def pause_run(run_id: str, user: User = Depends(get_current_user), db: Ses
     run = _run(db, run_id)
     if run.status in ("queued", "paused"):
         run.status, run.paused_by = "paused", "user"
+    elif run.status == "running" and run.kind == "task":
+        try:
+            await taskpods.TaskPods().stop(run.job_id)
+        except taskpods.TaskPodError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+        run.status, run.paused_by, run.stop_requested_at = "stopping", "user", worker.utcnow()
     elif run.status == "running":
         try:
             await runfiles.RunFiles().request_stop(run)
@@ -469,7 +544,7 @@ async def resume_run(run_id: str, user: User = Depends(get_current_user), db: Se
     run = _run(db, run_id)
     if run.status == "paused":
         run.status, run.paused_by, run.preempted_by = "queued", None, None
-    elif run.status == "failed" and run.plan is not None:
+    elif run.status == "failed" and (run.plan is not None or run.kind == "task"):
         worker.enqueue(db, run)
         run.error, run.finished_at = None, None
     else:
@@ -488,7 +563,12 @@ async def cancel_run(run_id: str, user: User = Depends(get_current_user), token:
         return _run_dict(run)
     open_job = (run.job_id if run.status in runs.TRAINING else run.plan_job_id if run.status == "planning"
                 else (run.preprocess or {}).get("job_id") if run.status == "preprocessing" else None)
-    if open_job:
+    if open_job and run.kind == "task":
+        try:
+            await taskpods.TaskPods().stop(open_job)
+        except taskpods.TaskPodError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+    elif open_job:
         try:
             await control.cancel_job(token, open_job)
         except control.ControlError as e:

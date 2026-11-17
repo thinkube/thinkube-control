@@ -287,8 +287,8 @@ export default function RunsPage() {
                       </Link>
                       {run.model_id && <div className="text-xs text-muted-foreground">{run.model_id}</div>}
                     </TkTableCell>
-                    <TkTableCell className="text-sm">{run.base_model}</TkTableCell>
-                    <TkTableCell className="text-sm">{t(`method.${run.method}`)}</TkTableCell>
+                    <TkTableCell className="text-sm">{run.task ? run.task.file : run.base_model}</TkTableCell>
+                    <TkTableCell className="text-sm">{run.task ? t('runs.task') : t(`method.${run.method}`)}</TkTableCell>
                     <TkTableCell className="text-sm">{run.node}</TkTableCell>
                     <TkTableCell>
                       <RunStateBadge state={run.status} preemptedBy={run.preempted_by} />

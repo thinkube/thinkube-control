@@ -136,7 +136,8 @@
     "compare_other": "Comparar {{count}}",
     "choose": "Elegir",
     "chooseRun": "Elegir {{name}} para comparar",
-    "all": "Todas las ejecuciones"
+    "all": "Todas las ejecuciones",
+    "task": "Tarea de Mill"
   },
   "method": {
     "qlora": "QLoRA",
@@ -310,7 +311,9 @@
     "preprocessHelp": "Tokenizados, comprobados y cortados una sola vez por Meep² en {{node}}, en una carpeta identificada por lo que los hizo; el plan y el entrenamiento la leen.",
     "preprocessFound": "Encontrados: hechos antes con los mismos datos y opciones",
     "preprocessBuilt": "Hechos para esta ejecución",
-    "preprocessKey": "clave {{key}}"
+    "preprocessKey": "clave {{key}}",
+    "taskSummary": "Tarea de Mill {{file}} en {{node}}, {{gpus}} GPU",
+    "millRun": "Su progreso, muestras y registro en Mill"
   },
   "chat": {
     "title": "Preguntar a los modelos",

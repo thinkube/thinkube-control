@@ -136,7 +136,8 @@
     "compare_other": "Comparar-ne {{count}}",
     "choose": "Triar",
     "chooseRun": "Triar {{name}} per comparar",
-    "all": "Totes les execucions"
+    "all": "Totes les execucions",
+    "task": "Tasca de Mill"
   },
   "method": {
     "qlora": "QLoRA",
@@ -310,7 +311,9 @@
     "preprocessHelp": "Tokenitzades, comprovades i tallades un sol cop per Meep² a {{node}}, en una carpeta identificada pel que les ha fet; el pla i l'entrenament la llegeixen.",
     "preprocessFound": "Trobades: fetes abans amb les mateixes dades i opcions",
     "preprocessBuilt": "Fetes per a aquesta execució",
-    "preprocessKey": "clau {{key}}"
+    "preprocessKey": "clau {{key}}",
+    "taskSummary": "Tasca de Mill {{file}} a {{node}}, {{gpus}} GPU",
+    "millRun": "El seu progrés, mostres i registre a Mill"
   },
   "chat": {
     "title": "Preguntar als models",

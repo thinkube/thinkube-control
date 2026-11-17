@@ -54,6 +54,15 @@ spec:
       migrations:
         tool: alembic
         auto: true
+      # The pods of Mill's task runs: a job for each start of a run in the
+      # namespace mill-runs, and its pod, read when the job fails
+      access:
+        - apiGroups: [batch]
+          resources: [jobs]
+          verbs: [create, get, delete]
+        - apiGroups: [""]
+          resources: [pods]
+          verbs: [list]
 
     - name: frontend
       build: ./frontend

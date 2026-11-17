@@ -59,13 +59,16 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.models.forge import NodeState, Run, Slot, WorkerCredential
-from app.services import control, priorities, runfiles, runs, slots as slot_windows
+from app.services import control, priorities, runfiles, runs, slots as slot_windows, taskpods
 from app.services.priorities import Occupant
 
 logger = logging.getLogger(__name__)
 
 TICK_SECONDS = 15
 STOP_GRACE_SECONDS = 30 * 60
+# A task run's pod is given a minute to end once it is asked to stop (taskpods.STOP_GRACE_SECONDS), and a
+# tick or two more for Kubernetes to remove it
+TASK_STOP_GRACE_SECONDS = taskpods.STOP_GRACE_SECONDS + 4 * TICK_SECONDS
 # The stop before a milestone is asked for this long before the step ahead of it ends: a tick, and the status
 # file's own delay of about one more
 MILESTONE_LEAD_SECONDS = 3 * TICK_SECONDS
@@ -149,10 +152,12 @@ class ControlPort:
 
 
 class Worker:
-    def __init__(self, control_port, files, clock: Callable[[], datetime] = utcnow):
+    def __init__(self, control_port, files, clock: Callable[[], datetime] = utcnow, pods=None):
         self.control = control_port
         self.files = files
         self.clock = clock
+        # The pods of Mill's task runs (app/services/taskpods.py)
+        self.pods = pods
 
     # --- one tick ----------------------------------------------------------
 
@@ -191,7 +196,10 @@ class Worker:
                                         Run.plan_job_id.isnot(None)).all():
             await self._follow_plan(db, run)
         for run in db.query(Run).filter(Run.status.in_(runs.TRAINING)).all():
-            await self._follow_training(db, run)
+            if run.kind == "task":
+                await self._follow_task(run)
+            else:
+                await self._follow_training(db, run)
         db.commit()
 
     async def _job(self, run: Run, job_id: str) -> Optional[Dict[str, Any]]:
@@ -305,10 +313,42 @@ class Worker:
             reason = (status or {}).get("error") or job.get("error") or "no error given"
             self._fail(run, f"the training's job {job['status']}: {reason}")
 
+    async def _follow_task(self, run: Run) -> None:
+        """A task run's pod: running, or ended. A task asked to stop ends as paused, to start again from the
+        beginning when it gets its node back; one that ends by itself is completed or failed."""
+        try:
+            pod = await self.pods.state(run.job_id)
+        except taskpods.TaskPodError as e:
+            logger.warning("run %s: its job could not be read, asking again at the next tick: %s", run.id, e)
+            return
+        now = self.clock()
+        if pod["state"] == "running":
+            run.waiting = pod.get("waiting")
+            await self._stop_overdue(run)
+            return
+        run.waiting = None
+        if run.status == "stopping":
+            run.status, run.stop_requested_at, run.job_id = "paused", None, None
+            run.paused_by = run.paused_by or "user"
+            if run.paused_by != "preempted":
+                run.preempted_by = None
+        elif pod["state"] == "completed":
+            run.status, run.finished_at, run.error, run.position = "completed", now, None, None
+        elif pod["state"] == "failed":
+            self._fail(run, f"{pod['error']}. Its log is in Mill, run {run.task['mill_run']}")
+        else:
+            self._fail(run, f"its job {run.job_id} is gone from Kubernetes before the task ended")
+
     async def _stop_overdue(self, run: Run) -> None:
         """A run asked to stop that has not paused within STOP_GRACE_SECONDS, and the time of a milestone, which
         runs before a stop takes effect, is cancelled."""
         if run.status != "stopping" or run.stop_requested_at is None:
+            return
+        if run.kind == "task":
+            grace = TASK_STOP_GRACE_SECONDS
+            if self.clock() - run.stop_requested_at < timedelta(seconds=grace):
+                return
+            self._fail(run, f"its pod did not end within {grace} seconds of its stop request")
             return
         grace = STOP_GRACE_SECONDS + runs.milestone_seconds(run)
         if self.clock() - run.stop_requested_at < timedelta(seconds=grace):
@@ -411,6 +451,14 @@ class Worker:
         db.flush()
 
     async def _request_stop(self, run: Run, by: str, now: datetime) -> bool:
+        if run.kind == "task":
+            try:
+                await self.pods.stop(run.job_id)
+            except taskpods.TaskPodError as e:
+                run.error = f"its job could not be stopped, trying again: {e}"
+                return False
+            run.status, run.paused_by, run.stop_requested_at = "stopping", by, now
+            return True
         try:
             await self.files.request_stop(run)
         except runfiles.RunFilesError as e:
@@ -545,7 +593,10 @@ class Worker:
         run.waiting = "making room: stopping " + ", ".join(stopping)
 
     async def _start(self, db: Session, run: Run, mode: str) -> bool:
-        """Start the run's plan job or training job; True when Control took it."""
+        """Start the run's plan job or training job; True when Control took it. A task run's pod is started
+        in Kubernetes instead."""
+        if run.kind == "task":
+            return await self._start_task(db, run)
         try:
             catalog = (await self.control.catalog())["models"]
             choices = await self.control.node_choices(run.node)
@@ -591,6 +642,26 @@ class Worker:
         return True
 
 
+    async def _start_task(self, db: Session, run: Run) -> bool:
+        """Start a pod for the task run, as its next attempt; each attempt is a run of its own in Mill."""
+        attempt = (run.task or {}).get("attempts", 0) + 1
+        try:
+            name = await self.pods.start(run, attempt)
+        except taskpods.TaskPodError as e:
+            self._fail(run, str(e))
+            return False
+        run.task = {**run.task, "attempts": attempt, "mill_run": taskpods.mill_run_id(run, attempt)}
+        run.job_id = name
+        run.status = "running"
+        run.started_at = self.clock()
+        run.paused_by = None
+        run.preempted_by = None
+        run.stop_requested_at = None
+        run.error, run.waiting = None, None
+        db.commit()
+        return True
+
+
 def enqueue(db: Session, run: Run) -> None:
     """Put a run at the end of its node's queue."""
     last = db.query(Run.position).filter(Run.node == run.node, Run.status.in_(runs.WAITING),
@@ -624,7 +695,7 @@ async def tick_once(session_factory) -> None:
             if found is None:
                 state["error"] = "the queue has no Control token; connect it on Forge's Slots page"
                 return
-            worker = Worker(ControlPort(found.token), runfiles.RunFiles())
+            worker = Worker(ControlPort(found.token), runfiles.RunFiles(), pods=taskpods.TaskPods())
             await worker.tick(db)
             state["last_tick"], state["error"] = utcnow().isoformat(), None
         finally:

@@ -136,7 +136,8 @@
     "compare_other": "Compare {{count}}",
     "choose": "Choose",
     "chooseRun": "Choose {{name}} to compare",
-    "all": "All runs"
+    "all": "All runs",
+    "task": "Mill task"
   },
   "method": {
     "qlora": "QLoRA",
@@ -310,7 +311,9 @@
     "preprocessHelp": "Tokenized, checked and cut once by Meep² on {{node}}, into a folder keyed by what made it; the plan and the training read it.",
     "preprocessFound": "Found: made before from the same data and settings",
     "preprocessBuilt": "Built for this run",
-    "preprocessKey": "key {{key}}"
+    "preprocessKey": "key {{key}}",
+    "taskSummary": "Mill task {{file}} on {{node}}, {{gpus}} GPU(s)",
+    "millRun": "Its progress, samples and log in Mill"
   },
   "chat": {
     "title": "Ask the models",

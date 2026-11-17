@@ -30,6 +30,30 @@ class Settings(BaseSettings):
     # experiments.<domain>, as for the notebook servers.
     DOMAIN_NAME: str
 
+    # Mill's task runs: the namespace their pods run in, with the claim of
+    # the shared file system's root (the playbook
+    # thinkube-control/14_configure_mill_runs.yaml of thinkube), the image
+    # their pods start from (the AI base image, a manifest of both
+    # architectures), and the NATS a run reports to, as Mill's main pod has them
+    MILL_RUNS_NAMESPACE: str = "mill-runs"
+    MILL_SHARED_CLAIM: str = "thinkube-shared"
+    MILL_SHARED_MOUNT: str = "/storage/thinkube-shared"
+    MILL_REPOSITORY: str = "/storage/thinkube-shared/mill"
+    MILL_TASK_IMAGE: str = "library/ai-inference-base:cuda13.0-torch2.9-py3.12"
+    MILL_NATS_URL: str = "nats://nats.nats.svc.cluster.local:4222"
+    MILL_SUBJECTS: str = "mill"
+    # The owner of the tasks repository, as the shared folders have it
+    MILL_TASK_UID: int = 1000
+    MILL_TASK_GID: int = 100
+
+    @property
+    def REGISTRY(self) -> str:
+        return f"registry.{self.DOMAIN_NAME}"
+
+    @property
+    def PACKAGE_INDEX(self) -> str:
+        return f"https://packages-api.{self.DOMAIN_NAME}/root/stable/+simple/"
+
     # The MLflow service account every app gets, to read the runs' metrics
     MLFLOW_KEYCLOAK_TOKEN_URL: str
     MLFLOW_KEYCLOAK_CLIENT_ID: str

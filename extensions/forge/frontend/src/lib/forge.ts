@@ -351,9 +351,26 @@ export function cellText(result: CellResult): string {
     .join('');
 }
 
+/** A task of Mill's tasks repository that a run executes, and the run of Mill that shows its progress. */
+export interface RunTask {
+  file: string;
+  task: string | null;
+  inputs: Record<string, string>;
+  outputs: Record<string, string>;
+  settings: Record<string, unknown>;
+  limit: number | null;
+  gpus: number;
+  attempts: number;
+  /** The id of the latest start of the run in Mill; null until it starts. */
+  mill_run: string | null;
+}
+
 export interface Run {
   id: string;
   name: string;
+  /** A fine-tune, or a task of Mill (whose fine-tune fields are null). */
+  kind: 'finetune' | 'task';
+  task: RunTask | null;
   dataset_id: string;
   dataset_version: number;
   dataset: RunDataset | null;

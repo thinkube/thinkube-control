@@ -118,6 +118,30 @@ navigation and draws its pages. It needs the Datasets extension
   (`llm.<domain>`), and MLflow (`experiments.<domain>`) with the MLflow
   account the platform gives every app.
 
+## Mill's task runs
+
+A task of Mill's tasks repository can wait in a node's queue like a
+fine-tune: Mill creates it with `POST /api/v1/tasks/runs` (the file, the
+task's inputs, outputs and settings, the node, its GPUs, memory and CPU
+cores, and a priority). It is queued at once; it has no preprocessing, no
+plan and no slots.
+
+When its turn comes the worker starts a Kubernetes job for it in the
+namespace `mill-runs` (`backend/app/services/taskpods.py`): on the run's
+node, from the AI base image, with the shared file system mounted where
+Mill's main pod has it, running `mill run`. The run reports its progress,
+samples and log to Mill through NATS, under the id in its `task.mill_run`;
+Forge follows only the job's state, and says why a pod waits or failed.
+
+A task has no checkpoint. Pausing it, or a run of a higher priority that
+needs the node, deletes its job: the task ends as stopped in Mill. It
+starts again from the beginning when it resumes, as a new run in Mill.
+
+The namespace `mill-runs` and its claim of the shared file system are made
+by the playbook `thinkube-control/14_configure_mill_runs.yaml` of thinkube.
+Forge's backend may create, read and delete jobs and list pods
+(`access` in `thinkube.yaml`).
+
 ## Known limits
 
 - **What runs on a node is inferred.** Control has no call that lists the

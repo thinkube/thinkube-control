@@ -198,8 +198,17 @@ export default function RunPage() {
             <RunStateBadge state={run.status} preemptedBy={run.preempted_by} />
           </div>
           <p className="text-muted-foreground mt-1">
-            {t('run.summary', { model: run.base_model, method: t(`method.${run.method}`), node: run.node })}
+            {run.task
+              ? t('run.taskSummary', { file: run.task.file, node: run.node, gpus: run.task.gpus })
+              : t('run.summary', { model: run.base_model, method: t(`method.${run.method}`), node: run.node })}
           </p>
+          {run.task?.mill_run && (
+            <p className="text-sm mt-1">
+              <a className="underline" href={`/x/mill/runs/${run.task.mill_run}`}>
+                {t('run.millRun')}
+              </a>
+            </p>
+          )}
           {run.job_spec && (
             <p className="text-muted-foreground text-sm">
               {t(`queue.whenValue.${run.when}`)}
