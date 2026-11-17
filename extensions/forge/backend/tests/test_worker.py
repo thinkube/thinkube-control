@@ -748,3 +748,34 @@ def test_a_task_waits_for_a_notebook_server_of_a_higher_priority(queue):
     queue.tick()
     assert run.status == "queued" and "notebook server" in run.waiting
     assert queue.pods.started == []
+
+
+def test_a_task_without_a_gpu_runs_beside_a_served_model_and_leaves_it_loaded(queue):
+    queue.control.allocations = {"tkspark": ["google/gemma"]}
+    run = queue.task("clean", gpus=0)
+    queue.tick()
+    assert run.status == "running"
+    assert queue.control.mode is None and queue.control.allocations == {"tkspark": ["google/gemma"]}
+
+
+def test_cpu_tasks_take_their_lane_in_turn_and_gpu_work_neither_waits_for_them_nor_stops_them(queue):
+    first = queue.task("first", gpus=0, priority=3, position=1)
+    second = queue.task("second", gpus=0, priority=3, position=2)
+    queue.tick()
+    assert (first.status, second.status) == ("running", "queued")
+    assert "first" in second.waiting
+    # A GPU run of a higher priority on the node starts beside the CPU task
+    gpu = queue.task("gpu", gpus=1, priority=1, position=3)
+    queue.tick()
+    assert gpu.status == "running" and first.status == "running"
+    assert queue.pods.stopped == []
+
+
+def test_a_cpu_task_of_a_higher_priority_stops_a_cpu_task_of_a_lower_one(queue):
+    low = queue.task("low", gpus=0, priority=4, position=1)
+    queue.tick()
+    high = queue.task("high", gpus=0, priority=2, position=2)
+    queue.tick()
+    assert low.status == "stopping" and low.preempted_by == "high"
+    queue.tick()
+    assert (low.status, high.status) == ("paused", "running")

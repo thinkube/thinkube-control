@@ -133,6 +133,11 @@ Mill's main pod has it, running `mill run`. The run reports its progress,
 samples and log to Mill through NATS, under the id in its `task.mill_run`;
 Forge follows only the job's state, and says why a pod waits or failed.
 
+A task that asks for no GPU takes its node's CPU lane: it waits only for the
+other tasks without a GPU on that node, and it neither stops GPU work nor
+turns training mode on, so the node's served models stay loaded. A task with
+GPUs waits in the node's GPU lane with the fine-tunes, by the rules above.
+
 A task has no checkpoint. Pausing it, or a run of a higher priority that
 needs the node, deletes its job: the task ends as stopped in Mill. It
 starts again from the beginning when it resumes, as a new run in Mill.

@@ -45,6 +45,10 @@ The rules:
   recorded as failed, so that the node comes back.
 - Training mode that someone else turned on is left alone, and its node runs
   no Forge job until it is off.
+- A task of Mill that asks for no GPU takes its node's CPU lane: it waits
+  only for the other tasks without a GPU on its node, by the same priorities
+  and order, and neither stops nor waits for GPU work, which does not stop
+  it either. Everything else is the node's GPU lane, as described above.
 - A failed run is recorded with its error, and the queue goes on. A call to
   Control that fails with no answer, or with a server error, is tried again
   at the next tick; a refusal fails the run.
@@ -177,12 +181,16 @@ class Worker:
         nodes = sorted(set(by_node) | {r.node for r in open_runs})
         windows = {node: slot_windows.active(by_node.get(node, []), now) for node in nodes}
         held = await self._end_slots(db, windows, held)
-        candidates = {node: self._candidate(db, node, windows[node], now) for node in nodes}
+        candidates = {node: self._candidate(db, node, windows[node], now, GPU_LANE) for node in nodes}
         wanting = [node for node in nodes if candidates[node] is not None]
         wanting.sort(key=lambda n: (candidates[n].priority, windows[n].start if windows[n] else now, n))
         outside = await self._outside(db) if wanting else {}
         for node in wanting:
             held = await self._place(db, node, candidates[node], windows[node], held, outside.get(node, []), now)
+        for node in nodes:
+            candidate = self._candidate(db, node, None, now, CPU_LANE)
+            if candidate is not None:
+                await self._place_cpu(db, node, candidate, now)
         await self._release(db, set(wanting))
         db.commit()
 
@@ -472,17 +480,23 @@ class Worker:
     # --- deciding what a node does ------------------------------------------
 
     @staticmethod
-    def _forge_work(db: Session, node: str) -> List[Run]:
-        """The node's Forge runs that hold its GPU: training or stopping, or planning in a job."""
-        return db.query(Run).filter(
+    def _forge_work(db: Session, node: str, lane: str = None) -> List[Run]:
+        """The node's Forge runs of a lane that hold it: training or stopping, or planning in a job. The GPU
+        lane when no lane is given."""
+        lane = lane or GPU_LANE
+        found = db.query(Run).filter(
             Run.node == node,
             (Run.status.in_(runs.TRAINING)) | ((Run.status == "planning") & Run.plan_job_id.isnot(None))).all()
+        return [r for r in found if lane_of(r) == lane]
 
-    def _candidate(self, db: Session, node: str, window, now: datetime) -> Optional[Run]:
-        """The node's first run that may start now: by priority, plans before trainings, then position."""
+    def _candidate(self, db: Session, node: str, window, now: datetime, lane: str) -> Optional[Run]:
+        """The node's first run of a lane that may start now: by priority, plans before trainings, then
+        position."""
         found = []
         for run in db.query(Run).filter(Run.node == node,
                                         Run.status.in_(("planning",) + runs.WAITING)).all():
+            if lane_of(run) != lane:
+                continue
             if run.status == "planning":
                 if run.plan_job_id is None:
                     found.append((run.priority, 0, 0, run.created_at, run))
@@ -571,6 +585,20 @@ class Worker:
             state.held_for, state.slot_end = "slot", window.end
         await self._start(db, run, "plan" if run.status == "planning" else "train")
         return held
+
+    async def _place_cpu(self, db: Session, node: str, run: Run, now: datetime) -> None:
+        """Start a task of the node's CPU lane, or stop CPU tasks of a lower priority for it, or say what it
+        waits for. GPU work is no part of it."""
+        occupants = [Occupant("forge_run", r.name, r.priority, r)
+                     for r in self._forge_work(db, node, CPU_LANE) if r.id != run.id]
+        waits, stops = priorities.decide(run.priority, occupants)
+        if waits:
+            run.waiting = priorities.waiting_for(waits[0], node)
+            return
+        if stops:
+            await self._make_room(run, stops, now)
+            return
+        await self._start(db, run, "train")
 
     async def _make_room(self, run: Run, stops: List[Occupant], now: datetime) -> None:
         """Stop the work of a lower priority, each kind in its gentlest way."""
@@ -662,6 +690,17 @@ class Worker:
         run.error, run.waiting = None, None
         db.commit()
         return True
+
+
+GPU_LANE = "gpu"
+CPU_LANE = "cpu"
+
+
+def lane_of(run: Run) -> str:
+    """A task of Mill without a GPU is in its node's CPU lane; every other run is in the GPU lane."""
+    if run.kind == "task" and not (run.task or {}).get("gpus"):
+        return CPU_LANE
+    return GPU_LANE
 
 
 def enqueue(db: Session, run: Run) -> None:
