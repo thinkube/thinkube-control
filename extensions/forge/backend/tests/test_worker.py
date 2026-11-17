@@ -763,7 +763,9 @@ def test_cpu_tasks_take_their_lane_in_turn_and_gpu_work_neither_waits_for_them_n
     second = queue.task("second", gpus=0, priority=3, position=2)
     queue.tick()
     assert (first.status, second.status) == ("running", "queued")
-    assert "first" in second.waiting
+    # The next tick finds the second the lane's candidate, and says what it waits for
+    queue.tick()
+    assert second.status == "queued" and "first" in second.waiting
     # A GPU run of a higher priority on the node starts beside the CPU task
     gpu = queue.task("gpu", gpus=1, priority=1, position=3)
     queue.tick()
