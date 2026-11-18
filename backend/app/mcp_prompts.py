@@ -84,7 +84,7 @@ Steps:
    backend and serving_name, or with an error when the gateway cannot route it yet.
 8. Tell the user how to call it. Gateway: https://llm.{{domain}}
    OpenAI style: POST /v1/chat/completions with "model": "{{model_id}}";
-   /v1/embeddings for a text-embeddings model, /v1/rerank for a reranker (task text-ranking: `query` and
+   /v1/embeddings for a text-embeddings model, /v1/rerank for a reranker (a text-classification model served by text-embeddings: `query` and
    `documents` in, `results` with `index` and `relevance_score` out). Anthropic style: POST /v1/messages.
    Authorization: Bearer <thinkube-control API token or Keycloak token>; x-api-key also
    works. The model field takes the model id; its catalog name or the last part of the id
