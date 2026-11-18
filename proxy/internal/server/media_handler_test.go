@@ -41,6 +41,7 @@ func mediaBackend(t *testing.T) *httptest.Server {
 		io.Copy(w, r.Body)
 	}
 	mux.HandleFunc("/v1/images/generations", echo)
+	mux.HandleFunc("/v1/rerank", echo)
 	mux.HandleFunc("/v1/audio/speech", echo)
 	mux.HandleFunc("/v1/audio/transcriptions", echo)
 	srv = httptest.NewServer(mux)
@@ -67,6 +68,27 @@ func TestAnImageRequestReachesItsModelUnderTheServedName(t *testing.T) {
 		t.Fatalf("the model server got no JSON: %s", rec.Body.String())
 	}
 	if got["model"] != "org/media" || got["prompt"] != "a lighthouse" {
+		t.Fatalf("the model server got %v", got)
+	}
+}
+
+func TestARerankRequestReachesItsModelUnderTheServedName(t *testing.T) {
+	backend := mediaBackend(t)
+	defer backend.Close()
+
+	rec := httptest.NewRecorder()
+	mediaHandler(backend.URL).Rerank(rec, httptest.NewRequest("POST", "/v1/rerank",
+		strings.NewReader(`{"model":"an-alias","query":"zero pronouns","documents":["a","b"]}`)))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("the model server got no JSON: %s", rec.Body.String())
+	}
+	documents, _ := got["documents"].([]any)
+	if got["model"] != "org/media" || got["query"] != "zero pronouns" || len(documents) != 2 {
 		t.Fatalf("the model server got %v", got)
 	}
 }

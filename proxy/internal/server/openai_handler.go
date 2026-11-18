@@ -309,6 +309,13 @@ func (h *OpenAIHandler) Embeddings(w http.ResponseWriter, r *http.Request) {
 	h.forwardJSON(w, r, "/embeddings", "embeddings")
 }
 
+// Rerank forwards a rerank request (a query and the documents to score
+// against it) to the reranker model it names; the backend answers with the
+// documents' indexes and scores, best first.
+func (h *OpenAIHandler) Rerank(w http.ResponseWriter, r *http.Request) {
+	h.forwardJSON(w, r, "/rerank", "rerank")
+}
+
 // ImageGenerations forwards an image request; the backend answers with the
 // images as base64 JSON or URLs.
 func (h *OpenAIHandler) ImageGenerations(w http.ResponseWriter, r *http.Request) {
