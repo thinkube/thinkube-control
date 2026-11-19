@@ -108,6 +108,59 @@ def test_a_run_is_started_followed_and_read(signed_in, work, repository):
     assert signed_in.get(f"/api/v1/runs/{run_id}").json()["has_log"] is True
 
 
+ASKS = """
+    import os
+    from thinkube_mill import task
+
+    @task(outputs={"seen": "json"})
+    def asks():
+        "What a task is given to call a model."
+        return {"seen": {"gateway": os.environ.get("LLM_GATEWAY_URL"), "token": os.environ.get("THINKUBE_API_TOKEN")}}
+"""
+
+
+def test_a_run_carries_tags_and_is_found_by_them(signed_in, work):
+    first = signed_in.post("/api/v1/runs", json={**work, "tags": {"experiment": "vote-of-finders", "setup": "plain"}})
+    assert first.status_code == 200, first.text
+    run_id = first.json()["id"]
+    wait_for(signed_in, run_id, "completed")
+    other = signed_in.post("/api/v1/runs", json=work).json()["id"]
+    wait_for(signed_in, other, "completed")
+
+    assert signed_in.get(f"/api/v1/runs/{run_id}").json()["tags"] == {"experiment": "vote-of-finders", "setup": "plain"}
+    found = signed_in.get("/api/v1/runs", params={"tag": "experiment=vote-of-finders"}).json()
+    assert [r["id"] for r in found["runs"]] == [run_id] and found["total"] == 1
+    assert found["runs"][0]["tags"]["setup"] == "plain"
+    assert signed_in.get("/api/v1/runs", params={"tag": ["experiment=vote-of-finders", "setup=other"]}).json()["runs"] == []
+    assert signed_in.get("/api/v1/runs").json()["total"] == 2
+
+    changed = signed_in.put(f"/api/v1/runs/{other}/tags", json={"tags": {"experiment": "vote-of-finders", "claim": "local-finder"}})
+    assert changed.json() == {"id": other, "tags": {"experiment": "vote-of-finders", "claim": "local-finder"}}
+    assert signed_in.get("/api/v1/runs", params={"tag": "experiment=vote-of-finders"}).json()["total"] == 2
+    removed = signed_in.put(f"/api/v1/runs/{other}/tags", json={"tags": {"claim": ""}})
+    assert removed.json()["tags"] == {"experiment": "vote-of-finders"}
+
+    assert signed_in.put(f"/api/v1/runs/{other}/tags", json={"tags": {"Bad Name": "x"}}).status_code == 409
+    assert signed_in.put("/api/v1/runs/none/tags", json={"tags": {"a": "b"}}).status_code == 404
+    assert signed_in.get("/api/v1/runs", params={"tag": "no-value"}).status_code == 422
+
+
+def test_a_task_is_given_the_gateway_and_the_callers_token(signed_in, repository):
+    (repository / "demo").mkdir()
+    (repository / "demo" / "asks.py").write_text(textwrap.dedent(ASKS), encoding="utf-8")
+    (repository / "data").mkdir()
+    job = {"file": "demo/asks.py", "outputs": {"seen": "data/seen.json"}}
+    run_id = signed_in.post("/api/v1/runs", json=job, headers={"Authorization": "Bearer tk_of_the_caller"}).json()["id"]
+    answer = wait_for(signed_in, run_id, "completed")
+    seen = json.loads((repository / "data" / "seen.json").read_text())
+    assert seen == {"gateway": "http://llm-proxy.thinkube-control.svc.cluster.local:8080", "token": "tk_of_the_caller"}
+    assert "tk_of_the_caller" not in json.dumps(answer), "the token is not in the run's record"
+
+    without = signed_in.post("/api/v1/runs", json={**job, "outputs": {"seen": "data/seen-2.json"}}).json()["id"]
+    wait_for(signed_in, without, "completed")
+    assert json.loads((repository / "data" / "seen-2.json").read_text())["token"] is None
+
+
 def test_limit_and_settings_reach_the_task(signed_in, work):
     r = signed_in.post("/api/v1/runs", json={**work, "limit": 4, "settings": {"pause": 0.01}})
     assert r.status_code == 200, r.text

@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     # The home folder of a task's process
     MILL_TASK_HOME: str = "/tmp/mill-home"
 
+    # The platform's LLM Gateway, in the cluster: a task that calls a model reads it as LLM_GATEWAY_URL
+    MILL_LLM_GATEWAY_URL: str = "http://llm-proxy.thinkube-control.svc.cluster.local:8080"
+
     # The platform's NATS, at the address its playbook gives it
     # (ansible/40_thinkube/optional/nats/10_deploy.yaml of thinkube), and the
     # prefix of the subjects the runs publish on

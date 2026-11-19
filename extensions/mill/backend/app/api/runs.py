@@ -4,9 +4,9 @@
 """The control center: the runs of Mill tasks, their progress, samples,
 failures and logs, and starting and stopping a run in the main pod."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from sqlalchemy.orm import Session
@@ -30,6 +30,31 @@ class StartRequest(BaseModel):
                                      "place of their defaults.")
     limit: Optional[int] = Field(None, ge=1, description="Read only the first N items of each jsonl input: "
                                  "a way to try a task in seconds.")
+    tags: Dict[str, str] = Field(default_factory=dict, description="Names and values attached to the run, to find "
+                                 "it again and to link it with other work, for example {\"experiment\": "
+                                 "\"vote-of-finders\"}.")
+
+
+class TagsRequest(BaseModel):
+    tags: Dict[str, str] = Field(..., description="The tags to attach, by name. A tag given with an empty value is "
+                                 "removed; the run's other tags stay.")
+
+
+def bearer(request: Request) -> Optional[str]:
+    """The token the request came with, for a task to call the platform's services as the same person."""
+    scheme, _, token = (request.headers.get("Authorization") or "").partition(" ")
+    return token.strip() or None if scheme.lower() == "bearer" else None
+
+
+def _tags(given: List[str]) -> Dict[str, str]:
+    """The tags of a query, each written name=value."""
+    tags = {}
+    for item in given:
+        name, found, value = item.partition("=")
+        if not found or not name:
+            raise HTTPException(status_code=422, detail=f"a tag is written name=value: {item!r}")
+        tags[name] = value
+    return tags
 
 
 def _do(fn, *args):
@@ -44,23 +69,26 @@ def _do(fn, *args):
 @router.get("/runs", operation_id="mill_list_runs")
 def list_runs(
     limit: int = Query(50, ge=1, le=500, description="How many runs to answer, the newest first."),
+    tag: List[str] = Query(default_factory=list, description="Only the runs with this tag, written name=value, "
+                           "for example experiment=vote-of-finders. Given several times, a run has them all."),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """The newest runs of Mill tasks, wherever they execute: each with its task, its state (running,
     completed, failed, stopped), its stages (name, total, done), its numbers of samples and failures, the
-    host it runs on, and the commit of the tasks repository it ran from (dirty when it had changes not
-    committed). problem says why the control center receives nothing from the runs, when it does not;
-    the runs listed are then as they were when it last did."""
-    answer = _do(runs.list_runs, db, limit)
+    host it runs on, its tags, and the commit of the tasks repository it ran from (dirty when it had changes
+    not committed). With tag, only the runs that carry it: this is how the runs of one experiment are found.
+    problem says why the control center receives nothing from the runs, when it does not; the runs listed
+    are then as they were when it last did."""
+    answer = _do(runs.list_runs, db, limit, _tags(tag))
     answer["problem"] = consumer.consumer.problem if consumer.consumer is not None else None
     return answer
 
 
 @router.get("/runs/{run_id}", operation_id="mill_get_run")
 def get_run(run_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """One run: what was run (task, file, inputs, outputs, settings, commit, host) and its status (state,
-    error, stages, counters, measures, numbers of samples and failures). can_stop says whether
+    """One run: what was run (task, file, inputs, outputs, settings, commit, host), its tags, and its status
+    (state, error, stages, counters, measures, numbers of samples and failures). can_stop says whether
     mill_stop_run can stop it; has_log whether mill_get_run_log has its log."""
     return _do(runs.get_run, db, run_id)
 
@@ -107,13 +135,26 @@ def describe_tasks(
 
 
 @router.post("/runs", operation_id="mill_start_run")
-def start_run(request: StartRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> Dict[str, Any]:
+def start_run(request: StartRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
+              token: Optional[str] = Depends(bearer)) -> Dict[str, Any]:
     """Start a run of a task in the control center's pod, which has no GPU: for work that calls models
-    through the platform's services, cleans data or scores results. Answers the run's id once the run's
-    first status is stored; follow it with mill_get_run and mill_get_run_samples. A task that cannot
-    start (a missing input, an unknown setting) is refused with the reason."""
+    through the platform's services, cleans data or scores results. The task's process is given the LLM
+    Gateway's address as LLM_GATEWAY_URL and your token as THINKUBE_API_TOKEN, so it calls a model as you.
+    tags are attached to the run: use them to link the run with what it is for (an experiment, a claim).
+    Answers the run's id once the run's first status is stored; follow it with mill_get_run and
+    mill_get_run_samples. A task that cannot start (a missing input, an unknown setting) is refused with
+    the reason."""
     return _do(runs.start, db, request.file, request.task, request.inputs, request.outputs, request.settings,
-               request.limit)
+               request.limit, token, request.tags)
+
+
+@router.put("/runs/{run_id}/tags", operation_id="mill_tag_run")
+def tag_run(run_id: str, request: TagsRequest, current_user: User = Depends(get_current_user),
+            db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Attach tags to a run, wherever it executed (the main pod, the IDE, or a pod Forge started on a
+    node): names and values that link it with what it is for, such as experiment, claim or setup. A tag
+    given with an empty value is removed. Answers the run's tags. mill_list_runs finds runs by tag."""
+    return _do(runs.tag_run, db, run_id, request.tags)
 
 
 @router.post("/runs/{run_id}/stop", operation_id="mill_stop_run")

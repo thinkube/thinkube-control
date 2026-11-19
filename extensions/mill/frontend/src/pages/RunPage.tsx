@@ -106,6 +106,7 @@ export default function RunPage() {
   }
 
   const { run, status } = detail;
+  const tags = Object.entries(detail.tags ?? {});
   const started = new Date(status.started_at).getTime();
   const until = status.ended_at ? new Date(status.ended_at).getTime() : Date.now();
   const shown = view === 'latest' ? [...samples.latest].reverse() : samples.spaced;
@@ -171,6 +172,16 @@ export default function RunPage() {
                 'not in a repository'
               )}
             </div>
+            {tags.length > 0 && (
+              <div data-testid="run-tags">
+                <div className="text-xs font-medium text-muted-foreground">Tags</div>
+                <div className="flex flex-wrap gap-1">
+                  {tags.map(([name, value]) => (
+                    <span key={name} className="border px-1 text-xs">{name}: {value}</span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
           <div className="grid grid-cols-[repeat(auto-fill,minmax(18rem,1fr))] gap-4">
             <Ports title="Inputs" ports={run.inputs} />

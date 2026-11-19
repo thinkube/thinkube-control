@@ -23,6 +23,7 @@ const run = {
   task: 'clean',
   file: 'kubexlat/clean.py',
   limit: 50,
+  tags: { experiment: 'vote-of-finders', setup: 'plain' },
   host: 'mill-backend-1',
   node: null,
   runner: 'mill',
@@ -57,6 +58,8 @@ describe('RunsPage', () => {
     expect(screen.getByText(/20 of 50/)).toBeTruthy();
     expect(screen.getByRole('progressbar', { name: 'cleaning' }).getAttribute('aria-valuenow')).toBe('40');
     expect(screen.getByText('2 failed items')).toBeTruthy();
+    expect(screen.getByText('experiment: vote-of-finders')).toBeTruthy();
+    expect(screen.getByText('setup: plain')).toBeTruthy();
     expect(screen.getByText('mill-backend-1')).toBeTruthy();
     expect(mockedApi.get.mock.calls[0][0]).toBe('/runs');
   });

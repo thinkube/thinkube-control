@@ -48,8 +48,18 @@ the Runs page says what is wrong.
 | `GET /api/v1/tasks?file=` | `mill_describe_tasks` | the tasks a file declares |
 | `POST /api/v1/runs` | `mill_start_run` | start a run in the main pod |
 | `POST /api/v1/runs/{id}/stop` | `mill_stop_run` | stop a run, wherever it executes |
+| `PUT /api/v1/runs/{id}/tags` | `mill_tag_run` | attach tags to a run; `GET /api/v1/runs?tag=name=value` finds runs by tag |
 
 The tools are the MCP server at `/api/v1/mcp`.
+
+A task that calls a model reads the LLM Gateway's address in
+`LLM_GATEWAY_URL` and calls it with `THINKUBE_API_TOKEN`, the token of whoever
+started the run. The token is in the task's process only, never in the run's
+record.
+
+A run carries tags: names and values that link it with what it is for, such
+as `experiment` or `claim`. They are given when the run starts or attached
+later, and the Runs page and the run's page show them.
 
 A path of an input or an output is relative to the root of the tasks
 repository, or absolute. The repository's `.gitignore` keeps `data/`

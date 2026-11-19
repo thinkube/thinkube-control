@@ -21,6 +21,9 @@ class MillRun(Base):
     status = Column(JSON, nullable=True)
     # The run's latest "samples" message
     samples = Column(JSON, nullable=True)
+    # What a person or an agent attached to the run to find it again and to link it with other work: names and
+    # values, such as experiment=vote-of-finders. The run itself does not send them; the control center keeps them.
+    tags = Column(JSON, nullable=True)
     # The state of the latest status: running, completed, failed, stopped
     state = Column(String, nullable=False)
     # The seq of the status and of the samples kept, so an older message never replaces a newer one

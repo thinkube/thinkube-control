@@ -14,6 +14,7 @@ import collections
 import datetime
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -78,7 +79,10 @@ def _as_task_user() -> Dict[str, Any]:
     return {"user": settings.MILL_TASK_UID, "group": settings.MILL_TASK_GID}
 
 
-def _task_env() -> Dict[str, str]:
+def _task_env(token: Optional[str] = None) -> Dict[str, str]:
+    """What a task's process is given. A task that calls a model reads the LLM Gateway's address as
+    LLM_GATEWAY_URL and calls it with THINKUBE_API_TOKEN, the token of whoever started the run; the token is in
+    the process's environment only, never in the run's record."""
     home = Path(settings.MILL_TASK_HOME)
     home.mkdir(parents=True, exist_ok=True)
     if os.geteuid() != settings.MILL_TASK_UID:
@@ -90,7 +94,10 @@ def _task_env() -> Dict[str, str]:
         "MILL_RUNNER": RUNNER,
         "MILL_NATS_URL": settings.MILL_NATS_URL,
         "MILL_SUBJECTS": settings.MILL_SUBJECTS,
+        "LLM_GATEWAY_URL": settings.MILL_LLM_GATEWAY_URL,
     }
+    if token:
+        env["THINKUBE_API_TOKEN"] = token
     node = os.environ.get("NODE_NAME")
     if node:
         env["NODE_NAME"] = node
@@ -129,6 +136,7 @@ def _summary(run: MillRun) -> Dict[str, Any]:
         "runner": info.get("runner"),
         "commit": repo.get("commit"),
         "dirty": repo.get("dirty"),
+        "tags": run.tags or {},
         "state": status["state"],
         "error": status["error"],
         "started_at": status["started_at"],
@@ -145,12 +153,38 @@ def _reap() -> None:
         del _children[run_id]
 
 
-def list_runs(db: Session, limit: int = 50) -> Dict[str, Any]:
-    """The newest runs, newest first."""
+TAG_NAME = re.compile(r"^[a-z][a-z0-9_.-]{0,39}$")
+TAG_VALUE_LENGTH = 200
+
+
+def _checked_tags(tags: Dict[str, str]) -> Dict[str, str]:
+    for name, value in tags.items():
+        if not TAG_NAME.match(name):
+            raise RunsError(f"a tag's name is lowercase letters, digits, dots, hyphens and underscores, at most 40: {name!r}")
+        if not isinstance(value, str) or len(value) > TAG_VALUE_LENGTH:
+            raise RunsError(f"the value of the tag {name} is text of at most {TAG_VALUE_LENGTH} characters")
+    return tags
+
+
+def list_runs(db: Session, limit: int = 50, tags: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """The newest runs, newest first; with tags, only the runs that have every one of them with that value."""
     _reap()
     started = db.query(MillRun).filter(MillRun.status_seq > 0)
-    newest = started.order_by(MillRun.started_at.desc()).limit(limit).populate_existing().all()
-    return {"runs": [_summary(run) for run in newest], "total": started.count()}
+    newest = started.order_by(MillRun.started_at.desc())
+    if not tags:
+        return {"runs": [_summary(run) for run in newest.limit(limit).populate_existing().all()], "total": started.count()}
+    having = [run for run in newest.populate_existing().all()
+              if all((run.tags or {}).get(name) == value for name, value in tags.items())]
+    return {"runs": [_summary(run) for run in having[:limit]], "total": len(having)}
+
+
+def tag_run(db: Session, run_id: str, tags: Dict[str, str]) -> Dict[str, Any]:
+    """Attach tags to a run, wherever it executed. A tag given with an empty value is removed; the others stay."""
+    run = _run(db, run_id)
+    merged = {**(run.tags or {}), **_checked_tags(tags)}
+    run.tags = {name: value for name, value in merged.items() if value != ""}
+    db.commit()
+    return {"id": run_id, "tags": run.tags}
 
 
 def get_run(db: Session, run_id: str) -> Dict[str, Any]:
@@ -159,6 +193,7 @@ def get_run(db: Session, run_id: str) -> Dict[str, Any]:
     return {
         "run": run.info,
         "status": run.status,
+        "tags": run.tags or {},
         "can_stop": run.state == "running",
         "has_log": db.query(MillLog).filter(MillLog.run_id == run_id).first() is not None,
     }
@@ -210,13 +245,17 @@ def start(
     outputs: Dict[str, str],
     task_settings: Dict[str, Any],
     limit: Optional[int],
+    token: Optional[str] = None,
+    tags: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Start a run of a task in this pod. Answers once the run's first status is stored.
 
     A path of an input or an output is relative to the root of the tasks
-    repository, or absolute.
+    repository, or absolute. `token` is the caller's token, which the task
+    calls the platform's services with; `tags` are attached to the run.
     """
     path = _file_in_repository(file)
+    tags = _checked_tags(tags or {})
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
     run_id = f"{stamp}-{task or path.stem}-{secrets.token_hex(2)}"
 
@@ -232,14 +271,19 @@ def start(
     command += ["--run-id", run_id]
 
     child = Child(subprocess.Popen(
-        command, cwd=repository(), env=_task_env(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        command, cwd=repository(), env=_task_env(token), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         errors="replace", start_new_session=True, **_as_task_user(),
     ))
     _children[run_id] = child
 
     def stored() -> Optional[MillRun]:
         run = db.query(MillRun).filter(MillRun.id == run_id).populate_existing().first()
-        return run if run is not None and run.status_seq > 0 else None
+        if run is None or run.status_seq == 0:
+            return None
+        if tags and run.tags != tags:
+            run.tags = tags
+            db.commit()
+        return run
 
     deadline = time.monotonic() + START_WAIT
     while time.monotonic() < deadline:

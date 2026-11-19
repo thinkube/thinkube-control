@@ -25,6 +25,8 @@ export interface RunSummary {
   runner: string | null;
   commit: string | null;
   dirty: boolean | null;
+  // Names and values attached to the run, such as the experiment it belongs to
+  tags?: Record<string, string>;
   state: RunState;
   error: string | null;
   started_at: string;
@@ -78,6 +80,8 @@ export interface RunInfo {
 export interface RunDetail {
   run: RunInfo;
   status: RunStatus;
+  // Names and values attached to the run, such as the experiment it belongs to
+  tags?: Record<string, string>;
   can_stop: boolean;
   has_log: boolean;
 }
