@@ -39,6 +39,16 @@ def test_the_job_runs_mill_on_the_runs_node_with_its_resources():
             "--out cleaned=data/out.jsonl --set pause=0.5 --set lang=en --limit 50 --run-id forge-01234567-2") in script
 
 
+def test_the_task_is_given_the_gateway_and_the_queues_token():
+    def env(job):
+        return {e["name"]: e.get("value") for e in job["spec"]["template"]["spec"]["containers"][0]["env"]}
+
+    without = env(taskpods.job_manifest(task_run(), 1))
+    assert without["LLM_GATEWAY_URL"] == "http://llm-proxy.thinkube-control.svc.cluster.local:8080"
+    assert "THINKUBE_API_TOKEN" not in without
+    assert env(taskpods.job_manifest(task_run(), 1, "tk_of_the_queue"))["THINKUBE_API_TOKEN"] == "tk_of_the_queue"
+
+
 def test_a_task_without_gpus_asks_for_none_and_a_named_task_is_targeted():
     job = taskpods.job_manifest(task_run(gpus=0, task="score"), 1)
     container = job["spec"]["template"]["spec"]["containers"][0]

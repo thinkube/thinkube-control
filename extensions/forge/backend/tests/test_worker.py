@@ -140,7 +140,7 @@ class FakePods:
         self.stopped = []
         self.refusal = None
 
-    async def start(self, run, attempt):
+    async def start(self, run, attempt, token=None):
         from app.services import taskpods
 
         if self.refusal is not None:

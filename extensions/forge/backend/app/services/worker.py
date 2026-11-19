@@ -676,7 +676,7 @@ class Worker:
         """Start a pod for the task run, as its next attempt; each attempt is a run of its own in Mill."""
         attempt = (run.task or {}).get("attempts", 0) + 1
         try:
-            name = await self.pods.start(run, attempt)
+            name = await self.pods.start(run, attempt, getattr(self.control, "token", None))
         except taskpods.TaskPodError as e:
             self._fail(run, str(e))
             return False

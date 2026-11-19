@@ -5,9 +5,10 @@
 runs with their progress and their model, the training queue and its slots."""
 
 import uuid
+import re
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from jinja2 import TemplateError
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
@@ -168,6 +169,8 @@ class NewRun(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     name: str = Field(..., min_length=1, max_length=120)
+    tags: Dict[str, str] = Field(default_factory=dict, description="names and values that link the run with what it "
+                                                                   "is for, such as an experiment or a claim")
     dataset_id: str
     # The version of the dataset the run trains on; its latest ready version when not given
     dataset_version: Optional[int] = Field(None, ge=1)
@@ -261,7 +264,8 @@ async def create_run(new: NewRun, user: User = Depends(get_current_user), token:
               method=new.method, node=new.node, register=new.register_model, model_id=model, job=job,
               when=new.when, across_slots=new.across_slots, queue_on_plan=new.queue, memory_gb=new.memory_gb,
               priority=new.priority if new.priority is not None else priorities.table(db)["forge_run"],
-              cpu_cores=new.cpu_cores, status="preprocessing", created_by=user.preferred_username)
+              cpu_cores=new.cpu_cores, status="preprocessing", created_by=user.preferred_username,
+              tags=_checked_tags(new.tags) or None)
     try:
         run.mlflow_experiment_id, run.mlflow_run_id = await runfiles.create(run.name, run.id, dataset)
     except runfiles.RunFilesError as e:
@@ -277,6 +281,8 @@ class NewTaskRun(BaseModel):
     the tasks repository, or absolute, as Mill's main pod sees them."""
     model_config = ConfigDict(extra="forbid")
     name: str = Field(..., min_length=1, max_length=255, description="the run's name in Forge's queue")
+    tags: Dict[str, str] = Field(default_factory=dict, description="names and values that link the run with what it "
+                                                                   "is for, such as an experiment or a claim")
     file: str = Field(..., min_length=1, description="the task's file, relative to the root of the tasks repository")
     task: Optional[str] = Field(None, description="the task's name, when the file declares several")
     inputs: Dict[str, str] = Field(default_factory=dict, description="the path of each input, by its name")
@@ -320,7 +326,8 @@ async def create_task_run(new: NewTaskRun, user: User = Depends(get_current_user
                                                     f"cores to a job; the task asks for {new.cpu_cores}")
     task = {"file": new.file, "task": new.task, "inputs": new.inputs, "outputs": new.outputs,
             "settings": new.settings, "limit": new.limit, "gpus": new.gpus, "attempts": 0, "mill_run": None}
-    run = Run(id=str(uuid.uuid4()), name=new.name, kind="task", task=task, node=new.node, when="now",
+    run = Run(id=str(uuid.uuid4()), name=new.name, kind="task", task=task, tags=_checked_tags(new.tags) or None,
+              node=new.node, when="now",
               memory_gb=new.memory_gb, cpu_cores=new.cpu_cores,
               priority=new.priority if new.priority is not None else priorities.table(db)["forge_run"],
               status="queued", created_by=user.preferred_username)
@@ -356,10 +363,52 @@ async def _refresh_export(db: Session, run: Run, token: str) -> None:
     db.refresh(run)
 
 
+TAG_NAME = re.compile(r"^[a-z][a-z0-9_.-]{0,39}$")
+TAG_VALUE_LENGTH = 200
+
+
+def _checked_tags(tags: Dict[str, str]) -> Dict[str, str]:
+    for name, value in tags.items():
+        if not TAG_NAME.match(name):
+            raise HTTPException(status_code=422, detail="a tag's name is lowercase letters, digits, dots, hyphens and "
+                                                        f"underscores, at most 40: {name!r}")
+        if len(value) > TAG_VALUE_LENGTH:
+            raise HTTPException(status_code=422, detail=f"the value of the tag {name} is at most {TAG_VALUE_LENGTH} "
+                                                        "characters")
+    return tags
+
+
+class RunTags(BaseModel):
+    tags: Dict[str, str] = Field(..., description="the tags to attach, by name; a tag given with an empty value is "
+                                                  "removed, the run's other tags stay")
+
+
 @router.get("/runs", operation_id="forge_list_runs")
-async def list_runs(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Every run, newest first, as the queue worker last recorded it."""
-    return [_run_dict(r) for r in db.query(Run).order_by(Run.created_at.desc()).all()]
+async def list_runs(tag: List[str] = Query(default_factory=list, description="only the runs with this tag, written "
+                                           "name=value; given several times, a run has them all"),
+                    user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Every run, newest first, as the queue worker last recorded it, each with its tags. With tag, only the runs
+    that carry it: this is how the runs of one experiment are found."""
+    wanted = {}
+    for item in tag:
+        name, found, value = item.partition("=")
+        if not found or not name:
+            raise HTTPException(status_code=422, detail=f"a tag is written name=value: {item!r}")
+        wanted[name] = value
+    return [_run_dict(r) for r in db.query(Run).order_by(Run.created_at.desc()).all()
+            if all((r.tags or {}).get(name) == value for name, value in wanted.items())]
+
+
+@router.put("/runs/{run_id}/tags", operation_id="forge_tag_run")
+async def tag_run(run_id: str, body: RunTags, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Attach tags to a run, a fine-tune or a task: names and values that link it with what it is for, such as
+    experiment, claim or setup. A tag given with an empty value is removed. forge_list_runs finds runs by tag."""
+    run = _run(db, run_id)
+    merged = {**(run.tags or {}), **_checked_tags(body.tags)}
+    run.tags = {name: value for name, value in merged.items() if value != ""} or None
+    db.commit()
+    db.refresh(run)
+    return _run_dict(run)
 
 
 @router.get("/runs/{run_id}", operation_id="forge_get_run")

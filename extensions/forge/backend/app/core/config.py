@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     MILL_REPOSITORY: str = "/storage/thinkube-shared/mill"
     MILL_TASK_IMAGE: str = "library/ai-inference-base:cuda13.0-torch2.9-py3.12"
     MILL_NATS_URL: str = "nats://nats.nats.svc.cluster.local:4222"
+    # The platform's LLM Gateway, in the cluster: a task that calls a model reads it as LLM_GATEWAY_URL
+    MILL_LLM_GATEWAY_URL: str = "http://llm-proxy.thinkube-control.svc.cluster.local:8080"
     MILL_SUBJECTS: str = "mill"
     # The owner of the tasks repository, as the shared folders have it
     MILL_TASK_UID: int = 1000

@@ -371,6 +371,8 @@ export interface Run {
   /** A fine-tune, or a task of Mill (whose fine-tune fields are null). */
   kind: 'finetune' | 'task';
   task: RunTask | null;
+  /** Names and values attached to the run, such as the experiment it belongs to. */
+  tags?: Record<string, string>;
   dataset_id: string;
   dataset_version: number;
   dataset: RunDataset | null;

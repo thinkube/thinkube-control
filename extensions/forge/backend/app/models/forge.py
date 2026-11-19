@@ -51,6 +51,9 @@ class Run(Base):
     # empty for it.
     kind = Column(String(16), nullable=False, server_default="finetune")
     task = Column(JSON, nullable=True)
+    # Names and values a person or an agent attached to the run, to find it again and to link it with what it
+    # is for, such as experiment=vote-of-finders
+    tags = Column(JSON, nullable=True)
     # A dataset of the Datasets extension, the version the run trains on, and
     # what the run read of it: name, format, mapping and the file of the split
     # it trains on
@@ -124,6 +127,7 @@ class Run(Base):
             "name": self.name,
             "kind": self.kind,
             "task": self.task,
+            "tags": self.tags or {},
             "dataset_id": self.dataset_id,
             "dataset_version": self.dataset_version,
             "dataset": self.dataset,

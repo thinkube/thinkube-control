@@ -41,6 +41,14 @@ navigation and draws its pages. It needs the Datasets extension
   and reordered from the Runs page or the API (`/runs/{id}/pause`,
   `/resume`, `/cancel`, `/queue/{node}/order`). A failed run keeps its error
   and the queue goes on.
+- **Tags**: a run, a fine-tune or a task, carries names and values that link
+  it with what it is for, such as `experiment` or `claim`. They are given
+  when the run is created (`tags`) or attached later (`PUT /runs/{id}/tags`,
+  `forge_tag_run`); `GET /runs?tag=name=value` finds the runs that carry
+  one, and the Runs page shows them.
+- **A task's pod** is given the LLM Gateway's address as `LLM_GATEWAY_URL`
+  and, as `THINKUBE_API_TOKEN`, the token the queue works with, so a task
+  that calls a model can.
 - **Priorities** (`/priorities`, `backend/app/services/priorities.py`):
   every piece of work on a GPU node has a priority, 1 (highest) to 5
   (lowest). When a run wants its node, work with a higher or the same

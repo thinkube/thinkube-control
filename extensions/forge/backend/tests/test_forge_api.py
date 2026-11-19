@@ -588,6 +588,23 @@ def test_a_task_run_is_queued_on_its_node_at_once(api, nodes):
     assert api.get(f"/api/v1/runs/{run['id']}").json()["job"] is None
 
 
+def test_a_run_carries_tags_and_is_found_by_them(api, nodes):
+    tagged = api.post("/api/v1/tasks/runs", json={**TASK, "tags": {"experiment": "vote-of-finders"}}).json()
+    plain = api.post("/api/v1/tasks/runs", json={**TASK, "name": "again"}).json()
+    assert tagged["tags"] == {"experiment": "vote-of-finders"} and plain["tags"] == {}
+    found = api.get("/api/v1/runs", params={"tag": "experiment=vote-of-finders"}).json()
+    assert [r["id"] for r in found] == [tagged["id"]]
+    assert len(api.get("/api/v1/runs").json()) == 2
+
+    changed = api.put(f"/api/v1/runs/{plain['id']}/tags", json={"tags": {"experiment": "vote-of-finders", "claim": "local"}})
+    assert changed.json()["tags"] == {"experiment": "vote-of-finders", "claim": "local"}
+    assert len(api.get("/api/v1/runs", params={"tag": "experiment=vote-of-finders"}).json()) == 2
+    assert api.put(f"/api/v1/runs/{plain['id']}/tags", json={"tags": {"claim": ""}}).json()["tags"] == {"experiment": "vote-of-finders"}
+    assert api.put(f"/api/v1/runs/{plain['id']}/tags", json={"tags": {"Bad Name": "x"}}).status_code == 422
+    assert api.get("/api/v1/runs", params={"tag": "no-value"}).status_code == 422
+    assert api.post("/api/v1/tasks/runs", json={**TASK, "name": "bad", "tags": {"Bad Name": "x"}}).status_code == 422
+
+
 def test_a_task_run_asks_no_more_than_its_node_gives(api, nodes):
     r = api.post("/api/v1/tasks/runs", json={**TASK, "memory_gb": 128})
     assert r.status_code == 422 and "at most 64 GiB" in r.json()["detail"]

@@ -60,9 +60,13 @@ def command(run: Run, run_id: str) -> List[str]:
     return args
 
 
-def job_manifest(run: Run, attempt: int) -> Dict[str, Any]:
-    """The Kubernetes job of one start of a task run."""
+def job_manifest(run: Run, attempt: int, token: Optional[str] = None) -> Dict[str, Any]:
+    """The Kubernetes job of one start of a task run. The task is given the LLM Gateway's address and, as
+    THINKUBE_API_TOKEN, the token Forge's queue works with, so a task that calls a model can."""
     task = run.task
+    platform = [{"name": "LLM_GATEWAY_URL", "value": settings.MILL_LLM_GATEWAY_URL}]
+    if token:
+        platform.append({"name": "THINKUBE_API_TOKEN", "value": token})
     run_id = mill_run_id(run, attempt)
     # The image does not carry thinkube-mill yet: the pod installs it from the platform's index first
     script = (
@@ -105,6 +109,7 @@ def job_manifest(run: Run, attempt: int) -> Dict[str, Any]:
                             {"name": "MILL_NATS_URL", "value": settings.MILL_NATS_URL},
                             {"name": "MILL_SUBJECTS", "value": settings.MILL_SUBJECTS},
                             {"name": "NODE_NAME", "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}},
+                            *platform,
                         ],
                         # Requests equal limits: the node keeps what the run was given
                         "resources": {"requests": dict(limits), "limits": limits},
@@ -139,8 +144,8 @@ class TaskPods:
         except ApiException as e:
             raise TaskPodError(f"Kubernetes refused to {what}: {e.status} {e.reason}: {e.body}") from e
 
-    async def start(self, run: Run, attempt: int) -> str:
-        manifest = job_manifest(run, attempt)
+    async def start(self, run: Run, attempt: int, token: Optional[str] = None) -> str:
+        manifest = job_manifest(run, attempt, token)
         await self._call(f"create the job {manifest['metadata']['name']}", self._batch.create_namespaced_job,
                          settings.MILL_RUNS_NAMESPACE, manifest)
         return manifest["metadata"]["name"]

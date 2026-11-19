@@ -94,6 +94,13 @@ function NodeQueue({ node, onChange }: { node: QueueNode; onChange: () => void }
                         <Link className="font-medium hover:underline" to={`/runs/${run.id}`}>
                           {run.name}
                         </Link>
+                        {Object.keys(run.tags ?? {}).length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1" data-testid={`tags-${run.id}`}>
+                            {Object.entries(run.tags ?? {}).map(([name, value]) => (
+                              <span key={name} className="border px-1 text-xs text-muted-foreground">{name}: {value}</span>
+                            ))}
+                          </div>
+                        )}
                         {run.waiting && <div className="text-xs text-muted-foreground">{run.waiting}</div>}
                         {run.error && <div className="text-xs text-destructive">{run.error}</div>}
                       </TkTableCell>
