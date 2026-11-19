@@ -31,7 +31,7 @@ def control(monkeypatch):
 
     real = httpx.AsyncClient
     monkeypatch.setattr(security.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
-    monkeypatch.setattr(runs, "list_runs", lambda db, limit: {"runs": [], "total": 0})
+    monkeypatch.setattr(runs, "list_runs", lambda db, limit, tags=None: {"runs": [], "total": 0})
     state["seen"] = seen
     return state
 
