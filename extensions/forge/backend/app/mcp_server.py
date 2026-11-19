@@ -19,6 +19,8 @@ TOOLS = [
     "forge_list_dataset_versions",
     "forge_preview_example",
     "forge_create_run",
+    "forge_create_task_run",
+    "forge_tag_run",
     "forge_list_runs",
     "forge_get_run",
     "forge_run_progress",
