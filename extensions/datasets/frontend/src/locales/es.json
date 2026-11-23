@@ -188,7 +188,8 @@
     "sharegpt": "Turnos ShareGPT (from, value)",
     "prompt": "Prompt y respuesta",
     "instruction": "Instrucción, entrada y salida",
-    "text": "Texto plano"
+    "text": "Texto plano",
+    "choice": "Un texto común y candidatos"
   },
   "part": {
     "messages": "Turnos",
@@ -199,7 +200,10 @@
     "instruction": "Instrucción",
     "input": "Entrada",
     "output": "Salida",
-    "text": "Texto"
+    "text": "Texto",
+    "candidates": "Candidatos",
+    "target": "Probabilidades objetivo",
+    "right": "Candidatos correctos"
   },
   "status": {
     "ready": "Listo",

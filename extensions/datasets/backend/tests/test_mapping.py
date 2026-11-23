@@ -62,3 +62,24 @@ def test_a_row_that_does_not_fit_is_shown_with_its_reason():
     shown = preview([{"q": "Hi", "a": "Hello"}, {"q": "Hi", "a": None}], m)
     assert shown[0] == {"example": {"messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello"}]}}
     assert "not text" in shown[1]["error"]
+
+
+def test_a_choice_row_keeps_its_candidates_target_and_right():
+    m = check({"kind": "choice", "columns": {"prompt": "p", "candidates": "c", "target": "t", "right": "r"}},
+              ["p", "c", "t", "r"])
+    row = {"p": "Who paints?", "c": ["〔雪舟が〕", "〔なし〕"], "t": [0.5, 0.5], "r": [True, False]}
+    assert apply(row, m) == {"prompt": "Who paints?", "candidates": ["〔雪舟が〕", "〔なし〕"], "target": [0.5, 0.5],
+                             "right": [True, False]}
+    assert output_format(m) == "choice"
+
+
+def test_a_choice_row_that_does_not_fit_says_why():
+    m = {"kind": "choice", "columns": {"prompt": "p", "candidates": "c", "target": "t", "right": "r"}}
+    shown = preview([{"p": "q", "c": ["a"], "t": [1.0], "r": [True]},
+                     {"p": "q", "c": ["a", "b"], "t": [0.5, 0.4], "r": [True, False]},
+                     {"p": "q", "c": ["a", "b"], "t": [1.0], "r": [True, False]},
+                     {"p": "q", "c": ["a", "b"], "t": [1.0, 0.0], "r": [1, 0]}], m)
+    assert "at least 2 candidates" in shown[0]["error"]
+    assert "sums to" in shown[1]["error"]
+    assert "one probability" in shown[2]["error"]
+    assert "true or false" in shown[3]["error"]

@@ -188,7 +188,8 @@
     "sharegpt": "Torns ShareGPT (from, value)",
     "prompt": "Prompt i resposta",
     "instruction": "Instrucció, entrada i sortida",
-    "text": "Text pla"
+    "text": "Text pla",
+    "choice": "Un text comú i candidats"
   },
   "part": {
     "messages": "Torns",
@@ -199,7 +200,10 @@
     "instruction": "Instrucció",
     "input": "Entrada",
     "output": "Sortida",
-    "text": "Text"
+    "text": "Text",
+    "candidates": "Candidats",
+    "target": "Probabilitats objectiu",
+    "right": "Candidats correctes"
   },
   "status": {
     "ready": "Llest",

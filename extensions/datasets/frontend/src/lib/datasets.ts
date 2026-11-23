@@ -6,7 +6,7 @@
 import { AxiosError } from 'axios';
 import api from './axios';
 
-export type MappingKind = 'messages' | 'sharegpt' | 'prompt' | 'instruction' | 'text';
+export type MappingKind = 'messages' | 'sharegpt' | 'prompt' | 'instruction' | 'text' | 'choice';
 
 export interface Mapping {
   kind: MappingKind;
@@ -89,6 +89,7 @@ export const PARTS: Record<MappingKind, { required: string[]; optional: string[]
   prompt: { required: ['prompt', 'completion'], optional: ['system'] },
   instruction: { required: ['instruction', 'output'], optional: ['input'] },
   text: { required: ['text'], optional: [] },
+  choice: { required: ['prompt', 'candidates'], optional: ['target', 'right'] },
 };
 
 /** The mapping with only the parts of its kind that name a column. */

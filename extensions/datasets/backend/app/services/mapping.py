@@ -10,9 +10,14 @@ A mapping names the kind of rows and the columns that hold each part:
 - prompt:      {"prompt": col, "completion": col, "system": col or absent}
 - instruction: {"instruction": col, "input": col or absent, "output": col}
 - text:        {"text": col}
+- choice:      {"prompt": col, "candidates": col, "target": col or absent, "right": col or absent}
 
-Every kind but text becomes chat turns, {"messages": [...]}, which the
-trainer formats with the model's chat template. text is trained on as it is.
+Every kind but text and choice becomes chat turns, {"messages": [...]}, which
+the trainer formats with the model's chat template. text is trained on as it
+is. choice is one shared text (prompt) and candidates that each continue it,
+for Meep²'s task "choice": target, the probability of each candidate, which a
+training needs; right, whether each candidate is right, which a milestone's
+evaluation needs.
 """
 
 from typing import Any, Dict, List, Optional
@@ -23,6 +28,7 @@ KINDS = {
     "prompt": ({"prompt", "completion"}, {"system"}),
     "instruction": ({"instruction", "output"}, {"input"}),
     "text": ({"text"}, set()),
+    "choice": ({"prompt", "candidates"}, {"target", "right"}),
 }
 ROLES = {"system", "user", "assistant", "tool"}
 SHAREGPT_ROLES = {"system": "system", "human": "user", "user": "user", "gpt": "assistant",
@@ -78,7 +84,34 @@ def guess(columns: List[str]) -> Optional[Dict[str, Any]]:
 
 
 def output_format(mapping: Dict[str, Any]) -> str:
-    return "text" if mapping["kind"] == "text" else "messages"
+    return mapping["kind"] if mapping["kind"] in ("text", "choice") else "messages"
+
+
+# The largest difference from 1 of the sum of a choice row's target
+TARGET_SUM_TOLERANCE = 1e-6
+
+
+def _choice(row: Dict[str, Any], cols: Dict[str, str]) -> Dict[str, Any]:
+    """One choice row: the shared text, its candidates, and the target and right of each candidate when mapped."""
+    candidates = row.get(cols["candidates"])
+    if not isinstance(candidates, list) or len(candidates) < 2:
+        raise MappingError(f"column {cols['candidates']} is not a list of at least 2 candidates")
+    example = {"prompt": _text(row.get(cols["prompt"]), f"column {cols['prompt']}"),
+               "candidates": [_text(c, f"a candidate of column {cols['candidates']}") for c in candidates]}
+    if cols.get("target"):
+        target = row.get(cols["target"])
+        if (not isinstance(target, list) or len(target) != len(candidates)
+                or not all(isinstance(p, (int, float)) and not isinstance(p, bool) and p >= 0 for p in target)):
+            raise MappingError(f"column {cols['target']} is not one probability of 0 or more for each candidate")
+        if abs(sum(target) - 1) > TARGET_SUM_TOLERANCE:
+            raise MappingError(f"column {cols['target']} sums to {sum(target)}, not 1")
+        example["target"] = [float(p) for p in target]
+    if cols.get("right"):
+        right = row.get(cols["right"])
+        if not isinstance(right, list) or len(right) != len(candidates) or not all(isinstance(r, bool) for r in right):
+            raise MappingError(f"column {cols['right']} is not one true or false for each candidate")
+        example["right"] = right
+    return example
 
 
 def _text(value: Any, what: str) -> str:
@@ -90,6 +123,8 @@ def _text(value: Any, what: str) -> str:
 def apply(row: Dict[str, Any], mapping: Dict[str, Any]) -> Dict[str, Any]:
     """One example in the trainer's format, from one row."""
     kind, cols = mapping["kind"], mapping["columns"]
+    if kind == "choice":
+        return _choice(row, cols)
     if kind == "text":
         return {"text": _text(row.get(cols["text"]), f"column {cols['text']}")}
     if kind == "messages":

@@ -188,7 +188,8 @@
     "sharegpt": "ShareGPT turns (from, value)",
     "prompt": "Prompt and completion",
     "instruction": "Instruction, input and output",
-    "text": "Plain text"
+    "text": "Plain text",
+    "choice": "A shared text and candidates"
   },
   "part": {
     "messages": "Turns",
@@ -199,7 +200,10 @@
     "instruction": "Instruction",
     "input": "Input",
     "output": "Output",
-    "text": "Text"
+    "text": "Text",
+    "candidates": "Candidates",
+    "target": "Target probabilities",
+    "right": "Right candidates"
   },
   "status": {
     "ready": "Ready",
