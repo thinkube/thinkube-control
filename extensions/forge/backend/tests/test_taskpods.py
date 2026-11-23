@@ -3,6 +3,7 @@
 
 """The Kubernetes job of a task run, and what a pod says when it fails or waits."""
 
+import shlex
 from types import SimpleNamespace as NS
 
 from app.models.forge import Run
@@ -91,10 +92,10 @@ def run_script(tmp_path, task_line: str, signal_after=None):
     import subprocess
     import time
 
-    script = taskpods.script(task_run(), "forge-x-1")
+    script = taskpods.script(task_run(), "forge-x-1").replace(NATS_WAIT_LINE, "")
     lines = script.splitlines()
     lines = [task_line + " &" if line.endswith(" &") else line for line in lines]
-    lines = [line for line in lines if "pip install" not in line and not line.startswith("python3 -c")]
+    lines = [line for line in lines if "pip install" not in line]
     state = tmp_path / "state"
     process = subprocess.Popen(["sh", "-c", "\n".join(lines)], env={**os.environ, "FORGE_STATE_DIR": str(state)})
     if signal_after is not None:
@@ -103,11 +104,13 @@ def run_script(tmp_path, task_line: str, signal_after=None):
     return process.wait(timeout=30), state.exists()
 
 
+NATS_WAIT_LINE = f"python3 -c {shlex.quote(taskpods.NATS_WAIT)}\n"
+
+
 def test_the_task_starts_after_nats_answers():
-    script = taskpods.script(task_run(), "forge-x-1").splitlines()
-    wait = next(i for i, line in enumerate(script) if line.startswith("python3 -c"))
-    start = next(i for i, line in enumerate(script) if line.endswith(" &"))
-    assert wait < start and script[wait + 1] == "set +e"
+    script = taskpods.script(task_run(), "forge-x-1")
+    assert NATS_WAIT_LINE + "set +e\n" in script
+    assert script.index(NATS_WAIT_LINE) < script.index(" &\n")
 
 
 def nats_wait(url):
