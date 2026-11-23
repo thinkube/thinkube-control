@@ -28,6 +28,8 @@ RUN_LABEL = "forge.thinkube.io/run"
 STOP_GRACE_SECONDS = 60
 # A finished job stays a day, for its pod's log
 KEEP_FINISHED_SECONDS = 24 * 3600
+# The mark Thinkube Control's training mode puts on its node, as a toleration
+TRAINING_TOLERATION = {"key": "thinkube.io/training", "operator": "Equal", "value": "true", "effect": "NoSchedule"}
 # What a pod that is not yet running may say, read into the run's waiting line
 PENDING_REASONS = ("Unschedulable", "ErrImagePull", "ImagePullBackOff", "CreateContainerConfigError")
 
@@ -170,6 +172,9 @@ def job_manifest(run: Run, attempt: int, token: Optional[str] = None) -> Dict[st
                 "spec": {
                     "restartPolicy": "Never",
                     "nodeSelector": {"kubernetes.io/hostname": run.node},
+                    # Training mode keeps new pods off its node; Forge starts a task there only when the mode is
+                    # its own (worker._place), so the task is the node's training work and tolerates the mark
+                    "tolerations": [TRAINING_TOLERATION],
                     "terminationGracePeriodSeconds": STOP_GRACE_SECONDS,
                     "securityContext": {"runAsUser": settings.MILL_TASK_UID, "runAsGroup": settings.MILL_TASK_GID},
                     "containers": [{

@@ -24,6 +24,8 @@ def test_the_job_runs_mill_on_the_runs_node_with_its_resources():
     pod = job["spec"]["template"]["spec"]
     assert pod["nodeSelector"] == {"kubernetes.io/hostname": "tkspark"}
     assert pod["securityContext"] == {"runAsUser": 1000, "runAsGroup": 100}
+    assert pod["tolerations"] == [{"key": "thinkube.io/training", "operator": "Equal", "value": "true",
+                                   "effect": "NoSchedule"}]
     [container] = pod["containers"]
     assert container["resources"]["limits"] == {"cpu": "2", "memory": "8Gi", "nvidia.com/gpu": "1"}
     assert container["resources"]["requests"] == container["resources"]["limits"]
