@@ -60,6 +60,8 @@ KEEP_NAMESPACES = frozenset({
     "keycloak", "registry", "envoy-gateway-system", "gateway-system", "tailscale",
     # the person's IDE, and the scoring of the training's milestones
     "code-server", "scoring",
+    # the messages of Mill's runs, Forge's task runs among them: a run that cannot reach NATS fails at its start
+    "nats",
 })
 
 # Kept namespaces whose pods stay on the training node: node daemons, the
@@ -231,9 +233,24 @@ def _taint(core, node: str, on: bool) -> None:
     })
 
 
+def _bound_to_its_node(core, pod) -> bool:
+    """Whether a pod mounts a volume that only its node has (a persistent
+    volume with a node affinity, such as k8s-hostpath's): it cannot run anywhere else."""
+    for v in pod.spec.volumes or []:
+        if v.persistent_volume_claim is None:
+            continue
+        claim = core.read_namespaced_persistent_volume_claim(v.persistent_volume_claim.claim_name,
+                                                             pod.metadata.namespace)
+        volume = core.read_persistent_volume(claim.spec.volume_name)
+        if volume.spec.node_affinity is not None and volume.spec.node_affinity.required is not None:
+            return True
+    return False
+
+
 def _move_kept_pods(core, node: str) -> List[str]:
     """Evict the pods of kept Deployments from the training node, so they are
-    placed again elsewhere; StatefulSets keep their pods, which may hold local data."""
+    placed again elsewhere. StatefulSets keep their pods, which may hold local
+    data, and so does a Deployment's pod whose volume only this node has."""
     moved = []
     pods = core.list_pod_for_all_namespaces(field_selector=f"spec.nodeName={node}").items
     for p in pods:
@@ -242,6 +259,8 @@ def _move_kept_pods(core, node: str) -> List[str]:
             continue
         owners = p.metadata.owner_references or []
         if not any(o.kind == "ReplicaSet" for o in owners):
+            continue
+        if _bound_to_its_node(core, p):
             continue
         core.create_namespaced_pod_eviction(
             p.metadata.name, ns,

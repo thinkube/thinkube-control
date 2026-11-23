@@ -148,10 +148,12 @@ def test_what_still_runs_after_the_last_round_is_named(monkeypatch):
     assert left == ["statefulset x/db"]
 
 
-def test_only_pods_of_kept_deployments_leave_the_training_node():
-    def kept(ns, name, owner):
-        return NS(metadata=NS(namespace=ns, name=name, owner_references=[NS(kind=owner)]))
+def kept(ns, name, owner, claims=()):
+    volumes = [NS(persistent_volume_claim=NS(claim_name=c)) for c in claims] + [NS(persistent_volume_claim=None)]
+    return NS(metadata=NS(namespace=ns, name=name, owner_references=[NS(kind=owner)]), spec=NS(volumes=volumes))
 
+
+def test_only_pods_of_kept_deployments_leave_the_training_node():
     core = MagicMock()
     core.list_pod_for_all_namespaces.return_value.items = [
         kept("scoring", "scoring-1", "ReplicaSet"),
@@ -161,6 +163,24 @@ def test_only_pods_of_kept_deployments_leave_the_training_node():
     ]
 
     assert tm._move_kept_pods(core, "tkspark") == ["scoring/scoring-1"]
+
+
+def test_a_kept_pod_whose_volume_only_its_node_has_stays_and_one_on_a_shared_volume_moves():
+    core = MagicMock()
+    core.list_pod_for_all_namespaces.return_value.items = [
+        kept("valkey", "valkey-1", "ReplicaSet", claims=["valkey-data"]),
+        kept("registry", "registry-1", "ReplicaSet", claims=["registry-data"]),
+    ]
+    core.read_namespaced_persistent_volume_claim.side_effect = lambda name, ns: NS(spec=NS(volume_name=f"pv-{name}"))
+    local = NS(spec=NS(node_affinity=NS(required=NS(node_selector_terms=[]))))
+    shared = NS(spec=NS(node_affinity=None))
+    core.read_persistent_volume.side_effect = lambda name: local if name == "pv-valkey-data" else shared
+
+    assert tm._move_kept_pods(core, "tkamd2") == ["registry/registry-1"]
+
+
+def test_nats_is_kept_so_mills_runs_can_report():
+    assert "nats" in tm.KEEP_NAMESPACES and "nats" not in tm.STAY_ON_NODE
 
 
 def test_turning_off_restores_the_record_and_leaves_what_changed(monkeypatch):
