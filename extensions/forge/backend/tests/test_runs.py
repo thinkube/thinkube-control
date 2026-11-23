@@ -106,11 +106,17 @@ NODES = {"tkspark": {**CHOICES, "gpus": [0, 1]},
                     "gpus": [0, 1, 2]}}
 
 
-def test_the_data_is_preprocessed_on_the_node_with_the_most_cores_other_than_the_runs():
+def test_the_data_is_preprocessed_on_the_gpu_node_with_the_most_cores_other_than_the_runs():
     assert runs.preprocess_node(NODES, "tkspark") == "tkamd2"
-    # tkamd1 and tkspark offer 16 cores alike: tkamd1, which has no GPU
-    assert runs.preprocess_node(NODES, "tkamd2") == "tkamd1"
+    # tkamd1 has no GPU, so no copy of Meep²'s venv: tkspark
+    assert runs.preprocess_node(NODES, "tkamd2") == "tkspark"
+    # tkspark and tkamd3 offer 16 cores alike: tkamd3, of fewer GPUs
+    tkamd3 = {"memory_gb": [2, 4, 8], "cpu_cores": [1, 2, 4, 8, 16], "gpus": [0, 1]}
+    spark2 = {**CHOICES, "gpus": [0, 1, 2]}
+    assert runs.preprocess_node({**NODES, "tkspark": spark2, "tkamd3": tkamd3}, "tkamd2") == "tkamd3"
     assert runs.preprocess_node({"tkspark": CHOICES}, "tkspark") == "tkspark"
+    # The run's node when no other node has a GPU
+    assert runs.preprocess_node({k: NODES[k] for k in ("tkamd1", "tkamd2")}, "tkamd2") == "tkamd2"
 
 
 def test_a_preprocessing_job_runs_on_the_cpu_node_with_its_cores_and_no_gpu():

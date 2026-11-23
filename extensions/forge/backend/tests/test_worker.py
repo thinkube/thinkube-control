@@ -80,9 +80,11 @@ class FakeControl:
         return {"memory_gb": [2, 4, 8, 16, 32, 48, 64, 96], "cpu_cores": [1, 2, 4, 6, 8, 12, 16]}
 
     async def nodes_choices(self):
-        return {"tkspark": {"memory_gb": [2, 4, 8, 16, 32, 48, 64, 96], "cpu_cores": [1, 2, 4, 6, 8, 12, 16]},
-                "tkamd1": {"memory_gb": [2, 4, 8, 16, 32, 48], "cpu_cores": [1, 2, 4, 6, 8, 12, 16]},
-                "tkamd2": {"memory_gb": [2, 4, 8, 16, 32, 48, 64, 96], "cpu_cores": [1, 2, 4, 6, 8, 12, 16, 24, 32]}}
+        return {"tkspark": {"memory_gb": [2, 4, 8, 16, 32, 48, 64, 96], "cpu_cores": [1, 2, 4, 6, 8, 12, 16],
+                            "gpus": [0, 1]},
+                "tkamd1": {"memory_gb": [2, 4, 8, 16, 32, 48], "cpu_cores": [1, 2, 4, 6, 8, 12, 16], "gpus": [0]},
+                "tkamd2": {"memory_gb": [2, 4, 8, 16, 32, 48, 64, 96], "cpu_cores": [1, 2, 4, 6, 8, 12, 16, 24, 32],
+                           "gpus": [0, 1, 2]}}
 
     async def run_job(self, request):
         if self.refusal is not None:

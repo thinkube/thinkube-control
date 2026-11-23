@@ -339,10 +339,11 @@ def sized(run: Run) -> bool:
 
 
 def preprocess_node(nodes: Dict[str, Dict[str, List[int]]], gpu_node: str) -> str:
-    """The node a run's data is preprocessed on: of the nodes other than the run's GPU node, the one with the
-    largest CPU choice (Control's /jupyterhub/config), of two alike the one of fewer GPUs, which keeps the GPU nodes
-    for GPU work; the GPU node itself when it is the only node."""
-    others = [node for node in nodes if node != gpu_node]
+    """The node a run's data is preprocessed on: of the GPU nodes other than the run's, the one with the
+    largest CPU choice (Control's /jupyterhub/config), of two alike the one of fewer GPUs; the run's node itself
+    when no other node has a GPU. The job runs in Meep²'s kernel, a venv that needs a GPU, which Control keeps
+    only on the nodes with a GPU, even for a job that uses none."""
+    others = [node for node in nodes if node != gpu_node and max(nodes[node].get("gpus") or [0]) > 0]
     if not others:
         return gpu_node
     return max(others, key=lambda node: (max(nodes[node]["cpu_cores"]), -max(nodes[node].get("gpus") or [0]), node))
