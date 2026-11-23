@@ -94,13 +94,50 @@ def run_script(tmp_path, task_line: str, signal_after=None):
     script = taskpods.script(task_run(), "forge-x-1")
     lines = script.splitlines()
     lines = [task_line + " &" if line.endswith(" &") else line for line in lines]
-    lines = [line for line in lines if "pip install" not in line]
+    lines = [line for line in lines if "pip install" not in line and not line.startswith("python3 -c")]
     state = tmp_path / "state"
     process = subprocess.Popen(["sh", "-c", "\n".join(lines)], env={**os.environ, "FORGE_STATE_DIR": str(state)})
     if signal_after is not None:
         time.sleep(signal_after)
         process.send_signal(signal.SIGTERM)
     return process.wait(timeout=30), state.exists()
+
+
+def test_the_task_starts_after_nats_answers():
+    script = taskpods.script(task_run(), "forge-x-1").splitlines()
+    wait = next(i for i, line in enumerate(script) if line.startswith("python3 -c"))
+    start = next(i for i, line in enumerate(script) if line.endswith(" &"))
+    assert wait < start and script[wait + 1] == "set +e"
+
+
+def nats_wait(url):
+    import os
+    import subprocess
+    import sys
+
+    code = taskpods.NATS_WAIT.replace(f"+ {taskpods.NATS_WAIT_SECONDS}", "+ 1")
+    return subprocess.run([sys.executable, "-c", code], env={**os.environ, "MILL_NATS_URL": url},
+                          capture_output=True, text=True, timeout=30)
+
+
+def test_the_nats_wait_ends_when_nats_answers():
+    import socket
+
+    with socket.socket() as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen()
+        assert nats_wait(f"nats://127.0.0.1:{server.getsockname()[1]}").returncode == 0
+
+
+def test_the_nats_wait_fails_saying_so_when_nats_does_not_answer():
+    import socket
+
+    with socket.socket() as free:
+        free.bind(("127.0.0.1", 0))
+        port = free.getsockname()[1]
+    result = nats_wait(f"nats://127.0.0.1:{port}")
+    assert result.returncode == 1
+    assert f"NATS at nats://127.0.0.1:{port} did not answer within" in result.stderr
 
 
 def test_a_task_that_ends_well_leaves_no_state(tmp_path):

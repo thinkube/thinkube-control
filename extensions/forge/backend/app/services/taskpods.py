@@ -30,6 +30,24 @@ STOP_GRACE_SECONDS = 60
 KEEP_FINISHED_SECONDS = 24 * 3600
 # The mark Thinkube Control's training mode puts on its node, as a toleration
 TRAINING_TOLERATION = {"key": "thinkube.io/training", "operator": "Equal", "value": "true", "effect": "NoSchedule"}
+# Seconds a task pod waits for NATS before its task starts. Turning training mode on evicts the services of its
+# node, NATS among them when it is there, and Mill's run cannot report without it; NATS is back within a minute
+NATS_WAIT_SECONDS = 300
+# The wait, run by the image's Python before the task: a TCP connection to MILL_NATS_URL, tried every 2 seconds
+NATS_WAIT = f"""\
+import os, socket, sys, time
+from urllib.parse import urlparse
+url = urlparse(os.environ["MILL_NATS_URL"])
+end = time.monotonic() + {NATS_WAIT_SECONDS}
+while True:
+    try:
+        socket.create_connection((url.hostname, url.port or 4222), timeout=5).close()
+        break
+    except OSError as e:
+        if time.monotonic() > end:
+            sys.exit(f"NATS at {{url.geturl()}} did not answer within {NATS_WAIT_SECONDS} seconds: {{e}}")
+        time.sleep(2)
+"""
 # What a pod that is not yet running may say, read into the run's waiting line
 PENDING_REASONS = ("Unschedulable", "ErrImagePull", "ImagePullBackOff", "CreateContainerConfigError")
 
@@ -88,6 +106,9 @@ def script(run: Run, run_id: str) -> str:
     so that it cannot replace a package of the venv (its one dependency,
     nats-py, is the venv's to have; a venv without it fails at the import,
     saying so).
+
+    Before the task starts, the shell waits for NATS (NATS_WAIT), and the
+    start fails, saying so, when NATS does not answer in time.
     """
     venv = run.task.get("venv")
     lines = ["set -e", 'mkdir -p "$FORGE_STATE_DIR"']
@@ -106,6 +127,7 @@ def script(run: Run, run_id: str) -> str:
         lines.append("pip install -q --user --break-system-packages --no-warn-script-location thinkube-mill")
         task_command = [shlex.quote(a) for a in command(run, run_id)]
     lines += [
+        f"python3 -c {shlex.quote(NATS_WAIT)}",
         "set +e",
         f"{' '.join(task_command)} &",
         "child=$!",
