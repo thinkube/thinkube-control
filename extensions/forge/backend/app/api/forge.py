@@ -13,6 +13,7 @@ from jinja2 import TemplateError
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.security import User, get_current_user, oauth2_scheme
 from app.db.session import get_db
 from app.models.forge import NodeState, Run, Slot, WorkerCredential
@@ -472,8 +473,13 @@ async def get_run(run_id: str, user: User = Depends(get_current_user), token: st
 
 @router.get("/runs/{run_id}/progress", operation_id="forge_run_progress")
 async def run_progress(run_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """The run's metrics from MLflow; null while the training has not begun."""
+    """The run's metrics from MLflow; null while the training has not begun. A task run reports to Mill, not
+    MLflow: its answer is its run of Mill (mill_run, null before its first start) and that run's page."""
     run = _run(db, run_id)
+    if run.kind == "task":
+        mill_run = (run.task or {}).get("mill_run")
+        return {"kind": "task", "mill_run": mill_run,
+                "url": f"https://control.{settings.DOMAIN_NAME}/x/mill/runs/{mill_run}" if mill_run else None}
     try:
         found = await mlflow.progress(run.id)
     except mlflow.MlflowError as e:

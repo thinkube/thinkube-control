@@ -292,6 +292,7 @@
     "queue": "Ponerla en cola",
     "progressTitle": "Progreso",
     "progressHelp": "Del archivo de estado de Meep², mientras el entrenamiento se ejecuta.",
+    "taskProgressHelp": "Una tarea envía su progreso, sus muestras y su registro a Mill.",
     "waiting": {
       "planning": "Meep² está planificando en {{node}}.",
       "planned": "Planificada. Ponla en cola para entrenar.",

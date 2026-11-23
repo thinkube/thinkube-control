@@ -96,10 +96,15 @@ export default function RunPage() {
       .catch((e) => setModelError(failure(e)));
   }, [runId]);
 
+  // A task run reports to Mill, not MLflow: its page links to its run of Mill instead
+  const isTask = run?.kind === 'task';
+  const runLoaded = run != null;
   useEffect(() => {
     loadRun();
-    loadProgress();
-  }, [loadRun, loadProgress]);
+  }, [loadRun]);
+  useEffect(() => {
+    if (runLoaded && !isTask) loadProgress();
+  }, [runLoaded, isTask, loadProgress]);
 
   const open = run ? RUN_STATES_OPEN.includes(run.status) : false;
   const exporting = [run?.export, run?.nvfp4].some((e) => e && OPEN_STATES.includes(e.status));
@@ -111,12 +116,12 @@ export default function RunPage() {
   useEffect(() => {
     if (!open) return;
     const runTimer = setInterval(loadRun, RUN_POLL_MS);
-    const progressTimer = setInterval(loadProgress, PROGRESS_POLL_MS);
+    const progressTimer = isTask ? undefined : setInterval(loadProgress, PROGRESS_POLL_MS);
     return () => {
       clearInterval(runTimer);
-      clearInterval(progressTimer);
+      if (progressTimer) clearInterval(progressTimer);
     };
-  }, [open, loadRun, loadProgress]);
+  }, [open, isTask, loadRun, loadProgress]);
 
   // The model exists once a run that registers has completed
   const hasModel = run?.register && run.status === 'completed';
@@ -269,6 +274,25 @@ export default function RunPage() {
       {run.waiting && <TkInfoAlert>{run.waiting}</TkInfoAlert>}
       {run.error && <TkErrorAlert title={t('run.failed')}>{run.error}</TkErrorAlert>}
 
+      {isTask ? (
+        <TkCard>
+          <TkCardHeader>
+            <TkCardTitle>{t('run.progressTitle')}</TkCardTitle>
+            <TkCardDescription>{t('run.taskProgressHelp')}</TkCardDescription>
+          </TkCardHeader>
+          <TkCardContent>
+            {run.task?.mill_run ? (
+              <a className="underline text-sm" href={`/x/mill/runs/${run.task.mill_run}`}>
+                {t('run.millRun')}
+              </a>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                {t(`run.waiting.${run.status}`, { node: run.node })}
+              </p>
+            )}
+          </TkCardContent>
+        </TkCard>
+      ) : (
       <div className="grid gap-4 lg:grid-cols-3">
         <TkCard>
           <TkCardHeader>
@@ -310,6 +334,7 @@ export default function RunPage() {
           </TkCardContent>
         </TkCard>
       </div>
+      )}
 
       {run.preprocess?.report && (
         <TkCard>

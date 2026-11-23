@@ -43,7 +43,11 @@ export default function ComparePage() {
   const key = ids.join(',');
 
   useEffect(() => {
-    Promise.all(key.split(',').filter(Boolean).map(async (id) => ({ run: await forge.run(id), progress: await forge.progress(id) })))
+    Promise.all(key.split(',').filter(Boolean).map(async (id) => {
+      const run = await forge.run(id);
+      // A task run has no MLflow metrics to compare
+      return { run, progress: run.kind === 'task' ? null : await forge.progress(id) };
+    }))
       .then(setRuns)
       .catch((e) => setError(failure(e)));
   }, [key]);

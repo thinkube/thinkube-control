@@ -292,6 +292,7 @@
     "queue": "Queue it",
     "progressTitle": "Progress",
     "progressHelp": "From Meep²'s status file, while the training runs.",
+    "taskProgressHelp": "A task reports its progress, samples and log to Mill.",
     "waiting": {
       "planning": "Meep² is planning on {{node}}.",
       "planned": "Planned. Queue it to train.",

@@ -292,6 +292,7 @@
     "queue": "Posar-la a la cua",
     "progressTitle": "Progrés",
     "progressHelp": "Del fitxer d'estat de Meep², mentre l'entrenament s'executa.",
+    "taskProgressHelp": "Una tasca envia el seu progrés, les seves mostres i el seu registre a Mill.",
     "waiting": {
       "planning": "Meep² està planificant a {{node}}.",
       "planned": "Planificada. Posa-la a la cua per entrenar.",

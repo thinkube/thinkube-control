@@ -676,6 +676,19 @@ def test_a_running_task_run_is_paused_and_cancelled_by_deleting_its_job(api, nod
     assert api.fake.cancelled == []
 
 
+def test_a_task_runs_progress_is_its_run_of_mill_and_mlflow_is_not_asked(api, nodes, monkeypatch):
+    async def no_mlflow(run_id):
+        raise AssertionError("a task run's progress asked MLflow")
+
+    monkeypatch.setattr(mlflow, "progress", no_mlflow)
+    run = api.post("/api/v1/tasks/runs", json=TASK).json()
+    assert api.get(f"/api/v1/runs/{run['id']}/progress").json() == {"kind": "task", "mill_run": None, "url": None}
+    stored = api.db.get(Run, run["id"])
+    put(api, run["id"], task={**stored.task, "mill_run": "forge-abc-4"})
+    assert api.get(f"/api/v1/runs/{run['id']}/progress").json() == {
+        "kind": "task", "mill_run": "forge-abc-4", "url": "https://control.test.com/x/mill/runs/forge-abc-4"}
+
+
 def test_a_failed_task_run_is_resumed(api, nodes):
     run = api.post("/api/v1/tasks/runs", json=TASK).json()
     put(api, run["id"], status="failed", position=None)
