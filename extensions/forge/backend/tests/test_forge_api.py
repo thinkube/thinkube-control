@@ -588,6 +588,38 @@ def test_a_task_run_is_queued_on_its_node_at_once(api, nodes):
     assert api.get(f"/api/v1/runs/{run['id']}").json()["job"] is None
 
 
+def test_a_task_run_names_a_built_venv_that_gets_the_gpu_it_needs(api, nodes, monkeypatch):
+    async def venvs(token):
+        return [{"name": "meepsquared", "status": "success", "needs_gpu": True},
+                {"name": "agent", "status": "success", "needs_gpu": False},
+                {"name": "broken", "status": "failed", "needs_gpu": False},
+                {"name": "fine-tuning", "status": "template", "needs_gpu": True, "is_template": True}]
+    monkeypatch.setattr(control, "venvs", venvs)
+    run = api.post("/api/v1/tasks/runs", json={**TASK, "venv": "meepsquared"}).json()
+    assert run["task"]["venv"] == "meepsquared"
+    r = api.post("/api/v1/tasks/runs", json={**TASK, "venv": "meepsquared", "gpus": 0})
+    assert r.status_code == 422 and "needs a GPU" in r.json()["detail"]
+    r = api.post("/api/v1/tasks/runs", json={**TASK, "venv": "broken"})
+    assert r.status_code == 422 and "not built" in r.json()["detail"]
+    r = api.post("/api/v1/tasks/runs", json={**TASK, "venv": "fine-tuning"})
+    assert r.status_code == 422 and "agent, meepsquared" in r.json()["detail"]
+    assert api.post("/api/v1/tasks/runs", json={**TASK, "venv": "agent", "gpus": 0}).status_code == 200
+
+
+def test_a_task_runs_models_are_resolved_once_when_it_is_created(api, nodes, monkeypatch):
+    from app.services import mlflow
+
+    async def model_folder(model_id):
+        if model_id != "google/gemma-4-E4B-it":
+            raise mlflow.MlflowError(f"{model_id} is not in the MLflow registry; mirror it in Thinkube Control first")
+        return "artifacts/3/abc/artifacts/model"
+    monkeypatch.setattr(mlflow, "model_folder", model_folder)
+    run = api.post("/api/v1/tasks/runs", json={**TASK, "models": ["google/gemma-4-E4B-it"]}).json()
+    assert run["task"]["models"] == {"google/gemma-4-E4B-it": "artifacts/3/abc/artifacts/model"}
+    r = api.post("/api/v1/tasks/runs", json={**TASK, "models": ["org/not-mirrored"]})
+    assert r.status_code == 422 and "not in the MLflow registry" in r.json()["detail"]
+
+
 def test_a_run_carries_tags_and_is_found_by_them(api, nodes):
     tagged = api.post("/api/v1/tasks/runs", json={**TASK, "tags": {"experiment": "vote-of-finders"}}).json()
     plain = api.post("/api/v1/tasks/runs", json={**TASK, "name": "again"}).json()

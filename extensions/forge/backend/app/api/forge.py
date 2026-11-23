@@ -295,6 +295,30 @@ class NewTaskRun(BaseModel):
     cpu_cores: int = Field(..., ge=1, le=256, description="the CPU cores the task's pod gets")
     priority: Optional[int] = Field(None, ge=1, le=5, description="1 (highest) to 5 (lowest); Forge runs' "
                                                                   "priority when not given")
+    venv: Optional[str] = Field(None, min_length=1, description="a venv of the notebook servers, by its name, that "
+                                                               "runs the task, on the notebook servers' image; the "
+                                                               "image's own Python when not given")
+    models: List[str] = Field(default_factory=list, description="mirrored models the task reads, by their ids; "
+                                                                "FORGE_MODELS gives the task each one's folder")
+
+
+async def _check_venv(token: str, name: str, gpus: int) -> None:
+    """A venv a task can run in: built, and, when it needs a GPU, given one (such a venv is kept only on the GPU
+    nodes, and its torch is CUDA's)."""
+    try:
+        venvs = await control.venvs(token)
+    except control.ControlError as e:
+        raise _control_failed(e)
+    found = next((v for v in venvs if v["name"] == name and not v.get("is_template")), None)
+    if found is None:
+        built = sorted(v["name"] for v in venvs if v.get("status") == "success" and not v.get("is_template"))
+        raise HTTPException(status_code=422, detail=f"venv: Thinkube Control has no venv {name}; the built ones are "
+                                                    f"{', '.join(built) or 'none'}")
+    if found.get("status") != "success":
+        raise HTTPException(status_code=422, detail=f"venv: {name} is {found.get('status')}, not built")
+    if found.get("needs_gpu") and not gpus:
+        raise HTTPException(status_code=422, detail=f"venv: {name} needs a GPU, and the task asks for none: give "
+                                                    "it gpus")
 
 
 def _task_only_fields(run: Run, what: str) -> None:
@@ -306,9 +330,15 @@ def _task_only_fields(run: Run, what: str) -> None:
 async def create_task_run(new: NewTaskRun, user: User = Depends(get_current_user),
                           token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     """A task of Mill's tasks repository, queued on a node: it runs in a pod of its own when its turn comes, by
-    the same priorities, queue order and training mode as a fine-tune. It has no plan and no checkpoint: when
-    work of a higher priority needs the node it is stopped, and it starts again from the beginning when it gets
-    the node back. Its progress, samples and log are in Mill, under the run id in its task's mill_run."""
+    the same priorities, queue order and training mode as a fine-tune. It has no plan: when work of a higher
+    priority needs the node it is stopped (SIGTERM, then a minute to end), and it starts again when it gets the
+    node back. Its progress, samples and log are in Mill, under the run id in its task's mill_run.
+
+    A task that goes on where it stopped keeps its state in FORGE_STATE_DIR, a folder of the run on the shared
+    file system, the same at every start, and reads FORGE_ATTEMPT (1 at the first start, more at a restart). The
+    folder is removed when the task ends well, and kept when it is stopped or fails. With venv, the task runs in
+    that venv of the notebook servers, on their image. With models, FORGE_MODELS is a JSON object of each mirrored
+    model's folder by its id, resolved now: every start reads the same version."""
     _queue_connected(db)
     try:
         nodes = await control.nodes_choices(token)
@@ -324,8 +354,17 @@ async def create_task_run(new: NewTaskRun, user: User = Depends(get_current_user
     if new.cpu_cores > max(choices["cpu_cores"]):
         raise HTTPException(status_code=422, detail=f"{new.node} gives at most {max(choices['cpu_cores'])} CPU "
                                                     f"cores to a job; the task asks for {new.cpu_cores}")
+    if new.venv is not None:
+        await _check_venv(token, new.venv, new.gpus)
+    models = {}
+    for model in new.models:
+        try:
+            models[model] = await mlflow.model_folder(model)
+        except mlflow.MlflowError as e:
+            raise HTTPException(status_code=422, detail=f"models: {e}")
     task = {"file": new.file, "task": new.task, "inputs": new.inputs, "outputs": new.outputs,
-            "settings": new.settings, "limit": new.limit, "gpus": new.gpus, "attempts": 0, "mill_run": None}
+            "settings": new.settings, "limit": new.limit, "gpus": new.gpus, "venv": new.venv, "models": models,
+            "attempts": 0, "mill_run": None}
     run = Run(id=str(uuid.uuid4()), name=new.name, kind="task", task=task, tags=_checked_tags(new.tags) or None,
               node=new.node, when="now",
               memory_gb=new.memory_gb, cpu_cores=new.cpu_cores,

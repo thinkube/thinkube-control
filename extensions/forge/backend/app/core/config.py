@@ -47,6 +47,17 @@ class Settings(BaseSettings):
     # The owner of the tasks repository, as the shared folders have it
     MILL_TASK_UID: int = 1000
     MILL_TASK_GID: int = 100
+    # The folder of each task run's state, below the shared file system: kept across the run's starts
+    MILL_STATE_FOLDER: str = "forge-runs"
+    # A task that names a venv of the notebook servers runs on their image, which the venvs are built for, with
+    # the node's venvs mounted where a notebook server has them
+    MILL_VENV_IMAGE: str = "library/tk-jupyter-base:latest"
+    MILL_VENVS_HOST_PATH: str = "/var/lib/jupyterhub-venvs"
+    MILL_VENVS_MOUNT: str = "/home/thinkube/venvs"
+    # MLflow's file system (the playbook thinkube-control/14_configure_mill_runs.yaml), where the mirrored models
+    # are, mounted read-only by a task that names models, where a notebook server has it
+    MILL_MODELS_CLAIM: str = "mlflow-root"
+    MILL_MODELS_MOUNT: str = "/home/thinkube/thinkube/mlflow"
 
     @property
     def REGISTRY(self) -> str:

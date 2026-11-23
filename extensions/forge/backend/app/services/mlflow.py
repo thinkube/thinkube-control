@@ -113,6 +113,32 @@ async def progress(forge_run_id: str) -> Optional[Dict[str, Any]]:
     }
 
 
+async def model_folder(model_id: str) -> str:
+    """The folder of a mirrored model's files, relative to the root of MLflow's file system: the "model" artifact
+    of the run of its latest registered version. Raises when the model is not mirrored or its files are not there."""
+    registered = model_id.replace("/", "-")
+    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        try:
+            token = await _token(client)
+            found = await _call(client, token, "GET", "model-versions/search", params={"filter": f"name='{registered}'"})
+            versions = found.get("model_versions", [])
+            if not versions:
+                raise MlflowError(f"{model_id} is not in the MLflow registry; mirror it in Thinkube Control first")
+            latest = max(versions, key=lambda v: int(v["version"]))
+            run = await _call(client, token, "GET", "runs/get", params={"run_id": latest["run_id"]})
+            folder = f"{run['run']['info']['experiment_id']}/{latest['run_id']}/artifacts/model"
+            listed = await client.get(f"{settings.MLFLOW_URL}/api/2.0/mlflow-artifacts/artifacts",
+                                      params={"path": folder}, headers={"Authorization": f"Bearer {token}"})
+        except httpx.HTTPError as e:
+            raise MlflowError(f"MLflow did not answer: {e}")
+    if listed.status_code >= 400:
+        raise MlflowError(f"MLflow answered the listing of {folder} with {listed.status_code}")
+    if "config.json" not in {f.get("path") for f in listed.json().get("files", [])}:
+        raise MlflowError(f"{model_id} version {latest['version']} is registered, and {folder} holds no config.json; "
+                          "its mirror may still be running, or failed")
+    return f"artifacts/{folder}"
+
+
 async def model_file(model_id: str, name: str) -> Optional[str]:
     """A text file of a registered model's latest version, or None when the model has no such file."""
     registered = model_id.replace("/", "-")

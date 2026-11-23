@@ -9,7 +9,9 @@ path of the tasks repository means the same in both, and runs `mill run`
 with the run's task, inputs, outputs and settings. The run reports its
 progress, samples and log to Mill through NATS; Forge reads only the job's
 state, and a pod's exit when the job fails. Stopping a run deletes its job:
-the task gets SIGTERM, ends as stopped in Mill, and its pod goes.
+the task gets SIGTERM, ends as stopped in Mill, and its pod goes. Every
+start of the run has the same state folder (state_folder), where a task
+keeps what it needs to go on.
 """
 
 import asyncio
@@ -60,23 +62,97 @@ def command(run: Run, run_id: str) -> List[str]:
     return args
 
 
+def state_folder(run: Run) -> str:
+    """The run's state folder, on the shared file system: the same for every start of the run."""
+    return f"{settings.MILL_SHARED_MOUNT}/{settings.MILL_STATE_FOLDER}/{run.id}/state"
+
+
+def model_paths(run: Run) -> Dict[str, str]:
+    """Each model the task names, by its id: the folder of its files as the pod mounts them."""
+    return {model: f"{settings.MILL_MODELS_MOUNT}/{folder}" for model, folder in (run.task.get("models") or {}).items()}
+
+
+def script(run: Run, run_id: str) -> str:
+    """What the pod's shell runs: thinkube-mill installed, then the task.
+
+    The shell stays up while the task runs, to remove the state folder when
+    the task ends well: a run that completed has no more use for it. A run
+    stopped or failed keeps it for its next start. The shell passes SIGTERM
+    on to the task, so a task that is stopped can save its state first.
+
+    Without a venv, Mill is installed for the image's Python, as before. With
+    one, the venv of the node's architecture runs the task; Mill is installed
+    without its dependencies into a folder of its own, put first on the path,
+    so that it cannot replace a package of the venv (its one dependency,
+    nats-py, is the venv's to have; a venv without it fails at the import,
+    saying so).
+    """
+    venv = run.task.get("venv")
+    lines = ["set -e", 'mkdir -p "$FORGE_STATE_DIR"']
+    if venv:
+        python = f"{settings.MILL_VENVS_MOUNT}/custom/{venv}/$ARCH/bin/python"
+        lines += [
+            'case "$(uname -m)" in aarch64) ARCH=arm64 ;; *) ARCH=amd64 ;; esac',
+            f'PYTHON="{python}"',
+            f'[ -x "$PYTHON" ] || {{ echo "the venv {venv} is not on $NODE_NAME for $ARCH ($PYTHON): '
+            f'build it in Thinkube Control for this architecture" >&2; exit 1; }}',
+            '"$PYTHON" -m pip install -q --no-deps --target /tmp/thinkube-mill thinkube-mill',
+            "export PYTHONPATH=/tmp/thinkube-mill",
+        ]
+        task_command = ['"$PYTHON"'] + [shlex.quote(a) for a in command(run, run_id)[1:]]
+    else:
+        lines.append("pip install -q --user --break-system-packages --no-warn-script-location thinkube-mill")
+        task_command = [shlex.quote(a) for a in command(run, run_id)]
+    lines += [
+        "set +e",
+        f"{' '.join(task_command)} &",
+        "child=$!",
+        "trap 'kill -TERM \"$child\" 2>/dev/null' TERM",
+        'wait "$child"',
+        "status=$?",
+        # A wait broken by SIGTERM returns early; the task is waited for until it ends
+        'while kill -0 "$child" 2>/dev/null; do wait "$child"; status=$?; done',
+        'if [ "$status" -eq 0 ]; then rm -rf "$FORGE_STATE_DIR"; fi',
+        'exit "$status"',
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def job_manifest(run: Run, attempt: int, token: Optional[str] = None) -> Dict[str, Any]:
-    """The Kubernetes job of one start of a task run. The task is given the LLM Gateway's address and, as
-    THINKUBE_API_TOKEN, the token Forge's queue works with, so a task that calls a model can."""
+    """The Kubernetes job of one start of a task run.
+
+    The task is given the LLM Gateway's address and, as THINKUBE_API_TOKEN,
+    the token Forge's queue works with, so a task that calls a model can;
+    FORGE_STATE_DIR, its state folder, the same for every start of the run;
+    FORGE_ATTEMPT, which start this is (1 the first); and with models,
+    FORGE_MODELS, a JSON object of each model's folder by its id, on MLflow's
+    file system mounted read-only.
+    """
     task = run.task
     platform = [{"name": "LLM_GATEWAY_URL", "value": settings.MILL_LLM_GATEWAY_URL}]
     if token:
         platform.append({"name": "THINKUBE_API_TOKEN", "value": token})
+    platform += [{"name": "FORGE_RUN_ID", "value": run.id},
+                 {"name": "FORGE_STATE_DIR", "value": state_folder(run)},
+                 {"name": "FORGE_ATTEMPT", "value": str(attempt)}]
+    models = model_paths(run)
+    if models:
+        platform.append({"name": "FORGE_MODELS", "value": json.dumps(models)})
     run_id = mill_run_id(run, attempt)
-    # The image does not carry thinkube-mill yet: the pod installs it from the platform's index first
-    script = (
-        "set -e\n"
-        "pip install -q --user --break-system-packages --no-warn-script-location thinkube-mill\n"
-        f"exec {shlex.join(command(run, run_id))}\n"
-    )
     limits: Dict[str, str] = {"cpu": str(run.cpu_cores), "memory": f"{run.memory_gb}Gi"}
     if task.get("gpus"):
         limits["nvidia.com/gpu"] = str(task["gpus"])
+    mounts = [{"name": "shared", "mountPath": settings.MILL_SHARED_MOUNT}]
+    volumes: List[Dict[str, Any]] = [{"name": "shared",
+                                      "persistentVolumeClaim": {"claimName": settings.MILL_SHARED_CLAIM}}]
+    if task.get("venv"):
+        mounts.append({"name": "venvs", "mountPath": settings.MILL_VENVS_MOUNT, "readOnly": True})
+        volumes.append({"name": "venvs", "hostPath": {"path": settings.MILL_VENVS_HOST_PATH, "type": "Directory"}})
+    if models:
+        mounts.append({"name": "models", "mountPath": settings.MILL_MODELS_MOUNT, "readOnly": True})
+        volumes.append({"name": "models", "persistentVolumeClaim": {"claimName": settings.MILL_MODELS_CLAIM,
+                                                                     "readOnly": True}})
+    image = settings.MILL_VENV_IMAGE if task.get("venv") else settings.MILL_TASK_IMAGE
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -98,9 +174,9 @@ def job_manifest(run: Run, attempt: int, token: Optional[str] = None) -> Dict[st
                     "securityContext": {"runAsUser": settings.MILL_TASK_UID, "runAsGroup": settings.MILL_TASK_GID},
                     "containers": [{
                         "name": "task",
-                        "image": f"{settings.REGISTRY}/{settings.MILL_TASK_IMAGE}",
+                        "image": f"{settings.REGISTRY}/{image}",
                         "workingDir": settings.MILL_REPOSITORY,
-                        "command": ["sh", "-c", script],
+                        "command": ["sh", "-c", script(run, run_id)],
                         "env": [
                             {"name": "HOME", "value": "/tmp/home"},
                             {"name": "PIP_INDEX_URL", "value": settings.PACKAGE_INDEX},
@@ -113,10 +189,9 @@ def job_manifest(run: Run, attempt: int, token: Optional[str] = None) -> Dict[st
                         ],
                         # Requests equal limits: the node keeps what the run was given
                         "resources": {"requests": dict(limits), "limits": limits},
-                        "volumeMounts": [{"name": "shared", "mountPath": settings.MILL_SHARED_MOUNT}],
+                        "volumeMounts": mounts,
                     }],
-                    "volumes": [{"name": "shared",
-                                 "persistentVolumeClaim": {"claimName": settings.MILL_SHARED_CLAIM}}],
+                    "volumes": volumes,
                 },
             },
         },
