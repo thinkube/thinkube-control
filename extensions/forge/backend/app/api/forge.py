@@ -143,8 +143,9 @@ class Milestones(BaseModel):
                                                "such as ['chrf', 'bleu']; required with an evaluation set")
 
 
-async def _milestones(token: str, wanted: Optional[Milestones]) -> Optional[Dict[str, Any]]:
-    """The run's milestones as Forge keeps them, the evaluation set read from Datasets."""
+async def _milestones(token: str, wanted: Optional[Milestones], task: str = "sft") -> Optional[Dict[str, Any]]:
+    """The run's milestones as Forge keeps them, the evaluation set read from Datasets; task is the run's Meep²
+    task, which decides the kind of evaluation set it takes."""
     if wanted is None:
         return None
     training, columns = None, []
@@ -161,7 +162,7 @@ async def _milestones(token: str, wanted: Optional[Milestones]) -> Optional[Dict
                                                     "eval_dataset_id")
     try:
         return runs.milestones_of(wanted.every, training, columns, wanted.eval_split, wanted.group_column,
-                                  wanted.source_column, wanted.metrics)
+                                  wanted.source_column, wanted.metrics, task)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
@@ -230,15 +231,10 @@ async def create_run(new: NewRun, user: User = Depends(get_current_user), token:
                      db: Session = Depends(get_db)):
     """A new run: Forge builds its Meep² job, and the queue worker asks Meep² for its plan on the node."""
     _queue_connected(db)
-    milestones = await _milestones(token, new.milestones)
     try:
         evaluation = runs.evaluation_of(new.eval_split, new.eval_holdout)
-        job = runs.meepsquared_job(new.method, new.steps, new.epochs, new.decisions, evaluation, milestones)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    if new.when == "now" and new.across_slots:
-        raise HTTPException(status_code=422, detail="across_slots is for a run that waits for slots")
-    await _meepsquared_environment(token)
     try:
         dataset = runs.dataset_for_run(await datasets.training(token, new.dataset_id, new.dataset_version),
                                        new.train_split, evaluation)
@@ -246,6 +242,20 @@ async def create_run(new: NewRun, user: User = Depends(get_current_user), token:
         raise _datasets_failed(e)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    # A choice dataset trains Meep²'s task choice: a model that scores candidates, which the LLM Gateway cannot serve
+    task = "choice" if dataset["format"] == "choice" else "sft"
+    if task == "choice" and new.register_model:
+        raise HTTPException(status_code=422, detail=f"{dataset['name']} is a choice dataset: its model scores "
+                                                    "candidates and is not registered for the LLM Gateway; set "
+                                                    "register to false")
+    milestones = await _milestones(token, new.milestones, task)
+    try:
+        job = runs.meepsquared_job(new.method, new.steps, new.epochs, new.decisions, evaluation, milestones, task)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    if new.when == "now" and new.across_slots:
+        raise HTTPException(status_code=422, detail="across_slots is for a run that waits for slots")
+    await _meepsquared_environment(token)
     base = next((m for m in await _catalog(token) if m["id"] == new.base_model), None)
     if base is None or not trainable(base):
         raise HTTPException(status_code=422, detail=f"{new.base_model} is not a mirrored BF16 text model of the catalogue")
@@ -508,11 +518,12 @@ async def replan(run_id: str, request: Replan, user: User = Depends(get_current_
     if run.job_id is not None or run.status not in ("planned", "queued", "failed"):
         raise HTTPException(status_code=409, detail=f"run {run.name} is {run.status}; only a run that has not trained "
                                                     "is planned again")
-    milestones = await _milestones(token, request.milestones) if "milestones" in request.model_fields_set \
+    task = run.job.get("task", "sft")
+    milestones = await _milestones(token, request.milestones, task) if "milestones" in request.model_fields_set \
         else run.milestones
     try:
         run.job = runs.meepsquared_job(run.method, run.job.get("steps"), run.job.get("epochs"), request.decisions,
-                                       run.evaluation, milestones)
+                                       run.evaluation, milestones, task)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     run.milestones = milestones

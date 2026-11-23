@@ -179,10 +179,14 @@ def dataset_for_run(training: Dict[str, Any], train_split: str, evaluation: Opti
 
 
 def milestones_of(every: Optional[float], training: Optional[Dict[str, Any]], columns: List[str], split: str,
-                  group_column: Optional[str], source_column: Optional[str], metrics: List[str]) -> Optional[Dict[str, Any]]:
+                  group_column: Optional[str], source_column: Optional[str], metrics: List[str],
+                  task: str = "sft") -> Optional[Dict[str, Any]]:
     """A run's milestones: every `every` of its planned steps; with an evaluation set (`training`, as Datasets'
     /training gives a version, and the version's `columns`), its split, the columns that group its rows and hold
-    each row's source, and the metrics the scoring service computes. None without milestones."""
+    each row's source, and the metrics the scoring service computes. None without milestones.
+
+    A choice run's evaluation set is a choice set that maps which candidates are right: Meep² counts the rows whose
+    top candidate is right, and the scoring service is not asked, so it takes no metrics and no source column."""
     if every is None:
         if training is not None:
             raise ValueError("an evaluation set is scored at milestones; give milestones.every")
@@ -191,7 +195,19 @@ def milestones_of(every: Optional[float], training: Optional[Dict[str, Any]], co
         raise ValueError(f"milestones.every is a share of the planned steps above 0 and at most 1, not {every}")
     if training is None:
         return {"every": every, "eval": None, "metrics": []}
-    if training["mapping"]["kind"] == "text":
+    kind = training["mapping"]["kind"]
+    if (task == "choice") != (kind == "choice"):
+        raise ValueError(f"the evaluation set {training['name']} maps its rows as {kind}; a "
+                         + ("choice run's milestones need a choice set" if task == "choice"
+                            else "choice set is for a run that trains on a choice dataset"))
+    if kind == "choice":
+        if "right" not in training["mapping"]["columns"]:
+            raise ValueError(f"the evaluation set {training['name']} does not map the column right, which says "
+                             "which candidates are right")
+        if metrics or source_column is not None:
+            raise ValueError("a choice run's milestones count the right answers; they take no metrics and no "
+                             "source_column")
+    if kind == "text":
         raise ValueError(f"the evaluation set {training['name']} maps its rows to plain text; a milestone needs a "
                          "prompt and its expected answer, a mapping of another kind")
     files = {s["name"]: s for s in training["splits"]}
@@ -200,7 +216,7 @@ def milestones_of(every: Optional[float], training: Optional[Dict[str, Any]], co
     for name, column in (("group_column", group_column), ("source_column", source_column)):
         if column is not None and column not in columns:
             raise ValueError(f"{name}: the evaluation set {training['name']} has no column {column}; it has {columns}")
-    if not metrics or not all(isinstance(m, str) and m for m in metrics):
+    if kind != "choice" and (not metrics or not all(isinstance(m, str) and m for m in metrics)):
         raise ValueError("milestones.metrics: the scoring service's metrics to compute, such as ['chrf', 'bleu']")
     return {"every": every, "metrics": list(metrics),
             "eval": {"id": training["id"], "name": training["name"], "version": training["version"],
@@ -227,18 +243,23 @@ def split_decisions(chosen: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 
 def meepsquared_job(method: str, steps: Optional[int], epochs: Optional[float], chosen: Dict[str, Any],
                evaluation: Optional[Dict[str, Any]] = None,
-               milestones: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+               milestones: Optional[Dict[str, Any]] = None, task: str = "sft") -> Dict[str, Any]:
     """The Meep² job Forge decides: an SFT job with LoRA or QLoRA, for steps
     or epochs, reporting to MLflow, evaluating on a held-out share when the
     run asks for one; auto mode decides every field not given. A run that
     evaluates on a split gets its eval_data from the notebook, which writes
-    the split's examples."""
+    the split's examples. task is "choice" for a dataset of the mapping kind
+    choice (Meep²'s task choice), "sft" for any other."""
     if method not in METHODS:
         raise ValueError(f"method is one of {list(METHODS)}, not {method!r}")
+    if task not in ("sft", "choice"):
+        raise ValueError(f"task is 'sft' or 'choice', not {task!r}")
+    if task == "choice" and method not in ("lora", "qlora"):
+        raise ValueError(f"a choice run trains with lora or qlora, not {method}")
     if (steps is None) == (epochs is None):
         raise ValueError("give the steps or the epochs to train, one of them")
     parts = split_decisions(chosen)
-    job: Dict[str, Any] = {"task": "sft", "method": method, "report_to": "mlflow"}
+    job: Dict[str, Any] = {"task": task, "method": method, "report_to": "mlflow"}
     if steps is not None:
         job["steps"] = steps
     else:

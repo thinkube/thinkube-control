@@ -327,6 +327,41 @@ def test_milestones_go_to_meepsquareds_job_and_the_notebook_writes_their_rows_an
     assert 'MILESTONE_FIELDS = {"milestone_eval": str(MILESTONE_ROWS), "milestone_scorer": f"{SCORER}:score"}' in cell
 
 
+CHOICE_SET = {
+    "id": "k1", "name": "jev-key", "version": 1, "format": "choice",
+    "mapping": {"kind": "choice", "columns": {"prompt": "prompt", "candidates": "candidates", "right": "right"}},
+    "splits": [{"name": "train", "rows": 201, "bytes": 1, "path": "artifacts/3/k/artifacts/data/train.parquet"}],
+}
+CHOICE_COLUMNS = ["prompt", "candidates", "right", "article"]
+
+
+def test_a_choice_runs_milestones_count_right_answers_with_no_metrics_and_no_scorer():
+    found = runs.milestones_of(0.1, CHOICE_SET, CHOICE_COLUMNS, "train", "article", None, [], "choice")
+    assert found["metrics"] == [] and found["eval"]["mapping"]["kind"] == "choice"
+    job = runs.meepsquared_job("qlora", None, 1, {}, None, found, "choice")
+    assert job["task"] == "choice" and job["milestones"] == 0.1
+    cell = runs.notebook()["cells"][2]["source"]
+    assert 'MILESTONE_FIELDS = {"milestone_eval": str(MILESTONE_ROWS)}' in cell
+
+
+@pytest.mark.parametrize("args,error", [
+    ((0.1, CHOICE_SET, CHOICE_COLUMNS, "train", None, None, [], "sft"), "is for a run that trains on a choice"),
+    ((0.1, EVAL_SET, EVAL_COLUMNS, "train", None, None, ["chrf"], "choice"), "need a choice set"),
+    ((0.1, CHOICE_SET, CHOICE_COLUMNS, "train", None, None, ["chrf"], "choice"), "take no metrics"),
+    ((0.1, {**CHOICE_SET, "mapping": {"kind": "choice", "columns": {"prompt": "p", "candidates": "c"}}},
+      CHOICE_COLUMNS, "train", None, None, [], "choice"), "does not map the column right"),
+])
+def test_choice_milestones_that_cannot_be_counted_are_refused(args, error):
+    with pytest.raises(ValueError, match=error):
+        runs.milestones_of(*args)
+
+
+def test_a_choice_job_trains_with_lora_or_qlora():
+    assert runs.meepsquared_job("lora", None, 1, {}, task="choice")["task"] == "choice"
+    with pytest.raises(ValueError, match="lora or qlora, not fp8"):
+        runs.meepsquared_job("fp8", None, 1, {}, task="choice")
+
+
 def test_the_time_left_counts_the_milestones_left():
     run = a_run()
     run.plan = {"decisions": [{"name": "milestones", "value": {"steps": [500, 1000], "generation_seconds": 300}}]}

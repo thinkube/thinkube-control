@@ -72,8 +72,15 @@ SHAREGPT_ROLES = {"system": "system", "human": "user", "user": "user", "gpt": "a
 
 
 def example(row, mapping):
-    """One row as {"messages": [...]} or {"text": ...}; the Datasets extension maps the same way."""
+    """One row as {"messages": [...]}, {"text": ...} or, for Meep²'s task choice, {"prompt", "candidates", "target",
+    "right"}; the Datasets extension maps the same way and checks the rows."""
     kind, cols = mapping["kind"], mapping["columns"]
+    if kind == "choice":
+        found = {"prompt": row[cols["prompt"]], "candidates": list(row[cols["candidates"]])}
+        for part in ("target", "right"):
+            if cols.get(part):
+                found[part] = [x.item() if hasattr(x, "item") else x for x in row[cols[part]]]
+        return found
     if kind == "text":
         return {"text": row[cols["text"]]}
     if kind == "messages":
@@ -152,8 +159,16 @@ if M is not None and M["eval"] is not None:
     if not source.exists():
         raise FileNotFoundError(f"split {E['split']} of the evaluation set {E['name']} is not at {source}")
     MILESTONE_ROWS = RUN_DIR / "milestone-eval.jsonl"
+    CHOICE = E["mapping"]["kind"] == "choice"
     with MILESTONE_ROWS.open("w") as f:
         for i, row in enumerate(pd.read_parquet(source).to_dict(orient="records")):
+            if CHOICE:
+                # Meep² counts the rows whose top candidate is right; no scorer is asked
+                item = {k: v for k, v in example(row, E["mapping"]).items() if k != "target"}
+                if E["group_column"]:
+                    item["group"] = str(row[E["group_column"]])
+                f.write(json.dumps(item, default=str) + "\n")
+                continue
             messages = example(row, E["mapping"])["messages"]
             if messages[-1]["role"] != "assistant":
                 raise ValueError(f"row {i} of the evaluation set {E['name']} has no answer to score against")
@@ -163,11 +178,16 @@ if M is not None and M["eval"] is not None:
             if E["source_column"]:
                 item["source"] = str(row[E["source_column"]])
             f.write(json.dumps(item, default=str) + "\n")
-    SCORER = RUN_DIR / "milestone_scorer.py"
-    SCORER.write_text(SCORER_CODE.replace("__METRICS__", json.dumps(M["metrics"])))
-    MILESTONE_FIELDS = {"milestone_eval": str(MILESTONE_ROWS), "milestone_scorer": f"{SCORER}:score"}
-    print(f"{E['rows']} rows of the evaluation set {E['name']} v{E['version']} answered at each milestone, "
-          f"scored with {', '.join(M['metrics'])}")
+    if CHOICE:
+        MILESTONE_FIELDS = {"milestone_eval": str(MILESTONE_ROWS)}
+        print(f"{E['rows']} rows of the evaluation set {E['name']} v{E['version']} answered at each milestone, "
+              "the rows whose top candidate is right counted")
+    else:
+        SCORER = RUN_DIR / "milestone_scorer.py"
+        SCORER.write_text(SCORER_CODE.replace("__METRICS__", json.dumps(M["metrics"])))
+        MILESTONE_FIELDS = {"milestone_eval": str(MILESTONE_ROWS), "milestone_scorer": f"{SCORER}:score"}
+        print(f"{E['rows']} rows of the evaluation set {E['name']} v{E['version']} answered at each milestone, "
+              f"scored with {', '.join(M['metrics'])}")
 
 # %% Job: the model from the cluster's mirror, the data, and the job Forge decided
 JOB = {**P["job"], "model": tkm.mirrored_model_path(P["base_model"]), "data": str(DATA), "output": str(OUT),
