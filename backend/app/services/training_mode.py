@@ -62,6 +62,8 @@ KEEP_NAMESPACES = frozenset({
     "code-server", "scoring",
     # the messages of Mill's runs, Forge's task runs among them: a run that cannot reach NATS fails at its start
     "nats",
+    # the training's metrics, which Forge's loss chart reads, and the registry of the models it saves
+    "mlflow",
 })
 
 # Kept namespaces whose pods stay on the training node: node daemons, the

@@ -179,8 +179,8 @@ def test_a_kept_pod_whose_volume_only_its_node_has_stays_and_one_on_a_shared_vol
     assert tm._move_kept_pods(core, "tkamd2") == ["registry/registry-1"]
 
 
-def test_nats_is_kept_so_mills_runs_can_report():
-    assert "nats" in tm.KEEP_NAMESPACES and "nats" not in tm.STAY_ON_NODE
+def test_nats_and_mlflow_are_kept_so_runs_can_report():
+    assert {"nats", "mlflow"} <= tm.KEEP_NAMESPACES and not {"nats", "mlflow"} & tm.STAY_ON_NODE
 
 
 def test_turning_off_restores_the_record_and_leaves_what_changed(monkeypatch):
