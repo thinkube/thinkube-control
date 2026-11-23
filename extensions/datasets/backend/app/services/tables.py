@@ -46,14 +46,19 @@ REAL_ORIGIN = ("struct_pack(kind := 'real', method := NULL::VARCHAR, model := NU
 # runs it: the backend's 512 MiB, or an import job's. Past this limit a query writes to SPILL on disk.
 MEMORY_LIMIT = "192MB"
 SPILL = Path(tempfile.gettempdir()) / "duckdb-spill"
-# A reader and a writer each hold a whole row group; DuckDB's 122,880 rows of long text are tens of MiB
-# each, more than MEMORY_LIMIT leaves them. Every split file is written in groups of this many rows.
-ROW_GROUP_ROWS = 20_000
+# A reader and a writer each hold a whole row group in memory, and a row group is counted in rows, not
+# bytes. Rows of several KiB (a prompt with a list of candidates) make 20,000 rows over 100 MiB, more
+# than MEMORY_LIMIT leaves them. Every split file is written in groups of this many rows.
+ROW_GROUP_ROWS = 2_000
+# DuckDB starts one thread per core it sees, and each holds its own buffers (a JSON reader's are tens
+# of MiB): on a node with many cores they alone pass MEMORY_LIMIT. One thread keeps a query's memory
+# independent of the node it runs on.
+THREADS = 1
 
 
 def _connect() -> duckdb.DuckDBPyConnection:
     SPILL.mkdir(parents=True, exist_ok=True)
-    return duckdb.connect(config={"memory_limit": MEMORY_LIMIT, "temp_directory": str(SPILL)})
+    return duckdb.connect(config={"memory_limit": MEMORY_LIMIT, "temp_directory": str(SPILL), "threads": THREADS})
 
 
 class TableError(ValueError):

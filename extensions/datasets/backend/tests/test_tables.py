@@ -64,6 +64,24 @@ def test_duckdb_is_bounded_and_spills_to_disk():
     assert spill == str(tables.SPILL)
 
 
+def test_duckdb_runs_one_thread_whatever_the_node_has():
+    with tables._connect() as db:
+        assert db.sql("SELECT current_setting('threads')").fetchone()[0] == tables.THREADS == 1
+
+
+def test_rows_of_several_kib_with_lists_are_read_within_the_limit(tmp_path):
+    # A prompt with a list of candidates and their targets: about 5.5 KiB a row, 140 MB in all
+    text = "x" * 3000
+    row = json.dumps({"prompt": text, "candidates": [f"c{k} " + "y" * 120 for k in range(20)],
+                      "target": [0.05] * 20})
+    source = tmp_path / "choice.jsonl"
+    source.write_text((row + "\n") * 26_000)
+    parquet, identified = tmp_path / "train.parquet", tmp_path / "train.identified.parquet"
+    tables.to_parquet(source, source.name, parquet)
+    assert tables.identify(parquet, identified, 0) == 26_000
+    assert [c["name"] for c in tables.describe(identified)["columns"]] == ["prompt", "candidates", "target"]
+
+
 def test_split_files_are_written_in_small_row_groups(tmp_path):
     source = tmp_path / "rows.jsonl"
     source.write_text("".join(json.dumps({"q": f"q{i}", "a": f"a{i}"}) + "\n" for i in range(5 * tables.ROW_GROUP_ROWS)))
