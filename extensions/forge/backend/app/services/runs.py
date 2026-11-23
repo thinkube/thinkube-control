@@ -78,7 +78,9 @@ JOB_CPU_CORES = 8
 # a decision of the plan with one of these names is overridden by that field
 RECIPE_FIELDS = ("rank", "alpha", "dropout", "targets", "learning_rate", "schedule", "warmup_steps",
                  "tokens_per_update", "effective_batch", "optimizer", "max_length", "max_grad_norm",
-                 "weight_decay", "experts", "answers_only")
+                 "weight_decay", "experts", "answers_only",
+                 # a choice job's (Meep²'s task choice)
+                 "choice_head", "head_learning_rate", "candidates_per_pass", "head_only")
 OVERRIDE_FIELDS = ("attention", "liger", "padding_free", "fused_lora", "compile_layers", "checkpointed_layers",
                    "selective_layers", "micro_batch", "milestone_engine")
 # Decisions that are fields of the job itself: how many steps apart the evaluations are
@@ -243,13 +245,16 @@ def split_decisions(chosen: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 
 def meepsquared_job(method: str, steps: Optional[int], epochs: Optional[float], chosen: Dict[str, Any],
                evaluation: Optional[Dict[str, Any]] = None,
-               milestones: Optional[Dict[str, Any]] = None, task: str = "sft") -> Dict[str, Any]:
+               milestones: Optional[Dict[str, Any]] = None, task: str = "sft",
+               start_from: Optional[str] = None) -> Dict[str, Any]:
     """The Meep² job Forge decides: an SFT job with LoRA or QLoRA, for steps
     or epochs, reporting to MLflow, evaluating on a held-out share when the
     run asks for one; auto mode decides every field not given. A run that
     evaluates on a split gets its eval_data from the notebook, which writes
     the split's examples. task is "choice" for a dataset of the mapping kind
-    choice (Meep²'s task choice), "sft" for any other."""
+    choice (Meep²'s task choice), "sft" for any other. start_from, a choice
+    job's only: a state saved outside Meep² to start from, a .pt file below the
+    notebooks' models folder (~/thinkube/models), which the notebook resolves."""
     if method not in METHODS:
         raise ValueError(f"method is one of {list(METHODS)}, not {method!r}")
     if task not in ("sft", "choice"):
@@ -260,6 +265,14 @@ def meepsquared_job(method: str, steps: Optional[int], epochs: Optional[float], 
         raise ValueError("give the steps or the epochs to train, one of them")
     parts = split_decisions(chosen)
     job: Dict[str, Any] = {"task": task, "method": method, "report_to": "mlflow"}
+    if start_from is not None:
+        if task != "choice":
+            raise ValueError("start_from is a choice run's: a state saved outside Meep² to start from")
+        parts_of = Path(start_from).parts
+        if Path(start_from).is_absolute() or ".." in parts_of or Path(start_from).suffix != ".pt":
+            raise ValueError(f"start_from is a .pt file below the models folder, such as forge/starts/run.pt, "
+                             f"not {start_from!r}")
+        job["start_from"] = start_from
     if steps is not None:
         job["steps"] = steps
     else:

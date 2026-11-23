@@ -189,6 +189,9 @@ class NewRun(BaseModel):
     # Decisions of Meep²'s plan the person sets, by name: fields of Meep²'s Recipe or Overrides
     decisions: Dict[str, Any] = Field({}, description=DECISIONS)
     milestones: Optional[Milestones] = None
+    start_from: Optional[str] = Field(None, description="a choice run's: a state saved outside Meep² to start from, "
+                                                        "a .pt file below the notebooks' models folder "
+                                                        "(~/thinkube/models), such as forge/starts/jev-3000.pt")
     when: Literal["now", "slots"] = "now"
     across_slots: bool = False
     # 1 (highest) to 5 (lowest); the priority of Forge runs on the Priorities page when not given
@@ -250,7 +253,8 @@ async def create_run(new: NewRun, user: User = Depends(get_current_user), token:
                                                     "register to false")
     milestones = await _milestones(token, new.milestones, task)
     try:
-        job = runs.meepsquared_job(new.method, new.steps, new.epochs, new.decisions, evaluation, milestones, task)
+        job = runs.meepsquared_job(new.method, new.steps, new.epochs, new.decisions, evaluation, milestones, task,
+                                   new.start_from)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     if new.when == "now" and new.across_slots:
@@ -523,7 +527,7 @@ async def replan(run_id: str, request: Replan, user: User = Depends(get_current_
         else run.milestones
     try:
         run.job = runs.meepsquared_job(run.method, run.job.get("steps"), run.job.get("epochs"), request.decisions,
-                                       run.evaluation, milestones, task)
+                                       run.evaluation, milestones, task, run.job.get("start_from"))
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     run.milestones = milestones

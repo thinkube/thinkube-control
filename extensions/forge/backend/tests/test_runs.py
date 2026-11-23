@@ -397,3 +397,15 @@ def test_a_job_without_the_persons_cores_gets_the_largest_choice_up_to_eight():
     assert runs.job_cores([1, 2, 4, 6], "small") == 6
     with pytest.raises(ValueError, match="no CPU choice of 8 cores or fewer on odd"):
         runs.job_cores([12, 16], "odd")
+
+
+def test_a_choice_run_starts_from_a_state_below_the_models_folder():
+    job = runs.meepsquared_job("qlora", None, 1, {"head_only": 500, "choice_head": "set"}, task="choice",
+                               start_from="forge/starts/jev-3000.pt")
+    assert job["start_from"] == "forge/starts/jev-3000.pt"
+    assert job["recipe"] == {"head_only": 500, "choice_head": "set"}
+    for wrong in ("/etc/jev.pt", "../jev.pt", "forge/starts/jev.bin"):
+        with pytest.raises(ValueError, match="start_from is a .pt file"):
+            runs.meepsquared_job("qlora", None, 1, {}, task="choice", start_from=wrong)
+    with pytest.raises(ValueError, match="start_from is a choice run's"):
+        runs.meepsquared_job("qlora", None, 1, {}, start_from="forge/starts/jev-3000.pt")
