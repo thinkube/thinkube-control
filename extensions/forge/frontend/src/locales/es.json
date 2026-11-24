@@ -204,6 +204,7 @@
     "planStep": "Plan",
     "planHelp": "Meep² carga el modelo en {{node}}, lo mide con tus datos y decide cómo entrenarlo. Aún no se entrena nada.",
     "planning": "Meep² está planificando en el nodo…",
+    "revising": "Meep² vuelve a colocar los hitos sobre el último plan; no se mide nada de nuevo…",
     "planWaits": "El plan espera a que {{node}} esté libre.",
     "planFailed": "El plan ha fallado",
     "openRun": "Abrir la página de la ejecución",
@@ -302,6 +303,7 @@
     "taskProgressHelp": "Una tarea envía su progreso, sus muestras y su registro a Mill.",
     "waiting": {
       "planning": "Meep² está planificando en {{node}}.",
+      "revising": "Meep² vuelve a colocar los hitos sobre el último plan.",
       "planned": "Planificada. Ponla en cola para entrenar.",
       "queued": "Esperando en la cola de {{node}}.",
       "running": "Empezando en {{node}}.",
@@ -367,6 +369,7 @@
     "title": "Cola por nodo",
     "state": {
       "planning": "Planificando",
+      "revising": "Revisando",
       "planned": "Planificada",
       "queued": "En cola",
       "running": "Entrenando",

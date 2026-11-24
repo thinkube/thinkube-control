@@ -278,6 +278,35 @@ def test_a_run_asked_to_queue_on_its_plan_joins_the_end_of_its_queue(queue):
     assert (run.status, run.position) == ("queued", 2)
 
 
+def test_a_revised_plan_needs_no_gpu_and_measures_nothing(queue):
+    queue.run("first", position=1)
+    old = {"decisions": [], "estimated_seconds": 3600, "revision_basis": {"planned_steps": 100}}
+    run = queue.run("b", status="revising", plan=old, revises="j0", queue_on_plan=True)
+    run.job = {**run.job, "milestones": 0.02, "milestone_growth": 1.5}
+    queue.tick()
+    request = queue.control.started[0]
+    assert run.plan_job_id == "j1" and run.status == "revising" and run.plan == old
+    assert (request["node"], request["gpus"], request["memory_gb"], request["kernel_name"]) == \
+        ("tkamd2", 0, 4, "meepsquared")
+    assert request["parameters"]["previous_plan"] == old and request["parameters"]["made"] == "Forge's plan job j0"
+    assert (request["parameters"]["milestones"], request["parameters"]["milestone_growth"]) == (0.02, 1.5)
+    assert "with_milestones" in "".join("".join(c["source"]) for c in request["notebook"]["cells"])
+    queue.tick()
+    assert len(queue.control.started) == 1
+    queue.files.plans[run.id] = {"decisions": [{"name": "revised"}], "estimated_seconds": 3700}
+    queue.control.end("j1")
+    queue.tick()
+    assert (run.status, run.position, run.plan["estimated_seconds"]) == ("queued", 2, 3700)
+
+
+def test_a_revision_that_fails_fails_its_run(queue):
+    run = queue.run("a", status="revising", plan={"decisions": []}, revises="j0")
+    queue.tick()
+    queue.control.end("j1", "error", "this plan keeps no revision basis")
+    queue.tick()
+    assert run.status == "failed" and "revision of the plan failed" in run.error
+
+
 def test_a_plan_job_that_fails_fails_its_run(queue):
     run = queue.run("a", status="planning", plan=None)
     queue.tick()

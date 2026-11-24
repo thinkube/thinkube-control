@@ -561,6 +561,46 @@ def test_planning_again_changes_or_removes_the_milestones_and_keeps_them_otherwi
     assert removed["milestones"] is None and "milestones" not in removed["job_spec"]
 
 
+BASIS = {"planned_steps": 100, "milestones_what": "the adapter saved apart, and 40 rows answered"}
+
+
+def test_a_change_of_only_the_milestones_steps_revises_the_last_plan(api):
+    run = api.post("/api/v1/runs", json={**RUN, "milestones": MILESTONES}).json()
+    plan = {"decisions": [], "revision_basis": BASIS}
+    preprocess = {"node": "tkamd2", "job_id": "j0", "folder": "/p"}
+    put(api, run["id"], status="queued", position=1, plan=plan, plan_job_id="j1", preprocess=preprocess)
+    revised = api.post(f"/api/v1/runs/{run['id']}/plan",
+                       json={"milestones": {**MILESTONES, "every": 0.02, "growth": 1.5}}).json()
+    assert (revised["status"], revised["plan"], revised["plan_job_id"], revised["revises"]) == \
+        ("revising", plan, None, "j1")
+    assert revised["preprocess"] == preprocess and revised["queue_on_plan"] is True
+    assert revised["job_spec"]["milestones"] == 0.02 and revised["job_spec"]["milestone_growth"] == 1.5
+    put(api, run["id"], plan_job_id="j2")
+    api.post(f"/api/v1/runs/{run['id']}/cancel")
+    assert api.fake.cancelled == ["j2"]
+
+
+def test_measuring_again_or_any_other_change_plans_in_full(api):
+    run = api.post("/api/v1/runs", json={**RUN, "milestones": MILESTONES}).json()
+    full = ("preprocessing", None, None, None)
+
+    def again(body):
+        put(api, run["id"], status="planned", plan={"decisions": [], "revision_basis": BASIS}, plan_job_id="j1",
+            preprocess={"node": "tkamd2", "job_id": "j0", "folder": "/p"})
+        r = api.post(f"/api/v1/runs/{run['id']}/plan", json=body).json()
+        return r["status"], r["plan"], r["revises"], r["preprocess"]
+
+    assert again({"milestones": {**MILESTONES, "every": 0.2}, "measure": True}) == full
+    assert again({"decisions": {"learning_rate": 5e-5}}) == full
+    assert again({"milestones": {**MILESTONES, "metrics": ["chrf"]}}) == full
+    assert again({})[:3] == full[:3]
+    assert again({"milestones": None})[0] == "revising"
+    plain = api.post("/api/v1/runs", json={**RUN, "name": "plain"}).json()
+    put(api, plain["id"], status="planned", plan={"decisions": [], "revision_basis": BASIS}, plan_job_id="j1")
+    added = api.post(f"/api/v1/runs/{plain['id']}/plan", json={"milestones": MILESTONES}).json()
+    assert added["status"] == "preprocessing"
+
+
 
 # --- Mill's task runs ------------------------------------------------------
 

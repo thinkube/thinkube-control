@@ -12,7 +12,7 @@ import type { RunState } from '@/lib/forge';
 export function RunStateBadge({ state, preemptedBy }: { state: RunState; preemptedBy?: string | null }) {
   const { t } = useTranslation();
   const label = state === 'paused' && preemptedBy ? t('queue.preempted', { run: preemptedBy }) : t(`queue.state.${state}`);
-  if (state === 'preprocessing' || state === 'planning' || state === 'running' || state === 'stopping') {
+  if (state === 'preprocessing' || state === 'planning' || state === 'revising' || state === 'running' || state === 'stopping') {
     return (
       <TkBadge status="pending" className="gap-1">
         <Loader2 className="h-3 w-3 animate-spin" />

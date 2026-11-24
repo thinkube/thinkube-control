@@ -484,7 +484,7 @@ async def get_run(run_id: str, user: User = Depends(get_current_user), token: st
         return {**_run_dict(run), "job": None}
     await _refresh_export(db, run, token)
     job_id = ((run.preprocess or {}).get("job_id") if run.status == "preprocessing"
-              else run.plan_job_id if run.status == "planning" else run.job_id)
+              else run.plan_job_id if run.status in ("planning", "revising") else run.job_id)
     job = None
     if job_id:
         try:
@@ -518,6 +518,9 @@ class Replan(BaseModel):
     milestones: Optional[Milestones] = Field(None, description="the run's milestones, replacing its earlier ones; "
                                                                "null removes them; the earlier ones stay when not "
                                                                "given")
+    measure: bool = Field(False, description="measure again: preprocess and plan in full, as for a new run, even "
+                                             "when only the milestones' steps change, which is otherwise revised "
+                                             "from the last plan in seconds")
 
 
 @router.post("/runs/{run_id}/plan", operation_id="forge_plan_again")
@@ -525,7 +528,11 @@ async def replan(run_id: str, request: Replan, user: User = Depends(get_current_
                  token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     """Plan the run again with the decisions given, which replace the run's earlier ones; Meep² reports each one
     as the person's. The data is preprocessed again first (found at once when nothing that made it changed).
-    The new plan is in the run once its status is planned again."""
+    The new plan is in the run once its status is planned again.
+
+    A change of only the milestones' steps (milestones.every and growth) of a planned or queued run is revised
+    from its last plan, which measured what the steps do not change: status revising, seconds, and the plan's
+    decision "revised" names the plan it started from. measure: true plans it in full instead."""
     run = _run(db, run_id)
     _task_only_fields(run, "has no plan")
     if run.job_id is not None or run.status not in ("planned", "queued", "failed"):
@@ -535,14 +542,20 @@ async def replan(run_id: str, request: Replan, user: User = Depends(get_current_
     milestones = await _milestones(token, request.milestones, task) if "milestones" in request.model_fields_set \
         else run.milestones
     try:
-        run.job = runs.meepsquared_job(run.method, run.job.get("steps"), run.job.get("epochs"), request.decisions,
-                                       run.evaluation, milestones, task, run.job.get("start_from"))
+        job = runs.meepsquared_job(run.method, run.job.get("steps"), run.job.get("epochs"), request.decisions,
+                                   run.evaluation, milestones, task, run.job.get("start_from"))
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    run.milestones = milestones
+    revise = not request.measure and runs.revisable(run, job, milestones)
+    run.job, run.milestones = job, milestones
     run.queue_on_plan = run.status == "queued"
-    run.status, run.plan, run.plan_job_id, run.preprocess, run.position, run.error, run.finished_at = \
-        "preprocessing", None, None, None, None, None, None
+    if revise:
+        # The last plan stays in run.plan until its revision replaces it
+        run.revises = run.plan_job_id
+        run.status, run.plan_job_id, run.position, run.error, run.finished_at = "revising", None, None, None, None
+    else:
+        run.status, run.plan, run.plan_job_id, run.revises, run.preprocess, run.position, run.error, \
+            run.finished_at = "preprocessing", None, None, None, None, None, None, None
     db.commit()
     db.refresh(run)
     return _run_dict(run)
@@ -679,7 +692,8 @@ async def cancel_run(run_id: str, user: User = Depends(get_current_user), token:
     run = _run(db, run_id)
     if run.status in runs.ENDED:
         return _run_dict(run)
-    open_job = (run.job_id if run.status in runs.TRAINING else run.plan_job_id if run.status == "planning"
+    open_job = (run.job_id if run.status in runs.TRAINING
+                else run.plan_job_id if run.status in ("planning", "revising")
                 else (run.preprocess or {}).get("job_id") if run.status == "preprocessing" else None)
     if open_job and run.kind == "task":
         try:

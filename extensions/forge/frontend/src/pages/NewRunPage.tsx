@@ -126,6 +126,12 @@ function PlanStep({ run, onRun }: { run: Run; onRun: (run: Run) => void }) {
               {run.plan_job_id ? t('newRun.planning') : t('newRun.planWaits', { node: run.node })}
             </div>
           )}
+          {run.status === 'revising' && (
+            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+              <TkLoader />
+              {t('newRun.revising')}
+            </div>
+          )}
           {run.waiting && <p className="text-sm text-muted-foreground">{run.waiting}</p>}
           {run.status === 'failed' && <TkErrorAlert title={t('newRun.planFailed')}>{run.error}</TkErrorAlert>}
           <p className="text-sm">
@@ -268,7 +274,7 @@ export default function NewRunPage() {
     forge.run(run.id).then(setRun).catch((e) => setCreateError(failure(e)));
   }, [run]);
   useEffect(() => {
-    if (run?.status !== 'preprocessing' && run?.status !== 'planning') return;
+    if (run?.status !== 'preprocessing' && run?.status !== 'planning' && run?.status !== 'revising') return;
     const timer = setInterval(followRun, PLAN_POLL_MS);
     return () => clearInterval(timer);
   }, [run?.status, followRun]);

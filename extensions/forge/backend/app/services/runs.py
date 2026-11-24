@@ -22,6 +22,7 @@ from app.services import runfiles
 MEEPSQUARED_SCRIPT = Path(__file__).resolve().parents[1] / "training" / "meepsquared_notebook.py"
 EXPORT_SCRIPT = Path(__file__).resolve().parents[1] / "training" / "export_notebook.py"
 NVFP4_SCRIPT = Path(__file__).resolve().parents[1] / "training" / "nvfp4_notebook.py"
+REVISE_SCRIPT = Path(__file__).resolve().parents[1] / "training" / "revise_notebook.py"
 # The NVFP4 export: the Python environment it runs in, the ModelOpt it is built for, and what the
 # environment holds (transformers in the range nvidia-modelopt[hf] declares)
 NVFP4_KERNEL = "nvfp4"
@@ -47,7 +48,7 @@ JOB_OPEN = ("starting", "running")
 JOB_FINAL = ("completed", "error", "cancelled", "lost")
 UNSUCCESSFUL_JOB = ("error", "cancelled", "lost")
 # A run's states in the queue (app/models/forge.py, Run)
-BEFORE_PLAN = ("preprocessing", "planning")
+BEFORE_PLAN = ("preprocessing", "planning", "revising")
 WAITING = ("queued", "paused")
 TRAINING = ("running", "stopping")
 ENDED = ("completed", "failed", "cancelled")
@@ -70,6 +71,9 @@ GIB = 2 ** 30
 # The seconds a cell of a training may take: the whole training is one cell
 TRAIN_CELL_SECONDS = 7 * 24 * 3600
 PLAN_CELL_SECONDS = 2 * 3600
+# A revision of a plan reads its plan and places milestones: no model, no data
+REVISE_MEMORY_GB = 4
+REVISE_CELL_SECONDS = 600
 # The cores a plan or training job gets unless the person sets them: Meep² tokenizes the data on every core the
 # job has, minutes a core per million rows, and a node's default (4 on tkspark) was set for a notebook server
 JOB_CPU_CORES = 8
@@ -430,6 +434,50 @@ def job_request(run: Run, base: Optional[Dict[str, Any]], mode: str, choices: Di
     return request
 
 
+def revisable(run: Run, job: Dict[str, Any], milestones: Optional[Dict[str, Any]]) -> bool:
+    """Whether the run's last plan can be revised for `job` and `milestones` (the run's new ones) without
+    measuring anything again: the run is planned or queued with a plan that keeps Meep²'s revision basis, and the
+    new job differs from the run's only in where its milestones are (every and growth). A plan that placed no
+    milestones measured none, so adding milestones is planned again; a plan asked again with no change at all
+    measures again."""
+    if run.status not in ("planned", "queued") or not (run.plan or {}).get("revision_basis"):
+        return False
+    if job == run.job and milestones == run.milestones:
+        return False
+    if milestones is not None and run.milestones is None:
+        return False
+    placement = ("milestones", "milestone_growth")
+    if {k: v for k, v in job.items() if k not in placement} != \
+            {k: v for k, v in (run.job or {}).items() if k not in placement}:
+        return False
+    if milestones is None or run.milestones is None:
+        return True
+    spacing = ("every", "growth")
+    return {k: v for k, v in milestones.items() if k not in spacing} == \
+        {k: v for k, v in run.milestones.items() if k not in spacing}
+
+
+def revise_request(run: Run, node: str, choices: Dict[str, List[int]]) -> Dict[str, Any]:
+    """The notebook job that revises the run's plan (its last one, in run.plan, made by the job run.revises) for
+    its job's milestones, on `node` with no GPU."""
+    if not run.revises:
+        raise ValueError(f"run {run.name}: a revision names the plan job whose plan it starts from")
+    made = f"Forge's plan job {run.revises}"
+    return {
+        "notebook": notebook(script=REVISE_SCRIPT),
+        "parameters": {"run_id": run.id, "mlflow_run_id": run.mlflow_run_id, "previous_plan": run.plan,
+                       "milestones": run.job.get("milestones"), "milestone_growth": run.job.get("milestone_growth"),
+                       "made": made},
+        "kernel_name": MEEPSQUARED_KERNEL,
+        "node": node,
+        "gpus": 0,
+        "memory_gb": allowed_memory(REVISE_MEMORY_GB, choices["memory_gb"], node),
+        "reserve_memory": False,
+        "cell_timeout_seconds": REVISE_CELL_SECONDS,
+        "cpu_cores": min(choices["cpu_cores"]),
+    }
+
+
 def job_cores(cpu_choices: List[int], node: str) -> int:
     """The largest of the node's CPU choices up to JOB_CPU_CORES."""
     fitting = [c for c in cpu_choices if c <= JOB_CPU_CORES]
@@ -571,7 +619,7 @@ def eta_seconds(run: Run) -> Optional[float]:
     p = run.progress or {}
     if p.get("eta_seconds") is not None:
         return float(p["eta_seconds"])
-    if run.status in ("planned", "queued", "planning", "preprocessing"):
+    if run.status in ("planned", "queued") + BEFORE_PLAN:
         estimate = (run.plan or {}).get("estimated_seconds")
         return float(estimate) if estimate is not None else None
     return None

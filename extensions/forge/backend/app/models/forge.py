@@ -82,6 +82,8 @@ class Run(Base):
     # Meep²'s plan from the plan job (Plan.to_dict()), and that job
     plan = Column(JSON, nullable=True)
     plan_job_id = Column(String(36), nullable=True)
+    # While the plan is revised (status "revising"): the job that made the plan the revision starts from
+    revises = Column(String(36), nullable=True)
     # The training's status file as last read: state, step, total_steps, loss,
     # seconds_per_step, eta_seconds, checkpoint, plan, error, updated
     progress = Column(JSON, nullable=True)
@@ -143,6 +145,7 @@ class Run(Base):
             "preprocess": self.preprocess,
             "plan": self.plan,
             "plan_job_id": self.plan_job_id,
+            "revises": self.revises,
             "progress": self.progress,
             "when": self.when,
             "across_slots": self.across_slots,

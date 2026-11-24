@@ -108,7 +108,7 @@ function NodeQueue({ node, onChange }: { node: QueueNode; onChange: () => void }
                         <RunStateBadge state={run.status} preemptedBy={run.preempted_by} />
                       </TkTableCell>
                       <TkTableCell>
-                        {['preprocessing', 'planning', 'planned', 'queued', 'paused'].includes(run.status) ? (
+                        {['preprocessing', 'planning', 'revising', 'planned', 'queued', 'paused'].includes(run.status) ? (
                           <PrioritySelect
                             value={run.priority}
                             label={t('priority.of', { name: run.name })}

@@ -218,6 +218,7 @@ export interface TrainingStatus {
 export type RunState =
   | 'preprocessing'
   | 'planning'
+  | 'revising'
   | 'planned'
   | 'queued'
   | 'running'
@@ -227,7 +228,7 @@ export type RunState =
   | 'failed'
   | 'cancelled';
 
-export const RUN_STATES_OPEN: RunState[] = ['preprocessing', 'planning', 'queued', 'running', 'stopping', 'paused'];
+export const RUN_STATES_OPEN: RunState[] = ['preprocessing', 'planning', 'revising', 'queued', 'running', 'stopping', 'paused'];
 
 /** The preprocessing of a run's data by Meep² before its plan: tokenized, checked and cut once, into a folder keyed by
  * what made it; the key, folder, found and report come once its job has completed. */
@@ -390,6 +391,8 @@ export interface Run {
   preprocess: RunPreprocess | null;
   plan: Plan | null;
   plan_job_id: string | null;
+  /** While the plan is revised, and after: the plan job whose plan the revision started from. */
+  revises?: string | null;
   progress: TrainingStatus | null;
   when: When;
   across_slots: boolean;

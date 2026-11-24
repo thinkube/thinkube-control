@@ -10,6 +10,7 @@ import { RunStateBadge } from '../RunStateBadge';
 describe('RunStateBadge', () => {
   it.each([
     ['planning', 'Planning'],
+    ['revising', 'Revising'],
     ['queued', 'Queued'],
     ['running', 'Training'],
     ['stopping', 'Stopping'],

@@ -172,7 +172,7 @@ class Worker:
         held = mode["record"] if mode.get("on") else None
         held = self._reconcile(db, held)
         by_node = self._slots_by_node(db)
-        open_runs = db.query(Run).filter(Run.status.in_(("preprocessing", "planning") + runs.WAITING
+        open_runs = db.query(Run).filter(Run.status.in_(runs.BEFORE_PLAN + runs.WAITING
                                                         + runs.TRAINING)).all()
         for run in open_runs:
             # A running task's line says why its pod waits, as _follow_task read it this tick
@@ -202,6 +202,11 @@ class Worker:
                 await self._start_preprocess(db, run)
             else:
                 await self._follow_preprocess(db, run)
+        for run in db.query(Run).filter(Run.status == "revising").all():
+            if run.plan_job_id is None:
+                await self._start_revise(db, run)
+            else:
+                await self._follow_plan(db, run)
         for run in db.query(Run).filter(Run.status == "planning",
                                         Run.plan_job_id.isnot(None)).all():
             await self._follow_plan(db, run)
@@ -263,13 +268,39 @@ class Worker:
         run.preprocess = {**run.preprocess, **outcome}
         run.status, run.error = "planning", None
 
+    async def _start_revise(self, db: Session, run: Run) -> None:
+        """Start the revision of the run's plan (run.plan, its last one) where its data was preprocessed; it
+        measures nothing, needs no GPU and waits for nothing."""
+        try:
+            nodes = await self.control.nodes_choices()
+        except control.ControlError as e:
+            run.error = f"waiting for Control: {e.detail}"
+            return
+        node = runs.preprocess_node(nodes, run.node)
+        try:
+            request = runs.revise_request(run, node, nodes[node])
+        except ValueError as e:
+            self._fail(run, str(e))
+            return
+        try:
+            job = await self.control.run_job(request)
+        except control.ControlError as e:
+            if transient(e):
+                run.error = f"waiting for Control: {e.detail}"
+                return
+            self._fail(run, e.detail)
+            return
+        run.plan_job_id, run.error = job["job_id"], None
+        db.commit()
+
     async def _follow_plan(self, db: Session, run: Run) -> None:
         job = await self._job(run, run.plan_job_id)
         if job is None or job["status"] in runs.JOB_OPEN:
             return
         if job["status"] != "completed":
-            self._fail(run, f"Meep²'s plan failed: {raised(job)}" if job["status"] == "error"
-                       else f"the plan job {job['status']}: {job.get('error') or 'no error given'}")
+            what = "revision of the plan" if run.status == "revising" else "plan"
+            self._fail(run, f"Meep²'s {what} failed: {raised(job)}" if job["status"] == "error"
+                       else f"the {what} job {job['status']}: {job.get('error') or 'no error given'}")
             return
         try:
             plan = await self.files.plan(run)

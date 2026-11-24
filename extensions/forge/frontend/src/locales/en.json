@@ -204,6 +204,7 @@
     "planStep": "Plan",
     "planHelp": "Meep² loads the model on {{node}}, measures it with your data, and decides how to train it. Nothing is trained yet.",
     "planning": "Meep² is planning on the node…",
+    "revising": "Meep² is placing the milestones again on the last plan; nothing is measured again…",
     "planWaits": "The plan waits for {{node}} to be free.",
     "planFailed": "The plan failed",
     "openRun": "Open the run's page",
@@ -302,6 +303,7 @@
     "taskProgressHelp": "A task reports its progress, samples and log to Mill.",
     "waiting": {
       "planning": "Meep² is planning on {{node}}.",
+      "revising": "Meep² is placing the milestones again on the last plan.",
       "planned": "Planned. Queue it to train.",
       "queued": "Waiting in the queue of {{node}}.",
       "running": "Starting on {{node}}.",
@@ -367,6 +369,7 @@
     "title": "Queue by node",
     "state": {
       "planning": "Planning",
+      "revising": "Revising",
       "planned": "Planned",
       "queued": "Queued",
       "running": "Training",
