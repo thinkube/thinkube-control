@@ -392,6 +392,7 @@ class LLMGPUTracker:
     async def plan_sizing(
         self, node_name: str, target_gb: float, gpu_count: int = 1,
         weight_gb: Optional[float] = None, share_gb: Optional[float] = None,
+        estimate_binds: bool = True,
     ) -> dict:
         """Translate a model footprint into arch-correct vLLM/pod knobs.
 
@@ -405,6 +406,12 @@ class LLMGPUTracker:
         share plus the margin, rounded up, and the node books target plus the
         margin. The margin covers how much the overhead vLLM measures at start
         changes from one start to the next.
+
+        estimate_binds=False, for a load whose GPUs the caller chose on a node
+        of discrete GPUs: the estimate does not refuse it, and the engine,
+        given the GPUs' memory up to the usual share, fails by itself when the
+        model does not fit; the GPUs and the free slots still bind.
+        estimate_fits says what the estimate alone decides.
         """
         node = self._gpu_nodes.get(node_name)
         if not node:
@@ -422,6 +429,7 @@ class LLMGPUTracker:
         reserved_on_node = _reserved_gb(allocs)
         free_slots = max(node.total_slots - _slots_used(allocs), 0)
 
+        estimate_fits = None
         if arch == "uma":
             # GPU memory == host RAM: util is a fraction of the whole device,
             # and the cgroup/quota must cover target + margin.
@@ -479,7 +487,8 @@ class LLMGPUTracker:
                 )}
             remaining = max((per_vram * tp) - reserved_on_node, 0.0)
             slots = gpu_slots(node, tp)
-            fits = target_gb <= remaining and free_slots >= slots
+            estimate_fits = target_gb <= remaining
+            fits = (estimate_fits or not estimate_binds) and free_slots >= slots
 
         if fits:
             reason = "ok"
@@ -512,6 +521,7 @@ class LLMGPUTracker:
             "pod_mem_limit_gb": pod_mem,
             "tensor_parallel_size": tp,
             "fits": fits,
+            "estimate_fits": estimate_fits,
             "reason": reason,
         }
 

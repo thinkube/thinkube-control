@@ -86,7 +86,12 @@ async def load_model(model_id: str, request: ModelLoadRequest = ModelLoadRequest
     takes the model. backend is an installed backend type
     (llm_list_backend_types, such as vllm) or a type on a node such as
     vllm-tkspark, which also names the node. max_context_length defaults to the largest of 32768, 16384 and
-    8192 that the model allows and the node has memory for.
+    8192 that the model allows and the node has memory for. gpus, for a backend whose pod serves one model
+    (vLLM, TensorRT-LLM): the GPUs of the node the pod takes, such as 1 to try a model on one card of a node
+    with two; on a node of discrete GPUs the memory estimate then does not refuse the load, and the engine
+    fails by itself if the model does not fit (the state turns "deployable" with last_error).
+
+    A node in training mode, or whose taints the backend's pods do not tolerate, refuses the load at once.
 
     The answer is HTTP 200 whether the load was accepted or refused: state
     "loading" with a backend_id means accepted, any other state means refused
@@ -109,6 +114,7 @@ async def load_model(model_id: str, request: ModelLoadRequest = ModelLoadRequest
         node=request.node,
         max_context_length=request.max_context_length,
         num_speculative_tokens=request.num_speculative_tokens,
+        gpus=request.gpus,
     )
     return result
 
@@ -121,8 +127,10 @@ async def load_model(model_id: str, request: ModelLoadRequest = ModelLoadRequest
 async def unload_model(model_id: str, request: ModelUnloadRequest = ModelUnloadRequest()):
     """Unload a served model and free its GPU memory.
 
-    Only a model in state "available" can be unloaded; the answer's message
-    names the state otherwise. The last model on a pod takes the pod down
+    A model in state "available" is unloaded. A model in state "loading" into
+    its own pod (vLLM, TensorRT-LLM) has its load cancelled: its Deployment is
+    deleted, whether its pod runs or waits to be scheduled, and the model is
+    deployable again. The answer's message names the state otherwise. The last model on a pod takes the pod down
     with it; a per-model-pod backend's pod holds one model. Other users may be calling
     the model: unload only what you loaded or what the user asked to stop.
     """

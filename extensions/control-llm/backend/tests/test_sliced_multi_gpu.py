@@ -106,3 +106,15 @@ def test_the_gpu_request_of_a_deployment_sums_its_containers():
     deployment = SimpleNamespace(spec=SimpleNamespace(template=SimpleNamespace(
         spec=SimpleNamespace(containers=[container(4), container(0)]))))
     assert deployment_gpu_request(deployment) == 4
+
+
+def test_a_load_on_the_gpus_the_caller_chose_is_not_refused_by_the_estimate(tracker):
+    plan = asyncio.run(tracker.plan_sizing("tkamd2", 29.7, 1, weight_gb=21.7, estimate_binds=False))
+    assert (plan["fits"], plan["estimate_fits"], plan["tensor_parallel_size"]) == (True, False, 1)
+    assert plan["gpu_memory_utilization"] == 0.95
+    assert asyncio.run(tracker.plan_sizing("tkamd2", 29.7, 1, weight_gb=21.7))["fits"] is False
+    # The slices still bind: every slice taken, the caller's GPUs are refused too
+    tracker._allocations["tkamd2"] = [GPUAllocation(
+        model_id=f"m{i}", backend_id=f"vllm-tkamd2/m{i}", node_name="tkamd2", estimated_memory_gb=6.0, slots=1,
+    ) for i in range(4)]
+    assert asyncio.run(tracker.plan_sizing("tkamd2", 29.7, 1, weight_gb=21.7, estimate_binds=False))["fits"] is False

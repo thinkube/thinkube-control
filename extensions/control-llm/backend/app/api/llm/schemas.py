@@ -234,6 +234,10 @@ class ModelLoadRequest(BaseModel):
     # whose catalog speculative_config sets a method (e.g. DFlash); lets `k` be
     # tuned at load time without editing the catalog. None = use catalog default.
     num_speculative_tokens: Optional[int] = None
+    # The GPUs of the node the model's pod takes, instead of the count the
+    # memory estimate gives; on a node of discrete GPUs the estimate then does
+    # not refuse the load, and the engine fails by itself if the model does not fit
+    gpus: Optional[int] = Field(None, ge=1)
 
 
 class ModelLoadResponse(BaseModel):

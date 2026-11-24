@@ -122,6 +122,7 @@ class LLMLifecycleManager:
         node: Optional[str] = None,
         max_context_length: Optional[int] = None,
         num_speculative_tokens: Optional[int] = None,
+        gpus: Optional[int] = None,
     ) -> ModelLoadResponse:
         from app.services.llm_model_registry import llm_model_registry
         from app.services.llm_gpu_tracker import llm_gpu_tracker
@@ -215,11 +216,17 @@ class LLMLifecycleManager:
             max_context_length = await self._default_context(entry, node)
 
         driver = backend_type.driver
+        if gpus is not None and driver in (DRIVER_SHARED_POD, DRIVER_OLLAMA):
+            return ModelLoadResponse(
+                model_id=model_id, state=entry.state,
+                message=(f"gpus places a model whose pod serves it alone; {backend_type.display_name} serves "
+                         "many models in one server"),
+            )
         if driver == DRIVER_SHARED_POD:
             return await self._load_shared(model_id, resolved_backend, node)
         if driver == DRIVER_OLLAMA:
             return await self._load_ollama(model_id, resolved_backend, keep_alive, node, max_context_length=max_context_length)
-        return await self._load_performance(model_id, backend=resolved_backend, node=node, max_context_length=max_context_length, num_speculative_tokens=num_speculative_tokens)
+        return await self._load_performance(model_id, backend=resolved_backend, node=node, max_context_length=max_context_length, num_speculative_tokens=num_speculative_tokens, gpus=gpus)
 
     CONTEXT_CHOICES = (32768, 16384, 8192)
 
@@ -623,6 +630,7 @@ class LLMLifecycleManager:
         backend: Optional[str] = None, node: Optional[str] = None,
         max_context_length: Optional[int] = None,
         num_speculative_tokens: Optional[int] = None,
+        gpus: Optional[int] = None,
     ) -> ModelLoadResponse:
         from app.services.llm_backend_discovery import llm_backend_discovery
         from app.services.llm_model_registry import llm_model_registry
@@ -699,7 +707,15 @@ class LLMLifecycleManager:
             estimated_memory = self._estimate_memory(
                 entry, max_context_length, extra_weight_gb=drafter_gb
             )
-        gpu_count = self._gpus_needed(estimated_memory, node)
+        # The caller's GPUs, on a node of discrete GPUs: the estimate does not
+        # refuse the load, and vLLM fails by itself when the model does not fit
+        chosen = gpus is not None and not llm_gpu_tracker.is_uma(node)
+        if gpus is not None and llm_gpu_tracker.is_uma(node) and gpus != 1:
+            return ModelLoadResponse(
+                model_id=model_id, state=ModelState.deployable,
+                message=f"{node}'s GPU shares the system's memory, and a load there takes its one GPU; gpus is 1",
+            )
+        gpu_count = gpus if chosen else self._gpus_needed(estimated_memory, node)
 
         # Architecture-aware sizing: translate the footprint into vLLM/pod knobs
         # consistent with the node's memory architecture, AI budget, and the
@@ -709,6 +725,7 @@ class LLMLifecycleManager:
             node, estimated_memory, gpu_count,
             weight_gb=(self._weight_gb(entry) or 0.0) + drafter_gb,
             share_gb=share_gb,
+            estimate_binds=not chosen,
         )
 
         # Node-safety rail: if it won't fit the operator-chosen node, refuse here
@@ -724,7 +741,8 @@ class LLMLifecycleManager:
 
         # Secondary safety: confirm the node actually has free memory right now
         # (metrics-based — catches real usage the budget bookkeeping can't see).
-        can_load, reason = await llm_gpu_tracker.check_can_load(
+        # With the caller's GPUs, the engine finds out instead.
+        can_load, reason = (True, None) if chosen else await llm_gpu_tracker.check_can_load(
             estimated_memory, node_name=node
         )
         if not can_load:
@@ -783,10 +801,15 @@ class LLMLifecycleManager:
             )
         )
 
+        message = f"Loading on {node} with a {max_context_length} token context; this takes some minutes"
+        if chosen:
+            message += (f". On {gpu_count} GPU{'s' if gpu_count != 1 else ''} as asked, each given "
+                        f"{sizing['gpu_memory_utilization']:.2f} of its memory")
+            if not sizing.get("estimate_fits"):
+                message += (f"; the estimate, ~{estimated_memory:.1f} GB, says it does not fit them, and vLLM "
+                            "fails by itself if it does not")
         return ModelLoadResponse(
-            model_id=model_id, state=ModelState.loading,
-            message=f"Loading on {node} with a {max_context_length} token context; this takes some minutes",
-            backend_id=backend_id,
+            model_id=model_id, state=ModelState.loading, message=message, backend_id=backend_id,
         )
 
     async def _load_performance_background(
@@ -863,6 +886,8 @@ class LLMLifecycleManager:
                 message=f"Model '{model_id}' not found"
             )
 
+        if entry.state == ModelState.loading:
+            return await self._cancel_load(entry)
         if entry.state != ModelState.available:
             return ModelLoadResponse(
                 model_id=model_id, state=entry.state,
@@ -899,6 +924,9 @@ class LLMLifecycleManager:
                 )
 
         llm_model_registry.update_model_state(model_id, ModelState.deployable)
+        # Discovery lists the model while its pod stops; the registry does not
+        # take it for loaded again on that backend until discovery stops listing it
+        entry._unloaded_from = backend_id
         llm_gpu_tracker.release_allocation(model_id)
 
         # A backend type no longer installed has no Deployment left to delete.
@@ -919,6 +947,39 @@ class LLMLifecycleManager:
             message="Model unloaded successfully"
         )
 
+
+    async def _cancel_load(self, entry) -> ModelLoadResponse:
+        """End a load in flight: a one-model pod's Deployment is deleted, its pod with it, whether it runs or waits
+        to be scheduled, and the model is deployable again. A model loading into a shared pod or Ollama is loaded by
+        the running server, which cannot be stopped halfway; it is unloaded once it is available."""
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+        from app.services.llm_model_registry import llm_model_registry
+        from app.services.llm_pod_manager import llm_pod_manager
+
+        backend_id = entry.backend_id or ""
+        backend_type, node = parse_backend_id(backend_id)
+        described = llm_backend_types.get(backend_type)
+        if described is None or not node or described.shared:
+            return ModelLoadResponse(
+                model_id=entry.id, state=entry.state, backend_id=entry.backend_id,
+                message=(f"The model is loading into the running {backend_type or 'backend'} server on "
+                         f"{node or 'its node'}, which cannot be stopped halfway; unload it once it is available"),
+            )
+        if not await llm_pod_manager.delete_pod(backend_type, node, entry.id):
+            return ModelLoadResponse(
+                model_id=entry.id, state=entry.state, backend_id=entry.backend_id,
+                message=f"The {described.display_name} Deployment of the load on {node} could not be deleted; "
+                        "see control-llm's log",
+            )
+        llm_model_registry.update_model_state(entry.id, ModelState.deployable, error="the load was cancelled")
+        entry._loading_since = None
+        entry._unloaded_from = backend_id
+        llm_gpu_tracker.release_allocation(entry.id)
+        self._planned_gb.pop(entry.id, None)
+        return ModelLoadResponse(
+            model_id=entry.id, state=ModelState.deployable,
+            message=f"Load cancelled: the {described.display_name} Deployment on {node} was deleted",
+        )
 
     async def _resolve_gguf_path(self, model_id: str) -> Optional[str]:
         mlflow_url = settings.MLFLOW_TRACKING_URI

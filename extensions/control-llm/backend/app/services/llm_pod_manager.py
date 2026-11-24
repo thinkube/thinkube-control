@@ -62,6 +62,36 @@ def deployment_gpu_request(deployment) -> int:
     return total
 
 
+# The taint training mode puts on a node, which the backends' pods do not tolerate
+TRAINING_TAINT = "thinkube.io/training"
+
+
+def untolerated_taint(tolerations: Optional[list], taints: Optional[list]) -> Optional[str]:
+    """The first of the node's taints that keeps a pod with these tolerations off it, or None.
+
+    A NoSchedule or NoExecute taint keeps a pod off unless one of its tolerations
+    matches it: the same key, or no key with operator Exists; operator Exists, or
+    Equal (the default) with the same value; and no effect, or the taint's.
+    PreferNoSchedule only steers the scheduler.
+    """
+    for taint in taints or []:
+        if taint.get("effect") not in ("NoSchedule", "NoExecute"):
+            continue
+        tolerated = False
+        for t in tolerations or []:
+            operator = t.get("operator") or "Equal"
+            key_matches = t.get("key") == taint.get("key") or (not t.get("key") and operator == "Exists")
+            value_matches = operator == "Exists" or (t.get("value") or "") == (taint.get("value") or "")
+            effect_matches = not t.get("effect") or t.get("effect") == taint.get("effect")
+            if key_matches and value_matches and effect_matches:
+                tolerated = True
+                break
+        if not tolerated:
+            value = f"={taint['value']}" if taint.get("value") else ""
+            return f"{taint.get('key')}{value}:{taint.get('effect')}"
+    return None
+
+
 def unmet_required_affinity(affinity: Optional[dict], node_labels: Dict[str, str]) -> Optional[str]:
     """Why a node cannot take a pod whose template has this affinity, or None when it can.
 
@@ -178,8 +208,9 @@ class LLMPodManager:
         """Why the backend's pods cannot be scheduled on the node, or None when they can.
 
         The per-model Deployment copies the base Deployment's pod template, affinity
-        included, so a node its required node affinity excludes (an architecture the
-        backend's image is not built for) would leave the pod Pending.
+        and tolerations included, so a node its required node affinity excludes (an
+        architecture the backend's image is not built for), or a node tainted with a
+        taint it does not tolerate (training mode's), would leave the pod Pending.
         """
         from kubernetes import client, config as k8s_config
 
@@ -190,13 +221,21 @@ class LLMPodManager:
         base = client.AppsV1Api().read_namespaced_deployment(
             self._get_base_deployment_name(backend_type), self._get_namespace(backend_type)
         )
-        affinity = client.ApiClient().sanitize_for_serialization(base.spec.template.spec.affinity)
-        labels = client.CoreV1Api().read_node(node_name).metadata.labels or {}
-        unmet = unmet_required_affinity(affinity, labels)
-        if unmet is None:
-            return None
+        api = client.ApiClient()
+        affinity = api.sanitize_for_serialization(base.spec.template.spec.affinity)
+        tolerations = api.sanitize_for_serialization(base.spec.template.spec.tolerations)
+        node = client.CoreV1Api().read_node(node_name)
         name = llm_backend_types.require(backend_type).display_name
-        return f"{name} pods cannot run on {node_name}: its Deployment requires {unmet}"
+        unmet = unmet_required_affinity(affinity, node.metadata.labels or {})
+        if unmet is not None:
+            return f"{name} pods cannot run on {node_name}: its Deployment requires {unmet}"
+        taint = untolerated_taint(tolerations, api.sanitize_for_serialization(node.spec.taints))
+        if taint is None:
+            return None
+        why = (f"{node_name} is in training mode ({taint}); load the model when the training there has ended"
+               if taint.startswith(TRAINING_TAINT + "=") or taint.startswith(TRAINING_TAINT + ":")
+               else f"{node_name} has the taint {taint}, which they do not tolerate")
+        return f"{name} pods cannot run on {node_name}: {why}"
 
     def _make_deployment_name(self, backend_type: str, node_name: str, model_id: Optional[str] = None) -> str:
         base = self._get_base_deployment_name(backend_type)

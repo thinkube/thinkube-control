@@ -274,6 +274,7 @@ class LLMModelRegistry:
             if existing:
                 model._loading_since = getattr(existing, "_loading_since", None)
                 model._last_available_at = getattr(existing, "_last_available_at", None)
+                model._unloaded_from = getattr(existing, "_unloaded_from", None)
             updated[model_id] = model
 
         catalog_serving = set()
@@ -407,6 +408,16 @@ class LLMModelRegistry:
                 entry.served_context_length = served_context.get((matched_backend_id, matched_name))
             else:
                 entry.served_context_length = None
+
+            # A model unloaded from a backend, or whose load there was cancelled, is
+            # listed by discovery while its pod stops: it is not loaded there again
+            # until discovery no longer lists it there
+            unloaded_from = getattr(entry, "_unloaded_from", None)
+            if unloaded_from is not None:
+                if matched_backend_id == unloaded_from and entry.state in (ModelState.deployable,
+                                                                           ModelState.loading):
+                    continue
+                entry._unloaded_from = None
 
             if matched_backend_id and entry.state in (ModelState.loading, ModelState.deployable):
                 entry.state = ModelState.available
