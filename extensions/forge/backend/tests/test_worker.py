@@ -324,8 +324,8 @@ def test_measurements_that_do_not_hold_are_measured_again_on_the_gpu(queue):
     queue.files.revisions[run.id] = {"measure_again": "the LoRA rank changed"}
     queue.control.end("j2")
     queue.tick()
-    assert (run.status, run.plan_job_id, run.reuse["measure_again"]) == ("planning", None, "the LoRA rank changed")
-    queue.tick()
+    # The plan job on the GPU starts in the same tick: the node is free
+    assert (run.status, run.plan_job_id, run.reuse["measure_again"]) == ("planning", "j3", "the LoRA rank changed")
     request = queue.control.started[-1]
     assert (request["parameters"]["mode"], request["gpus"]) == ("plan", 1)
     assert request["parameters"]["measured_because"] == \

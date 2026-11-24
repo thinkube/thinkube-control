@@ -42,6 +42,7 @@ def test_every_cell_of_the_notebook_is_python():
         "answers",
         "# %% Job: the model from the cluster's mirror, the data, and the job Forge decided",
         "# %% Preprocess: the data tokenized, checked and cut once, into a folder keyed by what made it",
+        "# %% Revise: the plan from an earlier plan's measurements, or Meep²'s reason they do not hold",
         "# %% Plan: what Meep² will do on this node, and why",
         "# %% Train: Meep² in its own process, its status sent to Forge while it runs",
         "# %% Register: merge the adapter and publish the model for the LLM Gateway"]
@@ -50,7 +51,7 @@ def test_every_cell_of_the_notebook_is_python():
 
 
 def test_the_training_runs_meepsquared_with_a_status_file_and_a_stop_file():
-    train = runs.notebook()["cells"][6]["source"]
+    train = runs.notebook()["cells"][7]["source"]
     assert '"--status-file", str(STATUS)' in train and '"--stop-file", str(STOP)' in train
     assert 'RESUME = interrupted_again(lambda: any(OUT.glob("checkpoint-*")))' in train
     assert '["--resume"] if RESUME' in train
