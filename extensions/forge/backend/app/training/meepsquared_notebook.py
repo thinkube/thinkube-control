@@ -6,10 +6,13 @@
 # PARAMETERS, the run as app/services/runs.py builds it. Each "# %%" line
 # starts a cell.
 #
-# PARAMETERS["mode"] is "preprocess", "plan" or "train". A preprocessing job
-# writes the data as Meep²'s examples and preprocesses it (tokenized, checked,
-# cut) into a folder keyed by what made it, on a CPU node; a plan job reads
-# that folder, writes Meep²'s plan and stops; a training job reads it and
+# PARAMETERS["mode"] is "preprocess", "revise", "plan" or "train". A
+# preprocessing job writes the data as Meep²'s examples and preprocesses it
+# (tokenized, checked, cut) into a folder keyed by what made it, on a CPU node;
+# a revision job, on a CPU too, asks Meep² for the plan from an earlier plan's
+# measurements, without loading the model, and writes the plan or Meep²'s
+# reason to measure again; a plan job reads that folder, writes Meep²'s plan,
+# measured on the GPU, and stops; a training job reads it and
 # runs `python -m meepsquared train` with a status file and a stop file, and
 # registers the model when the training completes.
 
@@ -29,8 +32,8 @@ P = PARAMETERS
 RUN = P["run_id"]
 D = P["dataset"]
 MODE = P["mode"]
-if MODE not in ("preprocess", "plan", "train"):
-    raise ValueError(f"mode is 'preprocess', 'plan' or 'train', not {MODE!r}")
+if MODE not in ("preprocess", "revise", "plan", "train"):
+    raise ValueError(f"mode is 'preprocess', 'revise', 'plan' or 'train', not {MODE!r}")
 # The run's own folder on the shared models volume: the data, the job, the
 # status file and Meep²'s output (checkpoints and the adapter)
 RUN_DIR = Path.home() / "thinkube" / "models" / "forge" / RUN
@@ -226,11 +229,28 @@ if MODE == "preprocess":
     PREPROCESS_FILE.write_text(json.dumps(outcome.to_dict(), indent=2, default=str))
     send(PREPROCESS_FILE, "preprocess.json")
 
+# %% Revise: the plan from an earlier plan's measurements, or Meep²'s reason they do not hold
+if MODE == "revise":
+    from meepsquared import MeasureAgain
+    from meepsquared.job import TrainingJob
+
+    try:
+        plan = TrainingJob.from_dict(JOB).plan(reuse=P["earlier_plan"], reused_from=P["reused_from"])
+        print(plan)
+        REVISION = {"plan": plan.to_dict()}
+    except MeasureAgain as e:
+        # Not a failure: the run plans on its node's GPU, measuring, and its plan says why
+        REVISION = {"measure_again": str(e)}
+        print(f"measure again: {e}")
+    REVISION_FILE = RUN_DIR / "revision.json"
+    REVISION_FILE.write_text(json.dumps(REVISION, indent=2, default=str))
+    send(REVISION_FILE, "revision.json")
+
 # %% Plan: what Meep² will do on this node, and why
 if MODE == "plan":
     from meepsquared.job import TrainingJob
 
-    plan = TrainingJob.from_dict(JOB).plan()
+    plan = TrainingJob.from_dict(JOB).plan(measured_because=P["measured_because"])
     print(plan)
     PLAN_FILE = RUN_DIR / "plan.json"
     PLAN_FILE.write_text(json.dumps(plan.to_dict(), indent=2, default=str))

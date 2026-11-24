@@ -114,6 +114,7 @@ class FakeFiles:
     def __init__(self):
         self.plans, self.statuses, self.stops = {}, {}, set()
         self.preprocesses = {}
+        self.revisions = {}
         self.cleared = []
 
     async def plan(self, run):
@@ -121,6 +122,9 @@ class FakeFiles:
 
     async def preprocess(self, run):
         return self.preprocesses.get(run.id)
+
+    async def revision(self, run):
+        return self.revisions.get(run.id)
 
     async def status(self, run):
         return self.statuses.get(run.id)
@@ -278,34 +282,80 @@ def test_a_run_asked_to_queue_on_its_plan_joins_the_end_of_its_queue(queue):
     assert (run.status, run.position) == ("queued", 2)
 
 
-def test_a_revised_plan_needs_no_gpu_and_measures_nothing(queue):
-    old = {"decisions": [], "estimated_seconds": 3600, "revision_basis": {"planned_steps": 100}}
-    run = queue.run("b", status="revising", plan=old, revises="j0", queue_on_plan=True)
-    run.job = {**run.job, "milestones": 0.02, "milestone_growth": 1.5}
+MEASURED = {"decisions": [], "estimated_seconds": 3600, "measurements": {"key": {}, "device": "RTX 3090"}}
+
+
+def preprocessed(queue, run, job_id):
+    """The run's preprocessing job started, then completed with its outcome."""
     queue.tick()
-    request = queue.control.started[0]
-    assert run.plan_job_id == "j1" and run.status == "revising" and run.plan == old
-    assert (request["node"], request["gpus"], request["memory_gb"], request["kernel_name"]) == \
-        ("tkamd2", 0, 4, "meepsquared")
-    assert request["parameters"]["previous_plan"] == old and request["parameters"]["made"] == "Forge's plan job j0"
-    assert (request["parameters"]["milestones"], request["parameters"]["milestone_growth"]) == (0.02, 1.5)
-    assert "with_milestones" in "".join("".join(c["source"]) for c in request["notebook"]["cells"])
+    queue.files.preprocesses[run.id] = {"key": "k9", "folder": "/p/k9", "found": True, "report": {"rows": 3}}
+    queue.control.end(job_id)
     queue.tick()
-    assert len(queue.control.started) == 1
-    queue.files.plans[run.id] = {"decisions": [{"name": "revised"}], "estimated_seconds": 3700}
-    queue.control.end("j1")
+
+
+def test_a_plan_reuses_the_last_plans_measurements_on_a_cpu(queue):
+    reuse = {"plan": MEASURED, "job_id": "j0", "run": "b", "node": "tkspark"}
+    run = queue.run("b", status="preprocessing", plan=None, reuse=reuse, queue_on_plan=True)
+    preprocessed(queue, run, "j1")
+    assert (run.status, run.revises) == ("revising", "j0")
     queue.tick()
-    # Queued on its revised plan, and started at once: the node is free
+    request = queue.control.started[1]
+    assert run.plan_job_id == "j2"
+    assert (request["node"], request["gpus"], request["memory_gb"], request["parameters"]["mode"]) == \
+        ("tkamd2", 0, 16, "revise")
+    assert request["parameters"]["earlier_plan"] == MEASURED
+    assert request["parameters"]["reused_from"] == "Forge's plan job j0 of run b"
+    assert request["parameters"]["preprocessed"] == "/p/k9"
+    queue.tick()
+    assert len(queue.control.started) == 2
+    queue.files.revisions[run.id] = {"plan": {"decisions": [{"name": "measurements"}], "estimated_seconds": 3700}}
+    queue.control.end("j2")
+    queue.tick()
+    # Queued on its plan, and started at once: the node is free
     assert (run.status, run.plan["estimated_seconds"]) == ("running", 3700)
     assert queue.control.started[-1]["parameters"]["mode"] == "train"
 
 
-def test_a_revision_that_fails_fails_its_run(queue):
-    run = queue.run("a", status="revising", plan={"decisions": []}, revises="j0")
+def test_measurements_that_do_not_hold_are_measured_again_on_the_gpu(queue):
+    reuse = {"plan": MEASURED, "job_id": "j0", "run": "b", "node": "tkspark"}
+    run = queue.run("b", status="preprocessing", plan=None, reuse=reuse)
+    preprocessed(queue, run, "j1")
     queue.tick()
-    queue.control.end("j1", "error", "this plan keeps no revision basis")
+    queue.files.revisions[run.id] = {"measure_again": "the LoRA rank changed"}
+    queue.control.end("j2")
     queue.tick()
-    assert run.status == "failed" and "revision of the plan failed" in run.error
+    assert (run.status, run.plan_job_id, run.reuse["measure_again"]) == ("planning", None, "the LoRA rank changed")
+    queue.tick()
+    request = queue.control.started[-1]
+    assert (request["parameters"]["mode"], request["gpus"]) == ("plan", 1)
+    assert request["parameters"]["measured_because"] == \
+        "the measurements of Forge's plan job j0 of run b do not hold: the LoRA rank changed"
+
+
+def test_a_first_plan_reuses_another_runs_on_its_node_and_a_person_may_ask_to_measure(queue):
+    start = queue.clock.now
+    queue.run("older", status="completed", plan=MEASURED, plan_job_id="p1")
+    queue.clock.now = start + timedelta(minutes=1)
+    queue.run("newer", status="planned", plan=MEASURED, plan_job_id="p2")
+    # Newer still, and not reused: on another node's GPU, or without measurements
+    queue.clock.now = start + timedelta(minutes=2)
+    queue.run("elsewhere", status="completed", node="tkamd2", plan=MEASURED, plan_job_id="p3")
+    queue.run("unmeasured", status="completed", plan={"decisions": []}, plan_job_id="p4")
+    run = queue.run("first", status="preprocessing", plan=None)
+    preprocessed(queue, run, "j1")
+    assert (run.status, run.revises, run.reuse["run"]) == ("revising", "p2", "newer")
+    asked = queue.run("asked", status="preprocessing", plan=None, measure=True)
+    preprocessed(queue, asked, "j3")
+    assert asked.status == "planning" and asked.reuse is None
+
+
+def test_a_revision_job_that_fails_fails_its_run(queue):
+    run = queue.run("a", status="revising", plan=None, revises="j0",
+                    reuse={"plan": MEASURED, "job_id": "j0", "run": "a", "node": "tkspark"})
+    queue.tick()
+    queue.control.end("j1", "error", "KeyError")
+    queue.tick()
+    assert run.status == "failed" and "plan from earlier measurements failed" in run.error
 
 
 def test_a_plan_job_that_fails_fails_its_run(queue):
