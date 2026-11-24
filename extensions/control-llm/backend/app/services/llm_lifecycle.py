@@ -529,13 +529,25 @@ class LLMLifecycleManager:
         return round((self._weight_gb(base) or 0.0) + own + 1.0, 1)
 
     async def _load_shared(self, model_id: str, backend_type: str, node: str) -> ModelLoadResponse:
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
         from app.services.llm_model_registry import llm_model_registry
+        from app.services.llm_pod_manager import llm_pod_manager
 
         entry = llm_model_registry.get_model(model_id)
         try:
             estimated = self._shared_memory(entry, node)
         except ValueError as e:
             return ModelLoadResponse(model_id=model_id, state=entry.state, message=str(e))
+        can_load, reason = await llm_gpu_tracker.check_can_load(estimated, node_name=node)
+        if not can_load:
+            return ModelLoadResponse(model_id=model_id, state=entry.state,
+                                     message=f"Insufficient GPU resources on {node}: {reason}")
+        # The pod's Deployment exists before the model is marked loading: the reconcile takes a loading model
+        # whose Deployment is absent for a failed load
+        created, _ = await llm_pod_manager.ensure_pod(backend_type, node, gpu_count=1, wait_ready=False)
+        if not created:
+            return ModelLoadResponse(model_id=model_id, state=entry.state,
+                                     message=f"The {backend_type} pod on {node} could not be created")
         backend_id = f"{backend_type}-{node}"
         llm_model_registry.update_model_state(model_id, ModelState.loading, backend_id)
         asyncio.create_task(self._load_shared_background(model_id, backend_type, node, backend_id, estimated))
@@ -554,11 +566,6 @@ class LLMLifecycleManager:
         event = asyncio.Event()
         self._loading_locks[model_id] = event
         try:
-            can_load, reason = await llm_gpu_tracker.check_can_load(estimated, node_name=node)
-            if not can_load:
-                llm_model_registry.update_model_state(
-                    model_id, ModelState.deployable, error=f"Insufficient GPU resources on {node}: {reason}")
-                return
             success, pod = await llm_pod_manager.ensure_pod(backend_type, node, gpu_count=1)
             if not success or pod is None:
                 llm_model_registry.update_model_state(
