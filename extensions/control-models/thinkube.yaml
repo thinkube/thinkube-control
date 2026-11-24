@@ -68,6 +68,8 @@ spec:
         - apiGroups: [argoproj.io]
           resources: [workflows]
           verbs: [create, get, list, patch]
+      # MLflow's file system, where a registered part's files are written into its run (app/services/parts.py)
+      filesystems: [mlflow]
 
     - name: frontend
       build: ./frontend

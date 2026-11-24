@@ -5,11 +5,12 @@
 MLflow, and the publishing of fine-tuned models."""
 
 import asyncio
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -17,7 +18,7 @@ from app.core.config import settings
 from app.core.security import User, get_current_user, oauth2_scheme
 from app.db.session import get_db
 from app.models.model_mirrors import ModelMirrorJob
-from app.services import finetuned_models
+from app.services import finetuned_models, parts
 from app.services.metadata import invalidate_catalogs
 from app.services.model_downloader import ModelDownloaderService, MlflowDeleteError, catalog_entry, mlflow_token
 
@@ -298,6 +299,15 @@ async def register_finetuned_model(
     entry = request.catalog_entry
     try:
         finetuned_models.check_entry(entry)
+    except finetuned_models.FinetunedModelError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+    return await _publish(entry, db, token)
+
+
+async def _publish(entry: Dict[str, Any], db: Session, token: str) -> Dict[str, Any]:
+    """The checked entry written to the user's catalogue, its weights recorded as in place, and the LLM Gateway
+    told to read the catalogue again; returns the model's state there."""
+    try:
         repository = await asyncio.to_thread(finetuned_models.write_entry, entry)
     except finetuned_models.FinetunedModelError as e:
         raise HTTPException(status_code=e.status, detail=str(e))
@@ -322,3 +332,47 @@ async def register_finetuned_model(
                             f"answer: {e}")
     state = status.json()["model"]["state"] if status.status_code == 200 else None
     return {"model_id": entry["id"], "repository": repository, "state": state}
+
+
+@router.post("/parts", operation_id="models_register_part")
+async def register_part(
+    catalog_entry: str = Form(..., description="the part's catalogue entry, as JSON"),
+    files: List[UploadFile] = File(..., description="the part's files, meepserve.json among them"),
+    current_user: User = Depends(get_current_user),
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+):
+    """Register a trained part on a base model (a tagger, a choice head; Meep²'s serving package meepserve) from its
+    files: they become a model version in MLflow, and its catalogue entry makes the LLM Gateway serve it with the
+    transformers backend, task heads. A multipart form: catalog_entry, the entry as JSON (every catalogue field,
+    server_type ["transformers"], task "heads", quantization "FP32" or "BF16", base_model the base's catalogue id,
+    is_finetuned true, serving_name equal to id), and files, the part's files with plain names, its contract
+    meepserve.json among them naming the same base. The base must be mirrored. state is the part's state in the LLM
+    Gateway after it read the catalogue again."""
+    try:
+        entry = json.loads(catalog_entry)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=422, detail=f"catalog_entry is not JSON: {e}")
+    if not isinstance(entry, dict):
+        raise HTTPException(status_code=422, detail="catalog_entry is a JSON object")
+    contents = {f.filename: await f.read() for f in files}
+    try:
+        finetuned_models.check_entry(entry)
+        if entry["server_type"] != ["transformers"]:
+            raise finetuned_models.FinetunedModelError("a part is served by the transformers backend, task heads", 422)
+        contract = json.loads(contents[parts.CONTRACT]) if parts.CONTRACT in contents else {}
+        parts.check_files(list(contents), contract, entry)
+    except (finetuned_models.FinetunedModelError, json.JSONDecodeError) as e:
+        status = e.status if isinstance(e, finetuned_models.FinetunedModelError) else 422
+        raise HTTPException(status_code=status, detail=str(e))
+    base = db.query(ModelMirrorJob).filter(ModelMirrorJob.model_id == entry["base_model"]).first()
+    if base is None or base.status != "succeeded":
+        raise HTTPException(status_code=409, detail=f"the base {entry['base_model']} is not mirrored; mirror it first "
+                                                    "(models_mirror)")
+    try:
+        mlflow = parts.Mlflow(settings.MLFLOW_TRACKING_URI, await mlflow_token())
+        written = await asyncio.to_thread(parts.write_part, mlflow, entry, contents)
+    except (finetuned_models.FinetunedModelError, MlflowDeleteError) as e:
+        raise HTTPException(status_code=getattr(e, "status", 502), detail=str(e))
+    published = await _publish(entry, db, token)
+    return {**published, "mlflow": written}
