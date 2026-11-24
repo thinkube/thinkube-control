@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+
+# Node
+node_modules/
+dist/
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Build artifacts
+build/
+*.egg-info/
+
+# Ansible inventory - contains sensitive data
+ansible/inventory/
+
+
+# Temporary files
+*.tmp
+*.bak
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Copier
+.copier-answers.yml
+
+# Cache directories
+.cache/
+
+# Package lock files (regenerated during builds)
+# package-lock.json is KEPT: this is an application, not a library. The
+# lock is what makes an install reproducible — the same tree in the
+# pipeline, in a worker's tree and on a person's machine — and it is what
+# lets `npm ci` skip the resolver, which on npm 10.9 crashes outright
+# resolving this frontend's peer graph from nothing.
+
+# GitOps helper scripts (added by deployment)
+DEVELOPMENT.md
+install-hooks.sh
+prepare-for-github.sh
+reprocess-templates.sh
+.git-hooks/
+
+# Local Claude Code and Tandem state
+.claude/
+.tandem/

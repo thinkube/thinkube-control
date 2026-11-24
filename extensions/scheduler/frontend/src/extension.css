@@ -1,0 +1,11 @@
+/*
+ * Copyright Alejandro Martínez Corriá and the Thinkube contributors
+ * SPDX-License-Identifier: MIT
+ */
+
+/* The extension inside Thinkube Control: its utility classes only. Control has
+   already set the base styles, which Tailwind's preflight would set again
+   over Control's own. */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "./theme.css";

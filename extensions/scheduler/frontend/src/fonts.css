@@ -1,0 +1,15 @@
+/*
+ * Copyright Alejandro Martínez Corriá and the Thinkube contributors
+ * SPDX-License-Identifier: MIT
+ */
+
+/* The fonts of the app on its own. Inside Thinkube Control, Control has loaded them. */
+@import "@fontsource/poppins/300.css";
+@import "@fontsource/poppins/400.css";
+@import "@fontsource/poppins/500.css";
+@import "@fontsource/poppins/600.css";
+@import "@fontsource/poppins/700.css";
+@import "@fontsource/noto-sans-mono/400.css";
+@import "@fontsource/noto-sans-mono/500.css";
+@import "@fontsource/noto-sans-mono/600.css";
+@import "@fontsource/noto-sans-mono/700.css";

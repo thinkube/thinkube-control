@@ -1,0 +1,70 @@
+# Copyright Alejandro Martínez Corriá and the Thinkube contributors
+# SPDX-License-Identifier: MIT
+
+apiVersion: thinkube.io/v1
+kind: ThinkubeDeployment
+metadata:
+  # The application's version; the generated app starts at it.
+  version: "0.1.0"
+
+spec:
+  deployment:
+    type: extension
+
+  # A part of Thinkube Control: Control lists it, draws its pages from the
+  # module the frontend builds, and forwards the module's API calls to /api/v1
+  extension:
+    title: Scheduler
+    description: "Running work on the nodes: whose turn it is, and on which GPU"
+    icon: calendar-clock
+    platform: "0.1"
+    ui:
+      module: /extension/index.js
+      css: /extension/index.css
+    nav:
+      - label: Nodes
+        path: /
+        icon: server
+
+  containers:
+    - name: backend
+      build: ./backend
+      port: 8000
+      size: medium
+      health: /health
+      test:
+        enabled: true
+        image: "python-base:3.12-slim"
+        command: "./run_tests.sh"
+        one: "./run_tests.sh <file>"
+      migrations:
+        tool: alembic
+        auto: true
+      # The node-metrics pods of Thinkube Control, one on each node, which say what each GPU holds
+      access:
+        - apiGroups: [""]
+          resources: [pods]
+          verbs: [list]
+
+    - name: frontend
+      build: ./frontend
+      port: 80
+      size: small
+      health: /health
+      publicEnv:
+        - APP_TITLE
+      test:
+        enabled: true
+        # node-base carries git, which npm needs to install thinkube-style
+        image: "node-base:22-alpine"
+        command: "./run_tests.sh"
+        one: "./run_tests.sh <file>"
+
+  routes:
+    - path: /api
+      to: backend
+    - path: /
+      to: frontend
+
+  services:
+    - database
