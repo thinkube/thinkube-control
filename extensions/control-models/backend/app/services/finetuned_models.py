@@ -10,6 +10,11 @@ adapter into a 16-bit checkpoint, uploaded it to the model folder of its run
 and registered a model version, or an export converted that checkpoint to a
 GGUF file or quantized it to NVFP4 the same way. The entry is what makes the LLM Gateway know the
 model; vLLM or llama.cpp serves it from that folder.
+
+A trained part on a base model (a tagger, a choice head; Meep²'s serving
+package, meepserve) is registered the same way: its folder, with its
+meepserve.json, is the model version in MLflow; the transformers backend
+serves it with the task heads, on the base its entry names in base_model.
 """
 
 import base64
@@ -39,14 +44,18 @@ class FinetunedModelError(Exception):
 
 
 # How a fine-tune is served: vLLM from the merged 16-bit checkpoint or an
-# NVFP4 checkpoint quantized from it (Blackwell GPUs only), or llama.cpp from
-# a GGUF file converted from it
-SERVING = {"vllm": {"BF16", "NVFP4"}, "llama-cpp": {"Q8_0", "F16"}}
+# NVFP4 checkpoint quantized from it (Blackwell GPUs only), llama.cpp from a
+# GGUF file converted from it, or the transformers backend from a trained
+# part's folder on its base (the base in float32 or bfloat16)
+SERVING = {"vllm": {"BF16", "NVFP4"}, "llama-cpp": {"Q8_0", "F16"}, "transformers": {"FP32", "BF16"}}
+# The task each serving path serves a fine-tune with
+TASKS = {"vllm": "text-generation", "llama-cpp": "text-generation", "transformers": "heads"}
 
 
 def check_entry(entry: Dict[str, Any]) -> None:
     """Refuse an entry that is incomplete, or that names a serving path other
-    than vLLM with the merged 16-bit checkpoint or its NVFP4 quantization, or llama.cpp with a GGUF file."""
+    than vLLM with the merged 16-bit checkpoint or its NVFP4 quantization, llama.cpp with a GGUF file, or the
+    transformers backend with a trained part, task heads, whose entry names its base in base_model."""
     missing = [field for field in CATALOG_FIELDS if field not in entry]
     if missing:
         raise FinetunedModelError(f"catalog_entry is missing: {', '.join(missing)}", 422)
@@ -58,10 +67,13 @@ def check_entry(entry: Dict[str, Any]) -> None:
     if entry["quantization"] not in quantizations:
         raise FinetunedModelError(f"catalog_entry has quantization {entry['quantization']}; {servers[0]} serves a "
                                   f"fine-tune as {sorted(quantizations)}", 422)
-    required = {"task": "text-generation", "is_finetuned": True, "serving_name": entry["id"]}
+    required = {"task": TASKS[servers[0]], "is_finetuned": True, "serving_name": entry["id"]}
     wrong = {field: entry[field] for field, value in required.items() if entry[field] != value}
     if wrong:
         raise FinetunedModelError(f"catalog_entry has {wrong}; a fine-tune needs {required}", 422)
+    if servers[0] == "transformers" and not (isinstance(entry.get("base_model"), str) and entry["base_model"]):
+        raise FinetunedModelError("catalog_entry has no base_model: a trained part names the catalogue id of the "
+                                  "base it runs on", 422)
 
 
 def write_entry(entry: Dict[str, Any]) -> str:

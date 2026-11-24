@@ -50,6 +50,18 @@ def test_a_gguf_entry_for_vllm_or_with_another_quantization_is_refused():
         fm.check_entry({**ENTRY, "server_type": ["vllm", "llama-cpp"]})
 
 
+def test_a_trained_part_is_served_by_the_transformers_backend_on_its_base():
+    part = {**ENTRY, "id": "kubexlat/ja-parse", "serving_name": "kubexlat/ja-parse", "server_type": ["transformers"],
+            "task": "heads", "quantization": "FP32", "base_model": "FacebookAI/xlm-roberta-large"}
+    fm.check_entry(part)
+    with pytest.raises(fm.FinetunedModelError, match="no base_model"):
+        fm.check_entry({k: v for k, v in part.items() if k != "base_model"})
+    with pytest.raises(fm.FinetunedModelError, match="'task': 'text-generation'"):
+        fm.check_entry({**part, "task": "text-generation"})
+    with pytest.raises(fm.FinetunedModelError, match="'task': 'heads'"):
+        fm.check_entry({**ENTRY, "task": "heads"})
+
+
 class GitHub:
     """The GitHub contents API of one repository holding models.json."""
 

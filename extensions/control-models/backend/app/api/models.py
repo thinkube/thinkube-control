@@ -291,7 +291,9 @@ async def register_finetuned_model(
     server_type ["vllm"] and quantization "BF16" (the merged weights) or
     "NVFP4" (their NVFP4 quantization, served on Blackwell GPUs only), or
     server_type ["llama-cpp"] and quantization "Q8_0" or "F16" (a GGUF file),
-    is_finetuned true and serving_name equal to id. state is the model's state
+    or, for a trained part on a base model (a tagger, a choice head), server_type
+    ["transformers"], task "heads", quantization "FP32" or "BF16" and base_model,
+    the base's catalogue id; is_finetuned true and serving_name equal to id. state is the model's state
     in the LLM Gateway after it read the catalogue again."""
     entry = request.catalog_entry
     try:
