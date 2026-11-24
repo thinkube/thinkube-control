@@ -82,6 +82,7 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("POST /v1/chat/completions", authMiddleware.Wrap(http.HandlerFunc(openaiHandler.ChatCompletions)))
 	s.mux.Handle("POST /v1/embeddings", authMiddleware.Wrap(http.HandlerFunc(openaiHandler.Embeddings)))
 	s.mux.Handle("POST /v1/rerank", authMiddleware.Wrap(http.HandlerFunc(openaiHandler.Rerank)))
+	s.mux.Handle("POST /v1/heads", authMiddleware.Wrap(http.HandlerFunc(openaiHandler.Heads)))
 	s.mux.Handle("POST /v1/images/generations", authMiddleware.Wrap(http.HandlerFunc(openaiHandler.ImageGenerations)))
 	s.mux.Handle("POST /v1/audio/speech", authMiddleware.Wrap(http.HandlerFunc(openaiHandler.AudioSpeech)))
 	s.mux.Handle("POST /v1/audio/transcriptions", authMiddleware.Wrap(http.HandlerFunc(openaiHandler.AudioTranscriptions)))

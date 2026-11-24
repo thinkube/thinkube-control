@@ -316,6 +316,13 @@ func (h *OpenAIHandler) Rerank(w http.ResponseWriter, r *http.Request) {
 	h.forwardJSON(w, r, "/rerank", "rerank")
 }
 
+// Heads forwards a request to a trained part on a base model (a tagger, a
+// choice head; see meepserve's design): the body names the model, and the
+// rest of it is the part's kind's request, which the backend answers.
+func (h *OpenAIHandler) Heads(w http.ResponseWriter, r *http.Request) {
+	h.forwardJSON(w, r, "/heads", "heads")
+}
+
 // ImageGenerations forwards an image request; the backend answers with the
 // images as base64 JSON or URLs.
 func (h *OpenAIHandler) ImageGenerations(w http.ResponseWriter, r *http.Request) {
