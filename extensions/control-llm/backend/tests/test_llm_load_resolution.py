@@ -48,7 +48,7 @@ def world(monkeypatch):
     async def get_status():
         return SimpleNamespace(nodes=state["nodes"])
 
-    async def plan_sizing(node_name, target_gb, gpu_count=1, weight_gb=None, share_gb=None):
+    async def plan_sizing(node_name, target_gb, gpu_count=1, weight_gb=None, share_gb=None, estimate_binds=True):
         return {"fits": target_gb <= state["fits_up_to_gb"], "reason": "ok"}
 
     gpu_nodes = {"tkamd2", "tkspark"}
@@ -68,7 +68,8 @@ def world(monkeypatch):
 
     captured = {}
 
-    async def fake_performance(model_id, backend=None, node=None, max_context_length=None, num_speculative_tokens=None):
+    async def fake_performance(model_id, backend=None, node=None, max_context_length=None, num_speculative_tokens=None,
+                               gpus=None):
         captured.update(backend=backend, node=node, context=max_context_length)
         return SimpleNamespace(model_id=model_id, state=ModelState.loading, message="captured")
 
