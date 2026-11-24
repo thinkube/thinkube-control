@@ -279,7 +279,7 @@ def test_a_run_asked_to_queue_on_its_plan_joins_the_end_of_its_queue(queue):
 
 
 def test_a_revised_plan_needs_no_gpu_and_measures_nothing(queue):
-    queue.run("first", position=1)
+    queue.run("first", status="paused", paused_by="user", position=1)
     old = {"decisions": [], "estimated_seconds": 3600, "revision_basis": {"planned_steps": 100}}
     run = queue.run("b", status="revising", plan=old, revises="j0", queue_on_plan=True)
     run.job = {**run.job, "milestones": 0.02, "milestone_growth": 1.5}
@@ -292,7 +292,7 @@ def test_a_revised_plan_needs_no_gpu_and_measures_nothing(queue):
     assert (request["parameters"]["milestones"], request["parameters"]["milestone_growth"]) == (0.02, 1.5)
     assert "with_milestones" in "".join("".join(c["source"]) for c in request["notebook"]["cells"])
     queue.tick()
-    assert [r["parameters"]["run_id"] for r in queue.control.started].count(run.id) == 1
+    assert len(queue.control.started) == 1
     queue.files.plans[run.id] = {"decisions": [{"name": "revised"}], "estimated_seconds": 3700}
     queue.control.end("j1")
     queue.tick()
