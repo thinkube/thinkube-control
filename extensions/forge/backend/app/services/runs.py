@@ -193,10 +193,11 @@ def milestones_of(every: Optional[float], training: Optional[Dict[str, Any]], co
     top candidate is right, and the scoring service is not asked, so it takes no metrics and no source column.
     weights, a choice run's: the method whose weights answer the rows (Meep²'s milestone_weights), such as qlora for
     the NF4 base a 24 GB GPU serves, when it is not the training's. growth: the milestones at growing distances,
-    the first at `every` of the planned steps and each next one at growth times the step before (Meep²'s
+    the first distance `every` of the planned steps and each next one growth times the one before (Meep²'s
     milestone_growth)."""
     if growth is not None and not growth > 1:
-        raise ValueError(f"milestones.growth is above 1, the factor from one milestone's step to the next, not {growth}")
+        raise ValueError(f"milestones.growth is above 1, the factor from one distance between milestones to the next, "
+                         f"not {growth}")
     if weights is not None:
         if weights not in METHODS:
             raise ValueError(f"milestones.weights is one of {list(METHODS)}, not {weights!r}")

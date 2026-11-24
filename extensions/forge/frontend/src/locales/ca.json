@@ -228,7 +228,7 @@
     "milestonesHelp": "Desa l'adaptador a una part de l'entrenament i, amb un conjunt d'avaluació, puntua el que escriu el model a cadascuna.",
     "milestoneEvery": "Cada (% de l'entrenament)",
     "milestoneGrowth": "Creixement (opcional)",
-    "milestoneGrowthHelp": "Buit per a fites a distàncies iguals. Un factor més gran que 1 les separa cada cop més: la primera al percentatge de dalt i cadascuna en aquest factor pel pas de l'anterior (1,5: passos 100, 150, 225, ...), freqüents al principi, on les puntuacions canvien ràpid, i escasses després.",
+    "milestoneGrowthHelp": "Buit per a fites a distàncies iguals. Un factor més gran que 1 les separa cada cop més: la primera després del percentatge de dalt, i cada distància entre dues fites és aquest factor per l'anterior (1,5 amb una primera distància de 500 passos: passos 500, 1250, 2375, ...), freqüents al principi, on les puntuacions canvien ràpid, i escasses després.",
     "milestoneEvalSet": "Conjunt d'avaluació",
     "milestoneAdapterOnly": "Cap: només desa l'adaptador",
     "milestoneSplit": "La seva partició",

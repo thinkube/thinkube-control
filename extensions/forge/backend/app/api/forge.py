@@ -128,11 +128,11 @@ class Milestones(BaseModel):
 
     every: float = Field(..., gt=0, le=1, description="the share of the planned steps between milestones, such as "
                                                        "0.02 for every 2%; there is one at the last step too. With "
-                                                       "growth, the share at the first milestone")
-    growth: Optional[float] = Field(None, gt=1, description="milestones at growing distances: each next one at growth "
-                                                            "times the step before (1.5: steps 100, 150, 225, ...), "
-                                                            "often at the start and seldom later; equal distances "
-                                                            "when not given")
+                                                       "growth, the share before the first milestone")
+    growth: Optional[float] = Field(None, gt=1, description="milestones at growing distances: each distance between two "
+                                                            "is growth times the one before (1.5 with a first distance "
+                                                            "of 500: steps 500, 1250, 2375, ...), often at the start "
+                                                            "and seldom later; equal distances when not given")
     eval_dataset_id: Optional[str] = Field(None, description="the evaluation set: a dataset of Datasets whose mapping "
                                                              "gives each row's prompt and its expected answer; "
                                                              "without it a milestone keeps the adapter only")
