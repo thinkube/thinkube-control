@@ -12,8 +12,8 @@ Registering it writes the files into a new run of the MLflow experiment
 model-registry, as a mirror writes a model, under the run's artifact folder
 model/, with an MLmodel naming the flavor meepserve, and registers a model
 version under the part's id. The catalogue entry (finetuned_models) then
-makes the LLM Gateway serve it with the transformers backend, task heads, on
-the base its entry names, which must be mirrored.
+makes the LLM Gateway serve it with the heads backend, task heads, on the
+base its entry names, which must be mirrored.
 
 The files are written through MLflow's file system, mounted at
 MLFLOW_ROOT: a run's artifact URI mlflow-artifacts:/<x> is the folder

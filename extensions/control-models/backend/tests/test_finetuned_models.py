@@ -50,8 +50,8 @@ def test_a_gguf_entry_for_vllm_or_with_another_quantization_is_refused():
         fm.check_entry({**ENTRY, "server_type": ["vllm", "llama-cpp"]})
 
 
-def test_a_trained_part_is_served_by_the_transformers_backend_on_its_base():
-    part = {**ENTRY, "id": "kubexlat/ja-parse", "serving_name": "kubexlat/ja-parse", "server_type": ["transformers"],
+def test_a_trained_part_is_served_by_the_heads_backend_on_its_base():
+    part = {**ENTRY, "id": "kubexlat/ja-parse", "serving_name": "kubexlat/ja-parse", "server_type": ["heads"],
             "task": "heads", "quantization": "FP32", "base_model": "FacebookAI/xlm-roberta-large"}
     fm.check_entry(part)
     with pytest.raises(fm.FinetunedModelError, match="no base_model"):

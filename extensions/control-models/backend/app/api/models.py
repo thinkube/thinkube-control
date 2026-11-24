@@ -293,7 +293,7 @@ async def register_finetuned_model(
     "NVFP4" (their NVFP4 quantization, served on Blackwell GPUs only), or
     server_type ["llama-cpp"] and quantization "Q8_0" or "F16" (a GGUF file),
     or, for a trained part on a base model (a tagger, a choice head), server_type
-    ["transformers"], task "heads", quantization "FP32" or "BF16" and base_model,
+    ["heads"], task "heads", quantization "FP32" or "BF16" and base_model,
     the base's catalogue id; is_finetuned true and serving_name equal to id. state is the model's state
     in the LLM Gateway after it read the catalogue again."""
     entry = request.catalog_entry
@@ -344,8 +344,8 @@ async def register_part(
 ):
     """Register a trained part on a base model (a tagger, a choice head; Meep²'s serving package meepserve) from its
     files: they become a model version in MLflow, and its catalogue entry makes the LLM Gateway serve it with the
-    transformers backend, task heads. A multipart form: catalog_entry, the entry as JSON (every catalogue field,
-    server_type ["transformers"], task "heads", quantization "FP32" or "BF16", base_model the base's catalogue id,
+    heads backend, which holds its base once for all the parts on it. A multipart form: catalog_entry, the entry as
+    JSON (every catalogue field, server_type ["heads"], task "heads", quantization "FP32" or "BF16", base_model the base's catalogue id,
     is_finetuned true, serving_name equal to id), and files, the part's files with plain names, its contract
     meepserve.json among them naming the same base. The base must be mirrored. state is the part's state in the LLM
     Gateway after it read the catalogue again."""
@@ -358,8 +358,8 @@ async def register_part(
     contents = {f.filename: await f.read() for f in files}
     try:
         finetuned_models.check_entry(entry)
-        if entry["server_type"] != ["transformers"]:
-            raise finetuned_models.FinetunedModelError("a part is served by the transformers backend, task heads", 422)
+        if entry["server_type"] != ["heads"]:
+            raise finetuned_models.FinetunedModelError("a part is served by the heads backend, task heads", 422)
         contract = json.loads(contents[parts.CONTRACT]) if parts.CONTRACT in contents else {}
         parts.check_files(list(contents), contract, entry)
     except (finetuned_models.FinetunedModelError, json.JSONDecodeError) as e:

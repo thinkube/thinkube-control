@@ -133,7 +133,6 @@ def validate_replicas(config: Dict[str, Any]) -> List[str]:
     return errors
 
 
-LLM_BACKEND_DRIVERS = ('per-model-pod', 'ollama')
 LLM_BACKEND_TIERS = ('performance', 'flexible')
 
 
@@ -142,7 +141,9 @@ def validate_llm_backend(config: Dict[str, Any]) -> List[str]:
 
     A backend of the LLM gateway is a gateway-managed component: the gateway
     copies the named container's base Deployment for each model it loads and
-    reaches the copy on that container's port.
+    reaches the copy on that container's port. The driver is named here and
+    checked by the LLM gateway (the extension control-llm), which knows the
+    drivers it has: a new driver ships with the gateway, not with Control.
     """
     spec = config.get('spec', {})
     backend = spec.get('llm_backend')
@@ -165,10 +166,11 @@ def validate_llm_backend(config: Dict[str, Any]) -> List[str]:
         )
     if not backend.get('display_name'):
         errors.append("spec.llm_backend.display_name is required.")
-    if backend.get('driver') not in LLM_BACKEND_DRIVERS:
+    driver = backend.get('driver')
+    if not driver or not re.match(r'^[a-z][a-z0-9-]*$', str(driver)):
         errors.append(
-            f"spec.llm_backend.driver '{backend.get('driver')}' "
-            f"is not one of {', '.join(LLM_BACKEND_DRIVERS)}."
+            f"spec.llm_backend.driver '{driver}' is invalid: the name of one of the LLM gateway's drivers, "
+            "lowercase alphanumeric with hyphens."
         )
     if backend.get('tier') not in LLM_BACKEND_TIERS:
         errors.append(

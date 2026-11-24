@@ -106,7 +106,7 @@ def test_an_app_cannot_be_a_backend():
 @pytest.mark.parametrize(
     "field,value,expected",
     [
-        ("driver", "shared", "driver 'shared'"),
+        ("driver", "Shared Pod", "driver 'Shared Pod'"),
         ("tier", "fast", "tier 'fast'"),
         ("type", "vLLM", "type 'vLLM'"),
         ("container", "server", "names no container"),
@@ -125,3 +125,7 @@ def test_a_compute_capability_is_major_dot_minor():
 def test_the_serving_container_must_have_a_port():
     [error] = validate_llm_backend(_config(containers=[{"name": "inference", "build": "."}]))
     assert "must declare a port" in error
+
+
+def test_a_driver_is_named_by_the_backend_and_known_by_the_gateway_not_by_control():
+    assert validate_llm_backend(_config(backend={**BACKEND, "driver": "shared-pod"})) == []
