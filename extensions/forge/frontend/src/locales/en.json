@@ -145,7 +145,9 @@
     "qloraHelp": "The base model in 4-bit. Needs the least memory.",
     "loraHelp": "The base model in 16-bit. Meep²'s default.",
     "fp8": "LoRA on FP8 weights",
-    "fp8Help": "The frozen weights held in FP8: less memory, faster on GPUs with FP8 tensor cores. The plan refuses it where the GPU has none."
+    "fp8Help": "The frozen weights held in FP8: less memory, faster on GPUs with FP8 tensor cores. The plan refuses it where the GPU has none.",
+    "nvfp4": "LoRA on NVFP4 weights",
+    "nvfp4Help": "The frozen weights and their inputs held in NVFP4, on Blackwell's FP4 tensor cores: about twice as fast as 16 bits on a DGX Spark. The plan refuses it where the GPU has none."
   },
   "modelState": {
     "registered": "Registered",

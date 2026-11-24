@@ -53,7 +53,7 @@ TRAINING = ("running", "stopping")
 ENDED = ("completed", "failed", "cancelled")
 UNSUCCESSFUL = ("failed", "cancelled")
 WHEN = ("now", "slots")
-METHODS = ("lora", "qlora", "fp8")
+METHODS = ("lora", "qlora", "fp8", "nvfp4")
 # A model id the catalogue gives a fine-tune: forge/<name of the run>
 MODEL_NAMESPACE = "forge"
 # The memory a plan job asks for: the base model's 16-bit weights, which it

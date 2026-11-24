@@ -145,7 +145,9 @@
     "qloraHelp": "El model base en 4 bits. Necessita menys memòria.",
     "loraHelp": "El model base en 16 bits. El valor per defecte de Meep².",
     "fp8": "LoRA sobre pesos FP8",
-    "fp8Help": "Els pesos congelats en FP8: menys memòria, més ràpid en GPU amb nuclis tensorials FP8. El pla ho rebutja on la GPU no en té."
+    "fp8Help": "Els pesos congelats en FP8: menys memòria, més ràpid en GPU amb nuclis tensorials FP8. El pla ho rebutja on la GPU no en té.",
+    "nvfp4": "LoRA sobre pesos NVFP4",
+    "nvfp4Help": "Els pesos congelats i les seves entrades en NVFP4, en els nuclis tensorials FP4 de Blackwell: unes dues vegades més ràpid que en 16 bits en un DGX Spark. El pla ho rebutja on la GPU no en té."
   },
   "modelState": {
     "registered": "Registrat",

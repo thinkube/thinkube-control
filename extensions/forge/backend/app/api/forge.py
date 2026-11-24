@@ -181,7 +181,7 @@ class NewRun(BaseModel):
     eval_split: Optional[str] = None
     eval_holdout: float = Field(0, ge=0, le=runs.MAX_HOLDOUT)
     base_model: str
-    method: Literal["lora", "qlora", "fp8"] = "lora"
+    method: Literal["lora", "qlora", "fp8", "nvfp4"] = "lora"
     node: str
     register_model: bool = Field(True, alias="register")
     steps: Optional[int] = Field(None, gt=0, le=10_000_000)

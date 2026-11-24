@@ -504,7 +504,7 @@ export default function NewRunPage() {
             <div className="space-y-2">
               <TkLabel>{t('newRun.method')}</TkLabel>
               <TkRadioGroup value={method} onValueChange={(v) => setMethod(v as Method)}>
-                {(['lora', 'qlora', 'fp8'] as Method[]).map((m) => (
+                {(['lora', 'qlora', 'fp8', 'nvfp4'] as Method[]).map((m) => (
                   <label key={m} className="flex items-start gap-2 text-sm">
                     <TkRadioGroupItem value={m} className="mt-0.5" />
                     <span>

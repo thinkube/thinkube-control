@@ -97,7 +97,7 @@ export interface Preview {
   templated: boolean;
 }
 
-export type Method = 'lora' | 'qlora' | 'fp8';
+export type Method = 'lora' | 'qlora' | 'fp8' | 'nvfp4';
 
 /** A new run: a Meep² job; auto mode decides every decision not named in `decisions`. */
 export interface NewRun {
