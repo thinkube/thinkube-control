@@ -279,7 +279,6 @@ def test_a_run_asked_to_queue_on_its_plan_joins_the_end_of_its_queue(queue):
 
 
 def test_a_revised_plan_needs_no_gpu_and_measures_nothing(queue):
-    queue.run("first", status="paused", paused_by="user", position=1)
     old = {"decisions": [], "estimated_seconds": 3600, "revision_basis": {"planned_steps": 100}}
     run = queue.run("b", status="revising", plan=old, revises="j0", queue_on_plan=True)
     run.job = {**run.job, "milestones": 0.02, "milestone_growth": 1.5}
@@ -296,7 +295,9 @@ def test_a_revised_plan_needs_no_gpu_and_measures_nothing(queue):
     queue.files.plans[run.id] = {"decisions": [{"name": "revised"}], "estimated_seconds": 3700}
     queue.control.end("j1")
     queue.tick()
-    assert (run.status, run.position, run.plan["estimated_seconds"]) == ("queued", 2, 3700)
+    # Queued on its revised plan, and started at once: the node is free
+    assert (run.status, run.plan["estimated_seconds"]) == ("running", 3700)
+    assert queue.control.started[-1]["parameters"]["mode"] == "train"
 
 
 def test_a_revision_that_fails_fails_its_run(queue):
