@@ -88,3 +88,22 @@ def test_an_unloaded_model_is_not_loaded_again_while_its_pod_stops(world):
     serving(world)
     world.registry._reconcile_states()
     assert world.entry.state == ModelState.available and world.entry.backend_id == BACKEND
+
+
+def test_a_load_cancelled_before_its_deployment_existed_deletes_it_once_made(world, monkeypatch):
+    import app.services.llm_pod_manager as pods
+
+    made = []
+
+    async def ensure_pod(backend_type, node, **kwargs):
+        made.append((backend_type, node, kwargs["model_id"]))
+        return True, None
+
+    pods.llm_pod_manager.ensure_pod = ensure_pod
+    manager = LLMLifecycleManager()
+    asyncio.run(manager.unload_model(MODEL))
+    asyncio.run(manager._load_performance_background(MODEL, "vllm", "tkamd2", 1,
+                                                     {"model_id": MODEL, "task": "text-generation"}, 24.0))
+    assert made == [("vllm", "tkamd2", MODEL)]
+    assert world.deleted == [("vllm", "tkamd2", MODEL), ("vllm", "tkamd2", MODEL)]
+    assert world.entry.state == ModelState.deployable

@@ -862,6 +862,14 @@ class LLMLifecycleManager:
                     error=f"Failed to create {perf_type} deployment on {node}",
                 )
                 return
+            # A load cancelled before its Deployment existed deleted nothing; the
+            # Deployment made since is deleted now
+            entry = llm_model_registry.get_model(model_id)
+            if entry is None or entry.state != ModelState.loading or \
+                    entry.backend_id != f"{perf_type}-{node}/{model_slug(model_id)}":
+                await llm_pod_manager.delete_pod(perf_type, node, model_id)
+                logger.info(f"The load of {model_id} on {node} was cancelled; its Deployment was deleted")
+                return
 
             logger.info(
                 f"Deployment created for {model_id} on {perf_type}/{node}, "
