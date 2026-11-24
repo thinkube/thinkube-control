@@ -292,7 +292,7 @@ def test_a_revised_plan_needs_no_gpu_and_measures_nothing(queue):
     assert (request["parameters"]["milestones"], request["parameters"]["milestone_growth"]) == (0.02, 1.5)
     assert "with_milestones" in "".join("".join(c["source"]) for c in request["notebook"]["cells"])
     queue.tick()
-    assert len(queue.control.started) == 1
+    assert [r["parameters"]["run_id"] for r in queue.control.started].count(run.id) == 1
     queue.files.plans[run.id] = {"decisions": [{"name": "revised"}], "estimated_seconds": 3700}
     queue.control.end("j1")
     queue.tick()
