@@ -83,7 +83,9 @@
               app: jupyter-venv-updater
               venv-name: "{{ venv_name }}"
           spec:
-            ttlSecondsAfterFinished: 600
+            # No ttlSecondsAfterFinished: a Job that ended is kept until this playbook has read it and removes it
+            # (last task). A Job deleted after it ended, while the playbook still waited for another node's,
+            # was not found and failed the update that had worked.
             backoffLimit: 0
             template:
               spec:

@@ -439,3 +439,32 @@ def test_the_reconciler_knows_a_running_package_update():
         assert not jv.venv_task_running("u1", "deleting")
 
     asyncio.run(scenario())
+
+
+def test_an_update_is_refused_while_a_node_is_in_training_mode(monkeypatch):
+    from fastapi import HTTPException
+
+    from app.services import training_mode
+
+    venv = SimpleNamespace(id=uuid.uuid4(), name="meepsquared", status="success", output="ok", is_template=False,
+                           completed_at=None)
+
+    async def training():
+        return {"node": "tkamd2", "reason": "run 62bc4239", "started": "2026-11-24T10:00:00Z"}
+
+    monkeypatch.setattr(training_mode, "status", training)
+    try:
+        asyncio.run(jv.update_venv_package(venv.id, jv.UpdatePackageRequest(package="meepsquared @ git+https://x@1"),
+                                           db=FakeDB(venv), current_user={}))
+    except HTTPException as e:
+        assert e.status_code == 409 and "tkamd2 is in training mode (run 62bc4239" in e.detail
+    else:
+        raise AssertionError("expected a refusal")
+    assert venv.status == "success"
+
+
+def test_update_jobs_are_kept_until_the_playbook_has_read_them():
+    from pathlib import Path
+
+    playbook = Path(__file__).resolve().parents[2] / "ansible/playbooks/update_venv_package.yaml"
+    assert "ttlSecondsAfterFinished:" not in playbook.read_text().replace("# No ttlSecondsAfterFinished:", "")
