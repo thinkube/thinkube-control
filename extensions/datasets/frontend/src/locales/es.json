@@ -203,7 +203,8 @@
     "text": "Texto",
     "candidates": "Candidatos",
     "target": "Probabilidades objetivo",
-    "right": "Candidatos correctos"
+    "right": "Candidatos correctos",
+    "none": "Candidato «ninguno» (su índice)"
   },
   "status": {
     "ready": "Listo",

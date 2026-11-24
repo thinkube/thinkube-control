@@ -203,7 +203,8 @@
     "text": "Text",
     "candidates": "Candidates",
     "target": "Target probabilities",
-    "right": "Right candidates"
+    "right": "Right candidates",
+    "none": "None candidate (its index)"
   },
   "status": {
     "ready": "Ready",

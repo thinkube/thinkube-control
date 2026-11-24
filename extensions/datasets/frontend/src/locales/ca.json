@@ -203,7 +203,8 @@
     "text": "Text",
     "candidates": "Candidats",
     "target": "Probabilitats objectiu",
-    "right": "Candidats correctes"
+    "right": "Candidats correctes",
+    "none": "Candidat «cap» (el seu índex)"
   },
   "status": {
     "ready": "Llest",

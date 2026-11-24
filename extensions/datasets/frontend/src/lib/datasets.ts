@@ -89,7 +89,7 @@ export const PARTS: Record<MappingKind, { required: string[]; optional: string[]
   prompt: { required: ['prompt', 'completion'], optional: ['system'] },
   instruction: { required: ['instruction', 'output'], optional: ['input'] },
   text: { required: ['text'], optional: [] },
-  choice: { required: ['prompt', 'candidates'], optional: ['target', 'right'] },
+  choice: { required: ['prompt', 'candidates'], optional: ['target', 'right', 'none'] },
 };
 
 /** The mapping with only the parts of its kind that name a column. */

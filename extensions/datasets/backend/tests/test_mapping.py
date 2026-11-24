@@ -83,3 +83,12 @@ def test_a_choice_row_that_does_not_fit_says_why():
     assert "sums to" in shown[1]["error"]
     assert "one probability" in shown[2]["error"]
     assert "true or false" in shown[3]["error"]
+
+
+def test_a_choice_row_names_its_none_candidate_by_index():
+    m = check({"kind": "choice", "columns": {"prompt": "p", "candidates": "c", "target": "t", "none": "n"}},
+              ["p", "c", "t", "n"])
+    row = {"p": "Who paints?", "c": ["〔雪舟が〕", "〔なし〕"], "t": [0.0, 1.0], "n": 1}
+    assert apply(row, m)["none"] == 1
+    shown = preview([{**row, "n": 2}, {**row, "n": True}], m)
+    assert all("not the index of one of the 2 candidates" in s["error"] for s in shown)

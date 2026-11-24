@@ -10,14 +10,16 @@ A mapping names the kind of rows and the columns that hold each part:
 - prompt:      {"prompt": col, "completion": col, "system": col or absent}
 - instruction: {"instruction": col, "input": col or absent, "output": col}
 - text:        {"text": col}
-- choice:      {"prompt": col, "candidates": col, "target": col or absent, "right": col or absent}
+- choice:      {"prompt": col, "candidates": col, "target": col or absent, "right": col or absent,
+                "none": col or absent}
 
 Every kind but text and choice becomes chat turns, {"messages": [...]}, which
 the trainer formats with the model's chat template. text is trained on as it
 is. choice is one shared text (prompt) and candidates that each continue it,
 for Meep²'s task "choice": target, the probability of each candidate, which a
 training needs; right, whether each candidate is right, which a milestone's
-evaluation needs.
+evaluation needs; none, the index of the candidate that says no candidate
+applies, which a head with a none output needs.
 """
 
 from typing import Any, Dict, List, Optional
@@ -28,7 +30,7 @@ KINDS = {
     "prompt": ({"prompt", "completion"}, {"system"}),
     "instruction": ({"instruction", "output"}, {"input"}),
     "text": ({"text"}, set()),
-    "choice": ({"prompt", "candidates"}, {"target", "right"}),
+    "choice": ({"prompt", "candidates"}, {"target", "right", "none"}),
 }
 ROLES = {"system", "user", "assistant", "tool"}
 SHAREGPT_ROLES = {"system": "system", "human": "user", "user": "user", "gpt": "assistant",
@@ -111,6 +113,11 @@ def _choice(row: Dict[str, Any], cols: Dict[str, str]) -> Dict[str, Any]:
         if not isinstance(right, list) or len(right) != len(candidates) or not all(isinstance(r, bool) for r in right):
             raise MappingError(f"column {cols['right']} is not one true or false for each candidate")
         example["right"] = right
+    if cols.get("none"):
+        index = row.get(cols["none"])
+        if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(candidates):
+            raise MappingError(f"column {cols['none']} is not the index of one of the {len(candidates)} candidates")
+        example["none"] = index
     return example
 
 
