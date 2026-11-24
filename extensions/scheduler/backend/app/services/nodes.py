@@ -65,7 +65,7 @@ class Nodes:
         except config.ConfigException:
             config.load_kube_config()
         try:
-            pods = client.CoreV1Api().list_namespaced_pod(settings.NODE_METRICS_NAMESPACE,
+            pods = client.CoreV1Api().list_namespaced_pod(settings.SCHEDULER_METRICS_NAMESPACE,
                                                           label_selector="app=node-metrics")
         except ApiException as e:
             raise NodesError(f"Kubernetes refused to list the node-metrics pods: {e.status} {e.reason}") from e
@@ -74,7 +74,7 @@ class Nodes:
 
     async def _node(self, http: httpx.AsyncClient, name: str, address: str) -> Dict[str, Any]:
         try:
-            answer = await http.get(f"http://{address}:{settings.NODE_METRICS_PORT}/metrics")
+            answer = await http.get(f"http://{address}:{settings.SCHEDULER_METRICS_PORT}/metrics")
             answer.raise_for_status()
             return node_of(answer.json())
         except httpx.HTTPError as e:
@@ -87,7 +87,7 @@ class Nodes:
         its figures."""
         pods = await asyncio.to_thread(self._pods)
         if not pods:
-            raise NodesError(f"no node-metrics pod is running in {settings.NODE_METRICS_NAMESPACE}")
+            raise NodesError(f"no node-metrics pod is running in {settings.SCHEDULER_METRICS_NAMESPACE}")
         async with httpx.AsyncClient(timeout=10.0) as http:
             found = await asyncio.gather(*(self._node(http, name, pods[name]) for name in sorted(pods)))
         return list(found)

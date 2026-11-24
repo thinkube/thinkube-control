@@ -40,9 +40,11 @@ class Settings(BaseSettings):
     def CONTROL_API_URL(self) -> str:
         return f"https://control.{self.DOMAIN_NAME}/api/v1"
 
-    # The node-metrics pods of Thinkube Control, one on each node, which say what each GPU holds
-    NODE_METRICS_NAMESPACE: str = "thinkube-control"
-    NODE_METRICS_PORT: int = 9100
+    # The node-metrics pods of Thinkube Control, one on each node, which say what each GPU holds. The names are
+    # not NODE_METRICS_*: Kubernetes gives every pod of the namespace variables of that name for the Service
+    # node-metrics
+    SCHEDULER_METRICS_NAMESPACE: str = "thinkube-control"
+    SCHEDULER_METRICS_PORT: int = 9100
 
     # Allow DATABASE_URL to be overridden by environment
     DATABASE_URL: Optional[str] = None
