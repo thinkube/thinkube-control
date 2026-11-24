@@ -27,7 +27,7 @@ touch it.
 | Images (Harbor images, custom images, Jupyter images, mirror) | extension `control-images` | done |
 | Models (catalogue, mirrors, fine-tuned models) | extension `control-models` | done |
 | LLM Gateway (`api/llm`, `services/llm_*`) | extension `control-llm` | done |
-| LLM proxy at `llm.<domain>` (`proxy/`) | Control | stays: the platform's address for models, installed with Control; it checks tokens with Control and asks `control-llm` which backend serves a model |
+| LLM proxy at `llm.<domain>` | extension `control-llm` (`proxy/`) | done: the container `proxy` of the extension, at the platform address `llm` (a route's `host`) and in-cluster at the Service `llm-proxy`; it checks tokens with Control and asks the backend which model server serves a model |
 | Notebooks (kernels, servers, notebook jobs, JupyterHub config, training mode, GPU metrics) | Control | to move, as `control-notebooks`, last |
 
 The order is the order of the table. Each move ends before the next begins.
@@ -148,9 +148,14 @@ for any repository.
   extension's `python -m app.jobs.copy_from_control`, run once in its
   backend's pod, copies their rows; after that nothing reads them.
 
-- **LLM Gateway.** The proxy at `llm.<domain>` (`proxy/`, the Deployment
-  `thinkube-control-llm-proxy`) stays with Control; `GATEWAY_URL` names the
-  extension's backend. Training mode calls the extension
+- **LLM Gateway.** The proxy at `llm.<domain>` is the extension's
+  container `proxy` (`extensions/control-llm/proxy/`), so a change to the
+  gateway deploys without Control. A cluster that ran Control before the move
+  still has its Deployment `thinkube-control-llm-proxy`, its HTTPRoute
+  `llm-proxy-httproute` and its BackendTrafficPolicy `llm-proxy-timeout`,
+  which nothing deploys any more: delete them once the extension's proxy
+  answers (its Service `llm-proxy` already selects the extension's pods).
+  Training mode calls the extension
   (`app/services/llm_gateway.py`), and `k8s_manager` keeps the label of the
   gateway's Deployments, to switch a backend off. The gateway has no
   tables. Control's `/api/v1/llm` answered without a sign-in; the

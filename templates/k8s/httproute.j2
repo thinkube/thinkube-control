@@ -3,7 +3,11 @@
 # Routes traffic through thinkube-gateway in gateway-system namespace
 # Every rule allows a request 600s, as the LLM gateway's route does: Envoy's
 # default of 15s ends a long response, such as a streamed LLM answer, midway.
-{% set routes = thinkube_spec.spec.routes | default([]) %}
+{# A route with host (an extension's platform address, such as llm) is served by an HTTPRoute of its own at
+   <host>.<domain>; every other route at the app's own address #}
+{% set all_routes = thinkube_spec.spec.routes | default([]) %}
+{% set routes = all_routes | rejectattr('host', 'defined') | list %}
+{% set hosts = all_routes | selectattr('host', 'defined') | map(attribute='host') | unique | list %}
 {% set containers_with_ports = thinkube_spec.spec.containers | selectattr('port', 'defined') | list %}
 ---
 apiVersion: gateway.networking.k8s.io/v1
@@ -37,7 +41,7 @@ spec:
         request: 600s
     {% endif %}
   {% endfor %}
-{% elif containers_with_ports %}
+{% elif containers_with_ports and not all_routes %}
     - matches:
         - path:
             type: PathPrefix
@@ -48,3 +52,34 @@ spec:
       timeouts:
         request: 600s
 {% endif %}
+{% for host in hosts %}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ project_name }}-{{ host }}
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/managed-by: argocd
+spec:
+  parentRefs:
+    - name: thinkube-gateway
+      namespace: gateway-system
+      sectionName: https
+  hostnames:
+    - "{{ host }}.{{ domain_name }}"
+  rules:
+  {% for route in all_routes | selectattr('host', 'defined') | selectattr('host', 'equalto', host) %}
+    {% set container = thinkube_spec.spec.containers | selectattr('name', 'equalto', route.to) | first %}
+    - matches:
+        - path:
+            type: PathPrefix
+            value: "{{ route.path }}"
+      backendRefs:
+        - name: {{ (project_name ~ '-') if extension else '' }}{{ container.name }}
+          port: {{ container.port }}
+      timeouts:
+        request: 600s
+  {% endfor %}
+{% endfor %}

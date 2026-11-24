@@ -29,11 +29,13 @@ from thinkube_yaml_validator import (
     validate_replicas as _validate_replicas,
     validate_build_size as _validate_build_size,
     validate_extension_access as _validate_extension_access,
+    validate_route_hosts as _validate_route_hosts,
 )
 from thinkube_yaml_placeholders import substitute as _substitute_placeholders
 from manifest_plan import (
     EXTENSION_ACCESS_MANIFEST as _EXTENSION_ACCESS_MANIFEST,
     EXTENSION_FILESYSTEMS as _EXTENSION_FILESYSTEMS,
+    PLATFORM_ADDRESSES as _PLATFORM_ADDRESSES,
     home_folder_vars as _home_folder_vars,
     EXTENSION_NAMESPACE as _EXTENSION_NAMESPACE,
     has_extension_access as _has_extension_access,
@@ -281,6 +283,7 @@ class ManifestGenerator:
         violations.extend(_validate_replicas(self.thinkube_config))
         violations.extend(_validate_build_size(self.thinkube_config))
         violations.extend(_validate_extension_access(self.thinkube_config))
+        violations.extend(_validate_route_hosts(self.thinkube_config))
         if violations:
             msg = "thinkube.yaml validation failed:\n" + "\n".join(f"  - {v}" for v in violations)
             raise ValueError(msg)
@@ -343,6 +346,7 @@ class ManifestGenerator:
             'artifact_repository': _artifact_repository_name(self.app_name, self.is_extension),
             'artifact_secret': _artifact_secret_name(self.app_name, self.is_extension),
             'extension_filesystems': _EXTENSION_FILESYSTEMS,
+            'platform_addresses': _PLATFORM_ADDRESSES,
             **_home_folder_vars(os.environ),
         }
 

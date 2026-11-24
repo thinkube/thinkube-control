@@ -26,8 +26,9 @@ BASE_RESOURCES = [
 # name, as its Deployments do.
 EXTENSION_NAMESPACE = 'thinkube-control'
 # Names an extension cannot take: Thinkube Control's own objects in its
-# namespace carry them, and tools that find a workload by part of its name
-# would reach Control's (thinkube-control-backend, node-metrics, ...).
+# namespace carry them, or the LLM gateway's platform address (llm-proxy, see
+# PLATFORM_ADDRESSES), and tools that find a workload by part of its name
+# would reach theirs (thinkube-control-backend, node-metrics, ...).
 RESERVED_EXTENSION_NAMES = frozenset({
     'thinkube', 'thinkube-control', 'control', 'backend', 'frontend',
     'llm', 'proxy', 'llm-proxy', 'node', 'metrics', 'node-metrics',
@@ -51,6 +52,14 @@ def artifact_repository_name(app_name: str, extension: bool) -> str:
     namespace each extension has its own, which its workflows name."""
     return f'{app_name}-artifact-repositories' if extension else 'artifact-repositories'
 
+
+# The platform's addresses an extension serves besides its own: a route with host <host> is served at
+# <host>.<domain>, and its container also answers in-cluster at the Service named here, the name the platform's
+# clients use; only the extension named may take it. llm: the LLM gateway's OpenAI and Anthropic API, control-llm's
+# proxy, reached in the cluster at llm-proxy.<Control's namespace>.
+PLATFORM_ADDRESSES = {
+    'llm': {'extension': 'control-llm', 'service': 'llm-proxy'},
+}
 
 # The shared JuiceFS file systems an extension's container may mount at its
 # root, by the name of the file system, with the secret in namespace juicefs

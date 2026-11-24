@@ -7,6 +7,13 @@ inside its own layout.
 
 ## What it does
 
+- **The proxy** (`proxy/`, Go): the gateway's OpenAI and Anthropic API at the
+  platform address `llm.<domain>` (a route with `host: llm`), and in-cluster
+  at `http://llm-proxy.thinkube-control.svc.cluster.local:8080`. It checks
+  the caller's token with Control, asks the backend which model server
+  serves the model a request names, and forwards the request there. Its Go
+  tests run inside its image build.
+
 - **Models and their state.** The catalogue models that are mirrored, read
   from the extension Models (`http://control-models-backend:8000/internal/models`),
   each with its state: deployable, loading, available, unloading.

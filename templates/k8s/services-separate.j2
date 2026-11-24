@@ -24,4 +24,28 @@ spec:
       protocol: TCP
       name: http
 {% endif %}
+{% endfor %}{# A container serving a platform address (a route with host) answers in-cluster at that address's own Service
+   too, the name the platform's clients use (manifest_plan.PLATFORM_ADDRESSES) #}
+{% for route in thinkube_spec.spec.routes | default([]) | selectattr('host', 'defined') %}
+{% set container = thinkube_spec.spec.containers | selectattr('name', 'equalto', route.to) | first %}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ platform_addresses[route.host].service }}
+  namespace: {{ k8s_namespace }}
+  labels:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/component: {{ container.name }}
+    app.kubernetes.io/managed-by: argocd
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: {{ project_name }}
+    app.kubernetes.io/component: {{ container.name }}
+  ports:
+    - port: {{ container.port }}
+      targetPort: {{ container.port }}
+      protocol: TCP
+      name: http
 {% endfor %}

@@ -11,7 +11,7 @@ Knative services must remain portable to cloud serverless platforms
 import re
 from typing import Any, Dict, List
 
-from manifest_plan import EXTENSION_FILESYSTEMS, EXTENSION_HOME_FOLDERS
+from manifest_plan import EXTENSION_FILESYSTEMS, EXTENSION_HOME_FOLDERS, PLATFORM_ADDRESSES
 
 # Services that tie a workload to this cluster: storage to a volume that must
 # follow the pod, workflows to an Argo controller and a namespace of its own.
@@ -290,6 +290,34 @@ def validate_test_size(config: Dict[str, Any]) -> List[str]:
 
 
 ACCESS_RULE_KEYS = ('apiGroups', 'resources', 'verbs', 'resourceNames')
+
+
+def validate_route_hosts(config: Dict[str, Any]) -> List[str]:
+    """Return a list of constraint violations for routes' host.
+
+    A route is served at the application's own address, <name>.<domain>. A
+    route with `host` is served at <host>.<domain> instead: only for an
+    extension, and only at a platform address that extension owns
+    (PLATFORM_ADDRESSES), so that no deploy takes another's address.
+    """
+    spec = config.get('spec', {})
+    extension = (spec.get('deployment') or {}).get('type') == 'extension'
+    name = (config.get('metadata') or {}).get('name')
+    errors = []
+    for i, route in enumerate(spec.get('routes', []) or []):
+        if 'host' not in route:
+            continue
+        host = route['host']
+        where = f"routes[{i}] (path {route.get('path')})"
+        if not extension:
+            errors.append(f"{where}: host is for deployment type extension only.")
+        elif host not in PLATFORM_ADDRESSES:
+            errors.append(f"{where}: host {host!r} is not a platform address; those are "
+                          f"{', '.join(sorted(PLATFORM_ADDRESSES))}.")
+        elif PLATFORM_ADDRESSES[host]['extension'] != name:
+            errors.append(f"{where}: {host}.<domain> is {PLATFORM_ADDRESSES[host]['extension']}'s address, "
+                          f"not {name}'s.")
+    return errors
 
 
 def validate_extension_access(config: Dict[str, Any]) -> List[str]:

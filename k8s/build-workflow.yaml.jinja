@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Build workflow for thinkube-control
-# Triggered by Gitea webhooks. It builds the backend, frontend and LLM proxy
-# images and pushes them to Harbor. The LLM proxy's Go unit tests run inside
-# its image build (proxy/Containerfile); the backend tests run with
-# backend/run_tests.sh.
+# Triggered by Gitea webhooks. It builds the backend and frontend
+# images and pushes them to Harbor; the backend tests run with
+# backend/run_tests.sh. The LLM proxy is the extension control-llm's.
 #
 # Build tool: Buildah (library/buildah, mirrored from quay.io/buildah/stable),
 # in a pod that is not privileged. Beyond a default pod it needs:
@@ -99,20 +98,6 @@ spec:
           - name: context
             value: "frontend"
 
-      - name: build-llm-proxy-{{ arch }}
-        template: build-on-arch
-        arguments:
-          parameters:
-          - name: image-tag
-            value: "{% raw %}{{workflow.uid}}{% endraw %}"
-          - name: target-arch
-            value: "{{ arch }}"
-          - name: component
-            value: "llm-proxy"
-          - name: dockerfile
-            value: "proxy/Containerfile"
-          - name: context
-            value: "proxy"
 {% endfor %}
 
       - name: manifest-backend
@@ -141,21 +126,9 @@ spec:
           - name: component
             value: "frontend"
 
-      - name: manifest-llm-proxy
-        dependencies:
-{% for arch in build_architectures %}
-          - build-llm-proxy-{{ arch }}
-{% endfor %}
-        template: create-manifest
-        arguments:
-          parameters:
-          - name: image-tag
-            value: "{% raw %}{{workflow.uid}}{% endraw %}"
-          - name: component
-            value: "llm-proxy"
 {% else %}
       # Single-arch builds on control plane
-{% for component, dockerfile, context in [("backend", "backend/Containerfile", "."), ("frontend", "frontend/Containerfile", "frontend"), ("llm-proxy", "proxy/Containerfile", "proxy")] %}
+{% for component, dockerfile, context in [("backend", "backend/Containerfile", "."), ("frontend", "frontend/Containerfile", "frontend")] %}
       - name: build-{{ component }}
         template: build
         arguments:

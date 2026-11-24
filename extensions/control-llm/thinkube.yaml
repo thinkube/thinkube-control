@@ -61,6 +61,20 @@ spec:
           resources: [pods/exec]
           verbs: [create, get]
 
+    # The gateway's OpenAI and Anthropic API at the platform address llm.<domain>, and in-cluster at
+    # llm-proxy.thinkube-control: it checks the caller's token with Control and asks the backend which
+    # model server serves a model. Its Go tests run inside its image build (proxy/Containerfile).
+    - name: proxy
+      build: ./proxy
+      port: 8080
+      size: small
+      health: /health
+      environment:
+        - name: GATEWAY_URL
+          value: "http://control-llm-backend.thinkube-control.svc.cluster.local:8000"
+      test:
+        enabled: false
+
     - name: frontend
       build: ./frontend
       port: 80
@@ -80,6 +94,10 @@ spec:
       to: backend
     - path: /
       to: frontend
+    # The platform address that is the gateway's, served by its own HTTPRoute
+    - path: /
+      to: proxy
+      host: llm
 
   services:
     - database
