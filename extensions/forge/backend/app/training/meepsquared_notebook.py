@@ -13,8 +13,10 @@
 # measurements, without loading the model, and writes the plan or Meep²'s
 # reason to measure again; a plan job reads that folder, writes Meep²'s plan,
 # measured on the GPU, and stops; a training job reads it and
-# runs `python -m meepsquared train` with a status file and a stop file, and
-# registers the model when the training completes.
+# runs `meepsquared train` with a status file and a stop file, and
+# registers the model when the training completes. A plan or a training runs
+# in processes of its own: one, or one on each of the job's GPUs (torchrun)
+# for a choice job's gpus.
 
 # %% Run
 import json
@@ -247,13 +249,40 @@ if MODE == "revise":
     send(REVISION_FILE, "revision.json")
 
 # %% Plan: what Meep² will do on this node, and why
-if MODE == "plan":
-    from meepsquared.job import TrainingJob
+GPUS = JOB.get("gpus", 1)
 
-    plan = TrainingJob.from_dict(JOB).plan(measured_because=P["measured_because"])
-    print(plan)
-    PLAN_FILE = RUN_DIR / "plan.json"
-    PLAN_FILE.write_text(json.dumps(plan.to_dict(), indent=2, default=str))
+
+def launch(script, *args):
+    """The command that runs a script in one process, or in one process on each of the job's GPUs."""
+    if GPUS == 1:
+        return [sys.executable, str(script), *map(str, args)]
+    return [sys.executable, "-m", "torch.distributed.run", "--standalone", f"--nproc_per_node={GPUS}", str(script),
+            *map(str, args)]
+
+
+PLAN_FILE = RUN_DIR / "plan.json"
+if MODE == "plan":
+    PLAN_LAUNCH = RUN_DIR / "plan.py"
+    PLAN_LAUNCH.write_text('''
+import json, sys
+from meepsquared import _sessions
+from meepsquared.job import TrainingJob
+
+job, out, because = sys.argv[1:]
+plan = TrainingJob.from_yaml(job).plan(measured_because=because)
+if _sessions.main_process():
+    print(plan, flush=True)
+    with open(out, "w") as f:
+        json.dump(plan.to_dict(), f, indent=2, default=str)
+''')
+    PLAN_FILE.unlink(missing_ok=True)
+    command = launch(PLAN_LAUNCH, JOB_FILE, PLAN_FILE, P["measured_because"])
+    print(" ".join(command), flush=True)
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    for line in process.stdout:
+        print(line, end="", flush=True)
+    if process.wait() != 0:
+        raise RuntimeError(f"Meep²'s plan exited with {process.returncode}: see its output above")
     send(PLAN_FILE, "plan.json")
 
 # %% Train: Meep² in its own process, its status sent to Forge while it runs
@@ -282,8 +311,8 @@ FINAL = None
 if MODE == "train":
     # The output folder is this run's alone: a checkpoint in it is this run's, which the training continues
     RESUME = interrupted_again(lambda: any(OUT.glob("checkpoint-*")))
-    command = [sys.executable, str(LAUNCH), "train", str(JOB_FILE), "--status-file", str(STATUS),
-               "--stop-file", str(STOP)] + (["--resume"] if RESUME else [])
+    command = launch(LAUNCH, "train", JOB_FILE, "--status-file", STATUS, "--stop-file", STOP,
+                     *(["--resume"] if RESUME else []))
     env = {**os.environ, "MLFLOW_EXPERIMENT_NAME": "forge", "MLFLOW_RUN_ID": P["mlflow_run_id"]}
     print(" ".join(command), flush=True)
     process = subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)

@@ -15,7 +15,7 @@ BASE = {"id": "BSC-LT/salamandraTA-2b-instruct", "name": "SalamandraTA 2B", "par
         "license": "apache-2.0"}
 
 # tkspark's choices, as Control's /jupyterhub/config lists them
-CHOICES = {"memory_gb": [2, 4, 8, 16, 32, 48, 64, 96], "cpu_cores": [1, 2, 4, 6, 8, 12, 16]}
+CHOICES = {"memory_gb": [2, 4, 8, 16, 32, 48, 64, 96], "cpu_cores": [1, 2, 4, 6, 8, 12, 16], "gpus": [0, 1, 2]}
 
 TRAINING = {
     "id": "d1", "name": "ca", "version": 1, "format": "text", "mapping": {"kind": "text", "columns": {"text": "t"}},
@@ -52,9 +52,17 @@ def test_every_cell_of_the_notebook_is_python():
 
 def test_the_training_runs_meepsquared_with_a_status_file_and_a_stop_file():
     train = runs.notebook()["cells"][7]["source"]
-    assert '"--status-file", str(STATUS)' in train and '"--stop-file", str(STOP)' in train
+    assert '"--status-file", STATUS, "--stop-file", STOP' in train
     assert 'RESUME = interrupted_again(lambda: any(OUT.glob("checkpoint-*")))' in train
     assert '["--resume"] if RESUME' in train
+
+
+def test_a_plan_or_training_on_several_gpus_is_launched_with_torchrun():
+    cells = runs.notebook()["cells"]
+    plan, train = cells[6]["source"], cells[7]["source"]
+    assert 'GPUS = JOB.get("gpus", 1)' in plan
+    assert '"-m", "torch.distributed.run", "--standalone", f"--nproc_per_node={GPUS}"' in plan
+    assert "launch(PLAN_LAUNCH, JOB_FILE, PLAN_FILE" in plan and "launch(LAUNCH, \"train\", JOB_FILE" in train
     assert "COMPLETED, PAUSED = 0, 75" in train
 
 
@@ -135,6 +143,23 @@ def test_a_preprocessing_job_runs_on_the_cpu_node_with_its_cores_and_no_gpu():
     # A plan or training job reads the preprocessed data, and is refused without it
     with pytest.raises(ValueError, match="has not been preprocessed"):
         runs.job_request(run, BASE, "plan", CHOICES)
+
+
+def test_a_choice_run_on_two_gpus_plans_and_trains_on_both():
+    run = a_run(job=runs.meepsquared_job("qlora", 1000, None, {"gpus": 2}, task="choice"))
+    assert run.job["gpus"] == 2 and runs.chosen_decisions(run.job) == {"gpus": 2}
+    plan = runs.job_request(run, BASE, "plan", CHOICES)
+    # The model loaded once in each of the two processes
+    assert (plan["gpus"], plan["memory_gb"]) == (2, runs.allowed_memory(2 * runs.plan_memory_gb(BASE),
+                                                                        CHOICES["memory_gb"], "tkspark"))
+    run.plan = {"decisions": [], "memory_request_bytes": 40 * 2**30}
+    train = runs.job_request(run, BASE, "train", CHOICES)
+    assert (train["gpus"], train["memory_gb"], train["parameters"]["job"]["gpus"]) == (2, 48, 2)
+    run.job = {**run.job, "gpus": 3}
+    with pytest.raises(ValueError, match=r"gpus 3, and a job on tkspark takes one of \[1, 2\] GPUs"):
+        runs.job_request(run, BASE, "train", CHOICES)
+    with pytest.raises(ValueError, match="gpus is a choice run's"):
+        runs.meepsquared_job("qlora", 1000, None, {"gpus": 2})
 
 
 def test_a_training_job_carries_its_job_its_files_and_its_catalogue_entry():

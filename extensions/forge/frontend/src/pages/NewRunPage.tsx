@@ -101,6 +101,7 @@ function PlanStep({ run, onRun }: { run: Run; onRun: (run: Run) => void }) {
     ...((run.job_spec?.recipe as Record<string, DecisionValue>) ?? {}),
     ...((run.job_spec?.overrides as Record<string, DecisionValue>) ?? {}),
     ...(run.job_spec?.eval_every != null ? { eval_every: run.job_spec.eval_every as number } : {}),
+    ...(run.job_spec?.gpus != null ? { gpus: run.job_spec.gpus as number } : {}),
   };
 
   return (

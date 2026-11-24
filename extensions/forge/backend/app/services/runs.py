@@ -89,8 +89,9 @@ RECIPE_FIELDS = ("rank", "alpha", "dropout", "targets", "learning_rate", "schedu
                  "none_output")
 OVERRIDE_FIELDS = ("attention", "liger", "padding_free", "fused_lora", "compile_layers", "checkpointed_layers",
                    "selective_layers", "micro_batch", "milestone_engine")
-# Decisions that are fields of the job itself: how many steps apart the evaluations are
-JOB_FIELDS = ("eval_every",)
+# Decisions that are fields of the job itself: how many steps apart the evaluations are, and the GPUs of the node a
+# choice job trains on, each with its own copy of the model
+JOB_FIELDS = ("eval_every", "gpus")
 # The largest share of the training split a run may hold out to evaluate on (Meep²'s eval_share)
 MAX_HOLDOUT = 0.5
 
@@ -299,8 +300,10 @@ def meepsquared_job(method: str, steps: Optional[int], epochs: Optional[float], 
         job["epochs"] = epochs
     if (evaluation or {}).get("holdout"):
         job["eval_share"] = evaluation["holdout"]
-    if parts["job"] and not evaluation:
+    if "eval_every" in parts["job"] and not evaluation:
         raise ValueError("eval_every is for a run that evaluates; choose an evaluation split or a held-out share")
+    if "gpus" in parts["job"] and task != "choice":
+        raise ValueError("gpus is a choice run's: an SFT run trains on one GPU")
     job.update(parts["job"])
     if milestones is not None:
         # The notebook adds the evaluation's rows and the scorer, which are files on its side
@@ -337,6 +340,11 @@ def memory_reason(plan: Optional[Dict[str, Any]]) -> str:
     if line is None:
         return "Meep²'s plan has no memory line"
     return "; ".join(part for part in (line.get("text"), line.get("reason")) if part)
+
+
+def job_gpus(run: Run) -> int:
+    """The GPUs of the run's plan and training jobs: the job's gpus, a choice job's decision; one when not given."""
+    return (run.job or {}).get("gpus", 1)
 
 
 def train_memory_gb(run: Run) -> int:
@@ -377,7 +385,8 @@ def job_request(run: Run, base: Optional[Dict[str, Any]], mode: str, choices: Di
                 node: Optional[str] = None) -> Dict[str, Any]:
     """The notebook job of a run: the preprocessing of its data ("preprocess", on `node`, with its cores and
     no GPU), its plan from an earlier plan's measurements ("revise", on `node`, with no GPU: Meep² loads no model),
-    its plan ("plan") or its training ("train"), the last two on the run's node with one GPU.
+    its plan ("plan") or its training ("train"), the last two on the run's node with the job's GPUs (one, or
+    the node's GPUs a choice job's gpus asks for, one process on each).
 
     A plan or training job's memory is the person's when they set it, else the base model's for a plan job
     and Meep²'s plan's memory_request_bytes for a training job, raised to the smallest of the node's memory
@@ -405,10 +414,14 @@ def job_request(run: Run, base: Optional[Dict[str, Any]], mode: str, choices: Di
         memory = allowed_memory(REVISE_MEMORY_GB, choices["memory_gb"], node)
     else:
         node = run.node
+        if job_gpus(run) not in choices["gpus"]:
+            raise ValueError(f"run {run.name}: gpus {job_gpus(run)}, and a job on {node} takes one of "
+                             f"{[g for g in choices['gpus'] if g]} GPUs")
         if run.memory_gb is not None:
             memory = run.memory_gb
         else:
-            needed = plan_memory_gb(base) if mode == "plan" else train_memory_gb(run)
+            # A plan job loads the model once in each process; a training job's memory is Meep²'s, for every process
+            needed = plan_memory_gb(base) * job_gpus(run) if mode == "plan" else train_memory_gb(run)
             memory = allowed_memory(needed, choices["memory_gb"], run.node)
         cores = run.cpu_cores if run.cpu_cores is not None else job_cores(choices["cpu_cores"], run.node)
     if mode != "preprocess":
@@ -439,7 +452,7 @@ def job_request(run: Run, base: Optional[Dict[str, Any]], mode: str, choices: Di
         "parameters": parameters,
         "kernel_name": MEEPSQUARED_KERNEL,
         "node": node,
-        "gpus": 1 if mode in ("plan", "train") else 0,
+        "gpus": job_gpus(run) if mode in ("plan", "train") else 0,
         "memory_gb": memory,
         # A training must not be stopped for memory halfway through
         "reserve_memory": mode in ("plan", "train"),

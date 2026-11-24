@@ -248,12 +248,13 @@ export interface RunPreprocess {
   };
 }
 
-/** The decisions of a plan a person may set: fields of Meep²'s Recipe and Overrides. */
+/** The decisions of a plan a person may set: fields of Meep²'s Recipe and Overrides, and of the job: eval_every, and
+ * gpus, the GPUs of the node a choice job trains on. */
 export const SETTABLE_DECISIONS = [
   'rank', 'alpha', 'dropout', 'learning_rate', 'schedule', 'warmup_steps', 'tokens_per_update', 'effective_batch',
   'optimizer', 'max_length', 'max_grad_norm', 'weight_decay', 'experts', 'answers_only', 'attention', 'liger',
   'padding_free', 'fused_lora', 'compile_layers', 'checkpointed_layers', 'selective_layers', 'micro_batch', 'milestone_engine',
-  'eval_every',
+  'eval_every', 'gpus',
 ];
 
 /** The job field a person sets for a decision of the plan: its own name, but eval_every for "evaluation". */
