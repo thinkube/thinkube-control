@@ -43,6 +43,8 @@ import {
 
 const PLAN_POLL_MS = 5000;
 const NO_EVAL = '__none__';
+// The milestones answered on the training's own weights
+const SAME_WEIGHTS = 'same';
 const HOLDOUT = '__holdout__';
 
 /** A dataset's own evaluation split, when it has one; else a share held out of the training split. */
@@ -197,6 +199,8 @@ export default function NewRunPage() {
   const [evalSetId, setEvalSetId] = useState(NO_EVAL);
   const [evalSetVersions, setEvalSetVersions] = useState<DatasetVersion[] | null>(null);
   const [evalSetSplit, setEvalSetSplit] = useState('train');
+  // A choice run's milestones answered on other weights than the training's, such as the NF4 base a 3090 serves
+  const [answerWeights, setAnswerWeights] = useState<Method | typeof SAME_WEIGHTS>(SAME_WEIGHTS);
   const [groupColumn, setGroupColumn] = useState(NO_EVAL);
   const [sourceColumn, setSourceColumn] = useState(NO_EVAL);
   const [metrics, setMetrics] = useState('');
@@ -329,6 +333,7 @@ export default function NewRunPage() {
               group_column: groupColumn === NO_EVAL ? null : groupColumn,
               source_column: sourceColumn === NO_EVAL ? null : sourceColumn,
               metrics: evalSetId === NO_EVAL ? [] : metricList,
+              weights: evalSet?.mapping.kind === 'choice' && answerWeights !== SAME_WEIGHTS ? answerWeights : null,
             }
             : null,
         }),
@@ -588,6 +593,23 @@ export default function NewRunPage() {
                         </TkSelectContent>
                       </TkSelect>
                     </div>
+                    {evalSet.mapping.kind === 'choice' && (
+                      <div className="space-y-1">
+                        <TkLabel>{t('newRun.milestoneWeights')}</TkLabel>
+                        <TkSelect value={answerWeights} onValueChange={(v) => setAnswerWeights(v as Method)}>
+                          <TkSelectTrigger>
+                            <TkSelectValue />
+                          </TkSelectTrigger>
+                          <TkSelectContent>
+                            <TkSelectItem value={SAME_WEIGHTS}>{t('newRun.milestoneWeightsSame')}</TkSelectItem>
+                            {(['lora', 'qlora', 'fp8', 'nvfp4'] as Method[]).map((m) => (
+                              <TkSelectItem key={m} value={m}>{t(`method.${m}`)}</TkSelectItem>
+                            ))}
+                          </TkSelectContent>
+                        </TkSelect>
+                        <p className="text-xs text-muted-foreground">{t('newRun.milestoneWeightsHelp')}</p>
+                      </div>
+                    )}
                     {([['milestoneGroup', groupColumn, setGroupColumn], ['milestoneSource', sourceColumn, setSourceColumn]] as const).map(
                       ([label, value, set]) => (
                         <div key={label} className="space-y-1">

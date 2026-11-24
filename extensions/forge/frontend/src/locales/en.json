@@ -237,6 +237,9 @@
     "milestoneNoColumn": "None",
     "milestoneMetrics": "Metrics",
     "milestoneMetricsHelp": "The scoring service's metrics, separated by commas.",
+    "milestoneWeights": "Answered on",
+    "milestoneWeightsSame": "The training's own weights",
+    "milestoneWeightsHelp": "A choice run's milestones can be answered on other weights than the training's, such as QLoRA's NF4 base, which a 24 GB GPU serves: Meep² loads a second copy of the base so and copies the adapter and the head into it at each milestone.",
     "preprocessing": "Meep² is preprocessing the data on {{node}}: tokenized, checked and cut once…",
     "preprocessWaits": "The preprocessing job is being started."
   },

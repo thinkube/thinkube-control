@@ -141,6 +141,10 @@ class Milestones(BaseModel):
                                                            "last user message when not given")
     metrics: List[str] = Field([], description="the scoring service's metrics computed on each group's answers, "
                                                "such as ['chrf', 'bleu']; required with an evaluation set")
+    weights: Optional[Literal["lora", "qlora", "fp8", "nvfp4"]] = Field(
+        None, description="a choice run's: the method whose weights answer the evaluation set when it is not the "
+                          "training's, such as qlora for the NF4 base a 24 GB GPU serves; Meep² loads a second copy "
+                          "of the base so and copies the adapter and the head into it at each milestone")
 
 
 async def _milestones(token: str, wanted: Optional[Milestones], task: str = "sft") -> Optional[Dict[str, Any]]:
@@ -162,7 +166,7 @@ async def _milestones(token: str, wanted: Optional[Milestones], task: str = "sft
                                                     "eval_dataset_id")
     try:
         return runs.milestones_of(wanted.every, training, columns, wanted.eval_split, wanted.group_column,
-                                  wanted.source_column, wanted.metrics, task)
+                                  wanted.source_column, wanted.metrics, task, wanted.weights)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 

@@ -237,6 +237,9 @@
     "milestoneNoColumn": "Ninguna",
     "milestoneMetrics": "Métricas",
     "milestoneMetricsHelp": "Las métricas del servicio de puntuación, separadas por comas.",
+    "milestoneWeights": "Respondidos con",
+    "milestoneWeightsSame": "Los pesos del propio entrenamiento",
+    "milestoneWeightsHelp": "Los hitos de una ejecución de elección pueden responderse con otros pesos que los del entrenamiento, como la base NF4 de QLoRA, que sirve una GPU de 24 GB: Meep² carga una segunda copia de la base así y copia en ella el adaptador y la cabeza en cada hito.",
     "preprocessing": "Meep² está preprocesando los datos en {{node}}: tokenizados, comprobados y cortados una sola vez…",
     "preprocessWaits": "Se está iniciando el trabajo de preprocesamiento."
   },

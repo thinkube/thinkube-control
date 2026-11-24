@@ -133,6 +133,8 @@ export interface NewMilestones {
   group_column: string | null;
   source_column: string | null;
   metrics: string[];
+  /** A choice run's: the method whose weights answer the evaluation set, when not the training's */
+  weights: Method | null;
 }
 
 /** A run's milestones as Forge keeps them. */

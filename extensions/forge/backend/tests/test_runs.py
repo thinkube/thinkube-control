@@ -415,3 +415,17 @@ def test_a_choice_run_starts_from_a_state_below_the_models_folder():
             runs.meepsquared_job("qlora", None, 1, {}, task="choice", start_from=wrong)
     with pytest.raises(ValueError, match="start_from is a choice run's"):
         runs.meepsquared_job("qlora", None, 1, {}, start_from="forge/starts/jev-3000.pt")
+
+
+def test_a_choice_runs_milestones_can_be_answered_on_other_weights():
+    found = runs.milestones_of(0.1, CHOICE_SET, CHOICE_COLUMNS, "train", None, None, [], "choice", "qlora")
+    assert found["weights"] == "qlora"
+    job = runs.meepsquared_job("nvfp4", None, 1, {}, None, found, "choice")
+    assert (job["method"], job["milestone_weights"]) == ("nvfp4", "qlora")
+    assert "milestone_weights" not in runs.meepsquared_job(
+        "nvfp4", None, 1, {}, None, runs.milestones_of(0.1, CHOICE_SET, CHOICE_COLUMNS, "train", None, None, [],
+                                                     "choice"), "choice")
+    with pytest.raises(ValueError, match="give a choice evaluation set"):
+        runs.milestones_of(0.1, None, [], "train", None, None, [], "choice", "qlora")
+    with pytest.raises(ValueError, match="milestones.weights is one of"):
+        runs.milestones_of(0.1, CHOICE_SET, CHOICE_COLUMNS, "train", None, None, [], "choice", "int8")
