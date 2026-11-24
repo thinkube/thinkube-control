@@ -429,3 +429,10 @@ def test_a_choice_runs_milestones_can_be_answered_on_other_weights():
         runs.milestones_of(0.1, None, [], "train", None, None, [], "choice", "qlora")
     with pytest.raises(ValueError, match="milestones.weights is one of"):
         runs.milestones_of(0.1, CHOICE_SET, CHOICE_COLUMNS, "train", None, None, [], "choice", "int8")
+
+
+def test_a_choice_run_takes_the_heads_options_and_its_rows_keep_their_none_candidate():
+    job = runs.meepsquared_job("nvfp4", None, 1, {"set_layers": 2, "none_output": True}, task="choice")
+    assert job["recipe"] == {"set_layers": 2, "none_output": True}
+    source = "".join(cell["source"] for cell in runs.notebook()["cells"])
+    assert 'found["none"] = int(row[cols["none"]])' in source

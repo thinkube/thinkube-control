@@ -73,13 +73,16 @@ SHAREGPT_ROLES = {"system": "system", "human": "user", "user": "user", "gpt": "a
 
 def example(row, mapping):
     """One row as {"messages": [...]}, {"text": ...} or, for Meep²'s task choice, {"prompt", "candidates", "target",
-    "right"}; the Datasets extension maps the same way and checks the rows."""
+    "right", "none"}; the Datasets extension maps the same way and checks the rows."""
     kind, cols = mapping["kind"], mapping["columns"]
     if kind == "choice":
         found = {"prompt": row[cols["prompt"]], "candidates": list(row[cols["candidates"]])}
         for part in ("target", "right"):
             if cols.get(part):
                 found[part] = [x.item() if hasattr(x, "item") else x for x in row[cols[part]]]
+        if cols.get("none"):
+            # The index of the candidate that says no candidate applies, for a head with a none output
+            found["none"] = int(row[cols["none"]])
         return found
     if kind == "text":
         return {"text": row[cols["text"]]}

@@ -80,7 +80,8 @@ RECIPE_FIELDS = ("rank", "alpha", "dropout", "targets", "learning_rate", "schedu
                  "tokens_per_update", "effective_batch", "optimizer", "max_length", "max_grad_norm",
                  "weight_decay", "experts", "answers_only",
                  # a choice job's (Meep²'s task choice)
-                 "choice_head", "head_learning_rate", "candidates_per_pass", "head_only")
+                 "choice_head", "head_learning_rate", "candidates_per_pass", "head_only", "set_layers",
+                 "none_output")
 OVERRIDE_FIELDS = ("attention", "liger", "padding_free", "fused_lora", "compile_layers", "checkpointed_layers",
                    "selective_layers", "micro_batch", "milestone_engine")
 # Decisions that are fields of the job itself: how many steps apart the evaluations are
