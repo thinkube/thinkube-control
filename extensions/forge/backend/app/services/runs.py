@@ -183,7 +183,8 @@ def dataset_for_run(training: Dict[str, Any], train_split: str, evaluation: Opti
 
 def milestones_of(every: Optional[float], training: Optional[Dict[str, Any]], columns: List[str], split: str,
                   group_column: Optional[str], source_column: Optional[str], metrics: List[str],
-                  task: str = "sft", weights: Optional[str] = None) -> Optional[Dict[str, Any]]:
+                  task: str = "sft", weights: Optional[str] = None,
+                  growth: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """A run's milestones: every `every` of its planned steps; with an evaluation set (`training`, as Datasets'
     /training gives a version, and the version's `columns`), its split, the columns that group its rows and hold
     each row's source, and the metrics the scoring service computes. None without milestones.
@@ -191,7 +192,11 @@ def milestones_of(every: Optional[float], training: Optional[Dict[str, Any]], co
     A choice run's evaluation set is a choice set that maps which candidates are right: Meep² counts the rows whose
     top candidate is right, and the scoring service is not asked, so it takes no metrics and no source column.
     weights, a choice run's: the method whose weights answer the rows (Meep²'s milestone_weights), such as qlora for
-    the NF4 base a 24 GB GPU serves, when it is not the training's."""
+    the NF4 base a 24 GB GPU serves, when it is not the training's. growth: the milestones at growing distances,
+    the first at `every` of the planned steps and each next one at growth times the step before (Meep²'s
+    milestone_growth)."""
+    if growth is not None and not growth > 1:
+        raise ValueError(f"milestones.growth is above 1, the factor from one milestone's step to the next, not {growth}")
     if weights is not None:
         if weights not in METHODS:
             raise ValueError(f"milestones.weights is one of {list(METHODS)}, not {weights!r}")
@@ -204,8 +209,9 @@ def milestones_of(every: Optional[float], training: Optional[Dict[str, Any]], co
         return None
     if not 0 < every <= 1:
         raise ValueError(f"milestones.every is a share of the planned steps above 0 and at most 1, not {every}")
+    spacing = {"growth": growth} if growth is not None else {}
     if training is None:
-        return {"every": every, "eval": None, "metrics": []}
+        return {"every": every, "eval": None, "metrics": [], **spacing}
     kind = training["mapping"]["kind"]
     if (task == "choice") != (kind == "choice"):
         raise ValueError(f"the evaluation set {training['name']} maps its rows as {kind}; a "
@@ -229,7 +235,8 @@ def milestones_of(every: Optional[float], training: Optional[Dict[str, Any]], co
             raise ValueError(f"{name}: the evaluation set {training['name']} has no column {column}; it has {columns}")
     if kind != "choice" and (not metrics or not all(isinstance(m, str) and m for m in metrics)):
         raise ValueError("milestones.metrics: the scoring service's metrics to compute, such as ['chrf', 'bleu']")
-    return {"every": every, "metrics": list(metrics), **({"weights": weights} if weights is not None else {}),
+    return {"every": every, "metrics": list(metrics), **spacing,
+            **({"weights": weights} if weights is not None else {}),
             "eval": {"id": training["id"], "name": training["name"], "version": training["version"],
                      "mapping": training["mapping"], "split": split, "path": files[split]["path"],
                      "rows": files[split]["rows"], "group_column": group_column, "source_column": source_column}}
@@ -294,6 +301,8 @@ def meepsquared_job(method: str, steps: Optional[int], epochs: Optional[float], 
         job["milestones"] = milestones["every"]
         if milestones.get("weights") is not None:
             job["milestone_weights"] = milestones["weights"]
+        if milestones.get("growth") is not None:
+            job["milestone_growth"] = milestones["growth"]
     for part in ("recipe", "overrides"):
         if parts[part]:
             job[part] = parts[part]

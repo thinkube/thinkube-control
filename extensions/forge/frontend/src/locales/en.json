@@ -227,6 +227,8 @@
     "milestones": "Milestones",
     "milestonesHelp": "Keep the adapter at a share of the training and, with an evaluation set, score what the model writes at each one.",
     "milestoneEvery": "Every (% of the training)",
+    "milestoneGrowth": "Growth (optional)",
+    "milestoneGrowthHelp": "Leave empty for milestones at equal distances. A factor above 1 spaces them out: the first at the percentage above, each next one at this factor times the step before (1.5: steps 100, 150, 225, ...), so they come often at the start, where scores move fast, and seldom later.",
     "milestoneEvalSet": "Evaluation set",
     "milestoneAdapterOnly": "None: keep the adapter only",
     "milestoneSplit": "Its split",

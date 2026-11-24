@@ -227,6 +227,8 @@
     "milestones": "Hitos",
     "milestonesHelp": "Guarda el adaptador en una parte del entrenamiento y, con un conjunto de evaluación, puntúa lo que escribe el modelo en cada uno.",
     "milestoneEvery": "Cada (% del entrenamiento)",
+    "milestoneGrowth": "Crecimiento (opcional)",
+    "milestoneGrowthHelp": "Vacío para hitos a distancias iguales. Un factor mayor que 1 los separa cada vez más: el primero en el porcentaje de arriba y cada uno en este factor por el paso del anterior (1,5: pasos 100, 150, 225, ...), frecuentes al principio, donde las puntuaciones cambian rápido, y escasos después.",
     "milestoneEvalSet": "Conjunto de evaluación",
     "milestoneAdapterOnly": "Ninguno: solo guarda el adaptador",
     "milestoneSplit": "Su partición",

@@ -436,3 +436,13 @@ def test_a_choice_run_takes_the_heads_options_and_its_rows_keep_their_none_candi
     assert job["recipe"] == {"set_layers": 2, "none_output": True}
     source = "".join(cell["source"] for cell in runs.notebook()["cells"])
     assert 'found["none"] = int(row[cols["none"]])' in source
+
+
+def test_milestones_at_growing_distances_reach_meepsquared():
+    found = runs.milestones_of(0.01, None, [], "train", None, None, [], growth=1.5)
+    assert found == {"every": 0.01, "eval": None, "metrics": [], "growth": 1.5}
+    assert runs.meepsquared_job("lora", None, 1, {}, None, found)["milestone_growth"] == 1.5
+    assert "milestone_growth" not in runs.meepsquared_job("lora", None, 1, {}, None,
+                                                          runs.milestones_of(0.01, None, [], "train", None, None, []))
+    with pytest.raises(ValueError, match="growth is above 1"):
+        runs.milestones_of(0.01, None, [], "train", None, None, [], growth=1.0)

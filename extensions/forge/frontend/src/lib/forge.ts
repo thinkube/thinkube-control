@@ -135,6 +135,8 @@ export interface NewMilestones {
   metrics: string[];
   /** A choice run's: the method whose weights answer the evaluation set, when not the training's */
   weights: Method | null;
+  /** Milestones at growing distances: each next one at this factor times the step before; null for equal ones */
+  growth: number | null;
 }
 
 /** A run's milestones as Forge keeps them. */

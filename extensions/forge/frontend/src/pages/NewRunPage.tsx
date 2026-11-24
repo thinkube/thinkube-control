@@ -196,6 +196,8 @@ export default function NewRunPage() {
   // Meep²'s milestones: how often, and the evaluation set they score with the scoring service
   const [milestonesOn, setMilestonesOn] = useState(false);
   const [milestonePct, setMilestonePct] = useState(2);
+  // Milestones at growing distances: each next one at this factor times the step before; empty for equal distances
+  const [milestoneGrowth, setMilestoneGrowth] = useState('');
   const [evalSetId, setEvalSetId] = useState(NO_EVAL);
   const [evalSetVersions, setEvalSetVersions] = useState<DatasetVersion[] | null>(null);
   const [evalSetSplit, setEvalSetSplit] = useState('train');
@@ -294,7 +296,9 @@ export default function NewRunPage() {
       .catch((e) => setLoadError(failure(e)));
   };
 
+  const growth = milestoneGrowth.trim() === '' ? null : Number(milestoneGrowth);
   const milestonesReady = !milestonesOn || (milestonePct > 0 && milestonePct <= 100
+    && (growth === null || growth > 1)
     && (evalSetId === NO_EVAL || metricList.length > 0));
   const ready = name.trim() && baseModel && datasetId && datasetVersion !== null && node && priority !== null
     && milestonesReady;
@@ -327,6 +331,7 @@ export default function NewRunPage() {
           milestones: milestonesOn
             ? {
               every: milestonePct / 100,
+              growth,
               eval_dataset_id: evalSetId === NO_EVAL ? null : evalSetId,
               eval_dataset_version: evalSetId === NO_EVAL ? null : evalSet!.version,
               eval_split: evalSetSplit,
@@ -561,6 +566,12 @@ export default function NewRunPage() {
                   <TkLabel htmlFor="milestone-pct">{t('newRun.milestoneEvery')}</TkLabel>
                   <TkInput id="milestone-pct" className="w-28" type="number" min={0.1} max={100} step={0.1}
                     value={milestonePct} onChange={(e) => setMilestonePct(Number(e.target.value))} />
+                </div>
+                <div className="space-y-1">
+                  <TkLabel htmlFor="milestone-growth">{t('newRun.milestoneGrowth')}</TkLabel>
+                  <TkInput id="milestone-growth" className="w-28" type="number" min={1.01} step={0.1}
+                    placeholder="1.5" value={milestoneGrowth} onChange={(e) => setMilestoneGrowth(e.target.value)} />
+                  <p className="text-xs text-muted-foreground">{t('newRun.milestoneGrowthHelp')}</p>
                 </div>
                 <div className="space-y-1">
                   <TkLabel>{t('newRun.milestoneEvalSet')}</TkLabel>
