@@ -206,7 +206,7 @@ class Worker:
             if run.plan_job_id is None:
                 await self._start_revise(db, run)
             else:
-                await self._follow_revise(db, run)
+                await self._follow_plan(db, run)
         for run in db.query(Run).filter(Run.status == "planning",
                                         Run.plan_job_id.isnot(None)).all():
             await self._follow_plan(db, run)
@@ -266,30 +266,19 @@ class Worker:
             self._fail(run, "the preprocessing job completed and wrote no outcome")
             return
         run.preprocess = {**run.preprocess, **outcome}
-        run.error = None
-        # The plan reuses an earlier plan's measurements when one may hold: the run's own last plan on its node,
-        # else another run's of the same model, method and task on it; Meep² decides, and the run measures when not
-        if not run.measure and run.reuse is not None and run.reuse.get("node") != run.node:
-            run.reuse = None
-        if not run.measure and run.reuse is None:
-            run.reuse = runs.other_plan(run, db.query(Run).filter(Run.node == run.node,
-                                                                  Run.base_model == run.base_model).all())
-        if not run.measure and run.reuse is not None and run.reuse.get("plan"):
-            run.status, run.revises, run.plan_job_id = "revising", run.reuse["job_id"], None
-        else:
-            run.status = "planning"
+        run.status, run.error = "planning", None
 
     async def _start_revise(self, db: Session, run: Run) -> None:
-        """Start the plan of the run from an earlier plan's measurements (run.reuse) where its data was preprocessed:
-        Meep² loads no model and measures nothing, so the job needs no GPU and waits for nothing."""
+        """Start the revision of the run's plan (run.plan, its last one) where its data was preprocessed; it
+        measures nothing, needs no GPU and waits for nothing."""
         try:
             nodes = await self.control.nodes_choices()
         except control.ControlError as e:
             run.error = f"waiting for Control: {e.detail}"
             return
-        node = run.preprocess["node"]
+        node = runs.preprocess_node(nodes, run.node)
         try:
-            request = runs.job_request(run, None, "revise", nodes[node], node=node)
+            request = runs.revise_request(run, node, nodes[node])
         except ValueError as e:
             self._fail(run, str(e))
             return
@@ -304,37 +293,14 @@ class Worker:
         run.plan_job_id, run.error = job["job_id"], None
         db.commit()
 
-    async def _follow_revise(self, db: Session, run: Run) -> None:
-        """The revision's outcome: the plan, or Meep²'s reason the measurements do not hold, and the run plans on
-        its node's GPU, measuring."""
-        job = await self._job(run, run.plan_job_id)
-        if job is None or job["status"] in runs.JOB_OPEN:
-            return
-        if job["status"] != "completed":
-            self._fail(run, f"Meep²'s plan from earlier measurements failed: {raised(job)}" if job["status"] == "error"
-                       else f"the revision job {job['status']}: {job.get('error') or 'no error given'}")
-            return
-        try:
-            outcome = await self.files.revision(run)
-        except runfiles.RunFilesError as e:
-            logger.warning("run %s: its revision could not be read, asking again at the next tick: %s", run.id, e)
-            return
-        if outcome is None:
-            self._fail(run, "the revision job completed and wrote no outcome")
-            return
-        if "measure_again" in outcome:
-            run.reuse = {**run.reuse, "measure_again": outcome["measure_again"]}
-            run.status, run.plan_job_id, run.revises = "planning", None, None
-            return
-        self._planned(db, run, outcome["plan"])
-
     async def _follow_plan(self, db: Session, run: Run) -> None:
         job = await self._job(run, run.plan_job_id)
         if job is None or job["status"] in runs.JOB_OPEN:
             return
         if job["status"] != "completed":
-            self._fail(run, f"Meep²'s plan failed: {raised(job)}" if job["status"] == "error"
-                       else f"the plan job {job['status']}: {job.get('error') or 'no error given'}")
+            what = "revision of the plan" if run.status == "revising" else "plan"
+            self._fail(run, f"Meep²'s {what} failed: {raised(job)}" if job["status"] == "error"
+                       else f"the {what} job {job['status']}: {job.get('error') or 'no error given'}")
             return
         try:
             plan = await self.files.plan(run)
@@ -344,10 +310,6 @@ class Worker:
         if plan is None:
             self._fail(run, "the plan job completed and wrote no plan")
             return
-        self._planned(db, run, plan)
-
-    def _planned(self, db: Session, run: Run, plan: Dict[str, Any]) -> None:
-        """The run with its plan: queued when it was asked to be, else planned."""
         run.plan = plan
         run.error = None
         if run.queue_on_plan and runs.sized(run):

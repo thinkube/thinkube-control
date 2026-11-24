@@ -518,9 +518,9 @@ class Replan(BaseModel):
     milestones: Optional[Milestones] = Field(None, description="the run's milestones, replacing its earlier ones; "
                                                                "null removes them; the earlier ones stay when not "
                                                                "given")
-    measure: bool = Field(False, description="measure again on the GPU: plan without reusing the last plan's "
-                                             "measurements, which Meep² otherwise reuses for any change they do "
-                                             "not depend on")
+    measure: bool = Field(False, description="measure again: preprocess and plan in full, as for a new run, even "
+                                             "when only the milestones' steps change, which is otherwise revised "
+                                             "from the last plan in seconds")
 
 
 @router.post("/runs/{run_id}/plan", operation_id="forge_plan_again")
@@ -530,11 +530,9 @@ async def replan(run_id: str, request: Replan, user: User = Depends(get_current_
     as the person's. The data is preprocessed again first (found at once when nothing that made it changed).
     The new plan is in the run once its status is planned again.
 
-    The new plan reuses the measurements of the run's last plan when nothing they depend on changed (Meep² says;
-    for a choice run: the model, the method, the attention, the LoRA rank and targets, the head, the candidates per
-    pass, and data no longer than the longest question measured): status revising, a job on a CPU that loads no
-    model, and the plan's line "measurements" names the plan it reused. Otherwise, or with measure: true, it plans
-    on the GPU, measuring, and that line says why."""
+    A change of only the milestones' steps (milestones.every and growth) of a planned or queued run is revised
+    from its last plan, which measured what the steps do not change: status revising, seconds, and the plan's
+    decision "revised" names the plan it started from. measure: true plans it in full instead."""
     run = _run(db, run_id)
     _task_only_fields(run, "has no plan")
     if run.job_id is not None or run.status not in ("planned", "queued", "failed"):
@@ -548,12 +546,16 @@ async def replan(run_id: str, request: Replan, user: User = Depends(get_current_
                                    run.evaluation, milestones, task, run.job.get("start_from"))
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    run.reuse = None if request.measure else runs.reuse_of(run, run.plan, run.plan_job_id, run.name, run.node)
-    run.measure = request.measure
+    revise = not request.measure and runs.revisable(run, job, milestones)
     run.job, run.milestones = job, milestones
     run.queue_on_plan = run.status == "queued"
-    run.status, run.plan, run.plan_job_id, run.revises, run.preprocess, run.position, run.error, \
-        run.finished_at = "preprocessing", None, None, None, None, None, None, None
+    if revise:
+        # The last plan stays in run.plan until its revision replaces it
+        run.revises = run.plan_job_id
+        run.status, run.plan_job_id, run.position, run.error, run.finished_at = "revising", None, None, None, None
+    else:
+        run.status, run.plan, run.plan_job_id, run.revises, run.preprocess, run.position, run.error, \
+            run.finished_at = "preprocessing", None, None, None, None, None, None, None
     db.commit()
     db.refresh(run)
     return _run_dict(run)

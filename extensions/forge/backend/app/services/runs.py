@@ -22,6 +22,7 @@ from app.services import runfiles
 MEEPSQUARED_SCRIPT = Path(__file__).resolve().parents[1] / "training" / "meepsquared_notebook.py"
 EXPORT_SCRIPT = Path(__file__).resolve().parents[1] / "training" / "export_notebook.py"
 NVFP4_SCRIPT = Path(__file__).resolve().parents[1] / "training" / "nvfp4_notebook.py"
+REVISE_SCRIPT = Path(__file__).resolve().parents[1] / "training" / "revise_notebook.py"
 # The NVFP4 export: the Python environment it runs in, the ModelOpt it is built for, and what the
 # environment holds (transformers in the range nvidia-modelopt[hf] declares)
 NVFP4_KERNEL = "nvfp4"
@@ -70,11 +71,9 @@ GIB = 2 ** 30
 # The seconds a cell of a training may take: the whole training is one cell
 TRAIN_CELL_SECONDS = 7 * 24 * 3600
 PLAN_CELL_SECONDS = 2 * 3600
-# A revision: the plan made from an earlier plan's measurements by Meep², on a node's CPU without loading the model;
-# it reads the preprocessed rows and the tokenizer. Its memory and cores, and the time it may take
-REVISE_MEMORY_GB = 16
-REVISE_CPU_CORES = 2
-REVISE_CELL_SECONDS = 1800
+# A revision of a plan reads its plan and places milestones: no model, no data
+REVISE_MEMORY_GB = 4
+REVISE_CELL_SECONDS = 600
 # The cores a plan or training job gets unless the person sets them: Meep² tokenizes the data on every core the
 # job has, minutes a core per million rows, and a node's default (4 on tkspark) was set for a notebook server
 JOB_CPU_CORES = 8
@@ -376,33 +375,22 @@ def preprocess_node(nodes: Dict[str, Dict[str, List[int]]], gpu_node: str) -> st
 def job_request(run: Run, base: Optional[Dict[str, Any]], mode: str, choices: Dict[str, List[int]],
                 node: Optional[str] = None) -> Dict[str, Any]:
     """The notebook job of a run: the preprocessing of its data ("preprocess", on `node`, with its cores and
-    no GPU), its plan from an earlier plan's measurements ("revise", on `node`, with no GPU: Meep² loads no model),
-    its plan ("plan") or its training ("train"), the last two on the run's node with one GPU.
+    no GPU), its plan ("plan") or its training ("train"), the last two on the run's node with one GPU.
 
     A plan or training job's memory is the person's when they set it, else the base model's for a plan job
     and Meep²'s plan's memory_request_bytes for a training job, raised to the smallest of the node's memory
     choices (Control's /jupyterhub/config) that covers it. Its CPU cores are the person's, else the largest
     of the node's choices up to JOB_CPU_CORES. A plan or training job reads the data the preprocessing
     job made."""
-    if mode not in ("preprocess", "revise", "plan", "train"):
-        raise ValueError(f"mode is 'preprocess', 'revise', 'plan' or 'train', not {mode!r}")
-    if mode in ("preprocess", "revise") and node is None:
-        raise ValueError(f"a {mode} job names its node")
-    folder = (run.preprocess or {}).get("folder")
+    if mode not in ("preprocess", "plan", "train"):
+        raise ValueError(f"mode is 'preprocess', 'plan' or 'train', not {mode!r}")
     if mode == "preprocess":
+        if node is None:
+            raise ValueError("a preprocessing job names its node")
         cores = max(choices["cpu_cores"])
         memory = allowed_memory(cores * PREPROCESS_MEMORY_GB_PER_CORE + PREPROCESS_MEMORY_EXTRA_GB,
                                 choices["memory_gb"], node)
         folder = None
-    elif mode == "revise":
-        if not (run.reuse or {}).get("plan"):
-            raise ValueError(f"run {run.name}: a revision reuses an earlier plan, and the run names none")
-        fitting = [c for c in choices["cpu_cores"] if c >= REVISE_CPU_CORES]
-        if not fitting:
-            raise ValueError(f"Thinkube Control lists no CPU choice of {REVISE_CPU_CORES} cores or more on {node}: "
-                             f"{choices['cpu_cores']}")
-        cores = min(fitting)
-        memory = allowed_memory(REVISE_MEMORY_GB, choices["memory_gb"], node)
     else:
         node = run.node
         if run.memory_gb is not None:
@@ -411,7 +399,7 @@ def job_request(run: Run, base: Optional[Dict[str, Any]], mode: str, choices: Di
             needed = plan_memory_gb(base) if mode == "plan" else train_memory_gb(run)
             memory = allowed_memory(needed, choices["memory_gb"], run.node)
         cores = run.cpu_cores if run.cpu_cores is not None else job_cores(choices["cpu_cores"], run.node)
-    if mode != "preprocess":
+        folder = (run.preprocess or {}).get("folder")
         if folder is None:
             raise ValueError(f"run {run.name}: its data has not been preprocessed; a {mode} job reads the "
                              "preprocessed data")
@@ -429,63 +417,65 @@ def job_request(run: Run, base: Optional[Dict[str, Any]], mode: str, choices: Di
         "register": run.register and mode == "train",
         "catalog_entry": catalog_entry(run.model_id, run, base) if run.register and mode == "train" else None,
     }
-    if mode == "revise":
-        parameters["earlier_plan"] = run.reuse["plan"]
-        parameters["reused_from"] = reused_from(run.reuse)
-    if mode == "plan":
-        parameters["measured_because"] = measured_because(run)
     request = {
         "notebook": notebook(),
         "parameters": parameters,
         "kernel_name": MEEPSQUARED_KERNEL,
         "node": node,
-        "gpus": 1 if mode in ("plan", "train") else 0,
+        "gpus": 0 if mode == "preprocess" else 1,
         "memory_gb": memory,
         # A training must not be stopped for memory halfway through
-        "reserve_memory": mode in ("plan", "train"),
+        "reserve_memory": mode != "preprocess",
         # The training is one cell, as long as the training itself
         "cell_timeout_seconds": {"train": TRAIN_CELL_SECONDS, "plan": PLAN_CELL_SECONDS,
-                                 "preprocess": PREPROCESS_CELL_SECONDS, "revise": REVISE_CELL_SECONDS}[mode],
+                                 "preprocess": PREPROCESS_CELL_SECONDS}[mode],
         "cpu_cores": cores,
     }
     return request
 
 
-def reuse_of(run: Run, plan: Optional[Dict[str, Any]], plan_job_id: Optional[str], run_name: str,
-             node: str) -> Optional[Dict[str, Any]]:
-    """An earlier plan for the run to reuse the measurements of, as Forge keeps it in run.reuse: {"plan", "job_id",
-    "run", "node"}; None when the plan keeps no measurements (it measured nothing, or Meep² made it before plans kept
-    them). Meep² decides whether they hold for the run's job."""
-    if not plan or not plan.get("measurements"):
-        return None
-    return {"plan": plan, "job_id": plan_job_id, "run": run_name, "node": node}
+def revisable(run: Run, job: Dict[str, Any], milestones: Optional[Dict[str, Any]]) -> bool:
+    """Whether the run's last plan can be revised for `job` and `milestones` (the run's new ones) without
+    measuring anything again: the run is planned or queued with a plan that keeps Meep²'s revision basis, and the
+    new job differs from the run's only in where its milestones are (every and growth). A plan that placed no
+    milestones measured none, so adding milestones is planned again; a plan asked again with no change at all
+    measures again."""
+    if run.status not in ("planned", "queued") or not (run.plan or {}).get("revision_basis"):
+        return False
+    if job == run.job and milestones == run.milestones:
+        return False
+    if milestones is not None and run.milestones is None:
+        return False
+    placement = ("milestones", "milestone_growth")
+    if {k: v for k, v in job.items() if k not in placement} != \
+            {k: v for k, v in (run.job or {}).items() if k not in placement}:
+        return False
+    if milestones is None or run.milestones is None:
+        return True
+    spacing = ("every", "growth")
+    return {k: v for k, v in milestones.items() if k not in spacing} == \
+        {k: v for k, v in run.milestones.items() if k not in spacing}
 
 
-def other_plan(run: Run, others: List[Run]) -> Optional[Dict[str, Any]]:
-    """The newest plan among other runs' that keeps measurements and was made for the same model, method and task on
-    the run's node, whose GPU the measurements were made on; for the run's first plan."""
-    task = (run.job or {}).get("task", "sft")
-    same = [o for o in others if o.id != run.id and o.kind == "finetune" and o.base_model == run.base_model
-            and o.method == run.method and o.node == run.node and (o.job or {}).get("task", "sft") == task
-            and (o.plan or {}).get("measurements")]
-    if not same:
-        return None
-    newest = max(same, key=lambda o: o.created_at)
-    return reuse_of(run, newest.plan, newest.plan_job_id, newest.name, newest.node)
-
-
-def reused_from(reuse: Dict[str, Any]) -> str:
-    """How a plan names the earlier plan whose measurements it reused."""
-    return f"Forge's plan job {reuse['job_id']} of run {reuse['run']}"
-
-
-def measured_because(run: Run) -> str:
-    """Why the run's plan job measures, for the plan's line "measurements"."""
-    if run.measure:
-        return "asked to measure again"
-    if (run.reuse or {}).get("measure_again"):
-        return f"the measurements of {reused_from(run.reuse)} do not hold: {run.reuse['measure_again']}"
-    return "no earlier plan of this model, method and task on this node keeps measurements"
+def revise_request(run: Run, node: str, choices: Dict[str, List[int]]) -> Dict[str, Any]:
+    """The notebook job that revises the run's plan (its last one, in run.plan, made by the job run.revises) for
+    its job's milestones, on `node` with no GPU."""
+    if not run.revises:
+        raise ValueError(f"run {run.name}: a revision names the plan job whose plan it starts from")
+    made = f"Forge's plan job {run.revises}"
+    return {
+        "notebook": notebook(script=REVISE_SCRIPT),
+        "parameters": {"run_id": run.id, "mlflow_run_id": run.mlflow_run_id, "previous_plan": run.plan,
+                       "milestones": run.job.get("milestones"), "milestone_growth": run.job.get("milestone_growth"),
+                       "made": made},
+        "kernel_name": MEEPSQUARED_KERNEL,
+        "node": node,
+        "gpus": 0,
+        "memory_gb": allowed_memory(REVISE_MEMORY_GB, choices["memory_gb"], node),
+        "reserve_memory": False,
+        "cell_timeout_seconds": REVISE_CELL_SECONDS,
+        "cpu_cores": min(choices["cpu_cores"]),
+    }
 
 
 def job_cores(cpu_choices: List[int], node: str) -> int:

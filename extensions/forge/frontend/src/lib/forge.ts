@@ -393,10 +393,6 @@ export interface Run {
   plan_job_id: string | null;
   /** While the plan is revised, and after: the plan job whose plan the revision started from. */
   revises?: string | null;
-  /** The earlier plan whose measurements the run's plan reuses (or, with measure_again, Meep²'s reason it does not). */
-  reused_plan?: { job_id: string | null; run: string; node: string; measure_again?: string } | null;
-  /** The person asked to measure again. */
-  measure?: boolean;
   progress: TrainingStatus | null;
   when: When;
   across_slots: boolean;
@@ -500,8 +496,8 @@ export const forge = {
   runs: () => api.get<Run[]>('/runs').then((r) => r.data),
   run: (id: string) => api.get<Run>(`/runs/${id}`).then((r) => r.data),
   createRun: (run: NewRun) => api.post<Run>('/runs', run, { timeout: 120000 }).then((r) => r.data),
-  replan: (id: string, decisions: Record<string, DecisionValue>, measure = false) =>
-    api.post<Run>(`/runs/${id}/plan`, { decisions, measure }).then((r) => r.data),
+  replan: (id: string, decisions: Record<string, DecisionValue>) =>
+    api.post<Run>(`/runs/${id}/plan`, { decisions }).then((r) => r.data),
   queueRun: (id: string, when?: When, across_slots?: boolean) =>
     api.post<Run>(`/runs/${id}/queue`, { when, across_slots }).then((r) => r.data),
   setPriority: (id: string, priority: number) => api.post<Run>(`/runs/${id}/priority`, { priority }).then((r) => r.data),
