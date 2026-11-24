@@ -259,8 +259,6 @@ def meepsquared_job(method: str, steps: Optional[int], epochs: Optional[float], 
         raise ValueError(f"method is one of {list(METHODS)}, not {method!r}")
     if task not in ("sft", "choice"):
         raise ValueError(f"task is 'sft' or 'choice', not {task!r}")
-    if task == "choice" and method not in ("lora", "qlora"):
-        raise ValueError(f"a choice run trains with lora or qlora, not {method}")
     if (steps is None) == (epochs is None):
         raise ValueError("give the steps or the epochs to train, one of them")
     parts = split_decisions(chosen)

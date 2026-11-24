@@ -362,10 +362,10 @@ def test_choice_milestones_that_cannot_be_counted_are_refused(args, error):
         runs.milestones_of(*args)
 
 
-def test_a_choice_job_trains_with_lora_or_qlora():
-    assert runs.meepsquared_job("lora", None, 1, {}, task="choice")["task"] == "choice"
-    with pytest.raises(ValueError, match="lora or qlora, not fp8"):
-        runs.meepsquared_job("fp8", None, 1, {}, task="choice")
+def test_a_choice_job_trains_with_any_of_meepsquareds_methods():
+    for method in runs.METHODS:
+        job = runs.meepsquared_job(method, None, 1, {}, task="choice")
+        assert (job["task"], job["method"]) == ("choice", method)
 
 
 def test_the_time_left_counts_the_milestones_left():
