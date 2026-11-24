@@ -27,6 +27,12 @@ MANAGED_SELECTOR = "thinkube.io/managed=true"
 DRIVER_PER_MODEL_POD = "per-model-pod"
 # One pod per node serves many models, loaded through the Ollama API.
 DRIVER_OLLAMA = "ollama"
+# One pod per node serves many models, loaded and unloaded through the pod's own routes: POST
+# <admin>/models and <admin>/models/unload with {"model_id"}, and GET <api_path>/models lists them. The
+# heads backend (tkt-heads) is one: it holds a base model once for all the trained parts on it.
+DRIVER_SHARED_POD = "shared-pod"
+SHARED_POD_ADMIN = "/admin"
+DRIVERS = (DRIVER_PER_MODEL_POD, DRIVER_OLLAMA, DRIVER_SHARED_POD)
 
 TIER_PERFORMANCE = "performance"
 
@@ -59,7 +65,7 @@ class BackendType:
     @property
     def shared(self) -> bool:
         """One pod hosts many models, so a model is not part of the pod's identity."""
-        return self.driver == DRIVER_OLLAMA
+        return self.driver in (DRIVER_OLLAMA, DRIVER_SHARED_POD)
 
     @property
     def performance(self) -> bool:
@@ -74,7 +80,7 @@ def parse_descriptor(namespace: str, descriptor: dict) -> BackendType:
     missing = [f for f in _FIELDS if not descriptor.get(f)]
     if missing:
         raise ValueError(f"llm_backend in {namespace} lacks {', '.join(missing)}")
-    if descriptor["driver"] not in (DRIVER_PER_MODEL_POD, DRIVER_OLLAMA):
+    if descriptor["driver"] not in DRIVERS:
         raise ValueError(f"llm_backend in {namespace} has unknown driver '{descriptor['driver']}'")
     return BackendType(
         namespace=namespace,

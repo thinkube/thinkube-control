@@ -11,7 +11,7 @@ import json as json_mod
 import httpx
 
 from app.api.llm.schemas import ModelLoadResponse, ModelState, ModelTier, model_id_to_ollama_name
-from app.services.llm_backend_types import DRIVER_OLLAMA, llm_backend_types
+from app.services.llm_backend_types import DRIVER_OLLAMA, DRIVER_SHARED_POD, SHARED_POD_ADMIN, llm_backend_types
 from app.services.llm_pod_manager import model_slug
 from app.core.config import settings
 
@@ -215,6 +215,8 @@ class LLMLifecycleManager:
             max_context_length = await self._default_context(entry, node)
 
         driver = backend_type.driver
+        if driver == DRIVER_SHARED_POD:
+            return await self._load_shared(model_id, resolved_backend, node)
         if driver == DRIVER_OLLAMA:
             return await self._load_ollama(model_id, resolved_backend, keep_alive, node, max_context_length=max_context_length)
         return await self._load_performance(model_id, backend=resolved_backend, node=node, max_context_length=max_context_length, num_speculative_tokens=num_speculative_tokens)
@@ -504,6 +506,111 @@ class LLMLifecycleManager:
             event.set()
             self._loading_locks.pop(model_id, None)
 
+    # A shared pod loads a model as it holds it: reading its files from MLflow, and its base when it is the first
+    # model on that base
+    SHARED_LOAD_TIMEOUT = 900
+
+    def _shared_memory(self, entry, node: str) -> float:
+        """A model's memory on a node's shared pod: its own weights and 1 GiB for its work, and its base's weights
+        when no model on the same base is on the node yet (the pod holds a base once)."""
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+        from app.services.llm_model_registry import llm_model_registry
+
+        own = self._weight_gb(entry) or 0.0
+        base_id = getattr(entry, "base_model", None)
+        if base_id is None:
+            return round(own + 1.0, 1)
+        if any(getattr(llm_model_registry.get_model(a.model_id), "base_model", None) == base_id
+               for a in llm_gpu_tracker._allocations.get(node, []) if a.model_id != entry.id):
+            return round(own, 2)
+        base = llm_model_registry.get_model(base_id)
+        if base is None:
+            raise ValueError(f"{entry.id}'s base {base_id} is not in the catalogue")
+        return round((self._weight_gb(base) or 0.0) + own + 1.0, 1)
+
+    async def _load_shared(self, model_id: str, backend_type: str, node: str) -> ModelLoadResponse:
+        from app.services.llm_model_registry import llm_model_registry
+
+        entry = llm_model_registry.get_model(model_id)
+        try:
+            estimated = self._shared_memory(entry, node)
+        except ValueError as e:
+            return ModelLoadResponse(model_id=model_id, state=entry.state, message=str(e))
+        backend_id = f"{backend_type}-{node}"
+        llm_model_registry.update_model_state(model_id, ModelState.loading, backend_id)
+        asyncio.create_task(self._load_shared_background(model_id, backend_type, node, backend_id, estimated))
+        return ModelLoadResponse(
+            model_id=model_id, state=ModelState.loading,
+            message=f"Loading on the {backend_type} pod of {node}", backend_id=backend_id,
+        )
+
+    async def _load_shared_background(
+        self, model_id: str, backend_type: str, node: str, backend_id: str, estimated: float,
+    ):
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+        from app.services.llm_model_registry import llm_model_registry
+        from app.services.llm_pod_manager import llm_pod_manager
+
+        event = asyncio.Event()
+        self._loading_locks[model_id] = event
+        try:
+            can_load, reason = await llm_gpu_tracker.check_can_load(estimated, node_name=node)
+            if not can_load:
+                llm_model_registry.update_model_state(
+                    model_id, ModelState.deployable, error=f"Insufficient GPU resources on {node}: {reason}")
+                return
+            success, pod = await llm_pod_manager.ensure_pod(backend_type, node, gpu_count=1)
+            if not success or pod is None:
+                llm_model_registry.update_model_state(
+                    model_id, ModelState.deployable, error=f"The {backend_type} pod on {node} did not start")
+                return
+            port = llm_backend_types.require(backend_type).port
+            async with httpx.AsyncClient(timeout=self.SHARED_LOAD_TIMEOUT) as http:
+                resp = await http.post(f"http://{pod.pod_ip}:{port}{SHARED_POD_ADMIN}/models",
+                                       json={"model_id": model_id})
+            if resp.status_code != 200:
+                llm_model_registry.update_model_state(
+                    model_id, ModelState.deployable,
+                    error=f"The {backend_type} pod on {node} refused it: HTTP {resp.status_code}: {resp.text[:400]}")
+                return
+            llm_model_registry.update_model_state(model_id, ModelState.available, backend_id)
+            llm_gpu_tracker.record_allocation(model_id, backend_id, estimated, node_name=node)
+            logger.info(f"Model '{model_id}' loaded on {backend_id} ({estimated} GiB)")
+        except Exception as e:
+            logger.error(f"Shared load of {model_id} on {node} failed: {e}")
+            llm_model_registry.update_model_state(model_id, ModelState.deployable, error=str(e))
+        finally:
+            event.set()
+            self._loading_locks.pop(model_id, None)
+
+    async def _unload_shared(self, model_id: str, backend_type: str, node: str) -> Optional[str]:
+        """Ask the node's shared pod to unload the model; the reason it could not, or None. A base whose memory was
+        counted with this model moves to another model on the same base."""
+        from app.services.llm_backend_discovery import llm_backend_discovery
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+        from app.services.llm_model_registry import llm_model_registry
+
+        # The pod as discovery knows it: an unload never starts one
+        backend = llm_backend_discovery.get_backend(f"{backend_type}-{node}")
+        if backend is None:
+            return f"the {backend_type} pod on {node} is not running"
+        async with httpx.AsyncClient(timeout=120) as http:
+            resp = await http.post(f"{backend.url}{SHARED_POD_ADMIN}/models/unload", json={"model_id": model_id})
+        if resp.status_code not in (200, 404):
+            return f"HTTP {resp.status_code}: {resp.text[:300]}"
+        entry = llm_model_registry.get_model(model_id)
+        allocs = llm_gpu_tracker._allocations.get(node, [])
+        mine = next((a for a in allocs if a.model_id == model_id), None)
+        base_id = getattr(entry, "base_model", None)
+        if mine is not None and base_id is not None:
+            base_share = mine.estimated_memory_gb - (self._weight_gb(entry) or 0.0)
+            heir = next((a for a in allocs if a.model_id != model_id and getattr(
+                llm_model_registry.get_model(a.model_id), "base_model", None) == base_id), None)
+            if heir is not None and base_share > 0.05:
+                llm_gpu_tracker.record_allocation(heir.model_id, heir.backend_id,
+                                                  round(heir.estimated_memory_gb + base_share, 1), node_name=node)
+        return None
+
     async def _load_performance(
         self, model_id: str,
         backend: Optional[str] = None, node: Optional[str] = None,
@@ -761,6 +868,12 @@ class LLMLifecycleManager:
         llm_model_registry.update_model_state(model_id, ModelState.unloading, backend_id)
 
         described = llm_backend_types.get(backend_type)
+        if described is not None and described.driver == DRIVER_SHARED_POD and node:
+            refused = await self._unload_shared(model_id, backend_type, node)
+            if refused:
+                llm_model_registry.update_model_state(model_id, ModelState.available, backend_id)
+                return ModelLoadResponse(model_id=model_id, state=ModelState.available,
+                                         message=f"The {backend_type} pod on {node} did not unload it: {refused}")
         if described is not None and described.driver == DRIVER_OLLAMA and node:
             models = await ollama_client.list_models(node=node)
             model_names = [m.get("name", "") for m in models]

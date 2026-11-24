@@ -97,3 +97,11 @@ def test_a_failed_read_keeps_the_known_types(cluster, monkeypatch):
     monkeypatch.setattr(kubernetes.client, "CoreV1Api", down)
     types.refresh()
     assert types.names() == ["vllm"]
+
+
+def test_a_shared_pod_backend_holds_many_models_in_one_pod_per_node():
+    heads = parse_descriptor("heads", {**VLLM, "type": "heads", "driver": "shared-pod", "deployment": "heads-inference",
+                                       "port": 8000})
+    assert heads.shared and not parse_descriptor("vllm", VLLM).shared
+    with pytest.raises(ValueError, match="unknown driver 'shared'"):
+        parse_descriptor("heads", {**VLLM, "driver": "shared"})

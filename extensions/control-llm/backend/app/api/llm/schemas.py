@@ -80,6 +80,8 @@ class ModelEntry(BaseModel):
     backend_id: Optional[str] = None
     tier: Optional[ModelTier] = None
     is_finetuned: bool = False
+    # A trained part's base model (task heads): the catalogue id of the model it runs on
+    base_model: Optional[str] = None
     last_error: Optional[str] = None
 
     @model_validator(mode='after')
