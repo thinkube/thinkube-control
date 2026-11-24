@@ -82,8 +82,13 @@ class Run(Base):
     # Meep²'s plan from the plan job (Plan.to_dict()), and that job
     plan = Column(JSON, nullable=True)
     plan_job_id = Column(String(36), nullable=True)
-    # While the plan is revised (status "revising"): the job that made the plan the revision starts from
+    # The plan job whose plan's measurements the run's plan reuses (status "revising", and after)
     revises = Column(String(36), nullable=True)
+    # The earlier plan the run's plan reuses the measurements of: {"plan", "job_id", "run", "node"}, the run's own
+    # last plan or another run's; with "measure_again", Meep²'s reason they do not hold, and the run measures
+    reuse = Column(JSON, nullable=True)
+    # The person asked to measure again: the run's plan reuses no earlier plan
+    measure = Column(Boolean, nullable=False, server_default=false())
     # The training's status file as last read: state, step, total_steps, loss,
     # seconds_per_step, eta_seconds, checkpoint, plan, error, updated
     progress = Column(JSON, nullable=True)
@@ -146,6 +151,8 @@ class Run(Base):
             "plan": self.plan,
             "plan_job_id": self.plan_job_id,
             "revises": self.revises,
+            "reused_plan": ({k: v for k, v in self.reuse.items() if k != "plan"} if self.reuse else None),
+            "measure": self.measure,
             "progress": self.progress,
             "when": self.when,
             "across_slots": self.across_slots,

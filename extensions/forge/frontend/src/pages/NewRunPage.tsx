@@ -77,9 +77,9 @@ function PlanStep({ run, onRun }: { run: Run; onRun: (run: Run) => void }) {
     }
   };
 
-  const replan = async (decisions: Record<string, DecisionValue>) => {
+  const replan = async (decisions: Record<string, DecisionValue>, measure: boolean) => {
     try {
-      onRun(await forge.replan(run.id, decisions));
+      onRun(await forge.replan(run.id, decisions, measure));
     } catch (e) {
       setError(failure(e));
     }

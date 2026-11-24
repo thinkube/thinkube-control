@@ -8,7 +8,7 @@ import { RotateCcw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { TkBadge, TkButton, TkLoadingButton } from 'thinkube-style/components/buttons-badges';
 import { TkCard, TkCardContent, TkCardDescription, TkCardHeader, TkCardTitle } from 'thinkube-style/components/cards-data';
-import { TkInput } from 'thinkube-style/components/forms-inputs';
+import { TkCheckbox, TkInput } from 'thinkube-style/components/forms-inputs';
 import { TkTable, TkTableBody, TkTableCell, TkTableHead, TkTableHeader, TkTableRow } from 'thinkube-style/components/tables';
 import { decisionField, duration, parseDecision, SETTABLE_DECISIONS, type DecisionValue, type Plan, type Run } from '@/lib/forge';
 
@@ -18,7 +18,7 @@ interface PlanCardProps {
   run?: Run;
   title?: string;
   /** With onReplan, a person may set a decision and ask for the plan again. */
-  onReplan?: (decisions: Record<string, DecisionValue>) => Promise<void>;
+  onReplan?: (decisions: Record<string, DecisionValue>, measure: boolean) => Promise<void>;
   chosen?: Record<string, DecisionValue>;
 }
 
@@ -29,6 +29,7 @@ export function PlanCard({ plan, run, title, onReplan, chosen = {} }: PlanCardPr
     Object.fromEntries(Object.entries(chosen).map(([k, v]) => [k, String(v)])),
   );
   const [planning, setPlanning] = useState(false);
+  const [measure, setMeasure] = useState(false);
 
   const replan = async () => {
     if (!onReplan) return;
@@ -40,7 +41,7 @@ export function PlanCard({ plan, run, title, onReplan, chosen = {} }: PlanCardPr
     }
     setPlanning(true);
     try {
-      await onReplan(decisions);
+      await onReplan(decisions, measure);
     } finally {
       setPlanning(false);
     }
@@ -114,6 +115,10 @@ export function PlanCard({ plan, run, title, onReplan, chosen = {} }: PlanCardPr
             <TkLoadingButton intent="secondary" loading={planning} onClick={replan}>
               {t('plan.replan')}
             </TkLoadingButton>
+            <label className="flex items-center gap-2 text-sm">
+              <TkCheckbox checked={measure} onCheckedChange={(on) => setMeasure(on === true)} />
+              {t('plan.measureAgain')}
+            </label>
             {Object.values(edits).some((v) => v.trim() !== '') && (
               <TkButton intent="ghost" onClick={() => setEdits({})}>
                 <RotateCcw className="h-4 w-4" />

@@ -34,6 +34,8 @@ EXPERIMENT = mlflow.EXPERIMENT
 FOLDER = "forge"
 PLAN = "plan.json"
 PREPROCESS = "preprocess.json"
+# What a revision job made: {"plan": ...}, or {"measure_again": Meep²'s reason}
+REVISION = "revision.json"
 STATUS = "status.json"
 STOP = "stop"
 TIMEOUT = httpx.Timeout(30.0)
@@ -153,6 +155,9 @@ class RunFiles:
 
     async def preprocess(self, run) -> Optional[Dict[str, Any]]:
         return await read_json(*self._of(run), PREPROCESS)
+
+    async def revision(self, run) -> Optional[Dict[str, Any]]:
+        return await read_json(*self._of(run), REVISION)
 
     async def status(self, run) -> Optional[Dict[str, Any]]:
         return await read_json(*self._of(run), STATUS)
