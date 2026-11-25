@@ -114,8 +114,10 @@ Each step is seen before the next begins.
    for tkspark's GPU alone, the second waited for the first; three jobs that
    asked for a card of tkamd2 alone waited, saying what each card held of
    work the scheduler did not start (a training on both cards).
-   Not seen yet: two jobs at once on the two cards of tkamd2. It is checked
-   when that training has ended and the cards are free.
+   Seen, 25 November, on tkamd2, once that training had ended: of three
+   jobs that each took 20 GiB of a card, two ran at once, one on each card
+   (the one on card 0 beside a served model's hold), and the third waited,
+   saying what each card had free.
 3. **It decides the turn.** The queue of each node, the priorities and the
    four changes above, with the work it did not start read from the GPUs.
    Seen when: a job of a higher priority stops one of a lower priority on the
@@ -124,8 +126,10 @@ Each step is seen before the next begins.
    alone stopped a running job of priority 4; the stopped job waited again,
    and ran a second time when the first had ended. A node's limit of GPUs at
    work, and the order on a node, are in the tests.
-   Not seen yet: the same on tkamd2 with a job on the other card that keeps
-   running. It is checked with step 2's check, when the cards are free.
+   Seen, 25 November, on tkamd2: with a job of priority 5 on each card, a
+   job of priority 4 that needed 20 GiB of a card stopped the one on card 1
+   and ran there; the job on card 0 and the served model beside it kept
+   running, and the stopped job ran a second time when the other had ended.
 4. **Forge's trainings run as jobs.** Preprocessing, the plan, the training
    and the registration: each a command in a job. Forge keeps no queue for
    them and starts no notebook job.
@@ -160,8 +164,10 @@ Each step is seen before the next begins.
    stopped, ran, and the pod's model was loaded again by itself, the pod
    still on its hold. The trained heads' pod on tkspark was running before
    with a GPU asked of Kubernetes, and stays so until it is made again.
-   Not seen yet: a model on the card a training does not use, on tkamd2. It
-   is checked with step 2's check, when the cards are free.
+   Seen, 25 November, on tkamd2: with a job of priority 3 that had card 0
+   alone, in a training's place, a model loaded on card 1 and was served
+   there. The served model that was on card 0 was unloaded for the job, and
+   was loaded again by itself on card 1 when that card was free.
    Open in this step: a server that takes a share of a GPU's memory whatever
    the model needs (vLLM, SGLang, Flare) is held by the gateway's estimate of
    the model, and counted for the rest by what the GPU reports once it has
