@@ -150,3 +150,8 @@ async def stop(job_id: str) -> Dict[str, Any]:
 
 async def log(job_id: str, lines: int = 200) -> Dict[str, Any]:
     return await _call("GET", f"/jobs/{job_id}/log?lines={lines}")
+
+
+async def priority(kind: str) -> int:
+    """The priority of a kind of work, such as forge_run, as a person set it on the Scheduler's Priorities page."""
+    return (await _call("GET", "/priorities"))[kind]

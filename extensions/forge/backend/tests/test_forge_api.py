@@ -10,7 +10,7 @@ import pytest
 
 from app.core.security import get_current_user
 from app.models.forge import Run, WorkerCredential
-from app.services import control, datasets, mlflow, runfiles, worker
+from app.services import control, datasets, mlflow, runfiles, scheduled, worker
 
 MODELS = [
     {"id": "BSC-LT/salamandraTA-2b-instruct", "name": "SalamandraTA 2B", "params_b": 2.25, "context_length": 8192,
@@ -108,6 +108,13 @@ def api(client, mock_user, monkeypatch, test_db):
     for name in ("catalog", "run_job", "job", "cancel_job", "create_api_token", "revoke_api_token"):
         monkeypatch.setattr(control, name, getattr(fake, name))
     monkeypatch.setattr(control, "venvs", fake.list_venvs)
+    # The priorities a person set on the Scheduler's Priorities page
+    client.priorities = {"forge_run": 3}
+
+    async def priority(kind):
+        return client.priorities[kind]
+
+    monkeypatch.setattr(scheduled, "priority", priority)
     created = []
 
     async def create(name, forge_run_id, dataset):
@@ -406,13 +413,10 @@ def test_a_run_gets_the_priority_given_or_that_of_forge_runs(api):
     urgent = api.post("/api/v1/runs", json={**RUN, "name": "urgent", "priority": 1}).json()
     assert urgent["priority"] == 1
     assert api.post("/api/v1/runs", json={**RUN, "name": "x", "priority": 6}).status_code == 422
-    put_ = api.put("/api/v1/priorities", json={"forge_run": 2, "app": 4})
-    assert put_.status_code == 200, put_.text
-    assert {p["kind"]: p["priority"] for p in put_.json()}["app"] == 4
+    # A person set Forge runs to 2 at the Scheduler
+    api.priorities["forge_run"] = 2
     assert api.post("/api/v1/runs", json={**RUN, "name": "later"}).json()["priority"] == 2
-    assert api.put("/api/v1/priorities", json={"app": 0}).status_code == 422
-    defaults = {p["kind"]: p["default"] for p in api.get("/api/v1/priorities").json()}
-    assert defaults == {"notebook_server": 1, "notebook_job": 2, "forge_run": 3, "served_model": 4, "app": 5}
+    assert api.get("/api/v1/priorities").status_code == 404
 
 
 def test_a_waiting_runs_priority_is_changed_and_a_running_ones_is_not(api):

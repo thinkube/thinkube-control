@@ -1,40 +1,17 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Priorities of the work on a GPU node: 1 (highest) to 5 (lowest).
+"""Priorities of Forge's runs: 1 (highest) to 5 (lowest).
 
-When a Forge run wants a node's GPU, every piece of work on the node is
-compared with it: work of a higher priority (a lower number) or of the same
-priority makes the run wait; work of a lower priority is stopped to make room,
-each kind in the gentlest way it has (STOPPED_BY). A Forge run has its own
-priority; work outside Forge has the priority Forge keeps for its kind, in the
-priorities table, which a person edits.
+A run's priority goes with its jobs to the Scheduler, which weighs them against all the other work on the node.
+Among Forge's own runs on a node, work of a higher or the same priority makes a run wait, and a run of a lower
+priority is paused at its next step, with a checkpoint (its stop file), to make room. A run given no priority gets
+the Scheduler's priority of Forge runs (scheduled.priority), which a person sets on the Scheduler's Priorities page.
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Iterable, List, Tuple
 
-from sqlalchemy.orm import Session
-
-from app.models.forge import Priority
-
-# Each kind: how the pages name it, and the default the person decided
-KINDS: Dict[str, Tuple[str, int]] = {
-    "notebook_server": ("notebook server", 1),
-    "notebook_job": ("notebook job", 2),
-    "forge_run": ("run", 3),
-    "served_model": ("served model", 4),
-    "app": ("app", 5),
-}
-STOPPED_BY = {
-    "forge_run": "paused at its next step, with a checkpoint (its stop file)",
-    "notebook_job": "cancelled through Control",
-    "notebook_server": "stopped through Control",
-    "served_model": "unloaded by Control's training mode, and loaded again when it ends",
-    "app": "scaled to 0 by Control's training mode, and restored when it ends",
-}
-# The kinds Control's training mode stops
-BY_TRAINING_MODE = ("served_model", "app")
 HIGHEST, LOWEST = 1, 5
 
 
@@ -48,28 +25,9 @@ def check(priority: Any) -> int:
     return priority
 
 
-def table(db: Session) -> Dict[str, int]:
-    """The priority of each kind, as the person set it."""
-    found = {p.kind: p.priority for p in db.query(Priority).all()}
-    missing = sorted(set(KINDS) - set(found))
-    if missing:
-        raise PriorityError(f"the priorities table has no row for {missing}; the migration e5a1c7b9d3f2 writes them")
-    return found
-
-
-def set_priorities(db: Session, changes: Dict[str, int]) -> Dict[str, int]:
-    unknown = sorted(set(changes) - set(KINDS))
-    if unknown:
-        raise PriorityError(f"{unknown} are not kinds of work; they are {sorted(KINDS)}")
-    for kind, priority in changes.items():
-        db.get(Priority, kind).priority = check(priority)
-    db.flush()
-    return table(db)
-
-
 @dataclass
 class Occupant:
-    """A piece of work on a node: its kind, its name, its priority, and what stops it."""
+    """A run of Forge's on a node: its name, its priority, and the run."""
 
     kind: str
     name: str
@@ -78,7 +36,7 @@ class Occupant:
 
     @property
     def label(self) -> str:
-        return KINDS[self.kind][0]
+        return "run"
 
 
 def decide(priority: int, occupants: Iterable[Occupant]) -> Tuple[List[Occupant], List[Occupant]]:

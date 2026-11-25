@@ -36,9 +36,6 @@ spec:
       - label: Slots
         path: /slots
         icon: calendar-clock
-      - label: Priorities
-        path: /priorities
-        icon: gauge
 
   containers:
     - name: backend

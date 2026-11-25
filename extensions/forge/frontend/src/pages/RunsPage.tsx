@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowDown, ArrowUp, CalendarClock, Gauge, GitCompare, Pause, Play, Plus, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, CalendarClock, GitCompare, Pause, Play, Plus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { TkButton } from 'thinkube-style/components/buttons-badges';
@@ -64,7 +64,6 @@ function NodeQueue({ node, onChange }: { node: QueueNode; onChange: () => void }
         </TkCardDescription>
       </TkCardHeader>
       <TkCardContent className="space-y-3">
-        {node.note && <TkInfoAlert>{node.note}</TkInfoAlert>}
         {node.runs.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t('queue.empty')}</p>
         ) : (
@@ -214,10 +213,6 @@ export default function RunsPage() {
           <TkButton intent="secondary" onClick={() => navigate('/slots')}>
             <CalendarClock className="h-4 w-4" />
             {t('nav.slots')}
-          </TkButton>
-          <TkButton intent="secondary" onClick={() => navigate('/priorities')}>
-            <Gauge className="h-4 w-4" />
-            {t('nav.priorities')}
           </TkButton>
           <TkButton intent="secondary" disabled={chosen.length < 2} onClick={() => navigate(`/compare?runs=${chosen.join(',')}`)}>
             <GitCompare className="h-4 w-4" />

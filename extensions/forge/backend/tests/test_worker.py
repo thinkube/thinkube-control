@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.models.forge import Priority, Run, Slot
+from app.models.forge import Run, Slot
 from app.services import control, runs, worker
 
 MADRID = ZoneInfo("Europe/Madrid")
@@ -515,11 +515,6 @@ def test_a_new_worker_re_attaches_to_running_jobs_from_the_database(queue):
 
 # --- priorities --------------------------------------------------------------
 
-def set_priority(queue, kind, priority):
-    queue.db.get(Priority, kind).priority = priority
-    queue.db.commit()
-
-
 def test_work_outside_forge_is_the_schedulers_to_weigh(queue):
     """A notebook server, a served model or an app on the node is not Forge's to wait for or to stop: the run's
     job goes to the Scheduler, which gives it its turn among them."""
@@ -585,17 +580,6 @@ def test_the_queue_order_is_by_priority_then_position(queue):
     second = queue.run("second", position=2, priority=2)
     queue.tick()
     assert second.status == "running" and first.status == "queued"
-
-
-def test_the_priorities_of_kinds_are_the_persons(queue):
-    from app.services import priorities
-
-    assert priorities.table(queue.db) == {"notebook_server": 1, "notebook_job": 2, "forge_run": 3,
-                                          "served_model": 4, "app": 5}
-    with pytest.raises(priorities.PriorityError, match="from 1"):
-        priorities.set_priorities(queue.db, {"app": 6})
-    with pytest.raises(priorities.PriorityError, match="kinds of work"):
-        priorities.set_priorities(queue.db, {"printer": 2})
 
 
 def test_a_training_is_sized_by_meepsquareds_plan(queue):

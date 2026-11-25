@@ -10,8 +10,7 @@
     "forge": "Forge",
     "runs": "Runs",
     "newRun": "New fine-tune",
-    "slots": "Slots",
-    "priorities": "Priorities"
+    "slots": "Slots"
   },
   "apiTokens": {
     "title": "API Tokens",
@@ -479,36 +478,14 @@
   "priority": {
     "title": "Priority",
     "of": "Priority of {{name}}",
-    "runHelp": "1 is the highest. Work on the node with a higher or the same priority makes the run wait; work with a lower one is stopped to make room.",
+    "runHelp": "1 is the highest. Forge's runs on the node of a higher or the same priority make the run wait, and its runs of a lower one are paused for it; the Scheduler weighs it against the other work on the node, by the priorities on its Priorities page.",
     "value": {
       "1": "1 · highest",
       "2": "2",
       "3": "3",
       "4": "4",
       "5": "5 · lowest"
-    },
-    "pageTitle": "Priorities",
-    "subtitle": "Every piece of work on a GPU node has a priority, from 1 (highest) to 5 (lowest). Forge runs have their own; the rest have the priority of their kind, set here.",
-    "rule": "How the queue decides",
-    "ruleHelp": "When a run wants its node: work with a higher priority makes it wait, and work with the same priority too; work with a lower priority is stopped to make room, in the gentlest way it has. This holds at any time: a run of priority 1 added later stops a running run of priority 3.",
-    "kind": "Kind of work",
-    "default": "Default",
-    "stoppedBy": "How it is stopped",
-    "kinds": {
-      "notebook_server": "Notebook servers",
-      "notebook_job": "Notebook jobs",
-      "forge_run": "Forge runs (the priority a new run gets)",
-      "served_model": "Served models",
-      "app": "Apps and services"
-    },
-    "stop": {
-      "notebook_server": "Stopped through Thinkube Control.",
-      "notebook_job": "Cancelled through Thinkube Control.",
-      "forge_run": "Paused at its next step with a checkpoint; the queue resumes it later.",
-      "served_model": "Unloaded by training mode, and loaded again when it ends.",
-      "app": "Scaled to 0 by training mode, and restored when it ends."
-    },
-    "trainingMode": "Training mode reserves one node at a time. When runs on two nodes want it, the one with the higher priority takes it first; the other waits until it ends. A run does not take training mode from another node, whatever its priority."
+    }
   },
   "nvfp4": {
     "title": "Export to NVFP4",

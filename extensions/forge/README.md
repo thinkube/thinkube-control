@@ -27,7 +27,7 @@ navigation and draws its pages. It needs the Datasets extension
   the plan view says whose they are. Forge builds a Meep² training job
   (`backend/app/services/runs.py`); Meep²'s auto mode decides the rest. The
   page shows the first example as the base model's chat template renders it.
-- **Plan**: before a run trains, a short notebook job on its node asks Meep²
+- **Plan**: before a run trains, a short job on its node asks Meep²
   for its plan, and the page shows each decision with its reason: how the
   model loads, the attention, the batches, the checkpointed layers, the
   micro-batch, the learning rate, the schedule, and the time the training
@@ -49,46 +49,37 @@ navigation and draws its pages. It needs the Datasets extension
 - **A task's pod** is given the LLM Gateway's address as `LLM_GATEWAY_URL`
   and, as `THINKUBE_API_TOKEN`, the token the queue works with, so a task
   that calls a model can.
-- **Priorities** (`/priorities`, `backend/app/services/priorities.py`):
-  every piece of work on a GPU node has a priority, 1 (highest) to 5
-  (lowest). When a run wants its node, work with a higher or the same
-  priority makes it wait, and the run says what it waits for ("waiting for
-  notebook server tkspark on tkspark, priority 1"); work with a lower
-  priority is stopped to make room, at any time, in the gentlest way it has:
-  a Forge run is paused at its next step with a checkpoint ("paused,
-  preempted by …") and resumed by the queue later; a notebook job is
-  cancelled and a person's notebook server is stopped, through Control's
-  API; served models and apps are stopped by Control's training mode and come
-  back when it ends. A run has its own priority, set when it is created and
-  changed while it waits. The other kinds have the priority of their kind,
-  which a person sets on the Priorities page: notebook servers 1, notebook
-  jobs 2, Forge runs 3 (the priority a new run gets), served models 4, apps
-  and services 5. Training mode reserves one node at a time: when runs on two
-  nodes want it, the one with the higher priority takes it first, and a run
-  never takes it from another node.
-- **Two nodes' slots**: training mode reserves one node at a time. When runs
-  on two nodes want it, the run with the higher priority takes it first; at
-  equal priority, the slot that started first. The other waits until it ends.
+- **Priorities** (`backend/app/services/priorities.py`): a run has a
+  priority, 1 (highest) to 5 (lowest), set when it is created and changed
+  while it waits; a run given none gets the Scheduler's priority of Forge
+  runs, which a person sets on the Scheduler's Priorities page. Its jobs carry
+  it to the Scheduler, which weighs them against the other work on the node:
+  notebook servers, served models, apps. Among Forge's own runs on a node, a
+  run of a higher or the same priority makes it wait ("waiting for run … on
+  tkspark, priority 2"), and one of a lower priority is paused at its next
+  step with a checkpoint ("paused, preempted by …") and resumed by the queue
+  later. A training the Scheduler stops for work of a higher priority outside
+  Forge stays running, says so in its waiting line, and goes on from its last
+  checkpoint when its turn comes again.
 - **The worker** (`backend/app/services/worker.py`): a background task of
   Forge's backend decides, every 15 seconds and from Forge's database alone,
   what each node does: by priority, plans before trainings, then the queue in
   order. It keeps nothing in memory, so a new pod re-attaches to the running
-  jobs. It calls Thinkube Control with a Control API token of the person who
-  connected it on the Slots page.
+  jobs. It gives the runs' jobs to the Scheduler, and their scripts call
+  Thinkube Control with a Control API token of the person who connected it
+  on the Slots page.
 - **Slots** (`/slots`): a node and a recurring window, such as every night
   from 23:00 to 07:00, in a time zone (Europe/Madrid unless another is
-  given); a window may cross midnight. At a slot's start the worker turns
-  Control's training mode on for the node (its served models unload and its
-  other workloads stop) and starts the node's runs for slots, each only if
-  its time left fits the slot, unless it goes on across slots. At the slot's
-  end the running training stops at its next step with a checkpoint, and
-  training mode is turned off; the run goes on from its checkpoint in the
-  next slot. Control reserves one node at a time, so when the slots of two
-  nodes overlap, the one that started first holds training mode and the
-  other starts when it ends.
-- **A training**: a notebook job of Thinkube Control on the node, on the
-  `meepsquared` kernel, with one GPU, built from
-  `backend/app/training/meepsquared_notebook.py`. It writes the dataset's split as
+  given); a window may cross midnight. At a slot's start the worker starts
+  the node's runs for slots, each only if its time left fits the slot,
+  unless it goes on across slots. At the slot's end the running training
+  stops at its next step with a checkpoint; the run goes on from its
+  checkpoint in the next slot. The slots of two nodes are independent.
+- **A training**: a job of the Scheduler on the node
+  (`backend/app/services/scheduled.py`), in the `meepsquared` Python
+  environment, with the GPUs its job asks for, alone, running
+  `backend/app/training/meepsquared_notebook.py` with its parameters in
+  `FORGE_PARAMETERS`. It writes the dataset's split as
   examples, the job as YAML, and runs
   `python -m meepsquared train job.yaml --status-file … --stop-file … [--resume]`.
   Its folder is `~/thinkube/models/forge/<run>`: the data, the job, the
@@ -106,12 +97,12 @@ navigation and draws its pages. It needs the Datasets extension
 - **NVFP4 export**: a registered model is quantized to NVFP4 with NVIDIA's
   TensorRT Model Optimizer (`nvidia-modelopt`), calibrated on rows of the
   split the run trained on (512 by default, drawn with a fixed seed), by a
-  notebook job with one GPU of a Blackwell node
+  job of the Scheduler with one GPU of a Blackwell node
   (`backend/app/training/nvfp4_notebook.py`). The checkpoint is ModelOpt's
   Hugging Face format, which vLLM loads as `modelopt_fp4`, and is published
   as `forge/<name>-nvfp4`; the LLM Gateway serves it on vLLM only on GPUs of
   compute capability 10.0 and higher, such as the DGX Spark's. The export
-  runs on the `nvfp4` kernel, a Jupyter environment with
+  runs in the `nvfp4` Python environment, a Jupyter environment with
   `nvidia-modelopt[hf]==0.47.0`, `transformers>=4.57,<5.15`, `accelerate`,
   `pandas`, `pyarrow`, `mlflow`, `boto3` and `kubernetes==36.0.3` (the last two for uploading the
   checkpoint); Forge refuses it while that environment
@@ -143,8 +134,8 @@ Forge follows only the job's state, and says why a pod waits or failed.
 
 A task that asks for no GPU takes its node's CPU lane: it waits only for the
 other tasks without a GPU on that node, and it neither stops GPU work nor
-turns training mode on, so the node's served models stay loaded. A task with
-GPUs waits in the node's GPU lane with the fine-tunes, by the rules above.
+waits for it. A task with GPUs waits in the node's GPU lane with the
+fine-tunes, among Forge's runs, by the rules above.
 
 A task has no checkpoint. Pausing it, or a run of a higher priority that
 needs the node, deletes its job: the task ends as stopped in Mill. It
@@ -157,16 +148,16 @@ Forge's backend may create, read and delete jobs and list pods
 
 ## Known limits
 
-- **What runs on a node is inferred.** Control has no call that lists the
-  work on a node. Forge infers it from Control's notebook servers, notebook
-  jobs, GPU status (the served models) and services (the apps that hold a
-  GPU on the node). A served model's own service may be counted as an app
-  too. The stopping itself is exact: training mode stops what is on the
-  node.
-- **Forge cannot set a notebook job's grace period.** The job's pod is
-  Control's. A training normally stops through Meep²'s stop file, at a step
-  boundary; a SIGTERM reaches it only when its pod is killed, and then the
-  step in progress may not finish.
+- **A task's pod still asks Kubernetes for its GPUs.** Until Mill gives its
+  tasks to the Scheduler itself (step 5 of the Scheduler's plan), a task with
+  GPUs waits only for Forge's runs; the Scheduler counts its pod as work it
+  did not start, by what its GPUs hold.
+- **A training stopped by the Scheduler is killed, not paused.** Forge pauses
+  its own runs at a step boundary through Meep²'s stop file. The Scheduler
+  stops a job for work of a higher priority outside Forge by deleting its pod
+  (SIGTERM, then STOP_SECONDS of `backend/app/services/scheduled.py`); the
+  training goes on from its last checkpoint, and the steps since it are done
+  again.
 
 ## Technology Stack
 

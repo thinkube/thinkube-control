@@ -10,8 +10,7 @@
     "forge": "Forge",
     "runs": "Entrenaments",
     "newRun": "Nou ajust fi",
-    "slots": "Franges",
-    "priorities": "Prioritats"
+    "slots": "Franges"
   },
   "apiTokens": {
     "title": "Tokens API",
@@ -479,36 +478,14 @@
   "priority": {
     "title": "Prioritat",
     "of": "Prioritat de {{name}}",
-    "runHelp": "1 és la més alta. La feina del node amb una prioritat més alta o igual fa esperar l'execució; la d'una més baixa s'atura per fer-li lloc.",
+    "runHelp": "1 és la més alta. Les execucions de Forge al node de prioritat més alta o igual fan esperar l'execució, i les de prioritat més baixa es posen en pausa per a ella; el Scheduler la compara amb la resta de feina del node, segons les prioritats de la seva pàgina Prioritats.",
     "value": {
       "1": "1 · la més alta",
       "2": "2",
       "3": "3",
       "4": "4",
       "5": "5 · la més baixa"
-    },
-    "pageTitle": "Prioritats",
-    "subtitle": "Cada feina en un node amb GPU té una prioritat, d'1 (la més alta) a 5 (la més baixa). Les execucions de Forge tenen la seva; la resta té la prioritat del seu tipus, que es fixa aquí.",
-    "rule": "Com decideix la cua",
-    "ruleHelp": "Quan una execució vol el seu node: la feina amb una prioritat més alta la fa esperar, i també la de la mateixa prioritat; la feina amb una prioritat més baixa s'atura per fer-li lloc, de la manera més suau que tingui. Val en tot moment: una execució de prioritat 1 afegida després atura una de prioritat 3 en marxa.",
-    "kind": "Tipus de feina",
-    "default": "Per defecte",
-    "stoppedBy": "Com s'atura",
-    "kinds": {
-      "notebook_server": "Servidors de quaderns",
-      "notebook_job": "Treballs de quadern",
-      "forge_run": "Execucions de Forge (la prioritat d'una de nova)",
-      "served_model": "Models servits",
-      "app": "Aplicacions i serveis"
-    },
-    "stop": {
-      "notebook_server": "S'atura a través de Thinkube Control.",
-      "notebook_job": "Es cancel·la a través de Thinkube Control.",
-      "forge_run": "Es posa en pausa al pas següent amb un punt de control; la cua la reprèn després.",
-      "served_model": "Es descarrega amb el mode entrenament, i es torna a carregar quan acaba.",
-      "app": "S'escala a 0 amb el mode entrenament, i es restaura quan acaba."
-    },
-    "trainingMode": "El mode entrenament reserva un node alhora. Quan execucions de dos nodes el volen, la de més prioritat l'obté primer; l'altra espera que acabi. Una execució no treu el mode entrenament a un altre node, sigui quina sigui la seva prioritat."
+    }
   },
   "nvfp4": {
     "title": "Exportar a NVFP4",

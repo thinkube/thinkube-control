@@ -296,15 +296,6 @@ export interface WorkerStatus {
   error: string | null;
 }
 
-/** A kind of work on a GPU node, and the priority Forge gives it. */
-export interface KindPriority {
-  kind: 'notebook_server' | 'notebook_job' | 'forge_run' | 'served_model' | 'app';
-  label: string;
-  default: number;
-  priority: number;
-  stopped_by: string;
-}
-
 /** 1 is the highest priority, 5 the lowest. */
 export const PRIORITIES = [1, 2, 3, 4, 5];
 
@@ -312,7 +303,6 @@ export interface QueueNode {
   node: string;
   slot: SlotWindow | null;
   next_slot: SlotWindow | null;
-  note: string | null;
   runs: Run[];
 }
 
@@ -505,8 +495,8 @@ export const forge = {
   queueRun: (id: string, when?: When, across_slots?: boolean) =>
     api.post<Run>(`/runs/${id}/queue`, { when, across_slots }).then((r) => r.data),
   setPriority: (id: string, priority: number) => api.post<Run>(`/runs/${id}/priority`, { priority }).then((r) => r.data),
-  priorities: () => api.get<KindPriority[]>('/priorities').then((r) => r.data),
-  setPriorities: (changes: Record<string, number>) => api.put<KindPriority[]>('/priorities', changes).then((r) => r.data),
+  /** The priority a run given none gets: the Scheduler's priority of Forge runs. */
+  runPriority: () => api.get<{ priority: number }>('/run-priority').then((r) => r.data.priority),
   setResources: (id: string, memory_gb: number | null, cpu_cores: number | null) =>
     api.post<Run>(`/runs/${id}/resources`, { memory_gb, cpu_cores }).then((r) => r.data),
   pauseRun: (id: string) => api.post<Run>(`/runs/${id}/pause`).then((r) => r.data),

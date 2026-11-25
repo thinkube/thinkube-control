@@ -37,7 +37,6 @@ TOOLS = [
     "forge_create_slot",
     "forge_update_slot",
     "forge_delete_slot",
-    "forge_get_priorities",
     "forge_worker_status",
 ]
 # Creating a run calls Control, Datasets and MLflow in turn, longer than fastapi-mcp's 10 seconds

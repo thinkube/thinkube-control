@@ -10,8 +10,7 @@
     "forge": "Forge",
     "runs": "Entrenamientos",
     "newRun": "Nuevo ajuste fino",
-    "slots": "Franjas",
-    "priorities": "Prioridades"
+    "slots": "Franjas"
   },
   "apiTokens": {
     "title": "Tokens API",
@@ -479,36 +478,14 @@
   "priority": {
     "title": "Prioridad",
     "of": "Prioridad de {{name}}",
-    "runHelp": "1 es la más alta. El trabajo del nodo con una prioridad más alta o igual hace esperar a la ejecución; el de una más baja se detiene para hacerle sitio.",
+    "runHelp": "1 es la más alta. Las ejecuciones de Forge en el nodo de prioridad más alta o igual hacen esperar a la ejecución, y las de prioridad más baja se pausan para ella; el Scheduler la compara con el resto del trabajo del nodo, según las prioridades de su página Prioridades.",
     "value": {
       "1": "1 · la más alta",
       "2": "2",
       "3": "3",
       "4": "4",
       "5": "5 · la más baja"
-    },
-    "pageTitle": "Prioridades",
-    "subtitle": "Cada trabajo en un nodo con GPU tiene una prioridad, de 1 (la más alta) a 5 (la más baja). Las ejecuciones de Forge tienen la suya; el resto tiene la prioridad de su tipo, que se fija aquí.",
-    "rule": "Cómo decide la cola",
-    "ruleHelp": "Cuando una ejecución quiere su nodo: el trabajo con una prioridad más alta la hace esperar, y también el de la misma prioridad; el trabajo con una prioridad más baja se detiene para hacerle sitio, de la forma más suave que tenga. Vale en todo momento: una ejecución de prioridad 1 añadida después detiene una de prioridad 3 en marcha.",
-    "kind": "Tipo de trabajo",
-    "default": "Por defecto",
-    "stoppedBy": "Cómo se detiene",
-    "kinds": {
-      "notebook_server": "Servidores de cuadernos",
-      "notebook_job": "Trabajos de cuaderno",
-      "forge_run": "Ejecuciones de Forge (la prioridad de una nueva)",
-      "served_model": "Modelos servidos",
-      "app": "Aplicaciones y servicios"
-    },
-    "stop": {
-      "notebook_server": "Se detiene a través de Thinkube Control.",
-      "notebook_job": "Se cancela a través de Thinkube Control.",
-      "forge_run": "Se pausa en el siguiente paso con un punto de control; la cola la reanuda después.",
-      "served_model": "Se descarga con el modo entrenamiento, y se vuelve a cargar cuando termina.",
-      "app": "Se escala a 0 con el modo entrenamiento, y se restaura cuando termina."
-    },
-    "trainingMode": "El modo entrenamiento reserva un nodo a la vez. Cuando ejecuciones de dos nodos lo quieren, la de más prioridad lo obtiene primero; la otra espera a que termine. Una ejecución no quita el modo entrenamiento a otro nodo, sea cual sea su prioridad."
+    }
   },
   "nvfp4": {
     "title": "Exportar a NVFP4",

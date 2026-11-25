@@ -209,36 +209,6 @@ class Slot(Base):
         }
 
 
-class NodeState(Base):
-    """What the queue worker holds on a node: training mode, which it turned
-    on for a slot, and the end of that slot; and its last note about the node,
-    such as why a slot waits."""
-
-    __tablename__ = "queue_nodes"
-
-    node = Column(String(255), primary_key=True)
-    training_mode = Column(Boolean, nullable=False, server_default=false())
-    # "slot" or "run": what the worker holds training mode for
-    held_for = Column(String(8), nullable=True)
-    slot_end = Column(DateTime(timezone=True), nullable=True)
-    note = Column(Text, nullable=True)
-    updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now, nullable=False)
-
-    def to_dict(self):
-        return {"node": self.node, "training_mode": self.training_mode, "held_for": self.held_for, "slot_end": _iso(self.slot_end),
-                "note": self.note, "updated_at": _iso(self.updated_at)}
-
-
-class Priority(Base):
-    """The priority of a kind of work on a GPU node that has none of its own,
-    and the priority a new Forge run gets: 1 (highest) to 5 (lowest)."""
-
-    __tablename__ = "priorities"
-
-    kind = Column(String(32), primary_key=True)
-    priority = Column(Integer, nullable=False)
-
-
 class WorkerCredential(Base):
     """The Thinkube Control API token the queue worker calls Control with.
 

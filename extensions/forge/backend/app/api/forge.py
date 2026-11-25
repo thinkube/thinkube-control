@@ -16,8 +16,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.security import User, get_current_user, oauth2_scheme
 from app.db.session import get_db
-from app.models.forge import NodeState, Run, Slot, WorkerCredential
-from app.services import (chat_template, control, datasets, gateway, mlflow, priorities, runfiles, runs,
+from app.models.forge import Run, Slot, WorkerCredential
+from app.services import (chat_template, control, datasets, gateway, mlflow, runfiles, runs, scheduled,
                           slots, taskpods, worker)
 
 router = APIRouter()
@@ -287,7 +287,7 @@ async def create_run(new: NewRun, user: User = Depends(get_current_user), token:
               base_model=new.base_model,
               method=new.method, node=new.node, register=new.register_model, model_id=model, job=job,
               when=new.when, across_slots=new.across_slots, queue_on_plan=new.queue, memory_gb=new.memory_gb,
-              priority=new.priority if new.priority is not None else priorities.table(db)["forge_run"],
+              priority=new.priority if new.priority is not None else await scheduled.priority("forge_run"),
               cpu_cores=new.cpu_cores, status="preprocessing", created_by=user.preferred_username,
               tags=_checked_tags(new.tags) or None)
     try:
@@ -392,7 +392,7 @@ async def create_task_run(new: NewTaskRun, user: User = Depends(get_current_user
     run = Run(id=str(uuid.uuid4()), name=new.name, kind="task", task=task, tags=_checked_tags(new.tags) or None,
               node=new.node, when="now",
               memory_gb=new.memory_gb, cpu_cores=new.cpu_cores,
-              priority=new.priority if new.priority is not None else priorities.table(db)["forge_run"],
+              priority=new.priority if new.priority is not None else await scheduled.priority("forge_run"),
               status="queued", created_by=user.preferred_username)
     db.add(run)
     db.flush()
@@ -745,14 +745,12 @@ async def queue(user: User = Depends(get_current_user), db: Session = Depends(ge
     nodes = sorted(set(by_node) | {r.node for r in active})
     found = []
     for node in nodes:
-        state = db.get(NodeState, node)
         window = slots.active(by_node.get(node, []), now)
         upcoming = slots.upcoming(by_node.get(node, []), now)
         mine = sorted((r for r in active if r.node == node),
                       key=lambda r: (r.status not in runs.TRAINING, r.position is None, r.position or 0, r.created_at))
         found.append({"node": node, "slot": window.to_dict() if window else None,
                       "next_slot": upcoming.to_dict() if upcoming else None,
-                      "note": state.note if state else None,
                       "runs": [_run_dict(r) for r in mine]})
     return {"nodes": found, "worker": {**worker.state, "connected": worker.credential(db) is not None}}
 
@@ -835,29 +833,16 @@ async def delete_slot(slot_id: str, user: User = Depends(get_current_user), db: 
     return {"deleted": slot_id}
 
 
-# --- Priorities of the work on a GPU node ----------------------------------
+# --- The priority of a new run ----------------------------------------------
 
-def _priorities(db: Session) -> List[Dict[str, Any]]:
-    table = priorities.table(db)
-    return [{"kind": kind, "label": label, "default": default, "priority": table[kind],
-             "stopped_by": priorities.STOPPED_BY[kind]} for kind, (label, default) in priorities.KINDS.items()]
-
-
-@router.get("/priorities", operation_id="forge_get_priorities")
-async def get_priorities(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """The priority of each kind of work on a GPU node, 1 (highest) to 5 (lowest), and how each is stopped.
-    forge_run is the priority a new run gets when none is given."""
-    return _priorities(db)
-
-
-@router.put("/priorities")
-async def put_priorities(changes: Dict[str, int], user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+@router.get("/run-priority")
+async def run_priority(user: User = Depends(get_current_user)):
+    """The priority a run given none gets: the Scheduler's priority of Forge runs, which a person sets on the
+    Scheduler's Priorities page."""
     try:
-        priorities.set_priorities(db, changes)
-    except priorities.PriorityError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    db.commit()
-    return _priorities(db)
+        return {"priority": await scheduled.priority("forge_run")}
+    except control.ControlError as e:
+        raise _control_failed(e)
 
 
 # --- The queue worker's token for Thinkube Control ---------------------------

@@ -215,12 +215,12 @@ export default function NewRunPage() {
   const [metrics, setMetrics] = useState('');
 
   useEffect(() => {
-    Promise.all([forge.models(), forge.datasets(), forge.nodes(), forge.priorities()])
+    Promise.all([forge.models(), forge.datasets(), forge.nodes(), forge.runPriority()])
       .then(([m, d, n, p]) => {
         setModels(m);
         setDatasets(d);
         setNodes(n);
-        setPriority(p.find((k) => k.kind === 'forge_run')?.priority ?? null);
+        setPriority(p);
         if (n.length === 1) setNode(n[0].name);
       })
       .catch((e) => setLoadError(failure(e)));
