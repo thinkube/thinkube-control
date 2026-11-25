@@ -141,11 +141,12 @@ def test_a_part_of_the_platform_gives_a_job_without_a_user(client):
 def test_a_person_sets_the_priority_of_a_kind_of_work_and_the_platform_reads_it(signed_in, client):
     listed = signed_in.get("/api/v1/priorities").json()
     assert [(k["kind"], k["priority"], k["default"]) for k in listed] == [
-        ("notebook_server", 1, 1), ("notebook_job", 2, 2), ("forge_run", 3, 3), ("served_model", 4, 4), ("app", 5, 5)]
+        ("notebook_server", 1, 1), ("notebook_job", 2, 2), ("forge_run", 3, 3), ("mill_task", 3, 3),
+        ("served_model", 4, 4), ("app", 5, 5)]
     changed = signed_in.put("/api/v1/priorities", json={"served_model": 3}).json()
     assert next(k for k in changed if k["kind"] == "served_model")["priority"] == 3
     assert client.get("/internal/scheduler/priorities").json() == {
-        "notebook_server": 1, "notebook_job": 2, "forge_run": 3, "served_model": 3, "app": 5}
+        "notebook_server": 1, "notebook_job": 2, "forge_run": 3, "mill_task": 3, "served_model": 3, "app": 5}
     for refused, why in (({"served_model": 6}, "from 1"), ({"printer": 2}, "not kinds of work")):
         answer = signed_in.put("/api/v1/priorities", json=refused)
         assert answer.status_code == 422 and why in answer.text

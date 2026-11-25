@@ -148,8 +148,14 @@ Each step is seen before the next begins.
    again on tkspark's GPU, trained 20 steps there and registered its model,
    every part a job of the scheduler and none a notebook job. The test model
    was deleted after.
-   Not seen yet: a run on both cards of tkamd2 through the scheduler. The next
-   training of the kubexlat finder is one.
+   Seen, 25 November, on tkamd2: a choice run of Gemma 4 12B on both cards,
+   planned from earlier measurements and training at 2.7 s a step, its
+   pod the scheduler's; the embedding model on card 1 was unloaded for it.
+   Also in this step: the table of priorities moved here from Forge. A person
+   sets the priority of each kind of work on the Priorities page, and each
+   owner reads its kind's when it gives work: JupyterHub for notebook servers
+   and unattended runs, Forge for a run given none, Mill for its tasks, the
+   gateway for served models, Control for apps.
 5. **Mill's transformations run as jobs of Mill.** Mill gives them to the
    scheduler itself. Forge loses the run kind "task", the code that starts
    Mill's pods, and its CPU lane.

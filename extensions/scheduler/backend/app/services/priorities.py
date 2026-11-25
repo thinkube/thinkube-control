@@ -5,7 +5,8 @@
 
 Each part of the platform that gives the scheduler work reads the priority of its kind here when it gives it: a
 notebook server and an unattended notebook run (JupyterHub, for Thinkube Control), a Forge run when the person
-gives it none, a model the LLM gateway serves, and an app with a GPU (Thinkube Control). Work of a higher priority
+gives it none, a task Mill runs on a node, a model the LLM gateway serves, and an app with a GPU (Thinkube
+Control). Work of a higher priority
 takes the GPUs from work of a lower one; work of the same priority waits its turn.
 """
 
@@ -21,6 +22,8 @@ KINDS: Dict[str, Tuple[str, int, str]] = {
     "notebook_job": ("Unattended notebook run", 2, "its pod is stopped, and the run fails"),
     "forge_run": ("Forge run", 3, "its pod is stopped, and the training goes on from its last checkpoint when its "
                                   "turn comes"),
+    "mill_task": ("Mill task on a node", 3, "its pod is stopped, and the task starts again from the beginning when "
+                                            "its turn comes"),
     "served_model": ("Served model", 4, "the LLM gateway unloads it, and loads it again when its GPUs are free"),
     "app": ("App with a GPU", 5, "Thinkube Control stops its pods, and starts them again when its GPUs are free"),
 }
