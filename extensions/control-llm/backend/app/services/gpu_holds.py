@@ -36,8 +36,8 @@ logger = logging.getLogger(__name__)
 # The Scheduler's routes for the other parts of the platform, at its Service
 SCHEDULER_URL = "http://scheduler-backend:8000/internal/scheduler"
 OWNER = "llm-gateway"
-# A served model's priority, of 1 (highest) to 5
-MODEL_PRIORITY = 4
+# The kind of work a served model is, whose priority (1, highest, to 5) a person sets at the Scheduler
+KIND = "served_model"
 # Where the Scheduler asks the gateway to give a hold's GPUs up
 RELEASE_URL = "http://control-llm-backend:8000/internal/llm/holds/release"
 HOLD_ANNOTATION = "scheduler.thinkube.io/hold"
@@ -70,12 +70,17 @@ async def _call(method: str, path: str, what: str, body: Optional[dict] = None) 
         raise HoldError(f"the Scheduler did not answer ({what}): {e}") from e
 
 
+async def priority() -> int:
+    """A served model's priority, as a person set it at the Scheduler."""
+    return (await _call("GET", "/priorities", "read the priorities"))[KIND]
+
+
 async def ask(name: str, node: str, gpus: int, gpu_memory_gb: Optional[float], memory_gb: int = 0,
               on_gpus: Optional[List[str]] = None) -> Dict[str, Any]:
-    """A new hold for a model's pod; it waits for its turn."""
+    """A new hold for a model's pod, with a served model's priority; it waits for its turn."""
     return await _call("POST", "/holds", f"hold GPUs of {node} for {name}", {
         "name": name, "owner": OWNER, "node": node, "gpus": gpus, "gpu_memory_gb": gpu_memory_gb,
-        "memory_gb": memory_gb, "priority": MODEL_PRIORITY, "on_gpus": on_gpus, "release_url": RELEASE_URL})
+        "memory_gb": memory_gb, "priority": await priority(), "on_gpus": on_gpus, "release_url": RELEASE_URL})
 
 
 async def get(hold_id: str) -> Dict[str, Any]:

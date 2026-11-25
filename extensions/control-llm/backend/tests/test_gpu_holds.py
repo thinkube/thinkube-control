@@ -371,3 +371,19 @@ def test_a_pod_of_several_models_gives_its_gpu_up_with_its_models(shared, holds,
                for e in shared.registry._models.values())
     assert said == ("the heads pod on tkspark was stopped with 2 models, which are loaded again when its GPUs are "
                     "free")
+
+
+
+def test_a_served_model_has_the_priority_a_person_set_at_the_scheduler(monkeypatch):
+    import asyncio
+
+    from app.services import gpu_holds
+
+    asked = []
+
+    async def call(method, path, what, body=None):
+        asked.append((method, path))
+        return {"notebook_server": 1, "served_model": 3}
+
+    monkeypatch.setattr(gpu_holds, "_call", call)
+    assert asyncio.run(gpu_holds.priority()) == 3 and asked == [("GET", "/priorities")]
