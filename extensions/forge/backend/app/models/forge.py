@@ -43,14 +43,10 @@ class Run(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(255), nullable=False)
     # "finetune": a Meep² training, as described above. "task": a task of
-    # Mill's tasks repository (`task`), run as a pod Forge starts in the
-    # namespace mill-runs (`job_id` is its Kubernetes job). A task run is
-    # queued at once and has no plan and no preprocessing: stopping it ends
-    # its pod, and it starts again when it resumes, with the state folder
-    # it kept (app/services/taskpods.py). `task` also names the venv it runs
-    # in and the folders of the models it reads, resolved when it was
-    # created. The fields of a fine-tune's dataset, model and method are
-    # empty for it.
+    # Mill's tasks repository (`task`) that Forge ran before Mill gave its
+    # tasks to the Scheduler itself; such a run is a record only, and Forge
+    # neither starts nor follows it. The fields of a fine-tune's dataset,
+    # model and method are empty for it.
     kind = Column(String(16), nullable=False, server_default="finetune")
     task = Column(JSON, nullable=True)
     # Names and values a person or an agent attached to the run, to find it again and to link it with what it

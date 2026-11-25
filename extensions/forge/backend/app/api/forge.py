@@ -18,7 +18,7 @@ from app.core.security import User, get_current_user, oauth2_scheme
 from app.db.session import get_db
 from app.models.forge import Run, Slot, WorkerCredential
 from app.services import (chat_template, control, datasets, gateway, mlflow, runfiles, runs, scheduled,
-                          slots, taskpods, worker)
+                          slots, worker)
 
 router = APIRouter()
 
@@ -300,106 +300,9 @@ async def create_run(new: NewRun, user: User = Depends(get_current_user), token:
     return _run_dict(run)
 
 
-class NewTaskRun(BaseModel):
-    """A task of Mill's tasks repository, to run on a node in its turn. The paths are relative to the root of
-    the tasks repository, or absolute, as Mill's main pod sees them."""
-    model_config = ConfigDict(extra="forbid")
-    name: str = Field(..., min_length=1, max_length=255, description="the run's name in Forge's queue")
-    tags: Dict[str, str] = Field(default_factory=dict, description="names and values that link the run with what it "
-                                                                   "is for, such as an experiment or a claim")
-    file: str = Field(..., min_length=1, description="the task's file, relative to the root of the tasks repository")
-    task: Optional[str] = Field(None, description="the task's name, when the file declares several")
-    inputs: Dict[str, str] = Field(default_factory=dict, description="the path of each input, by its name")
-    outputs: Dict[str, str] = Field(default_factory=dict, description="the path of each output, by its name")
-    settings: Dict[str, Any] = Field(default_factory=dict, description="values for the task's settings")
-    limit: Optional[int] = Field(None, ge=1, description="read only the first N items of each jsonl input")
-    node: str = Field(..., description="the node the task runs on")
-    gpus: int = Field(0, ge=0, le=8, description="the GPUs the task's pod gets; 0 for none")
-    memory_gb: int = Field(..., ge=1, le=1024, description="the memory the task's pod gets, in GiB")
-    cpu_cores: int = Field(..., ge=1, le=256, description="the CPU cores the task's pod gets")
-    priority: Optional[int] = Field(None, ge=1, le=5, description="1 (highest) to 5 (lowest); Forge runs' "
-                                                                  "priority when not given")
-    venv: Optional[str] = Field(None, min_length=1, description="a venv of the notebook servers, by its name, that "
-                                                               "runs the task, on the notebook servers' image; the "
-                                                               "image's own Python when not given")
-    models: List[str] = Field(default_factory=list, description="mirrored models the task reads, by their ids; "
-                                                                "FORGE_MODELS gives the task each one's folder")
-
-
-async def _check_venv(token: str, name: str, gpus: int) -> None:
-    """A venv a task can run in: built, and, when it needs a GPU, given one (such a venv is kept only on the GPU
-    nodes, and its torch is CUDA's)."""
-    try:
-        venvs = await control.venvs(token)
-    except control.ControlError as e:
-        raise _control_failed(e)
-    found = next((v for v in venvs if v["name"] == name and not v.get("is_template")), None)
-    if found is None:
-        built = sorted(v["name"] for v in venvs if v.get("status") == "success" and not v.get("is_template"))
-        raise HTTPException(status_code=422, detail=f"venv: Thinkube Control has no venv {name}; the built ones are "
-                                                    f"{', '.join(built) or 'none'}")
-    if found.get("status") != "success":
-        raise HTTPException(status_code=422, detail=f"venv: {name} is {found.get('status')}, not built")
-    if found.get("needs_gpu") and not gpus:
-        raise HTTPException(status_code=422, detail=f"venv: {name} needs a GPU, and the task asks for none: give "
-                                                    "it gpus")
-
-
 def _task_only_fields(run: Run, what: str) -> None:
     if run.kind == "task":
         raise HTTPException(status_code=409, detail=f"run {run.name} is a task of Mill, which {what}")
-
-
-@router.post("/tasks/runs", operation_id="forge_create_task_run")
-async def create_task_run(new: NewTaskRun, user: User = Depends(get_current_user),
-                          token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    """A task of Mill's tasks repository, queued on a node: it runs in a pod of its own when its turn comes, by
-    the same priorities and queue order as a fine-tune. It has no plan: when work of a higher
-    priority needs the node it is stopped (SIGTERM, then a minute to end), and it starts again when it gets the
-    node back. Its progress, samples and log are in Mill, under the run id in its task's mill_run.
-
-    A task that goes on where it stopped keeps its state in FORGE_STATE_DIR, a folder of the run on the shared
-    file system, the same at every start, and reads FORGE_ATTEMPT (1 at the first start, more at a restart). The
-    folder is removed when the task ends well, and kept when it is stopped or fails. With venv, the task runs in
-    that venv of the notebook servers, on their image. With models, FORGE_MODELS is a JSON object of each mirrored
-    model's folder by its id, resolved now: every start reads the same version."""
-    _queue_connected(db)
-    try:
-        nodes = await control.nodes_choices(token)
-    except control.ControlError as e:
-        raise _control_failed(e)
-    if new.node not in nodes:
-        raise HTTPException(status_code=422, detail=f"{new.node} is not a node Forge can use; the nodes are "
-                                                    f"{', '.join(sorted(nodes))}")
-    choices = nodes[new.node]
-    if new.memory_gb > max(choices["memory_gb"]):
-        raise HTTPException(status_code=422, detail=f"{new.node} gives at most {max(choices['memory_gb'])} GiB "
-                                                    f"to a job; the task asks for {new.memory_gb}")
-    if new.cpu_cores > max(choices["cpu_cores"]):
-        raise HTTPException(status_code=422, detail=f"{new.node} gives at most {max(choices['cpu_cores'])} CPU "
-                                                    f"cores to a job; the task asks for {new.cpu_cores}")
-    if new.venv is not None:
-        await _check_venv(token, new.venv, new.gpus)
-    models = {}
-    for model in new.models:
-        try:
-            models[model] = await mlflow.model_folder(model)
-        except mlflow.MlflowError as e:
-            raise HTTPException(status_code=422, detail=f"models: {e}")
-    task = {"file": new.file, "task": new.task, "inputs": new.inputs, "outputs": new.outputs,
-            "settings": new.settings, "limit": new.limit, "gpus": new.gpus, "venv": new.venv, "models": models,
-            "attempts": 0, "mill_run": None}
-    run = Run(id=str(uuid.uuid4()), name=new.name, kind="task", task=task, tags=_checked_tags(new.tags) or None,
-              node=new.node, when="now",
-              memory_gb=new.memory_gb, cpu_cores=new.cpu_cores,
-              priority=new.priority if new.priority is not None else await scheduled.priority("forge_run"),
-              status="queued", created_by=user.preferred_username)
-    db.add(run)
-    db.flush()
-    worker.enqueue(db, run)
-    db.commit()
-    db.refresh(run)
-    return _run_dict(run)
 
 
 def _run(db: Session, run_id: str) -> Run:
@@ -651,12 +554,6 @@ async def pause_run(run_id: str, user: User = Depends(get_current_user), db: Ses
     run = _run(db, run_id)
     if run.status in ("queued", "paused"):
         run.status, run.paused_by = "paused", "user"
-    elif run.status == "running" and run.kind == "task":
-        try:
-            await taskpods.TaskPods().stop(run.job_id)
-        except taskpods.TaskPodError as e:
-            raise HTTPException(status_code=502, detail=str(e))
-        run.status, run.paused_by, run.stop_requested_at = "stopping", "user", worker.utcnow()
     elif run.status == "running":
         try:
             await runfiles.RunFiles().request_stop(run)
@@ -676,9 +573,12 @@ async def pause_run(run_id: str, user: User = Depends(get_current_user), db: Ses
 async def resume_run(run_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """A paused run, or a failed one, back to its node's queue; it goes on from its newest checkpoint."""
     run = _run(db, run_id)
+    if run.kind == "task":
+        raise HTTPException(status_code=409, detail=f"run {run.name} is a task of Mill, which Mill runs on a node "
+                                                    "itself now: give it to Mill with mill_run_on_node")
     if run.status == "paused":
         run.status, run.paused_by, run.preempted_by = "queued", None, None
-    elif run.status == "failed" and (run.plan is not None or run.kind == "task"):
+    elif run.status == "failed" and run.plan is not None:
         worker.enqueue(db, run)
         run.error, run.finished_at = None, None
     else:
@@ -698,12 +598,7 @@ async def cancel_run(run_id: str, user: User = Depends(get_current_user), token:
     open_job = (run.job_id if run.status in runs.TRAINING
                 else run.plan_job_id if run.status in ("planning", "revising")
                 else (run.preprocess or {}).get("job_id") if run.status == "preprocessing" else None)
-    if open_job and run.kind == "task":
-        try:
-            await taskpods.TaskPods().stop(open_job)
-        except taskpods.TaskPodError as e:
-            raise HTTPException(status_code=502, detail=str(e))
-    elif open_job:
+    if open_job:
         try:
             await control.cancel_job(token, open_job)
         except control.ControlError as e:

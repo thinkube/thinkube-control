@@ -26,8 +26,8 @@ parts of the platform. Forge decides only among its own runs:
   higher priority paused it; a person's pause holds it until the person resumes it. A run that has not paused
   STOP_GRACE_SECONDS, and the time of one milestone, after its stop file was put is cancelled and recorded as
   failed.
-- A task of Mill that asks for no GPU takes its node's CPU lane: it waits only for the other tasks without a GPU
-  on its node, by the same priorities and order. Everything else is the node's GPU lane.
+- A task of Mill is not Forge's: Mill gives it to the Scheduler itself. A task run Forge kept from before was
+  ended by the migration c5e7a9b1d3f4.
 - A failed run is recorded with its error, and the queue goes on. A call that fails with no answer, or with a
   server error, is tried again at the next tick; a refusal fails the run.
 """
@@ -41,16 +41,13 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.models.forge import Run, Slot, WorkerCredential
-from app.services import control, priorities, runfiles, runs, slots as slot_windows, taskpods
+from app.services import control, priorities, runfiles, runs, slots as slot_windows
 from app.services.priorities import Occupant
 
 logger = logging.getLogger(__name__)
 
 TICK_SECONDS = 15
 STOP_GRACE_SECONDS = 30 * 60
-# A task run's pod is given a minute to end once it is asked to stop (taskpods.STOP_GRACE_SECONDS), and a
-# tick or two more for Kubernetes to remove it
-TASK_STOP_GRACE_SECONDS = taskpods.STOP_GRACE_SECONDS + 4 * TICK_SECONDS
 # The stop before a milestone is asked for this long before the step ahead of it ends: a tick, and the status
 # file's own delay of about one more
 MILESTONE_LEAD_SECONDS = 3 * TICK_SECONDS
@@ -107,19 +104,17 @@ class ControlPort:
 
 
 class Worker:
-    def __init__(self, control_port, files, clock: Callable[[], datetime] = utcnow, pods=None):
+    def __init__(self, control_port, files, clock: Callable[[], datetime] = utcnow):
         self.control = control_port
         self.files = files
         self.clock = clock
-        # The pods of Mill's task runs (app/services/taskpods.py)
-        self.pods = pods
 
     # --- one tick ----------------------------------------------------------
 
     async def tick(self, db: Session) -> None:
         now = self.clock()
-        open_runs = db.query(Run).filter(Run.status.in_(runs.BEFORE_PLAN + runs.WAITING
-                                                        + runs.TRAINING)).all()
+        open_runs = db.query(Run).filter(Run.kind != "task", Run.status.in_(runs.BEFORE_PLAN + runs.WAITING
+                                                                             + runs.TRAINING)).all()
         for run in open_runs:
             # A run whose job is followed says, this tick, what the job waits for
             run.waiting = None
@@ -129,13 +124,9 @@ class Worker:
         windows = {node: slot_windows.active(by_node.get(node, []), now) for node in nodes}
         await self._end_slots(db, windows)
         for node in nodes:
-            candidate = self._candidate(db, node, windows[node], now, GPU_LANE)
+            candidate = self._candidate(db, node, windows[node], now)
             if candidate is not None:
                 await self._place(db, node, candidate, now)
-        for node in nodes:
-            candidate = self._candidate(db, node, None, now, CPU_LANE)
-            if candidate is not None:
-                await self._place_cpu(db, node, candidate, now)
         db.commit()
 
     # --- following jobs ----------------------------------------------------
@@ -154,11 +145,8 @@ class Worker:
         for run in db.query(Run).filter(Run.status == "planning",
                                         Run.plan_job_id.isnot(None)).all():
             await self._follow_plan(db, run)
-        for run in db.query(Run).filter(Run.status.in_(runs.TRAINING)).all():
-            if run.kind == "task":
-                await self._follow_task(run)
-            else:
-                await self._follow_training(db, run)
+        for run in db.query(Run).filter(Run.kind != "task", Run.status.in_(runs.TRAINING)).all():
+            await self._follow_training(db, run)
         db.commit()
 
     async def _job(self, run: Run, job_id: str) -> Optional[Dict[str, Any]]:
@@ -340,42 +328,10 @@ class Worker:
             reason = (status or {}).get("error") or job.get("error") or "no error given"
             self._fail(run, f"the training's job {job['status']}: {reason}")
 
-    async def _follow_task(self, run: Run) -> None:
-        """A task run's pod: running, or ended. A task asked to stop ends as paused, to start again from the
-        beginning when it gets its node back; one that ends by itself is completed or failed."""
-        try:
-            pod = await self.pods.state(run.job_id)
-        except taskpods.TaskPodError as e:
-            logger.warning("run %s: its job could not be read, asking again at the next tick: %s", run.id, e)
-            return
-        now = self.clock()
-        if pod["state"] == "running":
-            run.waiting = pod.get("waiting")
-            await self._stop_overdue(run)
-            return
-        run.waiting = None
-        if run.status == "stopping":
-            run.status, run.stop_requested_at, run.job_id = "paused", None, None
-            run.paused_by = run.paused_by or "user"
-            if run.paused_by != "preempted":
-                run.preempted_by = None
-        elif pod["state"] == "completed":
-            run.status, run.finished_at, run.error, run.position = "completed", now, None, None
-        elif pod["state"] == "failed":
-            self._fail(run, f"{pod['error']}. Its log is in Mill, run {run.task['mill_run']}")
-        else:
-            self._fail(run, f"its job {run.job_id} is gone from Kubernetes before the task ended")
-
     async def _stop_overdue(self, run: Run) -> None:
         """A run asked to stop that has not paused within STOP_GRACE_SECONDS, and the time of a milestone, which
         runs before a stop takes effect, is cancelled."""
         if run.status != "stopping" or run.stop_requested_at is None:
-            return
-        if run.kind == "task":
-            grace = TASK_STOP_GRACE_SECONDS
-            if self.clock() - run.stop_requested_at < timedelta(seconds=grace):
-                return
-            self._fail(run, f"its pod did not end within {grace} seconds of its stop request")
             return
         grace = STOP_GRACE_SECONDS + runs.milestone_seconds(run)
         if self.clock() - run.stop_requested_at < timedelta(seconds=grace):
@@ -405,7 +361,7 @@ class Worker:
     async def _end_slots(self, db: Session, windows) -> None:
         """Pause the "slots" runs of nodes whose slot has ended, and those whose next milestone would end after
         the slot."""
-        for run in db.query(Run).filter(Run.when == "slots", Run.status == "running").all():
+        for run in db.query(Run).filter(Run.kind != "task", Run.when == "slots", Run.status == "running").all():
             window = windows.get(run.node)
             if window is None:
                 await self._request_stop(run, "slot", self.clock())
@@ -414,14 +370,6 @@ class Worker:
         db.flush()
 
     async def _request_stop(self, run: Run, by: str, now: datetime) -> bool:
-        if run.kind == "task":
-            try:
-                await self.pods.stop(run.job_id)
-            except taskpods.TaskPodError as e:
-                run.error = f"its job could not be stopped, trying again: {e}"
-                return False
-            run.status, run.paused_by, run.stop_requested_at = "stopping", by, now
-            return True
         try:
             await self.files.request_stop(run)
         except runfiles.RunFilesError as e:
@@ -433,23 +381,17 @@ class Worker:
     # --- deciding what a node does ------------------------------------------
 
     @staticmethod
-    def _forge_work(db: Session, node: str, lane: str = None) -> List[Run]:
-        """The node's Forge runs of a lane that hold it: training or stopping, or planning in a job. The GPU
-        lane when no lane is given."""
-        lane = lane or GPU_LANE
-        found = db.query(Run).filter(
-            Run.node == node,
+    def _forge_work(db: Session, node: str) -> List[Run]:
+        """The node's Forge runs that hold it: training or stopping, or planning in a job."""
+        return db.query(Run).filter(
+            Run.node == node, Run.kind != "task",
             (Run.status.in_(runs.TRAINING)) | ((Run.status == "planning") & Run.plan_job_id.isnot(None))).all()
-        return [r for r in found if lane_of(r) == lane]
 
-    def _candidate(self, db: Session, node: str, window, now: datetime, lane: str) -> Optional[Run]:
-        """The node's first run of a lane that may start now: by priority, plans before trainings, then
-        position."""
+    def _candidate(self, db: Session, node: str, window, now: datetime) -> Optional[Run]:
+        """The node's first run that may start now: by priority, plans before trainings, then position."""
         found = []
-        for run in db.query(Run).filter(Run.node == node,
+        for run in db.query(Run).filter(Run.node == node, Run.kind != "task",
                                         Run.status.in_(("planning",) + runs.WAITING)).all():
-            if lane_of(run) != lane:
-                continue
             if run.status == "planning":
                 if run.plan_job_id is None:
                     found.append((run.priority, 0, 0, run.created_at, run))
@@ -485,20 +427,6 @@ class Worker:
             return
         await self._start(db, run, "plan" if run.status == "planning" else "train")
 
-    async def _place_cpu(self, db: Session, node: str, run: Run, now: datetime) -> None:
-        """Start a task of the node's CPU lane, or stop CPU tasks of a lower priority for it, or say what it
-        waits for. GPU work is no part of it."""
-        occupants = [Occupant("forge_run", r.name, r.priority, r)
-                     for r in self._forge_work(db, node, CPU_LANE) if r.id != run.id]
-        waits, stops = priorities.decide(run.priority, occupants)
-        if waits:
-            run.waiting = priorities.waiting_for(waits[0], node)
-            return
-        if stops:
-            await self._make_room(run, stops, now)
-            return
-        await self._start(db, run, "train")
-
     async def _make_room(self, run: Run, stops: List[Occupant], now: datetime) -> None:
         """Pause Forge's runs of a lower priority: a training at its next step, with a checkpoint; a plan is
     stopped, and plans again later."""
@@ -519,10 +447,7 @@ class Worker:
         run.waiting = "making room: stopping " + ", ".join(stopping)
 
     async def _start(self, db: Session, run: Run, mode: str) -> bool:
-        """Start the run's plan job or training job; True when the Scheduler took it. A task run's pod is started
-        in Kubernetes instead."""
-        if run.kind == "task":
-            return await self._start_task(db, run)
+        """Start the run's plan job or training job; True when the Scheduler took it."""
         try:
             catalog = (await self.control.catalog())["models"]
             choices = await self.control.node_choices(run.node)
@@ -568,37 +493,6 @@ class Worker:
         return True
 
 
-    async def _start_task(self, db: Session, run: Run) -> bool:
-        """Start a pod for the task run, as its next attempt; each attempt is a run of its own in Mill."""
-        attempt = (run.task or {}).get("attempts", 0) + 1
-        try:
-            name = await self.pods.start(run, attempt, getattr(self.control, "token", None))
-        except taskpods.TaskPodError as e:
-            self._fail(run, str(e))
-            return False
-        run.task = {**run.task, "attempts": attempt, "mill_run": taskpods.mill_run_id(run, attempt)}
-        run.job_id = name
-        run.status = "running"
-        run.started_at = self.clock()
-        run.paused_by = None
-        run.preempted_by = None
-        run.stop_requested_at = None
-        run.error, run.waiting = None, None
-        db.commit()
-        return True
-
-
-GPU_LANE = "gpu"
-CPU_LANE = "cpu"
-
-
-def lane_of(run: Run) -> str:
-    """A task of Mill without a GPU is in its node's CPU lane; every other run is in the GPU lane."""
-    if run.kind == "task" and not (run.task or {}).get("gpus"):
-        return CPU_LANE
-    return GPU_LANE
-
-
 def enqueue(db: Session, run: Run) -> None:
     """Put a run at the end of its node's queue."""
     last = db.query(Run.position).filter(Run.node == run.node, Run.status.in_(runs.WAITING),
@@ -632,7 +526,7 @@ async def tick_once(session_factory) -> None:
             if found is None:
                 state["error"] = "the queue has no Control token; connect it on Forge's Slots page"
                 return
-            worker = Worker(ControlPort(found.token), runfiles.RunFiles(), pods=taskpods.TaskPods())
+            worker = Worker(ControlPort(found.token), runfiles.RunFiles())
             await worker.tick(db)
             state["last_tick"], state["error"] = utcnow().isoformat(), None
         finally:

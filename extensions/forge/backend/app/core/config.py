@@ -30,35 +30,6 @@ class Settings(BaseSettings):
     # experiments.<domain>, as for the notebook servers.
     DOMAIN_NAME: str
 
-    # Mill's task runs: the namespace their pods run in, with the claim of
-    # the shared file system's root (the playbook
-    # thinkube-control/14_configure_mill_runs.yaml of thinkube), the image
-    # their pods start from (the AI base image, a manifest of both
-    # architectures), and the NATS a run reports to, as Mill's main pod has them
-    MILL_RUNS_NAMESPACE: str = "mill-runs"
-    MILL_SHARED_CLAIM: str = "thinkube-shared"
-    MILL_SHARED_MOUNT: str = "/storage/thinkube-shared"
-    MILL_REPOSITORY: str = "/storage/thinkube-shared/mill"
-    MILL_TASK_IMAGE: str = "library/ai-inference-base:cuda13.0-torch2.9-py3.12"
-    MILL_NATS_URL: str = "nats://nats.nats.svc.cluster.local:4222"
-    # The platform's LLM Gateway, in the cluster: a task that calls a model reads it as LLM_GATEWAY_URL
-    MILL_LLM_GATEWAY_URL: str = "http://llm-proxy.thinkube-control.svc.cluster.local:8080"
-    MILL_SUBJECTS: str = "mill"
-    # The owner of the tasks repository, as the shared folders have it
-    MILL_TASK_UID: int = 1000
-    MILL_TASK_GID: int = 100
-    # The folder of each task run's state, below the shared file system: kept across the run's starts
-    MILL_STATE_FOLDER: str = "forge-runs"
-    # A task that names a venv of the notebook servers runs on their image, which the venvs are built for, with
-    # the node's venvs mounted where a notebook server has them
-    MILL_VENV_IMAGE: str = "library/tk-jupyter-base:latest"
-    MILL_VENVS_HOST_PATH: str = "/var/lib/jupyterhub-venvs"
-    MILL_VENVS_MOUNT: str = "/home/thinkube/venvs"
-    # MLflow's file system (the playbook thinkube-control/14_configure_mill_runs.yaml), where the mirrored models
-    # are, mounted read-only by a task that names models, where a notebook server has it
-    MILL_MODELS_CLAIM: str = "mlflow-root"
-    MILL_MODELS_MOUNT: str = "/home/thinkube/thinkube/mlflow"
-
     @property
     def REGISTRY(self) -> str:
         return f"registry.{self.DOMAIN_NAME}"

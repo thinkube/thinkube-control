@@ -97,36 +97,6 @@ class FakeFiles:
         self.cleared.append(run.id)
 
 
-class FakePods:
-    """Kubernetes as the worker sees task runs' pods: started, read, deleted."""
-
-    def __init__(self):
-        self.jobs = {}
-        self.started = []
-        self.stopped = []
-        self.refusal = None
-
-    async def start(self, run, attempt, token=None):
-        from app.services import taskpods
-
-        if self.refusal is not None:
-            raise self.refusal
-        name = taskpods.job_name(run, attempt)
-        self.jobs[name] = {"state": "running", "waiting": None}
-        self.started.append((run.name, attempt))
-        return name
-
-    async def state(self, name):
-        return dict(self.jobs.get(name, {"state": "gone"}))
-
-    async def stop(self, name):
-        self.stopped.append(name)
-        self.jobs.pop(name, None)
-
-    def end(self, name, state="completed", error=None):
-        self.jobs[name] = {"state": state, "error": error}
-
-
 class Clock:
     def __init__(self, now):
         self.now = now
@@ -137,17 +107,17 @@ class Clock:
 
 @pytest.fixture
 def queue(test_db):
-    fake, files, clock, pods = FakeControl(), FakeFiles(), Clock(madrid(2026, 11, 2, 12, 0)), FakePods()
+    fake, files, clock = FakeControl(), FakeFiles(), Clock(madrid(2026, 11, 2, 12, 0))
 
     class Queue:
         db = test_db
         control = fake
 
         def __init__(self):
-            self.files, self.clock, self.pods = files, clock, pods
+            self.files, self.clock = files, clock
 
         def worker(self):
-            return worker.Worker(fake, files, clock, pods=pods)
+            return worker.Worker(fake, files, clock)
 
         def task(self, name, node="tkspark", priority=3, position=None, status="queued", gpus=1):
             """A task run of Mill, as Forge's API creates it."""
@@ -602,119 +572,10 @@ def test_a_plan_that_cannot_size_the_training_is_not_queued(queue):
 # --- Mill's task runs ------------------------------------------------------
 
 
-def test_task_runs_take_their_node_in_turn_and_other_nodes_at_once(queue):
-    first = queue.task("first", position=1)
-    second = queue.task("second", position=2)
-    elsewhere = queue.task("elsewhere", node="tkamd2", position=1)
+def test_a_task_run_kept_from_before_is_not_forges_to_run(queue):
+    """Mill gives its tasks to the Scheduler itself; a task run Forge kept is neither started nor followed."""
+    old = queue.task("old", position=1)
+    fine_tune = queue.run("mine", position=2)
     queue.tick()
-    assert (first.status, second.status, elsewhere.status) == ("running", "queued", "running")
-    assert sorted(queue.pods.started) == [("elsewhere", 1), ("first", 1)]
-    assert first.task["mill_run"] == f"forge-{first.id[:8]}-1" and first.job_id == f"forge-task-{first.id[:8]}-1"
-    # No notebook job is started for a task
-    assert queue.control.started == []
-
-    queue.pods.end(first.job_id)
-    queue.tick()
-    assert first.status == "completed" and first.finished_at is not None
-    assert second.status == "running" and second.waiting is None
-
-
-def test_a_failed_task_is_recorded_and_the_queue_goes_on(queue):
-    first = queue.task("first", position=1)
-    second = queue.task("second", position=2)
-    queue.tick()
-    queue.pods.end(first.job_id, "failed", "the task's process exited with code 1")
-    queue.tick()
-    assert first.status == "failed"
-    assert first.error == f"the task's process exited with code 1. Its log is in Mill, run forge-{first.id[:8]}-1"
-    assert second.status == "running"
-
-
-def test_a_task_whose_job_disappears_fails(queue):
-    run = queue.task("first")
-    queue.tick()
-    queue.pods.jobs.pop(run.job_id)
-    queue.tick()
-    assert run.status == "failed" and "is gone from Kubernetes" in run.error
-
-
-def test_a_task_that_waits_for_room_on_its_node_says_why(queue):
-    run = queue.task("first")
-    queue.tick()
-    queue.pods.jobs[run.job_id]["waiting"] = "the pod waits for room on its node: 0/3 nodes have a free GPU"
-    queue.tick()
-    assert run.status == "running" and run.waiting.endswith("have a free GPU")
-
-
-def test_a_task_of_a_higher_priority_stops_a_running_one_which_starts_again_later(queue):
-    low = queue.task("low", priority=3, position=1)
-    queue.tick()
-    assert low.status == "running"
-    high = queue.task("high", priority=1, position=2)
-    queue.tick()
-    # The running task is stopped: its job is deleted, and it waits for its pod to end
-    assert low.status == "stopping" and low.paused_by == "preempted" and low.preempted_by == "high"
-    assert queue.pods.stopped == [f"forge-task-{low.id[:8]}-1"]
-    queue.tick()
-    assert low.status == "paused" and low.job_id is None
-    assert high.status == "running"
-    queue.pods.end(high.job_id)
-    queue.tick()
-    # It starts again from the beginning, as a new run in Mill
-    assert low.status == "running" and low.task["attempts"] == 2
-    assert low.task["mill_run"] == f"forge-{low.id[:8]}-2"
-    assert queue.pods.started[-1] == ("low", 2)
-
-
-def test_a_task_that_does_not_end_after_its_stop_fails(queue):
-    run = queue.task("first")
-    queue.tick()
-    asyncio.run(queue.worker()._request_stop(run, "user", queue.clock.now))
-    # The pod still runs, as a pod that ignores SIGTERM would until Kubernetes kills it
-    queue.pods.jobs[run.job_id] = {"state": "running", "waiting": None}
-    queue.tick()
-    assert run.status == "stopping"
-    queue.clock.now += timedelta(seconds=worker.TASK_STOP_GRACE_SECONDS + 1)
-    queue.tick()
-    assert run.status == "failed" and "did not end within" in run.error
-
-
-def test_a_task_that_kubernetes_refuses_fails(queue):
-    from app.services import taskpods
-
-    run = queue.task("first")
-    queue.pods.refusal = taskpods.TaskPodError("Kubernetes refused to create the job: 403 Forbidden")
-    queue.tick()
-    assert run.status == "failed" and "403 Forbidden" in run.error
-
-
-def test_a_task_without_a_gpu_runs_beside_a_served_model_and_leaves_it_loaded(queue):
-    queue.control.allocations = {"tkspark": ["google/gemma"]}
-    run = queue.task("clean", gpus=0)
-    queue.tick()
-    assert run.status == "running" and queue.control.calls == []
-
-
-def test_cpu_tasks_take_their_lane_in_turn_and_gpu_work_neither_waits_for_them_nor_stops_them(queue):
-    first = queue.task("first", gpus=0, priority=3, position=1)
-    second = queue.task("second", gpus=0, priority=3, position=2)
-    queue.tick()
-    assert (first.status, second.status) == ("running", "queued")
-    # The next tick finds the second the lane's candidate, and says what it waits for
-    queue.tick()
-    assert second.status == "queued" and "first" in second.waiting
-    # A GPU run of a higher priority on the node starts beside the CPU task
-    gpu = queue.task("gpu", gpus=1, priority=1, position=3)
-    queue.tick()
-    assert gpu.status == "running" and first.status == "running"
-    assert queue.pods.stopped == []
-
-
-def test_a_cpu_task_of_a_higher_priority_stops_a_cpu_task_of_a_lower_one(queue):
-    low = queue.task("low", gpus=0, priority=4, position=1)
-    queue.tick()
-    high = queue.task("high", gpus=0, priority=2, position=2)
-    queue.tick()
-    assert low.status == "stopping" and low.preempted_by == "high"
-    queue.tick()
-    assert (low.status, high.status) == ("paused", "running")
+    assert old.status == "queued" and fine_tune.status == "running"
+    assert [r["parameters"]["run_id"] for r in queue.control.started] == [fine_tune.id]

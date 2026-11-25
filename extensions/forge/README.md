@@ -119,39 +119,13 @@ navigation and draws its pages. It needs the Datasets extension
 
 ## Mill's task runs
 
-A task of Mill's tasks repository can wait in a node's queue like a
-fine-tune: Mill creates it with `POST /api/v1/tasks/runs` (the file, the
-task's inputs, outputs and settings, the node, its GPUs, memory and CPU
-cores, and a priority). It is queued at once; it has no preprocessing, no
-plan and no slots.
-
-When its turn comes the worker starts a Kubernetes job for it in the
-namespace `mill-runs` (`backend/app/services/taskpods.py`): on the run's
-node, from the AI base image, with the shared file system mounted where
-Mill's main pod has it, running `mill run`. The run reports its progress,
-samples and log to Mill through NATS, under the id in its `task.mill_run`;
-Forge follows only the job's state, and says why a pod waits or failed.
-
-A task that asks for no GPU takes its node's CPU lane: it waits only for the
-other tasks without a GPU on that node, and it neither stops GPU work nor
-waits for it. A task with GPUs waits in the node's GPU lane with the
-fine-tunes, among Forge's runs, by the rules above.
-
-A task has no checkpoint. Pausing it, or a run of a higher priority that
-needs the node, deletes its job: the task ends as stopped in Mill. It
-starts again from the beginning when it resumes, as a new run in Mill.
-
-The namespace `mill-runs` and its claim of the shared file system are made
-by the playbook `thinkube-control/14_configure_mill_runs.yaml` of thinkube.
-Forge's backend may create, read and delete jobs and list pods
-(`access` in `thinkube.yaml`).
+Forge runs no task of Mill: Mill gives a task that must run on a chosen node
+to the Scheduler itself (`mill_run_on_node`). Task runs Forge kept from before
+are records only: one that had not ended was ended, saying so (migration
+`c5e7a9b1d3f4`), and its state folder on the shared file system was kept.
 
 ## Known limits
 
-- **A task's pod still asks Kubernetes for its GPUs.** Until Mill gives its
-  tasks to the Scheduler itself (step 5 of the Scheduler's plan), a task with
-  GPUs waits only for Forge's runs; the Scheduler counts its pod as work it
-  did not start, by what its GPUs hold.
 - **A training stopped by the Scheduler is killed, not paused.** Forge pauses
   its own runs at a step boundary through Meep²'s stop file. The Scheduler
   stops a job for work of a higher priority outside Forge by deleting its pod

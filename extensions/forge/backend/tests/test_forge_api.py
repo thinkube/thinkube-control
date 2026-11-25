@@ -595,67 +595,12 @@ def test_cancel_ends_a_revision_job(api):
 
 
 
-# --- Mill's task runs ------------------------------------------------------
-
-TASK = {"name": "clean on tkspark", "file": "demo/clean.py", "inputs": {"rows": "data/rows.jsonl"},
-        "outputs": {"cleaned": "data/cleaned.jsonl"}, "node": "tkspark", "gpus": 1, "memory_gb": 16, "cpu_cores": 4}
+# --- Tags, and Mill's task runs kept from before ------------------------------
 
 
-@pytest.fixture
-def nodes(monkeypatch):
-    async def choices(token):
-        return {"tkspark": {"memory_gb": [8, 16, 32, 64], "cpu_cores": [1, 2, 4, 8]}}
-    monkeypatch.setattr(control, "nodes_choices", choices)
-
-
-def test_a_task_run_is_queued_on_its_node_at_once(api, nodes):
-    r = api.post("/api/v1/tasks/runs", json=TASK)
-    assert r.status_code == 200, r.text
-    run = r.json()
-    assert (run["kind"], run["status"], run["node"], run["position"], run["when"]) == \
-        ("task", "queued", "tkspark", 1, "now")
-    assert run["task"]["file"] == "demo/clean.py" and run["task"]["gpus"] == 1 and run["task"]["mill_run"] is None
-    assert (run["memory_gb"], run["cpu_cores"], run["base_model"], run["plan"]) == (16, 4, None, None)
-    second = api.post("/api/v1/tasks/runs", json={**TASK, "name": "again"}).json()
-    assert second["position"] == 2
-    assert api.get(f"/api/v1/runs/{run['id']}").json()["job"] is None
-
-
-def test_a_task_run_names_a_built_venv_that_gets_the_gpu_it_needs(api, nodes, monkeypatch):
-    async def venvs(token):
-        return [{"name": "meepsquared", "status": "success", "needs_gpu": True},
-                {"name": "agent", "status": "success", "needs_gpu": False},
-                {"name": "broken", "status": "failed", "needs_gpu": False},
-                {"name": "fine-tuning", "status": "template", "needs_gpu": True, "is_template": True}]
-    monkeypatch.setattr(control, "venvs", venvs)
-    run = api.post("/api/v1/tasks/runs", json={**TASK, "venv": "meepsquared"}).json()
-    assert run["task"]["venv"] == "meepsquared"
-    r = api.post("/api/v1/tasks/runs", json={**TASK, "venv": "meepsquared", "gpus": 0})
-    assert r.status_code == 422 and "needs a GPU" in r.json()["detail"]
-    r = api.post("/api/v1/tasks/runs", json={**TASK, "venv": "broken"})
-    assert r.status_code == 422 and "not built" in r.json()["detail"]
-    r = api.post("/api/v1/tasks/runs", json={**TASK, "venv": "fine-tuning"})
-    assert r.status_code == 422 and "agent, meepsquared" in r.json()["detail"]
-    assert api.post("/api/v1/tasks/runs", json={**TASK, "venv": "agent", "gpus": 0}).status_code == 200
-
-
-def test_a_task_runs_models_are_resolved_once_when_it_is_created(api, nodes, monkeypatch):
-    from app.services import mlflow
-
-    async def model_folder(model_id):
-        if model_id != "google/gemma-4-E4B-it":
-            raise mlflow.MlflowError(f"{model_id} is not in the MLflow registry; mirror it in Thinkube Control first")
-        return "artifacts/3/abc/artifacts/model"
-    monkeypatch.setattr(mlflow, "model_folder", model_folder)
-    run = api.post("/api/v1/tasks/runs", json={**TASK, "models": ["google/gemma-4-E4B-it"]}).json()
-    assert run["task"]["models"] == {"google/gemma-4-E4B-it": "artifacts/3/abc/artifacts/model"}
-    r = api.post("/api/v1/tasks/runs", json={**TASK, "models": ["org/not-mirrored"]})
-    assert r.status_code == 422 and "not in the MLflow registry" in r.json()["detail"]
-
-
-def test_a_run_carries_tags_and_is_found_by_them(api, nodes):
-    tagged = api.post("/api/v1/tasks/runs", json={**TASK, "tags": {"experiment": "vote-of-finders"}}).json()
-    plain = api.post("/api/v1/tasks/runs", json={**TASK, "name": "again"}).json()
+def test_a_run_carries_tags_and_is_found_by_them(api):
+    tagged = api.post("/api/v1/runs", json={**RUN, "name": "tagged", "tags": {"experiment": "vote-of-finders"}}).json()
+    plain = api.post("/api/v1/runs", json={**RUN, "name": "again"}).json()
     assert tagged["tags"] == {"experiment": "vote-of-finders"} and plain["tags"] == {}
     found = api.get("/api/v1/runs", params={"tag": "experiment=vote-of-finders"}).json()
     assert [r["id"] for r in found] == [tagged["id"]]
@@ -667,62 +612,17 @@ def test_a_run_carries_tags_and_is_found_by_them(api, nodes):
     assert api.put(f"/api/v1/runs/{plain['id']}/tags", json={"tags": {"claim": ""}}).json()["tags"] == {"experiment": "vote-of-finders"}
     assert api.put(f"/api/v1/runs/{plain['id']}/tags", json={"tags": {"Bad Name": "x"}}).status_code == 422
     assert api.get("/api/v1/runs", params={"tag": "no-value"}).status_code == 422
-    assert api.post("/api/v1/tasks/runs", json={**TASK, "name": "bad", "tags": {"Bad Name": "x"}}).status_code == 422
 
 
-def test_a_task_run_asks_no_more_than_its_node_gives(api, nodes):
-    r = api.post("/api/v1/tasks/runs", json={**TASK, "memory_gb": 128})
-    assert r.status_code == 422 and "at most 64 GiB" in r.json()["detail"]
-    r = api.post("/api/v1/tasks/runs", json={**TASK, "cpu_cores": 16})
-    assert r.status_code == 422 and "at most 8 CPU" in r.json()["detail"]
-    r = api.post("/api/v1/tasks/runs", json={**TASK, "node": "tkfar"})
-    assert r.status_code == 422 and "tkfar is not a node" in r.json()["detail"]
+def test_forge_runs_no_task_of_mill(api):
+    """Mill gives its tasks to the Scheduler itself: Forge takes none, and a task run it kept is not resumed."""
+    assert api.post("/api/v1/tasks/runs", json={"name": "x", "file": "demo/clean.py", "node": "tkspark",
+                                                "memory_gb": 8, "cpu_cores": 2}).status_code in (404, 405)
+    import uuid as _uuid
 
-
-def test_a_task_run_has_no_plan_and_no_slots(api, nodes):
-    run = api.post("/api/v1/tasks/runs", json=TASK).json()
-    r = api.post(f"/api/v1/runs/{run['id']}/plan", json={})
-    assert r.status_code == 409 and "has no plan" in r.json()["detail"]
-    r = api.post(f"/api/v1/runs/{run['id']}/queue", json={"when": "slots"})
-    assert r.status_code == 422 and "runs now" in r.json()["detail"]
-
-
-def test_a_running_task_run_is_paused_and_cancelled_by_deleting_its_job(api, nodes, monkeypatch):
-    from app.services import taskpods
-
-    stopped = []
-
-    class Pods:
-        async def stop(self, name):
-            stopped.append(name)
-
-    monkeypatch.setattr(taskpods, "TaskPods", Pods)
-    run = api.post("/api/v1/tasks/runs", json=TASK).json()
-    put(api, run["id"], status="running", job_id="forge-task-x-1")
-    paused = api.post(f"/api/v1/runs/{run['id']}/pause").json()
-    assert paused["status"] == "stopping" and stopped == ["forge-task-x-1"]
-    # A file of stops is for fine-tunes; a task's pod is deleted instead
-    assert api.files.stops == []
-    put(api, run["id"], status="running", job_id="forge-task-x-2")
-    assert api.post(f"/api/v1/runs/{run['id']}/cancel").json()["status"] == "cancelled"
-    assert stopped == ["forge-task-x-1", "forge-task-x-2"]
-    assert api.fake.cancelled == []
-
-
-def test_a_task_runs_progress_is_its_run_of_mill_and_mlflow_is_not_asked(api, nodes, monkeypatch):
-    async def no_mlflow(run_id):
-        raise AssertionError("a task run's progress asked MLflow")
-
-    monkeypatch.setattr(mlflow, "progress", no_mlflow)
-    run = api.post("/api/v1/tasks/runs", json=TASK).json()
-    assert api.get(f"/api/v1/runs/{run['id']}/progress").json() == {"kind": "task", "mill_run": None, "url": None}
-    stored = api.db.get(Run, run["id"])
-    put(api, run["id"], task={**stored.task, "mill_run": "forge-abc-4"})
-    assert api.get(f"/api/v1/runs/{run['id']}/progress").json() == {
-        "kind": "task", "mill_run": "forge-abc-4", "url": "https://control.test.com/x/mill/runs/forge-abc-4"}
-
-
-def test_a_failed_task_run_is_resumed(api, nodes):
-    run = api.post("/api/v1/tasks/runs", json=TASK).json()
-    put(api, run["id"], status="failed", position=None)
-    assert api.post(f"/api/v1/runs/{run['id']}/resume").json()["status"] == "queued"
+    old = Run(id=str(_uuid.uuid4()), name="old task", kind="task", node="tkspark", when="now", status="cancelled",
+              priority=3, memory_gb=8, cpu_cores=2, created_by="u", task={"file": "demo/clean.py"})
+    api.db.add(old)
+    api.db.commit()
+    refused = api.post(f"/api/v1/runs/{old.id}/resume")
+    assert refused.status_code == 409 and "mill_run_on_node" in refused.json()["detail"]
