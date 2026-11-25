@@ -101,11 +101,21 @@ Each step is seen before the next begins.
    `scheduler`. It lists each node's GPUs by id, with their memory and what
    they hold now, and the node's type.
    Seen when: its page lists the two cards of tkamd2 and the GPU of tkspark.
+   Done, 25 November: the route lists tkamd2's two cards and tkspark's GPU by
+   id, with what each holds. Thinkube Control's node-metrics pods give each
+   GPU's id for it.
 2. **It runs a job.** Given a job, it starts the pod on the GPUs it chose,
    says the job's state, and stops it when asked. The pods run in a namespace
    of the scheduler's, which holds the claims of the shared file systems.
    Seen when: two jobs asked for one card each run at once on the two cards
    of tkamd2, and a third waits.
+   Seen, 25 November: a job computed on tkspark's GPU, given by its id; a
+   job without a GPU ran on tkamd1 and saw none; of two jobs that each asked
+   for tkspark's GPU alone, the second waited for the first; three jobs that
+   asked for a card of tkamd2 alone waited, saying what each card held of
+   work the scheduler did not start (a training on both cards).
+   Not seen yet: two jobs at once on the two cards of tkamd2. It is checked
+   when that training has ended and the cards are free.
 3. **It decides the turn.** The queue of each node, the priorities and the
    four changes above, with the work it did not start read from the GPUs.
    Seen when: a job of a higher priority stops one of a lower priority on the

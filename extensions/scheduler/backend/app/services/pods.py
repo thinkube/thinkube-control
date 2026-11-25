@@ -174,8 +174,11 @@ class Pods:
         pod = await self._pod(name)
         if pod is None:
             return None
-        return await self._call(f"read the log of {pod.metadata.name}", self._core.read_namespaced_pod_log,
-                                pod.metadata.name, settings.SCHEDULER_RUNS_NAMESPACE, tail_lines=lines)
+        # The raw answer, decoded here: the client gives a log back as the text of a bytes value otherwise
+        answer = await self._call(f"read the log of {pod.metadata.name}", self._core.read_namespaced_pod_log,
+                                  pod.metadata.name, settings.SCHEDULER_RUNS_NAMESPACE, tail_lines=lines,
+                                  _preload_content=False)
+        return answer.data.decode("utf-8", errors="replace")
 
 
 def _exit(pod: Any) -> str:
