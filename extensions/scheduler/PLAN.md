@@ -194,6 +194,10 @@ Each step is seen before the next begins.
    label: the scheduler ends a hold that has its GPUs and no pod for 10
    minutes, so a server that is gone leaves no hold of priority 1 on a GPU.
    Seen when: a notebook server gets a GPU through the scheduler.
+   Seen, 25 November, on tkspark: a notebook server started with 1 GPU and
+   8 GB of it got a hold of priority 1; its pod asked Kubernetes for no GPU,
+   ran with the GB10's id, and nvidia-smi in it showed the GB10. The hold
+   ended when the server stopped.
    Open in this step: the priority of each kind of work (notebook server 1,
    notebook job 2, run 3, served model 4, app 5) is a table a person edits
    in Forge, and the owners that ask the scheduler today say the default
