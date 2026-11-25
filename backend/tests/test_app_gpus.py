@@ -65,6 +65,9 @@ class Scheduler:
     def __init__(self):
         self.holds, self.asked, self.ended, self.released = {}, [], [], []
 
+    def priority(self, kind):
+        return {"app": 5}[kind]
+
     def open_holds(self):
         return [h for h in self.holds.values() if h["status"] in app_gpus.OPEN]
 

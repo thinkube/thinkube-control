@@ -5,9 +5,10 @@
 
 A notebook server is a pod that JupyterHub starts on one node with a CPU,
 memory and GPU budget. Its GPUs are asked of the Scheduler by JupyterHub when
-the server starts, with the priority given here: SERVER_PRIORITY for a node's
-interactive server, JOB_PRIORITY for an unattended run. A start the Scheduler
-gives no GPU fails with the Scheduler's reason. Each node runs at most one interactive server, a
+the server starts, with the priority a person set at the Scheduler for its
+kind of work: SERVER_KIND for a node's interactive server, JOB_KIND for an
+unattended run. A start the Scheduler gives no GPU fails with the Scheduler's
+reason. Each node runs at most one interactive server, a
 JupyterHub named server called after the node, which starts with the node's
 defaults unless other values are asked for. These endpoints let Claude Code
 and Thinkube IDE see every node's server, start one where the work needs to
@@ -56,9 +57,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/jupyter", tags=["jupyter-server"])
 
 PROFILE = "thinkube-notebooks"
-# The priorities, of 1 (highest) to 5, with which a server's GPUs are asked of the Scheduler
-SERVER_PRIORITY = 1
-JOB_PRIORITY = 2
+# The kinds of work whose priority, at the Scheduler, a server's GPUs are asked with
+SERVER_KIND = "notebook_server"
+JOB_KIND = "notebook_job"
 JOB_POLL_SECONDS = 15
 JOB_SERVER_PREFIX = jupyter_notebooks.JOB_SERVER_PREFIX
 
@@ -84,7 +85,7 @@ class Placement(BaseModel):
     # The memory the server takes on each GPU, with which it shares the GPU;
     # none: it has its GPUs alone
     gpu_memory_gb: Optional[int] = None
-    priority: int = SERVER_PRIORITY
+    kind: str = SERVER_KIND
     # The spawner requests a quarter of memory_gb, so a server can be placed
     # where memory is short and still grow to its limit. A run that must not
     # be killed for memory asks the node to reserve all of it.
@@ -103,7 +104,7 @@ class Placement(BaseModel):
             "memory": f"{self.memory_gb}G",
             "gpus": str(self.gpus),
             "gpu_memory": str(self.gpu_memory_gb) if self.gpu_memory_gb else WHOLE_GPU,
-            "priority": str(self.priority),
+            "kind": self.kind,
         }
 
 
@@ -349,7 +350,7 @@ async def start_notebook_server(
     current_user: dict = Depends(get_current_user_dual_auth),
     db: Session = Depends(get_db),
 ):
-    """Start the notebook server on a node, for example 'tkspark', with the node's default CPU, memory and GPUs unless others are given. Its GPUs are asked of the Scheduler, with priority 1: work of a lower priority on them is stopped for it, and a start the Scheduler gives no GPU fails with its reason. Answers at once with state 'starting'; poll jupyter_notebook_status until the node's state is 'running' (its tools answer when extension.status is 'ok') or 'stopped' with start_error. Servers on other nodes keep running."""
+    """Start the notebook server on a node, for example 'tkspark', with the node's default CPU, memory and GPUs unless others are given. Its GPUs are asked of the Scheduler with the priority of a notebook server (1 unless a person changed it at the Scheduler): work of a lower priority on them is stopped for it, and a start the Scheduler gives no GPU fails with its reason. Answers at once with state 'starting'; poll jupyter_notebook_status until the node's state is 'running' (its tools answer when extension.status is 'ok') or 'stopped' with start_error. Servers on other nodes keep running."""
     request = request or StartServerRequest()
     placement = await resolve_placement(
         db,
@@ -664,7 +665,7 @@ async def run_notebook_job(
     current_user: dict = Depends(get_current_user_dual_auth),
     db: Session = Depends(get_db),
 ):
-    """Run a whole notebook unattended on its own server: started on the node with the GPUs asked for (the node's defaults fill the rest), run top to bottom, stopped when done. Its GPUs are asked of the Scheduler, with priority 2. Returns a job_id at once; poll notebook_job_status. The notebook file keeps the outputs. A training sets training true and runs on the node training mode is on. With a given notebook or parameters, the job runs its own copy, job-runs/<job_id>.ipynb in the notebooks folder, which keeps the outputs; parameters reach the notebook as the dict PARAMETERS."""
+    """Run a whole notebook unattended on its own server: started on the node with the GPUs asked for (the node's defaults fill the rest), run top to bottom, stopped when done. Its GPUs are asked of the Scheduler with the priority of an unattended notebook run (2 unless a person changed it at the Scheduler). Returns a job_id at once; poll notebook_job_status. The notebook file keeps the outputs. A training sets training true and runs on the node training mode is on. With a given notebook or parameters, the job runs its own copy, job-runs/<job_id>.ipynb in the notebooks folder, which keeps the outputs; parameters reach the notebook as the dict PARAMETERS."""
     is_training = jupyter_notebooks._bool(request.training, False)
     training = await training_mode.status()
     if is_training and training is None:
@@ -685,7 +686,7 @@ async def run_notebook_job(
         jupyter_notebooks._opt_int(request.gpus, "gpus"),
         jupyter_notebooks._opt_int(request.gpu_memory_gb, "gpu_memory_gb"),
     )
-    placement.priority = JOB_PRIORITY
+    placement.kind = JOB_KIND
     placement.reserve_memory = jupyter_notebooks._bool(request.reserve_memory, False)
     placement.training_node = training is not None and training["node"] == placement.node
     if request.kernel_name:

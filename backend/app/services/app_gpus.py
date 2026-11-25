@@ -9,7 +9,7 @@ ConfigMap <deployment>-gpus (scripts/gpu_placement.py). Its pod asks Kubernetes 
 the ConfigMap holds no GPU ids. Thinkube Control owns the hold of each such Deployment; every TICK_SECONDS it:
 
 - asks the Scheduler for a hold for each one that has replicas and no open hold: on its node, with the GPUs and the
-  GPU memory its annotations say, and APP_PRIORITY;
+  GPU memory its annotations say, and the priority a person set at the Scheduler for apps (KIND);
 - writes the ids of the GPUs a running hold was given into the ConfigMap, and deletes the Deployment's pods that
   are not running, so that they start at once;
 - when the Scheduler asks for the GPUs back (the hold is stopping), takes the ids out of the ConfigMap and deletes
@@ -33,8 +33,8 @@ logger = logging.getLogger(__name__)
 
 SCHEDULER_URL = "http://scheduler-backend.thinkube-control.svc.cluster.local:8000/internal/scheduler"
 OWNER = "thinkube-control"
-# An app's priority, of 1 (highest) to 5
-APP_PRIORITY = 5
+# The kind of work an app with a GPU is, whose priority a person sets at the Scheduler
+KIND = "app"
 # Where the Scheduler asks Control to give an app's GPUs up (app.api.internal)
 RELEASE_URL = "http://backend.thinkube-control.svc.cluster.local:8000/internal/apps/gpus/release"
 GPUS_ANNOTATION = "scheduler.thinkube.io/gpus"
@@ -79,6 +79,10 @@ class Scheduler:
 
     def get(self, hold_id: str) -> Dict[str, Any]:
         return self._call("GET", f"/jobs/{hold_id}")
+
+    def priority(self, kind: str) -> int:
+        """The priority of a kind of work, as a person set it at the Scheduler."""
+        return self._call("GET", "/priorities")[kind]
 
     def ask(self, request: Dict[str, Any]) -> Dict[str, Any]:
         return self._call("POST", "/holds", request)
@@ -231,7 +235,7 @@ class AppGpus:
                 "name": hold_name(namespace, name), "owner": OWNER, "node": node,
                 "gpus": int(deployment.metadata.annotations[GPUS_ANNOTATION]),
                 "gpu_memory_gb": float(gpu_memory) if gpu_memory else None,
-                "memory_gb": memory_limit_gb(deployment), "priority": APP_PRIORITY, "release_url": RELEASE_URL})
+                "memory_gb": memory_limit_gb(deployment), "priority": self.scheduler.priority(KIND), "release_url": RELEASE_URL})
             logger.info("asked hold %s for %s/%s on %s", made["id"], namespace, name, node)
             self.cluster.write_configmap(namespace, cm_name, {HOLD_ANNOTATION: made["id"],
                                                               GENERATION_ANNOTATION: generation,
