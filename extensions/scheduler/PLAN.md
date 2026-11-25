@@ -155,6 +155,11 @@ Each step is seen before the next begins.
    a model is loaded, when the scheduler lets it, and shrinks as models
    leave. Asked to give its GPU up, such a pod is stopped and its models are
    loaded again when it has a GPU.
+   Seen on tkspark, 25 November: the Ollama pod started on the GPU its hold
+   was given; a job of priority 2 that needed the GPU alone had the pod
+   stopped, ran, and the pod's model was loaded again by itself, the pod
+   still on its hold. The trained heads' pod on tkspark was running before
+   with a GPU asked of Kubernetes, and stays so until it is made again.
    Not seen yet: a model on the card a training does not use, on tkamd2. It
    is checked with step 2's check, when the cards are free.
    Open in this step: a server that takes a share of a GPU's memory whatever
