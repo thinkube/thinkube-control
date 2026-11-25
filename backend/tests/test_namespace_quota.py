@@ -123,7 +123,8 @@ def test_a_container_without_size_counts_as_the_limit_range_default():
 
 
 def test_the_gpu_quota_stands_when_it_already_holds_the_application_twice():
-    assert namespace_quota(True, [CPU, RTX, SPARK], BUDGET, [APY]) == ("48Gi", "96Gi", "12", "40")
+    # Three GPUs: the CPU quota holds a GPU pod on each
+    assert namespace_quota(True, [CPU, RTX, SPARK], BUDGET, [APY]) == ("48Gi", "96Gi", "7", "20")
 
 
 def test_an_unknown_size_is_refused():

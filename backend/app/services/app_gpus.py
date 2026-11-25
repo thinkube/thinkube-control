@@ -220,6 +220,8 @@ class AppGpus:
             # Nothing to run, or nowhere: an open hold ends, and the GPU ids go
             if hold is not None and hold["status"] in OPEN:
                 self.scheduler.end(hold["id"])
+                # Ended here, it is not ended again with the holds no Deployment wants
+                holds.pop(hold["id"], None)
             if found is not None and (ids or hold_id):
                 error = None if node else ("the Deployment names no node; deploy the app again so that its "
                                            "manifests name one")
