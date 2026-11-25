@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """An app container's GPUs come from the Scheduler: its manifest pins it to the node chosen for it, gives it its
-GPUs by their ids from a ConfigMap Control writes, and asks Kubernetes for no GPU. A component's container keeps
-the GPU it asks Kubernetes for: the LLM gateway starts its pods."""
+GPUs by their ids from a ConfigMap Control writes, and asks Kubernetes for no GPU. A component's container asks for
+none either: the LLM gateway starts its pods on the GPUs of its holds."""
 
 import sys
 from pathlib import Path
@@ -110,10 +110,11 @@ def test_an_app_container_with_a_gpu_needs_its_node():
         render(GPU, gpu_nodes={})
 
 
-def test_a_components_container_keeps_the_gpu_it_asks_kubernetes_for():
+def test_a_components_container_asks_kubernetes_for_no_gpu():
+    """The LLM gateway starts a component's pods on the GPUs of its holds; the base Deployment asks for none."""
     deployment = render(GPU, kind="component")
     pod = deployment["spec"]["template"]
     assert "annotations" not in deployment["metadata"] and "runtimeClassName" not in pod["spec"]
     [container] = pod["spec"]["containers"]
-    assert container["resources"]["limits"]["nvidia.com/gpu"] == 1
+    assert "nvidia.com/gpu" not in container["resources"]["limits"]
     assert "NVIDIA_VISIBLE_DEVICES" not in {e["name"] for e in container["env"]}

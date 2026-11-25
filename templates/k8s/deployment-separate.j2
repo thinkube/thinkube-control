@@ -3,7 +3,7 @@
 # Each container gets its own deployment
 {% for container in thinkube_spec.spec.containers %}
 {# A container's GPUs are the Scheduler's to give (scripts/gpu_placement.py), except a component's, whose pods the
-   LLM gateway starts #}
+   LLM gateway starts on the GPUs of its holds #}
 {% set held_gpus = container.gpu is defined and container.gpu.count is defined
    and (thinkube_spec.spec.deployment.type | default('app')) != 'component' %}
 ---
@@ -375,21 +375,9 @@ spec:
               cpu: "500m"
             {% endif %}
 {%- endif %}
-{% if held_gpus %}
-{% elif container.gpu is defined and container.gpu.count is defined and container.gpu.memory is defined %}
-{% if container.size is not defined %}
-
-          resources:
-            requests:
-              nvidia.com/gpu: {{ container.gpu.count }}
-            limits:
-              nvidia.com/gpu: {{ container.gpu.count }}
-{% else %}
-
-            # GPU resources added to existing resources
-              nvidia.com/gpu: {{ container.gpu.count }}
-{% endif %}
-{% elif container.gpu is defined %}
+{# No container asks Kubernetes for a GPU: an app's GPUs are given by the Scheduler (held_gpus), and a component's
+   by the LLM gateway, which starts its pods on the GPUs of a hold #}
+{% if container.gpu is defined and not (container.gpu.count is defined and container.gpu.memory is defined) %}
           # ERROR: GPU configuration requires both 'count' and 'memory' fields
 {% endif %}
           resizePolicy:

@@ -52,7 +52,9 @@ ROLLOUT_COPIES = 2
 GPU_POD_CPU_REQUEST = 1
 GPU_POD_CPU_LIMIT = 4
 
-GPU_RESOURCE = "nvidia.com/gpu"
+# The GPUs of a node, as GPU feature discovery counts them; Kubernetes hands out none (the Scheduler gives each by
+# its id)
+GPU_COUNT_LABEL = "nvidia.com/gpu.count"
 FAMILY_LABEL = "nvidia.com/gpu.family"
 PRODUCT_LABEL = "nvidia.com/gpu.product"
 
@@ -83,6 +85,11 @@ def _is_unified_memory(node: Dict) -> bool:
     return "blackwell" in family or "gb10" in product or "dgx" in product
 
 
+def gpu_count(node: Dict) -> int:
+    """The GPUs of a node, as GPU feature discovery counts them."""
+    return int(node["labels"].get(GPU_COUNT_LABEL, "0"))
+
+
 def _allocatable_gi(node: Dict) -> int:
     memory = node["allocatable"].get("memory")
     if not isinstance(memory, str) or not memory.endswith("Ki"):
@@ -102,7 +109,7 @@ def memory_quota(has_gpu: bool, nodes: List[Dict], environ: Mapping[str, str]) -
 
     limit_gi = 0
     for node in nodes:
-        if int(node["allocatable"].get(GPU_RESOURCE, "0")) == 0:
+        if gpu_count(node) == 0:
             continue
         if _is_unified_memory(node):
             node_gi = min(_allocatable_gi(node), uma_budget_gi(environ))
@@ -122,7 +129,7 @@ def cpu_quota(has_gpu: bool, nodes: List[Dict]) -> Tuple[str, str]:
     """
     if not has_gpu:
         return NON_GPU_CPU_QUOTA
-    slots = sum(int(node["allocatable"].get(GPU_RESOURCE, "0")) for node in nodes)
+    slots = sum(gpu_count(node) for node in nodes)
     if slots == 0:
         raise QuotaError("The application requests a GPU, but no node in the cluster has one.")
     requests, limits = NON_GPU_CPU_QUOTA

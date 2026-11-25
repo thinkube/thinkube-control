@@ -1,7 +1,7 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""GPU details come from each node's node-metrics pod; time-slicing from node labels."""
+"""GPU details come from each node's node-metrics pod; a node's GPUs are counted by GPU feature discovery."""
 
 import json
 from types import SimpleNamespace
@@ -99,10 +99,11 @@ def _node_metrics_pod(node, ip):
     }
 
 
-def test_time_sliced_node_is_capped_at_one_gpu_even_without_details(monkeypatch):
+def test_a_nodes_gpus_are_counted_by_feature_discovery_not_by_kubernetes(monkeypatch):
+    # Kubernetes hands out no GPU (nvidia.com/gpu 0): the Scheduler gives each one by its id
     nodes = [
-        _Node("tkamd2", 4, {"nvidia.com/gpu.replicas": "2", "nvidia.com/gpu.count": "2"}),
-        _Node("plain", 2, {}),
+        _Node("tkamd2", 0, {"nvidia.com/gpu.count": "2"}),
+        _Node("plain", 0, {"nvidia.com/gpu.count": "2"}),
         _Node("cpu", 0, {}),
     ]
     pods = [_node_metrics_pod("plain", "10.0.0.9")]
@@ -112,13 +113,13 @@ def test_time_sliced_node_is_capped_at_one_gpu_even_without_details(monkeypatch)
 
     result = {n["name"]: n for n in cr._compute_cluster_resources()}
 
-    assert result["tkamd2"]["capacity"]["effective_gpu"] == 1
+    assert result["tkamd2"]["capacity"]["physical_gpu"] == 2 and result["tkamd2"]["available"]["gpu"] == 2
     assert result["tkamd2"]["gpu_details"] == []
     assert "no running node-metrics pod" in result["tkamd2"]["gpu_error"]
 
-    assert result["plain"]["capacity"]["effective_gpu"] == 2
+    assert result["plain"]["capacity"]["effective_gpu"] == 2 and result["plain"]["capacity"]["gpu_slices"] == 1
     assert len(result["plain"]["gpu_details"]) == 2
     assert result["plain"]["gpu_error"] is None
 
-    assert result["cpu"]["capacity"]["effective_gpu"] == 0
+    assert result["cpu"]["capacity"]["gpu"] == 0
     assert result["cpu"]["gpu_error"] is None

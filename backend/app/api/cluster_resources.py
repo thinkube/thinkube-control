@@ -206,10 +206,14 @@ def _compute_cluster_resources() -> List[Dict[str, Any]]:
         else:
             cpu_val = int(cpu_capacity)
 
+        # A node's GPUs are counted by GPU feature discovery (nvidia.com/gpu.count), which labels a node whose
+        # GPUs the platform uses; a node the GPU operator leaves out (a GPU too old for it) has none. Kubernetes
+        # hands out no GPU: the Scheduler gives each one by its id, so the GPUs are not counted as resources.
+        labels = node.metadata.labels or {}
         capacity = {
             "cpu": cpu_val,
             "memory": parse_memory(node.status.capacity.get("memory", "0")),
-            "gpu": int(node.status.capacity.get("nvidia.com/gpu", 0))
+            "gpu": int(labels.get("nvidia.com/gpu.count", "0")),
         }
 
         # Calculate allocated resources from pods (pre-grouped per node)
@@ -217,7 +221,6 @@ def _compute_cluster_resources() -> List[Dict[str, Any]]:
 
         allocated_cpu = 0
         allocated_memory = 0
-        allocated_gpu = 0
 
         # Terminated pods (Succeeded/Failed) are already excluded server-side via
         # the field_selector above. Each pod is a plain dict (raw JSON).
@@ -245,10 +248,6 @@ def _compute_cluster_resources() -> List[Dict[str, Any]]:
                 if mem_limit != "0":
                     allocated_memory += parse_memory(mem_limit)
 
-                # GPU
-                gpu_limit = limits.get("nvidia.com/gpu", "0")
-                if gpu_limit != "0":
-                    allocated_gpu += int(gpu_limit)
 
         # One entry per physical GPU. When they cannot be read, the list is
         # empty and gpu_error says why.
@@ -261,22 +260,13 @@ def _compute_cluster_resources() -> List[Dict[str, Any]]:
                 gpu_error = str(e)
                 logger.warning(f"Could not get GPU details for {node_name}: {e}")
 
-        # Calculate available resources
+        # Calculate available resources. Whether a GPU is free now is the Scheduler's to say, when work asks for it:
+        # every GPU of the node is one work may ask for.
         available = {
             "cpu": max(0, capacity["cpu"] - allocated_cpu),
             "memory": max(0, capacity["memory"] - allocated_memory),
-            "gpu": max(0, capacity["gpu"] - allocated_gpu)
+            "gpu": capacity["gpu"],
         }
-
-        # A time-sliced node advertises several slices per physical GPU
-        # (nvidia.com/gpu.replicas, set by GPU feature discovery). A pod asking
-        # for some of the slices may get slices of the same GPU, so a server on
-        # such a node is given one slice (effective_gpu), or every slice, which
-        # is every physical GPU (physical_gpu, gpu_slices).
-        labels = node.metadata.labels or {}
-        replicas = int(labels.get("nvidia.com/gpu.replicas", "1"))
-        effective_gpu = 1 if capacity["gpu"] > 0 and replicas > 1 else capacity["gpu"]
-        physical_gpu = capacity["gpu"] // replicas if replicas > 1 else capacity["gpu"]
 
         result.append({
             "name": node_name,
@@ -284,14 +274,14 @@ def _compute_cluster_resources() -> List[Dict[str, Any]]:
                 "cpu": capacity["cpu"],
                 "memory": format_memory(capacity["memory"]),
                 "gpu": capacity["gpu"],
-                "effective_gpu": effective_gpu,
-                "physical_gpu": physical_gpu,
-                "gpu_slices": replicas,
+                "effective_gpu": capacity["gpu"],
+                "physical_gpu": capacity["gpu"],
+                "gpu_slices": 1,
             },
             "allocated": {
                 "cpu": round(allocated_cpu, 2),
                 "memory": format_memory(allocated_memory),
-                "gpu": allocated_gpu
+                "gpu": 0,
             },
             "available": {
                 "cpu": round(available["cpu"], 2),

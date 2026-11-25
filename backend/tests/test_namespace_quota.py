@@ -23,16 +23,17 @@ from namespace_quota import (  # noqa: E402
 
 BUDGET = {"LLM_UMA_AI_BUDGET_GB": "96"}
 
-# The GPU nodes of the reference cluster, as they report themselves.
+# The GPU nodes of the reference cluster, as they report themselves: their GPUs counted by GPU feature discovery,
+# none handed out by Kubernetes.
 RTX = node_view(
     "tkamd2",
-    {"nvidia.com/gpu": "4", "memory": "122620300Ki"},
-    {"nvidia.com/gpu.family": "ampere", "nvidia.com/gpu.product": "NVIDIA-GeForce-RTX-3090-SHARED"},
+    {"memory": "122620300Ki"},
+    {"nvidia.com/gpu.count": "2", "nvidia.com/gpu.family": "ampere", "nvidia.com/gpu.product": "NVIDIA-GeForce-RTX-3090"},
 )
 SPARK = node_view(
     "tkspark",
-    {"nvidia.com/gpu": "4", "memory": "119211920Ki"},
-    {"nvidia.com/gpu.family": "blackwell", "nvidia.com/gpu.product": "NVIDIA-GB10-SHARED"},
+    {"memory": "119211920Ki"},
+    {"nvidia.com/gpu.count": "1", "nvidia.com/gpu.family": "blackwell", "nvidia.com/gpu.product": "NVIDIA-GB10"},
 )
 CPU = node_view("tkamd1", {"memory": "57396820Ki"}, {})
 
@@ -52,8 +53,8 @@ def test_a_discrete_node_alone_needs_host_overhead_only():
 def test_a_unified_memory_node_below_the_budget_uses_its_allocatable_memory():
     small = node_view(
         "small-spark",
-        {"nvidia.com/gpu": "1", "memory": str(64 * 1024 * 1024) + "Ki"},
-        {"nvidia.com/gpu.family": "blackwell", "nvidia.com/gpu.product": "NVIDIA-GB10"},
+        {"memory": str(64 * 1024 * 1024) + "Ki"},
+        {"nvidia.com/gpu.count": "1", "nvidia.com/gpu.family": "blackwell", "nvidia.com/gpu.product": "NVIDIA-GB10"},
     )
     assert memory_quota(True, [small], BUDGET) == ("32Gi", "64Gi")
 
@@ -64,7 +65,7 @@ def test_gpu_work_on_a_cluster_without_gpus_is_refused():
 
 
 def test_a_gpu_node_without_feature_labels_is_refused():
-    unlabelled = node_view("gpu-x", {"nvidia.com/gpu": "1", "memory": "1000Ki"}, None)
+    unlabelled = node_view("gpu-x", {"memory": "1000Ki"}, {"nvidia.com/gpu.count": "1"})
     with pytest.raises(QuotaError, match="gpu-x"):
         memory_quota(True, [unlabelled], BUDGET)
 
@@ -72,8 +73,8 @@ def test_a_gpu_node_without_feature_labels_is_refused():
 def test_memory_not_reported_in_ki_is_refused():
     odd = node_view(
         "odd-spark",
-        {"nvidia.com/gpu": "1", "memory": "120Gi"},
-        {"nvidia.com/gpu.family": "blackwell", "nvidia.com/gpu.product": "NVIDIA-GB10"},
+        {"memory": "120Gi"},
+        {"nvidia.com/gpu.count": "1", "nvidia.com/gpu.family": "blackwell", "nvidia.com/gpu.product": "NVIDIA-GB10"},
     )
     with pytest.raises(QuotaError, match="not in Ki"):
         memory_quota(True, [odd], BUDGET)
@@ -93,9 +94,9 @@ def test_an_application_without_gpu_work_gets_the_fixed_cpu_quota():
     assert cpu_quota(False, nodes=[]) == NON_GPU_CPU_QUOTA
 
 
-def test_the_cpu_quota_holds_one_gpu_pod_per_slot_of_the_cluster():
-    # Eight slots: four on each GPU node. Each GPU pod requests 1 CPU, limit 4.
-    assert cpu_quota(True, [CPU, RTX, SPARK]) == ("12", "40")
+def test_the_cpu_quota_holds_one_gpu_pod_per_gpu_of_the_cluster():
+    # Three GPUs: two on tkamd2, one on tkspark. Each GPU pod requests 1 CPU, limit 4.
+    assert cpu_quota(True, [CPU, RTX, SPARK]) == ("7", "20")
 
 
 def test_gpu_work_on_a_cluster_without_gpus_gets_no_cpu_quota():

@@ -74,7 +74,8 @@ class NodeManager:
                 )
 
                 capacity = node.status.capacity or {}
-                gpu_count = int(capacity.get("nvidia.com/gpu", 0))
+                # The GPUs GPU feature discovery counts on the node; Kubernetes hands out none
+                gpu_count = int(labels.get("nvidia.com/gpu.count", "0"))
 
                 result.append(
                     {
