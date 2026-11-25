@@ -43,7 +43,7 @@ def test_jobs_alone_take_one_card_each_and_the_third_waits():
     second.status, second.gpu_ids = RUNNING, ["GPU-1"]
     given, why = placement.place(third, cards(), jobs, NOW)
     assert given is None
-    assert why == "waiting for a GPU of tkamd2 (a GPU alone): GPU 0 holds job a; GPU 1 holds job b"
+    assert why == "waiting for a GPU of tkamd2 (a GPU alone): GPU 0 is job a's alone; GPU 1 is job b's alone"
 
 
 def test_a_job_on_both_cards_needs_both_free():

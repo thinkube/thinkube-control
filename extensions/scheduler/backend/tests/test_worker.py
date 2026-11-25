@@ -79,7 +79,7 @@ def test_two_jobs_run_on_the_two_cards_and_the_third_starts_when_one_ends(queue)
     a, b, c = queue.job("a"), queue.job("b"), queue.job("c")
     queue.tick()
     assert [(j.status, j.gpu_ids) for j in (a, b)] == [(RUNNING, ["GPU-0"]), (RUNNING, ["GPU-1"])]
-    assert (c.status, c.gpu_ids) == (WAITING, None) and "GPU 0 holds job a; GPU 1 holds job b" in c.waiting
+    assert (c.status, c.gpu_ids) == (WAITING, None) and "GPU 0 is job a's alone; GPU 1 is job b's alone" in c.waiting
     assert queue.pods.started == [(a.pod_job, ("GPU-0",)), (b.pod_job, ("GPU-1",))]
     queue.pods.states[a.pod_job] = {"state": "completed"}
     queue.tick()
