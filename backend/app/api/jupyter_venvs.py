@@ -659,16 +659,18 @@ async def update_venv_package(
     package = request.package.strip()
     if not package:
         raise HTTPException(status_code=400, detail="package must be a pip requirement")
-    # A venv is not changed on a node while a training runs there: its update Job could not start there either
-    # (training mode's taint keeps new pods off the node), and would wait until it timed out
-    from app.services import training_mode
-    training = await training_mode.status()
+    # A venv is not changed while a training runs: the update changes the venv on every node, under the training's
+    # process. A training is a resumable job of Forge's at the Scheduler.
+    from app.services import scheduler_jobs
+    try:
+        training = await scheduler_jobs.running_training()
+    except scheduler_jobs.SchedulerError as e:
+        raise HTTPException(status_code=502, detail=f"whether a training runs could not be read: {e}")
     if training:
         raise HTTPException(
             status_code=409,
-            detail=(f"{training['node']} is in training mode ({training.get('reason') or 'a training'}, since "
-                    f"{training.get('started')}): a venv is not changed on a node while a training runs there. "
-                    "Update it once training mode is off."),
+            detail=(f"a training runs on {training['node']} ({training['name']}, since {training.get('started_at')}): "
+                    "a venv is not changed while a training runs. Update it once the training has ended."),
         )
 
     venv.status = "building"

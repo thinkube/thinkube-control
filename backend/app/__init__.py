@@ -503,10 +503,6 @@ MCP_OPERATIONS = [
     "list_notebook_jobs",          # Resource
     "cancel_notebook_job",         # Tool
 
-    # === Training mode (one node reserved for one training) ===
-    "get_training_mode",           # Resource
-    "training_mode_on",            # Tool
-    "training_mode_off",           # Tool
 
     # === Notebooks (forwarded to tk-notebook-mcp in the server) ===
     "jupyter_list_notebooks",      # Resource

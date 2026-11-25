@@ -441,23 +441,23 @@ def test_the_reconciler_knows_a_running_package_update():
     asyncio.run(scenario())
 
 
-def test_an_update_is_refused_while_a_node_is_in_training_mode(monkeypatch):
+def test_an_update_is_refused_while_a_training_runs(monkeypatch):
     from fastapi import HTTPException
 
-    from app.services import training_mode
+    from app.services import scheduler_jobs
 
     venv = SimpleNamespace(id=uuid.uuid4(), name="meepsquared", status="success", output="ok", is_template=False,
                            completed_at=None)
 
     async def training():
-        return {"node": "tkamd2", "reason": "run 62bc4239", "started": "2026-11-24T10:00:00Z"}
+        return {"node": "tkamd2", "name": "Forge run x: train", "started_at": "2026-11-24T10:00:00Z"}
 
-    monkeypatch.setattr(training_mode, "status", training)
+    monkeypatch.setattr(scheduler_jobs, "running_training", training)
     try:
         asyncio.run(jv.update_venv_package(venv.id, jv.UpdatePackageRequest(package="meepsquared @ git+https://x@1"),
                                            db=FakeDB(venv), current_user={}))
     except HTTPException as e:
-        assert e.status_code == 409 and "tkamd2 is in training mode (run 62bc4239" in e.detail
+        assert e.status_code == 409 and "a training runs on tkamd2 (Forge run x: train" in e.detail
     else:
         raise AssertionError("expected a refusal")
     assert venv.status == "success"

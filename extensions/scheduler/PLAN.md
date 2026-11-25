@@ -277,8 +277,11 @@ Each step is seen before the next begins.
    its validator passed; the served models came back by themselves; a job of
    the scheduler ran on a 3090 of tkamd2 by its id; the gateway and the
    notebook servers count 2 GPUs on tkamd2 and 1 on tkspark.
-   Left: training mode, which nothing turns on now but a person; it is
-   removed next.
+10. Training mode removed. Control has no training mode, its routes, its
+   MCP tools or its record; a venv is not built while a resumable Forge run
+   of the Scheduler runs. The hub, the Scheduler's jobs and the gateway no
+   longer know the training taint; a build no longer tolerates it or checks
+   for it. Forge's slots no longer warn when slots of two nodes overlap.
 
 ## Not in this plan
 

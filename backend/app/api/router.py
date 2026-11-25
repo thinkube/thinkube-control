@@ -29,7 +29,6 @@ from app.api import (
     code_server,
     fixes,
     runs,
-    training_mode,
 )
 from app.api import extensions
 
@@ -58,7 +57,6 @@ api_router.include_router(jupyter_venvs.router, tags=["jupyter-venvs"])
 api_router.include_router(jupyter_servers.router, tags=["jupyter-server"])
 api_router.include_router(jupyter_notebooks.router, tags=["jupyter-notebooks"])
 api_router.include_router(nodes.router, tags=["nodes"])
-api_router.include_router(training_mode.router, tags=["training-mode"])
 api_router.include_router(debug.router, tags=["debug"])
 api_router.include_router(docs_search.router, prefix="/docs", tags=["docs"])
 api_router.include_router(extensions.router, tags=["extensions"])

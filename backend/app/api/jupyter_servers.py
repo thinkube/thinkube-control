@@ -49,7 +49,6 @@ from app.models.jupyter_venvs import JupyterVenv
 from app.models.notebook_jobs import NotebookJob
 from app.services import jupyterhub_client as hub
 from app.services import shared_folder
-from app.services import training_mode
 from app.services import notebook_resources as res
 
 logger = logging.getLogger(__name__)
@@ -90,15 +89,11 @@ class Placement(BaseModel):
     # where memory is short and still grow to its limit. A run that must not
     # be killed for memory asks the node to reserve all of it.
     reserve_memory: bool = False
-    # Training mode keeps new pods off its node; a job for that node is the
-    # training's own and is let through.
-    training_node: bool = False
 
     def user_options(self) -> Dict[str, str]:
         return {
             "profile": PROFILE,
             "reserve_memory": "yes" if self.reserve_memory else "no",
-            "training_node": "yes" if self.training_node else "no",
             "node": self.node,
             "cpu": str(self.cpu_cores),
             "memory": f"{self.memory_gb}G",
@@ -424,15 +419,6 @@ class RunNotebookJobRequest(BaseModel):
             "used when free). For a long run that must not be killed for memory, such as a training."
         ),
     )
-    training: Union[bool, str, None] = Field(
-        False,
-        description=(
-            "The run is a training (default false): it gets the node's training folder at "
-            "/home/thinkube/training, kept across runs, and is let onto the node training mode keeps free. "
-            "Training mode must be on for this node; when it is off, or on for another node, the run is "
-            "refused. A run for the node training mode is on gets the same without asking."
-        ),
-    )
 
 
 class JobResponse(BaseModel):
@@ -665,19 +651,7 @@ async def run_notebook_job(
     current_user: dict = Depends(get_current_user_dual_auth),
     db: Session = Depends(get_db),
 ):
-    """Run a whole notebook unattended on its own server: started on the node with the GPUs asked for (the node's defaults fill the rest), run top to bottom, stopped when done. Its GPUs are asked of the Scheduler with the priority of an unattended notebook run (2 unless a person changed it at the Scheduler). Returns a job_id at once; poll notebook_job_status. The notebook file keeps the outputs. A training sets training true and runs on the node training mode is on. With a given notebook or parameters, the job runs its own copy, job-runs/<job_id>.ipynb in the notebooks folder, which keeps the outputs; parameters reach the notebook as the dict PARAMETERS."""
-    is_training = jupyter_notebooks._bool(request.training, False)
-    training = await training_mode.status()
-    if is_training and training is None:
-        raise HTTPException(
-            status_code=409,
-            detail=f"training is true but training mode is off; turn training mode on for {request.node} first (training_mode_on with node '{request.node}'), then run the job",
-        )
-    if is_training and training["node"] != request.node:
-        raise HTTPException(
-            status_code=409,
-            detail=f"training is true but training mode is on for {training['node']}, not {request.node}; a training runs on the node training mode is on",
-        )
+    """Run a whole notebook unattended on its own server: started on the node with the GPUs asked for (the node's defaults fill the rest), run top to bottom, stopped when done. Its GPUs are asked of the Scheduler with the priority of an unattended notebook run (2 unless a person changed it at the Scheduler). Returns a job_id at once; poll notebook_job_status. The notebook file keeps the outputs. With a given notebook or parameters, the job runs its own copy, job-runs/<job_id>.ipynb in the notebooks folder, which keeps the outputs; parameters reach the notebook as the dict PARAMETERS."""
     placement = await resolve_placement(
         db,
         request.node,
@@ -688,7 +662,6 @@ async def run_notebook_job(
     )
     placement.kind = JOB_KIND
     placement.reserve_memory = jupyter_notebooks._bool(request.reserve_memory, False)
-    placement.training_node = training is not None and training["node"] == placement.node
     if request.kernel_name:
         await _check_kernel_fits_node(db, request.kernel_name, placement.node)
     stop_on_error = jupyter_notebooks._bool(request.stop_on_error, True)
@@ -714,7 +687,7 @@ async def run_notebook_job(
         gpus=placement.gpus,
         stop_on_error=stop_on_error,
         cell_timeout_seconds=cell_timeout,
-        training=placement.training_node,
+        training=False,
         status="starting",
     )
     db.add(job)

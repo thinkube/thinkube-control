@@ -1,9 +1,8 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""An unattended run ends only on a final status or a lost server, is followed
-again after a restart while its server exists, and a training needs training
-mode on for its node."""
+"""An unattended run ends only on a final status or a lost server, and is followed
+again after a restart while its server exists."""
 
 import asyncio
 import json
@@ -172,29 +171,6 @@ def test_a_job_still_open_keeps_its_server(monkeypatch):
     monkeypatch.setattr(js, "_remove_job_server", remove)
     asyncio.run(js._release_job(JOB, "job-1"))
     assert removed == []
-
-
-def ask_training(monkeypatch, record, node="tkspark"):
-    async def status():
-        return record
-
-    monkeypatch.setattr(js.training_mode, "status", status)
-    request = js.RunNotebookJobRequest(notebook_path="train.ipynb", node=node, training=True)
-    with pytest.raises(HTTPException) as e:
-        asyncio.run(js.run_notebook_job(request, current_user={}, db=None))
-    return e.value
-
-
-def test_a_training_is_refused_while_training_mode_is_off(monkeypatch):
-    e = ask_training(monkeypatch, None)
-    assert e.status_code == 409
-    assert "turn training mode on for tkspark first" in e.detail
-
-
-def test_a_training_is_refused_on_another_node_than_training_mode(monkeypatch):
-    e = ask_training(monkeypatch, {"node": "tkamd2"})
-    assert e.status_code == 409
-    assert "training mode is on for tkamd2, not tkspark" in e.detail
 
 
 NOTEBOOK = {"nbformat": 4, "nbformat_minor": 5, "metadata": {},

@@ -28,7 +28,7 @@ touch it.
 | Models (catalogue, mirrors, fine-tuned models) | extension `control-models` | done |
 | LLM Gateway (`api/llm`, `services/llm_*`) | extension `control-llm` | done |
 | LLM proxy at `llm.<domain>` | extension `control-llm` (`proxy/`) | done: the container `proxy` of the extension, at the platform address `llm` (a route's `host`) and in-cluster at the Service `llm-proxy`; it checks tokens with Control and asks the backend which model server serves a model |
-| Notebooks (kernels, servers, notebook jobs, JupyterHub config, training mode, GPU metrics) | Control | to move, as `control-notebooks`, last |
+| Notebooks (kernels, servers, notebook jobs, JupyterHub config, GPU metrics) | Control | to move, as `control-notebooks`, last |
 
 The order is the order of the table. Each move ends before the next begins.
 
@@ -71,8 +71,8 @@ The order is the order of the table. Each move ends before the next begins.
   pods of the cluster reach it, and it needs no sign-in. It offers only
   operations the part already offers its users. Examples: the LLM proxy
   resolves a model at `control-llm`; the gateway reads the catalogue at
-  `control-models` and a service's on/off state at Control; training mode
-  loads models again at `control-llm`.
+  `control-models` and a service's on/off state at Control; the Scheduler
+  asks `control-llm` to give a hold's GPUs up.
 - **Sign-in.** A Thinkube Control API token signs in to an extension:
   the extension asks Control whose it is (`control_token_user` in an
   extension's `app/core/security.py`).
@@ -155,8 +155,7 @@ for any repository.
   `llm-proxy-httproute` and its BackendTrafficPolicy `llm-proxy-timeout`,
   which nothing deploys any more: delete them once the extension's proxy
   answers (its Service `llm-proxy` already selects the extension's pods).
-  Training mode calls the extension
-  (`app/services/llm_gateway.py`), and `k8s_manager` keeps the label of the
+  `k8s_manager` keeps the label of the
   gateway's Deployments, to switch a backend off. The gateway has no
   tables. Control's `/api/v1/llm` answered without a sign-in; the
   extension's `/api/v1/llm` needs one.
