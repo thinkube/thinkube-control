@@ -17,8 +17,10 @@ inside its own layout.
 - **Models and their state.** The catalogue models that are mirrored, read
   from the extension Models (`http://control-models-backend:8000/internal/models`),
   each with its state: deployable, loading, available, unloading.
-- **GPU nodes.** Each node's GPUs, its memory for AI and its slots, from the
-  nodes and the node-metrics pods of Control's namespace.
+- **GPU nodes.** Each node's GPUs, as GPU feature discovery counts them
+  (`nvidia.com/gpu.count`), and its memory for AI, from the nodes and the
+  node-metrics pods of Control's namespace. Kubernetes hands out no GPU:
+  whether a node's GPUs are free for a load is the Scheduler's to say.
 - **Backends.** The inference backends installed as components (vLLM,
   TensorRT-LLM, text-embeddings, Ollama, ...), each declared in its service
   ConfigMap (`spec.llm_backend` of its `thinkube.yaml`), and the pods that

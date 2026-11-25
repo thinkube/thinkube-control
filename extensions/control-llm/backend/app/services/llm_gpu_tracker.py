@@ -87,39 +87,6 @@ def _floored_util(
     return min(max(util, min_util), 0.95)
 
 
-def gpu_slots(node, gpus: int) -> int:
-    """The nvidia.com/gpu count that gives a pod `gpus` GPUs of the node.
-
-    On a node that shares its GPUs in time slices, a request for several
-    slices can be served by slices of one GPU, so a load on several GPUs
-    takes every slice of the node, as a notebook server on every GPU does
-    (notebook_resources.gpu_slots), and its tensor-parallel ranks get GPUs
-    of their own.
-    """
-    if gpus > 1 and node.gpu_replicas > 1:
-        if gpus != node.gpu_count:
-            raise ValueError(
-                f"{node.name} shares its GPUs in time slices: a load takes one GPU or all "
-                f"{node.gpu_count}, not {gpus}"
-            )
-        return gpus * node.gpu_replicas
-    return gpus
-
-
-def _slots_used(allocs) -> int:
-    """Time-slice slots consumed on a node, backend-aware.
-
-    A one-model backend locks one slot per model, as each model is its own
-    pod; a shared backend (Ollama) takes one slot per pod however many models
-    it hosts.
-    """
-    from app.services.llm_lifecycle import is_shared_backend_id
-
-    per_model = sum(a.slots for a in allocs if not is_shared_backend_id(a.backend_id))
-    shared_pods = {a.backend_id for a in allocs if is_shared_backend_id(a.backend_id)}
-    return per_model + len(shared_pods)
-
-
 def _reserved_gb(allocs) -> float:
     """Memory reserved up front on a node. One-model backends reserve per
     model; a shared backend (Ollama) manages its models' memory itself
@@ -169,16 +136,16 @@ class LLMGPUTracker:
 
             discovered = set()
             for node in nodes.items:
-                allocatable = node.status.allocatable or {}
-                gpu_slots = int(allocatable.get("nvidia.com/gpu", "0"))
-                if gpu_slots == 0:
+                # A GPU node is one whose GPUs GPU feature discovery counts. Kubernetes hands out none: the
+                # Scheduler gives each GPU by its id, so whether one is free is the Scheduler's to say at a load.
+                labels = node.metadata.labels or {}
+                gpu_count = int(labels.get("nvidia.com/gpu.count", "0"))
+                if gpu_count == 0:
                     continue
 
-                labels = node.metadata.labels or {}
                 name = node.metadata.name
                 product = labels.get("nvidia.com/gpu.product", "")
                 family = labels.get("nvidia.com/gpu.family", "")
-                gpu_count = int(labels.get("nvidia.com/gpu.count", "1"))
                 gpu_replicas = int(labels.get("nvidia.com/gpu.replicas", "1"))
                 gpu_memory_mb = labels.get("nvidia.com/gpu.memory", "")
                 sharing = labels.get("nvidia.com/gpu.sharing-strategy", "none")
@@ -210,8 +177,8 @@ class LLMGPUTracker:
                     gpu_family=family or None,
                     gpu_count=gpu_count,
                     gpu_replicas=gpu_replicas,
-                    total_slots=gpu_slots,
-                    available_slots=gpu_slots,
+                    total_slots=gpu_count,
+                    available_slots=gpu_count,
                     total_memory_gb=total_memory,
                     per_gpu_memory_gb=per_gpu_memory,
                     per_gpu_vram_gb=per_gpu_memory,
@@ -227,7 +194,7 @@ class LLMGPUTracker:
                 if is_new:
                     logger.info(
                         f"GPU node discovered: {name} — {product} "
-                        f"({gpu_count}x, {gpu_slots} slots)"
+                        f"({gpu_count}x)"
                     )
 
             # Drop nodes that no longer exist in the cluster.
@@ -410,7 +377,7 @@ class LLMGPUTracker:
         estimate_binds=False, for a load whose GPUs the caller chose on a node
         of discrete GPUs: the estimate does not refuse it, and the engine,
         given the GPUs' memory up to the usual share, fails by itself when the
-        model does not fit; the GPUs and the free slots still bind.
+        model does not fit; the node's GPUs still bind. Whether they are free is the Scheduler's to say.
         estimate_fits says what the estimate alone decides.
         """
         node = self._gpu_nodes.get(node_name)
@@ -423,11 +390,10 @@ class LLMGPUTracker:
         calibrated = share_gb is not None
         margin = CALIBRATED_MARGIN_GB if calibrated else max(4.0, round(0.2 * target_gb, 1))
 
-        # Co-residency: time-slices share the pool, so fit against what's LEFT
-        # after the models already reserved on this node, and against free slots.
+        # Co-residency: models share the node's memory, so fit against what's LEFT after the models already
+        # reserved on this node
         allocs = self._allocations.get(node_name, [])
         reserved_on_node = _reserved_gb(allocs)
-        free_slots = max(node.total_slots - _slots_used(allocs), 0)
 
         estimate_fits = None
         if arch == "uma":
@@ -454,7 +420,7 @@ class LLMGPUTracker:
             # LLM_UMA_AI_BUDGET_GB (scripts/namespace_quota.py), whatever the
             # node's planning budget; Kubernetes refuses a pod limit above it.
             over_quota = pod_mem > UMA_AI_BUDGET_GB
-            fits = (target_gb + margin) <= remaining and free_slots >= 1 and not over_quota
+            fits = (target_gb + margin) <= remaining and not over_quota
         else:
             # Discrete VRAM: util is per-GPU; cgroup only needs host overhead.
             per_vram = node.per_gpu_vram_gb or (total_gb / max(node.gpu_count, 1))
@@ -486,9 +452,8 @@ class LLMGPUTracker:
                     f"{node_name} has {node.gpu_count}"
                 )}
             remaining = max((per_vram * tp) - reserved_on_node, 0.0)
-            slots = gpu_slots(node, tp)
             estimate_fits = target_gb <= remaining
-            fits = (estimate_fits or not estimate_binds) and free_slots >= slots
+            fits = estimate_fits or not estimate_binds
 
         if fits:
             reason = "ok"
@@ -497,11 +462,6 @@ class LLMGPUTracker:
                 f"the pod would need a {pod_mem} GiB memory limit for ~{target_gb:.1f} GB "
                 f"(engine share {util:.2f} of {total_gb:.0f} GB, +~{margin:.0f} GB margin) on "
                 f"{node_name}, above the {UMA_AI_BUDGET_GB:.0f} GB namespace quota (LLM_UMA_AI_BUDGET_GB)"
-            )
-        elif free_slots < (1 if arch == "uma" else slots):
-            reason = (
-                f"{node_name} has {free_slots} free time-slice slot(s) of {node.total_slots}, "
-                f"and the load needs {1 if arch == 'uma' else slots}"
             )
         else:
             reason = (
@@ -516,7 +476,6 @@ class LLMGPUTracker:
             "ai_budget_gb": ai_budget,
             "ai_remaining_gb": round(remaining, 1),
             "reserved_gb": reserved,
-            "free_slots": free_slots,
             "gpu_memory_utilization": util,
             "pod_mem_limit_gb": pod_mem,
             "tensor_parallel_size": tp,
@@ -540,7 +499,6 @@ class LLMGPUTracker:
 
         for name, node in self._gpu_nodes.items():
             allocs = self._allocations.get(name, [])
-            slots_used = _slots_used(allocs)
             metrics = await self.fetch_node_metrics(name)
 
             if metrics:
@@ -581,7 +539,7 @@ class LLMGPUTracker:
                         "metrics_available": True,
                         "per_gpu_metrics": per_gpu,
                         "allocations": list(allocs),
-                        "available_slots": max(node.total_slots - slots_used, 0),
+                        "available_slots": node.total_slots,
                     }
                 )
             else:
@@ -596,7 +554,7 @@ class LLMGPUTracker:
                         "platform_reserved_gb": reserved,
                         "ai_budget_gb": ai_budget,
                         "ai_remaining_gb": round(max(ai_budget - _reserved_gb(allocs), 0.0), 1),
-                        "available_slots": max(node.total_slots - slots_used, 0),
+                        "available_slots": node.total_slots,
                         "allocations": list(allocs),
                         "metrics_available": False,
                     }
@@ -606,14 +564,10 @@ class LLMGPUTracker:
             total_mem += updated.total_memory_gb
             used_mem += updated.used_memory_gb
 
-        # A node can accept a new model when its AI budget has headroom beyond
-        # the memory already reserved by co-resident models, and it has a free
-        # time-slice slot. Ollama's self-managed memory isn't counted as reserved.
-        can_accept = any(
-            (n.ai_budget_gb - _reserved_gb(n.allocations)) > 4.0
-            and n.available_slots > 0
-            for n in nodes
-        )
+        # A node can accept a new model when its AI budget has headroom beyond the memory already reserved by
+        # co-resident models; whether its GPUs are free is the Scheduler's to say. Ollama's self-managed memory
+        # isn't counted as reserved.
+        can_accept = any((n.ai_budget_gb - _reserved_gb(n.allocations)) > 4.0 for n in nodes)
 
         return GPUStatusResponse(
             nodes=nodes,

@@ -370,12 +370,7 @@ class LLMLifecycleManager:
         per_gpu = node.per_gpu_memory_gb
         if per_gpu <= 0:
             return 1
-        needed = math.ceil(estimated_memory_gb / (per_gpu * llm_gpu_tracker._memory_threshold))
-        if node.shared_memory and needed > 1:
-            # A node that shares its GPUs in time slices gives a load one GPU
-            # or every GPU (llm_gpu_tracker.gpu_slots).
-            return max(needed, node.gpu_count)
-        return needed
+        return math.ceil(estimated_memory_gb / (per_gpu * llm_gpu_tracker._memory_threshold))
 
     async def _load_ollama(
         self, model_id: str, backend_type: str, keep_alive: Optional[str] = None,

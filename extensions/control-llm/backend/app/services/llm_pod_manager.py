@@ -289,8 +289,9 @@ class LLMPodManager:
         ``gpu_ids`` and ``hold_id``: the GPUs a hold of the Scheduler gave
         (app.services.gpu_holds). The pod is started on them by their ids and
         asks Kubernetes for no GPU; its Deployment keeps the hold's id, and
-        the hold ends when the Deployment is deleted. Without them the pod
-        asks Kubernetes for ``gpu_count`` GPUs.
+        the hold ends when the Deployment is deleted. Without them a pod with
+        GPUs is not made: only a Deployment that exists already is found, as
+        a further load on a pod that serves several models finds its pod.
 
         Returns (success, managed_pod). If wait_ready is False, creates the
         Deployment and returns immediately without waiting for pod readiness.
@@ -401,7 +402,7 @@ class LLMPodManager:
         """Create a single-replica Deployment targeting a specific node.
 
         Copies the pod template from the base Deployment (replicas: 0) and adds
-        nodeSelector + GPU resource requests. If model_env is provided, injects
+        nodeSelector and the GPUs of its hold, by their ids. If model_env is provided, injects
         env vars (MODEL_ID, etc.) so the container auto-loads the model on start.
         """
         try:
@@ -420,12 +421,8 @@ class LLMPodManager:
 
             base = apps_v1.read_namespaced_deployment(base_name, namespace)
 
-            from app.services.llm_gpu_tracker import gpu_slots, llm_gpu_tracker
-            gpu_node = llm_gpu_tracker.get_node(node_name)
-            if gpu_count > 0 and gpu_ids is None and gpu_node is None:
-                raise ValueError(f"{node_name} is not a known GPU node")
-            # With the GPUs of a hold the pod asks Kubernetes for none
-            slots = gpu_slots(gpu_node, gpu_count) if gpu_count > 0 and gpu_ids is None else 0
+            # A pod's GPUs are the Scheduler's to give: without a hold's, a pod with GPUs is only found, not made
+            unheld = f"{deploy_name} needs GPUs, and has no hold of the Scheduler to give them; load its model again"
 
             try:
                 existing = apps_v1.read_namespaced_deployment(deploy_name, namespace)
@@ -443,9 +440,6 @@ class LLMPodManager:
                         if existing_model_id and existing_model_id != model_env["MODEL_ID"]:
                             needs_recreate = True
 
-                    if slots and not on_hold and deployment_gpu_request(existing) != slots:
-                        needs_recreate = True
-
                     if gpu_count > 1 and not any(
                         v.name == SHM_VOLUME for v in (existing.spec.template.spec.volumes or [])
                     ):
@@ -456,6 +450,8 @@ class LLMPodManager:
                         if pod_status == "failed":
                             needs_recreate = True
 
+                    if needs_recreate and gpu_count > 0 and gpu_ids is None:
+                        raise ValueError(unheld)
                     if needs_recreate:
                         apps_v1.delete_namespaced_deployment(deploy_name, namespace)
                         self._end_hold_of(existing, but=hold_id)
@@ -478,6 +474,8 @@ class LLMPodManager:
             except client.rest.ApiException as e:
                 if e.status != 404:
                     raise
+            if gpu_count > 0 and gpu_ids is None:
+                raise ValueError(unheld)
             pod_template = base.spec.template
 
             pod_template.spec.node_selector = {"kubernetes.io/hostname": node_name}
@@ -509,14 +507,6 @@ class LLMPodManager:
                     kept = [e for e in (container.env or []) if e.name != "NVIDIA_VISIBLE_DEVICES"]
                     kept.append(client.V1EnvVar(name="NVIDIA_VISIBLE_DEVICES", value=",".join(gpu_ids)))
                     container.env = kept
-            elif gpu_count > 0:
-                for container in pod_template.spec.containers:
-                    requests = container.resources.requests or {}
-                    limits = container.resources.limits or {}
-                    requests["nvidia.com/gpu"] = str(slots)
-                    limits["nvidia.com/gpu"] = str(slots)
-                    container.resources.requests = requests
-                    container.resources.limits = limits
 
             # Tensor-parallel ranks exchange their inputs through /dev/shm,
             # which a pod gets at 64 MiB; vLLM needs more for two ranks and

@@ -284,10 +284,9 @@ def test_a_pod_of_several_models_keeps_its_models_when_it_gives_its_gpus_up(clus
 def test_a_pod_on_a_hold_found_at_a_further_load_is_not_made_again(cluster, holds, monkeypatch):
     import app.services.llm_gpu_tracker as trk
 
-    # The node as the gateway knows it: one GPU, asked of Kubernetes as one slot
+    # The node as the gateway knows it: one GPU
     monkeypatch.setattr(trk, "llm_gpu_tracker", SimpleNamespace(get_node=lambda node: SimpleNamespace(
         gpu_count=1, gpu_replicas=1, total_slots=1)))
-    monkeypatch.setattr(trk, "gpu_slots", lambda node, gpus: gpus)
     manager = LLMPodManager()
     monkeypatch.setattr(manager, "check_pod_status", lambda *a: ("running", ""))
     monkeypatch.setattr(manager, "_sync_deployment_image", lambda *a: None)
@@ -302,6 +301,15 @@ def test_a_pod_on_a_hold_found_at_a_further_load_is_not_made_again(cluster, hold
     cluster.deployments[name].spec.replicas = 0
     assert not manager._create_node_deployment("ollama", "tkspark", 1, None, None, None)
     assert cluster.deleted == [] and cluster.patches == []
+
+
+
+def test_a_pod_with_gpus_is_not_made_without_a_hold(cluster, holds):
+    """The GPUs are the Scheduler's to give: with none of a hold's, no Deployment that asks Kubernetes for one."""
+    manager = LLMPodManager()
+    before = set(cluster.deployments)
+    assert not manager._create_node_deployment("vllm", "tkamd2", 1, None, None, "m/x")
+    assert set(cluster.deployments) == before
 
 
 @pytest.fixture
