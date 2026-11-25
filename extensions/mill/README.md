@@ -70,6 +70,13 @@ A task that calls a model reads the LLM Gateway's address in
 started the run. The token is in the task's process only, never in the run's
 record.
 
+A task run on a node (`mill_run_on_node`) that needs a secret of Thinkube
+Control names it in `secrets`, such as `["JEV_API_KEY"]`. Mill reads each
+value from Control with the caller's token when the job is given, and the task
+gets it as an environment variable of the same name. A name Control does not
+have refuses the job. The job's record in Mill keeps the names only; the
+Scheduler keeps the values with the job, so every start has them.
+
 A run carries tags: names and values that link it with what it is for, such
 as `experiment` or `claim`. They are given when the run starts or attached
 later, and the Runs page and the run's page show them.

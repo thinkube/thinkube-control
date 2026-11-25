@@ -91,3 +91,53 @@ def test_a_task_in_a_venv_runs_on_the_notebook_servers_image_with_the_nodes_envi
     assert "/var/lib/jupyterhub-venvs/custom/meepsquared/$ARCH/bin/python" in spec["command"][2]
     assert spec["env"]["MILL_MODELS"] == '{"Qwen/Qwen3-0.6B": "/home/thinkube/thinkube/mlflow/artifacts/3/r/artifacts/model"}'
     assert spec["env"]["THINKUBE_API_TOKEN"] == "tok"
+
+
+@pytest.fixture
+def control_secrets(monkeypatch):
+    """Thinkube Control's secrets as Mill reads them: their values, by name, with the token they were read with."""
+    import httpx
+
+    seen = {"tokens": []}
+    values = {"JEV_API_KEY": "jev-value"}
+
+    class Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, headers=None):
+            name = url.rsplit("/", 1)[1]
+            seen["tokens"].append((headers or {}).get("Authorization"))
+            request = httpx.Request("POST", url)
+            if name not in values:
+                return httpx.Response(404, json={"detail": "Secret not found"}, request=request)
+            return httpx.Response(200, json={"value": values[name]}, request=request)
+
+    monkeypatch.setattr("app.api.jobs.httpx.AsyncClient", Client)
+    return seen
+
+
+def test_a_task_gets_the_secrets_it_names_as_environment_variables(signed_in, scheduler, control_secrets):
+    made = signed_in.post("/api/v1/jobs", json={**TASK, "gpus": 0, "secrets": ["JEV_API_KEY"]})
+    assert made.status_code == 200, made.text
+    [spec] = scheduler["given"]
+    assert spec["env"]["JEV_API_KEY"] == "jev-value"
+    # The job's record names the secret and does not keep its value
+    assert made.json()["request"]["secrets"] == ["JEV_API_KEY"] and "jev-value" not in str(made.json())
+
+
+def test_a_secret_control_does_not_have_or_that_would_replace_a_variable_of_mill_is_refused(signed_in, scheduler,
+                                                                                              control_secrets):
+    missing = signed_in.post("/api/v1/jobs", json={**TASK, "secrets": ["NOPE"]})
+    assert missing.status_code == 422 and "has no secret NOPE" in missing.text
+    taken = signed_in.post("/api/v1/jobs", json={**TASK, "secrets": ["HOME"]})
+    assert taken.status_code == 422 and "a variable Mill gives every task" in taken.text
+    odd = signed_in.post("/api/v1/jobs", json={**TASK, "secrets": ["jev-key"]})
+    assert odd.status_code == 422 and "environment variable's name" in odd.text
+    assert scheduler["given"] == []

@@ -38,6 +38,10 @@ MLFLOW_MOUNT = "/home/thinkube/thinkube/mlflow"
 VENVS_MOUNT = "/var/lib/jupyterhub-venvs"
 # The folder of the shared file system that holds each job's state folder
 STATE_FOLDER = "mill-jobs"
+# The environment variables Mill gives every task, which a secret's name may not take
+GIVEN_ENV = ["HOME", "PIP_INDEX_URL", "PYTHONUNBUFFERED", "MILL_RUNNER", "MILL_NATS_URL", "MILL_SUBJECTS",
+             "LLM_GATEWAY_URL", "MILL_JOB_ID", "MILL_RUN_PREFIX", "MILL_STATE_DIR", "NODE_NAME", "THINKUBE_API_TOKEN",
+             "MILL_MODELS", "MILL_ATTEMPT", "RUN_ID", "PYTHONPATH", "PYTHON", "ARCH"]
 # Seconds a task has to end after it is stopped
 STOP_SECONDS = 60
 # Seconds a task's pod waits for NATS before its task starts
@@ -135,9 +139,10 @@ def script(task: Dict[str, Any]) -> str:
 
 
 def job_spec(job_id: str, request: Dict[str, Any], models: Dict[str, str], priority: int,
-             token: Optional[str]) -> Dict[str, Any]:
+             token: Optional[str], secrets: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """The Scheduler's job of a task run. The task is given the LLM Gateway's address and, as THINKUBE_API_TOKEN,
-    the token of whoever gave it, so a task that calls a model can."""
+    the token of whoever gave it, so a task that calls a model can, and the secrets it asked for, by their names.
+    The Scheduler keeps them with the job, so every start of the job has them."""
     task = request["task"]
     env = {"HOME": "/tmp/home", "PIP_INDEX_URL": f"https://packages-api.{settings.DOMAIN_NAME}/root/stable/+simple/",
            "PYTHONUNBUFFERED": "1", "MILL_RUNNER": "scheduler", "MILL_NATS_URL": settings.MILL_NATS_URL,
@@ -146,6 +151,7 @@ def job_spec(job_id: str, request: Dict[str, Any], models: Dict[str, str], prior
            "NODE_NAME": request["node"]}
     if token:
         env["THINKUBE_API_TOKEN"] = token
+    env.update(secrets or {})
     mounts = ["shared"]
     if task.get("venv"):
         mounts.append("venvs")
