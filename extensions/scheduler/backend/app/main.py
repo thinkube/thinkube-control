@@ -9,12 +9,24 @@ from app.core.config import settings
 from app.api.router import api_router
 # Import models to ensure they're registered with Base
 from app.core.api_tokens import APIToken
+from app.models.jobs import Job  # noqa: F401
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # The database tables are managed by Alembic migrations, which start.sh applies before the app starts
+    import asyncio
+
+    from app.db.session import get_session_local
+    from app.services import nodes, pods, worker
+
+    # The worker follows the jobs and starts the ones that can run
+    loop = None
+    if settings.SCHEDULER_WORKER:
+        loop = asyncio.create_task(worker.run_forever(get_session_local(), worker.Worker(nodes.nodes, pods.Pods())))
     yield
+    if loop is not None:
+        loop.cancel()
 
 # Initialize FastAPI app
 app = FastAPI(

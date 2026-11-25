@@ -46,6 +46,22 @@ class Settings(BaseSettings):
     SCHEDULER_METRICS_NAMESPACE: str = "thinkube-control"
     SCHEDULER_METRICS_PORT: int = 9100
 
+    # The cluster's registry, where a job's image is
+    @property
+    def REGISTRY(self) -> str:
+        return f"registry.{self.DOMAIN_NAME}"
+
+    # The namespace of the jobs' pods, which holds the claims of the folders a job mounts
+    # (ansible/40_thinkube/core/thinkube-control/14_configure_scheduler_runs.yaml of thinkube)
+    SCHEDULER_RUNS_NAMESPACE: str = "scheduler-runs"
+
+    # The owner of the shared folders, as a notebook server and the IDE have it: a job runs as this user
+    SCHEDULER_JOB_UID: int = 1000
+    SCHEDULER_JOB_GID: int = 100
+
+    # Whether this process runs the worker, which follows the jobs and starts them; the tests run without it
+    SCHEDULER_WORKER: bool = True
+
     # Allow DATABASE_URL to be overridden by environment
     DATABASE_URL: Optional[str] = None
 

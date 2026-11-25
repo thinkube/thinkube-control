@@ -8,7 +8,8 @@
     "settings": "Settings",
     "apiTokens": "API Tokens",
     "account": "Account",
-    "logout": "Logout"
+    "logout": "Logout",
+    "jobs": "Jobs"
   },
   "apiTokens": {
     "title": "API Tokens",

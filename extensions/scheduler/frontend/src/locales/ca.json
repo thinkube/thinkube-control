@@ -8,7 +8,8 @@
     "settings": "Configuracio",
     "apiTokens": "Tokens API",
     "account": "Compte",
-    "logout": "Tancar sessio"
+    "logout": "Tancar sessio",
+    "jobs": "Feines"
   },
   "apiTokens": {
     "title": "Tokens API",

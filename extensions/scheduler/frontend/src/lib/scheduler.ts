@@ -38,6 +38,40 @@ export const KIND_TEXT: Record<NodeKind, string> = {
   none: 'No GPU',
 };
 
+export type JobStatus = 'waiting' | 'running' | 'stopping' | 'completed' | 'failed' | 'stopped';
+
+/** A job: a command the scheduler runs in a pod on a node, on the GPUs it chooses. */
+export interface Job {
+  id: string;
+  name: string;
+  /** The service the job is of, such as forge or mill. */
+  owner: string;
+  node: string;
+  command: string[];
+  gpus: number;
+  /** The memory it takes on each GPU; null when it has its GPUs alone. */
+  gpu_memory_gb: number | null;
+  memory_gb: number;
+  cpu_cores: number;
+  priority: number;
+  status: JobStatus;
+  /** The ids of the GPUs it holds. */
+  gpu_ids: string[] | null;
+  starts: number;
+  waiting: string | null;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+/** What a job asks of its node's GPUs, in words. */
+export function gpuNeed(job: Job): string {
+  if (!job.gpus) return 'no GPU';
+  const count = job.gpus === 1 ? '1 GPU' : `${job.gpus} GPUs`;
+  return job.gpu_memory_gb === null ? `${count}, alone` : `${count}, ${job.gpu_memory_gb} GiB on each`;
+}
+
 /** The reason an API call failed, in the backend's own words when it gave them. */
 export function failureText(err: unknown): string {
   const e = err as { response?: { data?: { detail?: unknown } }; message?: string };

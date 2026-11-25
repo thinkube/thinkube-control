@@ -25,6 +25,9 @@ spec:
       - label: Nodes
         path: /
         icon: server
+      - label: Jobs
+        path: /jobs
+        icon: list-checks
 
   containers:
     - name: backend
@@ -40,11 +43,19 @@ spec:
       migrations:
         tool: alembic
         auto: true
-      # The node-metrics pods of Thinkube Control, one on each node, which say what each GPU holds
+      # The node-metrics pods of Thinkube Control, one on each node, which say what each GPU holds; and the
+      # pods of the jobs: a Kubernetes job for each start of a job in the namespace scheduler-runs, its pod, and
+      # the pod's log
       access:
         - apiGroups: [""]
           resources: [pods]
           verbs: [list]
+        - apiGroups: [batch]
+          resources: [jobs]
+          verbs: [create, get, delete]
+        - apiGroups: [""]
+          resources: [pods/log]
+          verbs: [get]
 
     - name: frontend
       build: ./frontend
