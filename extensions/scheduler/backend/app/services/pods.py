@@ -26,8 +26,6 @@ KEEP_FINISHED_SECONDS = 24 * 3600
 # The account of the jobs' pods (thinkube's 14_configure_scheduler_runs.yaml): it may read the key of MLflow's
 # storage, with which a job that registers a model uploads it
 JOB_ACCOUNT = "scheduler-job"
-# The mark Thinkube Control's training mode puts on its node; a job runs there when the scheduler placed it there
-TRAINING_TOLERATION = {"key": "thinkube.io/training", "operator": "Equal", "value": "true", "effect": "NoSchedule"}
 # The folders a job may mount, by name: the claim of the scheduler's namespace or the node's folder, where it is
 # mounted, and whether read-only. They are where a notebook server and Mill's main pod have them.
 MOUNTS: Dict[str, Dict[str, Any]] = {
@@ -90,7 +88,6 @@ def manifest(job: Job, start: int, gpu_ids: List[str]) -> Dict[str, Any]:
         "restartPolicy": "Never",
         "serviceAccountName": JOB_ACCOUNT,
         "nodeSelector": {"kubernetes.io/hostname": job.node},
-        "tolerations": [TRAINING_TOLERATION],
         "terminationGracePeriodSeconds": job.stop_seconds,
         "securityContext": {"runAsUser": settings.SCHEDULER_JOB_UID, "runAsGroup": settings.SCHEDULER_JOB_GID},
         "containers": [container],
