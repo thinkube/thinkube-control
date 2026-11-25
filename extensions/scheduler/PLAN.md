@@ -135,6 +135,21 @@ Each step is seen before the next begins.
    them and starts no notebook job.
    Seen when: a training planned and trained through the scheduler registers
    its model.
+   Built so, 25 November: Forge's script runs as a process in the job's pod,
+   in the Python environment it names, with its parameters in
+   FORGE_PARAMETERS; a training is resumable. Forge no longer turns training
+   mode on and no longer reads the work outside it: it keeps two of its own
+   runs off one node at once and pauses its own lower runs with their stop
+   file, and the scheduler weighs everything else. A job's pod requests half
+   its CPU cores and all its memory, and runs as `scheduler-job`, which may
+   read the key of MLflow's storage to upload a registered model.
+   Seen, 25 November: a LoRA run of Qwen3 0.6B on tkspark was preprocessed on
+   tkamd2 without a GPU, planned from earlier measurements there, measured
+   again on tkspark's GPU, trained 20 steps there and registered its model,
+   every part a job of the scheduler and none a notebook job. The test model
+   was deleted after.
+   Not seen yet: a run on both cards of tkamd2 through the scheduler. The next
+   training of the kubexlat finder is one.
 5. **Mill's transformations run as jobs of Mill.** Mill gives them to the
    scheduler itself. Forge loses the run kind "task", the code that starts
    Mill's pods, and its CPU lane.
