@@ -64,8 +64,6 @@ def deployment_gpu_request(deployment) -> int:
     return total
 
 
-# The taint training mode puts on a node, which the backends' pods do not tolerate
-TRAINING_TAINT = "thinkube.io/training"
 
 
 def untolerated_taint(tolerations: Optional[list], taints: Optional[list]) -> Optional[str]:
@@ -212,7 +210,7 @@ class LLMPodManager:
         The per-model Deployment copies the base Deployment's pod template, affinity
         and tolerations included, so a node its required node affinity excludes (an
         architecture the backend's image is not built for), or a node tainted with a
-        taint it does not tolerate (training mode's), would leave the pod Pending.
+        taint it does not tolerate, would leave the pod Pending.
         """
         from kubernetes import client, config as k8s_config
 
@@ -234,10 +232,7 @@ class LLMPodManager:
         taint = untolerated_taint(tolerations, api.sanitize_for_serialization(node.spec.taints))
         if taint is None:
             return None
-        why = (f"{node_name} is in training mode ({taint}); load the model when the training there has ended"
-               if taint.startswith(TRAINING_TAINT + "=") or taint.startswith(TRAINING_TAINT + ":")
-               else f"{node_name} has the taint {taint}, which they do not tolerate")
-        return f"{name} pods cannot run on {node_name}: {why}"
+        return f"{name} pods cannot run on {node_name}: {node_name} has the taint {taint}, which they do not tolerate"
 
     def _make_deployment_name(self, backend_type: str, node_name: str, model_id: Optional[str] = None) -> str:
         base = self._get_base_deployment_name(backend_type)

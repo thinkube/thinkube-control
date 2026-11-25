@@ -8,8 +8,7 @@ only at the Service, inside the cluster. They need no sign-in:
 
 - the LLM proxy at llm.<domain> resolves the model of every request
   (models/resolve, models/resolve-all) and lists the models (models/);
-- Control's training mode unloads a node's models and loads them again,
-  minutes after the request that started it (gpu/status, models/<id>/...).
+- the Scheduler asks the gateway to give a hold's GPUs up (holds/release).
 
 They are the routes of /api/v1/llm, the same operations.
 """

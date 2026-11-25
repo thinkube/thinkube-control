@@ -76,9 +76,8 @@ for the memory of the models on it:
 - **The LLM proxy** at `llm.<domain>`, which stays with Control, asks
   `/internal/llm/models/resolve` which backend serves the model of each
   request, and lists the models at `/internal/llm/models/`.
-- **Control's training mode** unloads a node's models and loads them again
-  at `/internal/llm/...`, for up to 45 minutes after the request that
-  started it.
+- **The Scheduler** asks the gateway to give a hold's GPUs up for work of a
+  higher priority, at `/internal/llm/holds/release`.
 
 The `/internal/llm` routes are the routes of `/api/v1/llm` without a
 sign-in. They are outside `/api`, so neither the extension's address nor

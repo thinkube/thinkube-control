@@ -91,7 +91,7 @@ async def load_model(model_id: str, request: ModelLoadRequest = ModelLoadRequest
     with two; on a node of discrete GPUs the memory estimate then does not refuse the load, and the engine
     fails by itself if the model does not fit (the state turns "deployable" with last_error).
 
-    A node in training mode, or whose taints the backend's pods do not tolerate, refuses the load at once.
+    A node whose taints the backend's pods do not tolerate refuses the load at once.
 
     The answer is HTTP 200 whether the load was accepted or refused: state
     "loading" with a backend_id means accepted, any other state means refused
