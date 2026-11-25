@@ -3,55 +3,33 @@
 
 """The training queue's worker: a background task of Forge's backend.
 
-Every TICK_SECONDS it reads the queue from the database, follows the notebook
-jobs of the runs that hold a node, and decides what each node does next. It
-keeps nothing in memory between ticks: after a restart (a push replaces
-Forge's pod) the next tick finds the running runs by their job ids, their
-stop requests by stop_requested_at, and the training mode it holds in the
-queue_nodes table, and goes on from there.
+Every TICK_SECONDS it reads the queue from the database, follows the jobs of the runs, and decides what each node
+does next. It keeps nothing in memory between ticks: after a restart (a push replaces Forge's pod) the next tick
+finds the running runs by their job ids and their stop requests by stop_requested_at, and goes on from there.
 
-The rules:
+A run's jobs (its preprocessing, plan and training) are jobs of the Scheduler (app/services/scheduled.py), which
+decides when each one runs among all the work on its node: notebook servers, served models, apps and the other
+parts of the platform. Forge decides only among its own runs:
 
-- Priorities (app/services/priorities.py): every piece of work on a GPU node
-  has a priority, 1 (highest) to 5 (lowest). When a run wants its node, work
-  of a higher or the same priority makes it wait, and the run says what it
-  waits for; work of a lower priority is stopped to make room: a Forge run is
-  paused at its next step with a checkpoint, a notebook job is cancelled, a
-  notebook server is stopped, and served models and apps are stopped by
-  Control's training mode. This holds at any time: a run of priority 1 added
-  later stops a running run of priority 3. Forge's own jobs count as work of
-  their run's priority, so two runs of the same priority never share a node.
-- A node's candidate is its first run that may start now, by priority, then
-  plans before trainings, then position. A queued run "now" may start at any
-  time. A run "slots" may start only inside the node's slot, and only when its
-  remaining time (its status file, else its plan's estimate) fits before the
-  slot ends, unless it is across_slots. A paused run starts again by itself
-  when a slot or a run of a higher priority paused it; a person's pause holds
-  it until the person resumes it.
-- Training mode: a run "slots" trains under it, and a run that must stop
-  served models or apps of a lower priority turns it on. Control reserves one
-  node at a time: the nodes whose candidates want it are served by the
-  candidates' priority, then by the start of their slot; the others wait
-  until it is off. A run does not take training mode from another node,
-  whatever its priority. When a slot ends, every running "slots" run of the
-  node gets its stop file, and one whose next milestone falls due before the
-  slot's end and would end after it gets it before that milestone (Meep² runs
-  a milestone before a stop at its step takes effect); when they have paused,
-  training mode is turned off,
-  or kept for a run "now" still training under it. Training mode held for a
-  run is turned off when the node has no Forge work left. A run that has not
-  paused STOP_GRACE_SECONDS, and the time of one milestone, after its stop
-  file was put is cancelled and
-  recorded as failed, so that the node comes back.
-- Training mode that someone else turned on is left alone, and its node runs
-  no Forge job until it is off.
-- A task of Mill that asks for no GPU takes its node's CPU lane: it waits
-  only for the other tasks without a GPU on its node, by the same priorities
-  and order, and neither stops nor waits for GPU work, which does not stop
-  it either. Everything else is the node's GPU lane, as described above.
-- A failed run is recorded with its error, and the queue goes on. A call to
-  Control that fails with no answer, or with a server error, is tried again
-  at the next tick; a refusal fails the run.
+- Priorities (app/services/priorities.py): a run has a priority, 1 (highest) to 5 (lowest), which its jobs carry
+  to the Scheduler. Two of Forge's runs never hold a node's GPUs at once: a run waits for Forge's work of a higher
+  or the same priority on its node, and a run of a lower priority is paused at its next step, with a checkpoint
+  (its stop file), to make room. A run whose job the Scheduler stopped for work of a higher priority outside Forge
+  stays running, and its training goes on from its last checkpoint when its turn comes again; its waiting line
+  says so.
+- A node's candidate is its first run that may start now, by priority, then plans before trainings, then
+  position. A queued run "now" may start at any time. A run "slots" may start only inside the node's slot, and
+  only when its remaining time (its status file, else its plan's estimate) fits before the slot ends, unless it is
+  across_slots. When a slot ends, every running "slots" run of the node gets its stop file, and one whose next
+  milestone falls due before the slot's end and would end after it gets it before that milestone (Meep² runs a
+  milestone before a stop at its step takes effect). A paused run starts again by itself when a slot or a run of a
+  higher priority paused it; a person's pause holds it until the person resumes it. A run that has not paused
+  STOP_GRACE_SECONDS, and the time of one milestone, after its stop file was put is cancelled and recorded as
+  failed.
+- A task of Mill that asks for no GPU takes its node's CPU lane: it waits only for the other tasks without a GPU
+  on its node, by the same priorities and order. Everything else is the node's GPU lane.
+- A failed run is recorded with its error, and the queue goes on. A call that fails with no answer, or with a
+  server error, is tried again at the next tick; a refusal fails the run.
 """
 
 import asyncio
@@ -62,7 +40,7 @@ from typing import Any, Callable, Dict, List, Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.models.forge import NodeState, Run, Slot, WorkerCredential
+from app.models.forge import Run, Slot, WorkerCredential
 from app.services import control, priorities, runfiles, runs, slots as slot_windows, taskpods
 from app.services.priorities import Occupant
 
@@ -76,13 +54,9 @@ TASK_STOP_GRACE_SECONDS = taskpods.STOP_GRACE_SECONDS + 4 * TICK_SECONDS
 # The stop before a milestone is asked for this long before the step ahead of it ends: a tick, and the status
 # file's own delay of about one more
 MILESTONE_LEAD_SECONDS = 3 * TICK_SECONDS
-REASON_PREFIX = "Forge:"
 # The worker's advisory lock: while a new pod starts beside the old one, only one of them ticks
 LOCK_KEY = 0x466F726765
 CREDENTIAL_ID = "control"
-# Namespaces whose GPU pods are counted as another kind: the notebook servers
-# and jobs (JupyterHub), and Thinkube Control with its extensions
-NOT_APPS = ("jupyterhub", "thinkube-control")
 # A paused run that starts again by itself
 RESUMES_BY_ITSELF = ("slot", "preempted")
 
@@ -112,19 +86,11 @@ class ControlPort:
     def __init__(self, token: str):
         self.token = token
 
-    async def training_mode(self) -> Dict[str, Any]:
-        return await control.training_mode(self.token)
-
-    async def training_mode_on(self, node: str, reason: str) -> Dict[str, Any]:
-        return await control.training_mode_on(self.token, node, reason)
-
-    async def training_mode_off(self) -> Dict[str, Any]:
-        return await control.training_mode_off(self.token)
-
     async def catalog(self) -> Dict[str, Any]:
         return await control.catalog(self.token)
 
     async def run_job(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """Give a run's job to the Scheduler; its script calls Control with this token."""
         return await control.run_job(self.token, request)
 
     async def node_choices(self, node: str) -> Dict[str, List[int]]:
@@ -139,21 +105,6 @@ class ControlPort:
     async def cancel_job(self, job_id: str) -> Dict[str, Any]:
         return await control.cancel_job(self.token, job_id)
 
-    async def servers(self) -> List[Dict[str, Any]]:
-        return await control.notebook_servers(self.token)
-
-    async def stop_server(self, node: str) -> Dict[str, Any]:
-        return await control.stop_notebook_server(self.token, node)
-
-    async def jobs(self) -> List[Dict[str, Any]]:
-        return await control.jobs(self.token)
-
-    async def gpu_status(self) -> Dict[str, Any]:
-        return await control.gpu_status(self.token)
-
-    async def services(self) -> List[Dict[str, Any]]:
-        return await control.services(self.token)
-
 
 class Worker:
     def __init__(self, control_port, files, clock: Callable[[], datetime] = utcnow, pods=None):
@@ -167,31 +118,24 @@ class Worker:
 
     async def tick(self, db: Session) -> None:
         now = self.clock()
-        await self._follow(db)
-        mode = await self.control.training_mode()
-        held = mode["record"] if mode.get("on") else None
-        held = self._reconcile(db, held)
-        by_node = self._slots_by_node(db)
         open_runs = db.query(Run).filter(Run.status.in_(runs.BEFORE_PLAN + runs.WAITING
                                                         + runs.TRAINING)).all()
         for run in open_runs:
-            # A running task's line says why its pod waits, as _follow_task read it this tick
-            if not (run.kind == "task" and run.status in runs.TRAINING):
-                run.waiting = None
+            # A run whose job is followed says, this tick, what the job waits for
+            run.waiting = None
+        await self._follow(db)
+        by_node = self._slots_by_node(db)
         nodes = sorted(set(by_node) | {r.node for r in open_runs})
         windows = {node: slot_windows.active(by_node.get(node, []), now) for node in nodes}
-        held = await self._end_slots(db, windows, held)
-        candidates = {node: self._candidate(db, node, windows[node], now, GPU_LANE) for node in nodes}
-        wanting = [node for node in nodes if candidates[node] is not None]
-        wanting.sort(key=lambda n: (candidates[n].priority, windows[n].start if windows[n] else now, n))
-        outside = await self._outside(db) if wanting else {}
-        for node in wanting:
-            held = await self._place(db, node, candidates[node], windows[node], held, outside.get(node, []), now)
+        await self._end_slots(db, windows)
+        for node in nodes:
+            candidate = self._candidate(db, node, windows[node], now, GPU_LANE)
+            if candidate is not None:
+                await self._place(db, node, candidate, now)
         for node in nodes:
             candidate = self._candidate(db, node, None, now, CPU_LANE)
             if candidate is not None:
                 await self._place_cpu(db, node, candidate, now)
-        await self._release(db, set(wanting))
         db.commit()
 
     # --- following jobs ----------------------------------------------------
@@ -218,11 +162,15 @@ class Worker:
         db.commit()
 
     async def _job(self, run: Run, job_id: str) -> Optional[Dict[str, Any]]:
+        """The run's job at the Scheduler; while it waits, the run says what for."""
         try:
-            return await self.control.job(job_id)
+            job = await self.control.job(job_id)
         except control.ControlError as e:
             logger.warning("run %s: job %s could not be read, asking again at the next tick: %s", run.id, job_id, e)
             return None
+        if job.get("waiting") and job["status"] in runs.JOB_OPEN:
+            run.waiting = job["waiting"]
+        return job
 
     async def _start_preprocess(self, db: Session, run: Run) -> None:
         """Start the preprocessing of the run's data on a CPU node; it needs no GPU and waits for nothing."""
@@ -445,7 +393,7 @@ class Worker:
         run.position = None
         run.stop_requested_at = None
 
-    # --- training mode and slots -------------------------------------------
+    # --- slots ---------------------------------------------------------------
 
     @staticmethod
     def _slots_by_node(db: Session) -> Dict[str, List[Slot]]:
@@ -454,79 +402,15 @@ class Worker:
             found.setdefault(s.node, []).append(s)
         return found
 
-    @staticmethod
-    def _state(db: Session, node: str) -> NodeState:
-        state = db.get(NodeState, node)
-        if state is None:
-            state = NodeState(node=node, training_mode=False)
-            db.add(state)
-            db.flush()
-        return state
-
-    def _reconcile(self, db: Session, held: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """The worker's record of training mode, made to agree with Control's."""
-        for state in db.query(NodeState).filter(NodeState.training_mode.is_(True)).all():
-            if held is None or held["node"] != state.node:
-                state.training_mode, state.held_for, state.slot_end = False, None, None
-                state.note = "training mode was turned off outside Forge"
-        if held is not None and str(held.get("reason", "")).startswith(REASON_PREFIX):
-            state = self._state(db, held["node"])
-            if not state.training_mode:
-                # Turned on by Forge, and not recorded: held for a run, given back when the node has no Forge work
-                state.training_mode, state.held_for = True, "run"
-        db.flush()
-        return held
-
-    @staticmethod
-    def _ours(db: Session, node: str) -> bool:
-        state = db.get(NodeState, node)
-        return bool(state and state.training_mode)
-
-    async def _end_slots(self, db: Session, windows, held):
-        """Pause the "slots" runs of nodes whose slot has ended, and give training mode back when they have."""
-        for state in db.query(NodeState).filter(NodeState.training_mode.is_(True), NodeState.held_for == "slot").all():
-            window = windows.get(state.node)
-            if window is not None:
-                state.slot_end = window.end
-                # A milestone that would end after the slot is not begun: the run stops before it
-                for run in db.query(Run).filter(Run.node == state.node, Run.when == "slots",
-                                                Run.status == "running").all():
-                    if runs.stops_before_milestone(run, window.end, self.clock(), MILESTONE_LEAD_SECONDS):
-                        await self._request_stop(run, "slot", self.clock())
-                continue
-            waiting = False
-            for run in db.query(Run).filter(Run.node == state.node,
-                                            Run.when == "slots", Run.status.in_(runs.TRAINING)).all():
-                waiting = True
-                if run.status == "running":
-                    await self._request_stop(run, "slot", self.clock())
-            if waiting:
-                state.note = "the slot has ended; waiting for its runs to pause"
-                continue
-            if self._forge_work(db, state.node):
-                # A run "now" trains under it still; it is given back when that run ends
-                state.held_for, state.slot_end = "run", None
-                continue
-            if await self._mode_off(state):
-                held = None
-        db.flush()
-        return held
-
-    async def _mode_off(self, state: NodeState) -> bool:
-        try:
-            await self.control.training_mode_off()
-        except control.ControlError as e:
-            state.note = f"training mode could not be turned off: {e.detail}"
-            return False
-        state.training_mode, state.held_for, state.slot_end, state.note = False, None, None, None
-        return True
-
-    async def _release(self, db: Session, wanting: set) -> None:
-        """Training mode held for a run is given back when its node has no Forge work and wants none."""
-        for state in db.query(NodeState).filter(NodeState.training_mode.is_(True), NodeState.held_for == "run").all():
-            if state.node in wanting or self._forge_work(db, state.node):
-                continue
-            await self._mode_off(state)
+    async def _end_slots(self, db: Session, windows) -> None:
+        """Pause the "slots" runs of nodes whose slot has ended, and those whose next milestone would end after
+        the slot."""
+        for run in db.query(Run).filter(Run.when == "slots", Run.status == "running").all():
+            window = windows.get(run.node)
+            if window is None:
+                await self._request_stop(run, "slot", self.clock())
+            elif runs.stops_before_milestone(run, window.end, self.clock(), MILESTONE_LEAD_SECONDS):
+                await self._request_stop(run, "slot", self.clock())
         db.flush()
 
     async def _request_stop(self, run: Run, by: str, now: datetime) -> bool:
@@ -587,73 +471,19 @@ class Worker:
             found.append((run.priority, 1, run.position if run.position is not None else 0, run.created_at, run))
         return min(found, key=lambda f: f[:4])[4] if found else None
 
-    async def _outside(self, db: Session) -> Dict[str, List[Occupant]]:
-        """The work on each node that is not Forge's, with the priority of its kind."""
-        table = priorities.table(db)
-        ours = {i for r in db.query(Run).all() for i in (r.job_id, r.plan_job_id) if i}
-        found: Dict[str, List[Occupant]] = {}
-
-        def add(node, kind, name, ref):
-            found.setdefault(node, []).append(Occupant(kind, name, table[kind], ref))
-
-        # Work that holds no GPU, such as a GGUF export, leaves the GPU to the queue
-        for server in await self.control.servers():
-            if server["state"] != "stopped" and server.get("gpus"):
-                add(server["node"], "notebook_server", server["server_name"], server["node"])
-        for job in await self.control.jobs():
-            if job["status"] in runs.JOB_OPEN and job["job_id"] not in ours and job.get("node") and job.get("gpus"):
-                add(job["node"], "notebook_job", f"{job['job_id'][:8]} ({job.get('notebook_path')})", job["job_id"])
-        for node in (await self.control.gpu_status())["nodes"]:
-            for allocation in node.get("allocations", []):
-                add(node["name"], "served_model", allocation["model_id"], None)
-        for service in await self.control.services():
-            if service.get("namespace") in NOT_APPS:
-                continue
-            for node in service.get("gpu_nodes") or []:
-                add(node, "app", service.get("display_name") or service["name"], None)
-        return found
-
-    async def _place(self, db: Session, node: str, run: Run, window, held, outside: List[Occupant], now: datetime):
-        """Start the node's candidate, or make room for it, or say what it waits for."""
-        ours = self._ours(db, node)
-        if held is not None and held["node"] == node and not ours:
-            run.waiting = f"waiting for training mode on {node} to end; it was turned on outside Forge ({held.get('reason')})"
-            self._state(db, node).note = f"training mode is on for this node outside Forge ({held.get('reason')})"
-            return held
+    async def _place(self, db: Session, node: str, run: Run, now: datetime) -> None:
+        """Start the node's candidate, or pause Forge's runs of a lower priority for it, or say which of Forge's
+        runs it waits for. The work outside Forge is the Scheduler's to weigh."""
         occupants = [Occupant("forge_run", r.name if r.status != "planning" else f"{r.name} (its plan)", r.priority, r)
                      for r in self._forge_work(db, node) if r.id != run.id]
-        occupants += [o for o in outside if not (ours and o.kind in priorities.BY_TRAINING_MODE)]
         waits, stops = priorities.decide(run.priority, occupants)
         if waits:
             run.waiting = priorities.waiting_for(waits[0], node)
-            return held
-        in_slot = run.when == "slots"
-        needs_mode = in_slot or any(o.kind in priorities.BY_TRAINING_MODE for o in stops)
-        if needs_mode and not ours:
-            if held is not None:
-                run.waiting = (f"waiting for training mode, which is on for {held['node']} ({held.get('reason')}); "
-                               "Control reserves one node at a time, and a run does not take it from another node")
-                return held
-            reason = f"{REASON_PREFIX} {'slot' if in_slot else 'run ' + run.name} on {node}, priority {run.priority}"
-            try:
-                await self.control.training_mode_on(node, reason)
-            except control.ControlError as e:
-                run.waiting = f"waiting for training mode: {e.detail}"
-                self._state(db, node).note = f"training mode could not be turned on: {e.detail}"
-                return held
-            state = self._state(db, node)
-            state.training_mode, state.note = True, None
-            state.held_for, state.slot_end = ("slot", window.end) if in_slot else ("run", None)
-            held = {"node": node, "reason": reason}
-            stops = [o for o in stops if o.kind not in priorities.BY_TRAINING_MODE]
+            return
         if stops:
             await self._make_room(run, stops, now)
-            return held
-        if in_slot:
-            state = self._state(db, node)
-            state.held_for, state.slot_end = "slot", window.end
+            return
         await self._start(db, run, "plan" if run.status == "planning" else "train")
-        return held
 
     async def _place_cpu(self, db: Session, node: str, run: Run, now: datetime) -> None:
         """Start a task of the node's CPU lane, or stop CPU tasks of a lower priority for it, or say what it
@@ -670,7 +500,8 @@ class Worker:
         await self._start(db, run, "train")
 
     async def _make_room(self, run: Run, stops: List[Occupant], now: datetime) -> None:
-        """Stop the work of a lower priority, each kind in its gentlest way."""
+        """Pause Forge's runs of a lower priority: a training at its next step, with a checkpoint; a plan is
+    stopped, and plans again later."""
         stopping = []
         for o in stops:
             try:
@@ -682,17 +513,13 @@ class Worker:
                         # A plan job has no checkpoint: it is cancelled, and plans again later
                         await self.control.cancel_job(other.plan_job_id)
                         other.plan_job_id = None
-                elif o.kind == "notebook_job":
-                    await self.control.cancel_job(o.ref)
-                elif o.kind == "notebook_server":
-                    await self.control.stop_server(o.ref)
             except control.ControlError as e:
                 run.error = f"{o.label} {o.name} could not be stopped, trying again: {e.detail}"
             stopping.append(f"{o.label} {o.name} (priority {o.priority})")
         run.waiting = "making room: stopping " + ", ".join(stopping)
 
     async def _start(self, db: Session, run: Run, mode: str) -> bool:
-        """Start the run's plan job or training job; True when Control took it. A task run's pod is started
+        """Start the run's plan job or training job; True when the Scheduler took it. A task run's pod is started
         in Kubernetes instead."""
         if run.kind == "task":
             return await self._start_task(db, run)

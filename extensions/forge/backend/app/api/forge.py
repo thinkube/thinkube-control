@@ -354,7 +354,7 @@ def _task_only_fields(run: Run, what: str) -> None:
 async def create_task_run(new: NewTaskRun, user: User = Depends(get_current_user),
                           token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     """A task of Mill's tasks repository, queued on a node: it runs in a pod of its own when its turn comes, by
-    the same priorities, queue order and training mode as a fine-tune. It has no plan: when work of a higher
+    the same priorities and queue order as a fine-tune. It has no plan: when work of a higher
     priority needs the node it is stopped (SIGTERM, then a minute to end), and it starts again when it gets the
     node back. Its progress, samples and log are in Mill, under the run id in its task's mill_run.
 
@@ -477,8 +477,9 @@ async def tag_run(run_id: str, body: RunTags, user: User = Depends(get_current_u
 @router.get("/runs/{run_id}", operation_id="forge_get_run")
 async def get_run(run_id: str, user: User = Depends(get_current_user), token: str = Depends(oauth2_scheme),
                   db: Session = Depends(get_db)):
-    """The run, with its notebook job now: the preprocessing job while its data is preprocessed, the plan job
-    while it plans, else its training's."""
+    """The run, with its job at the Scheduler now: the preprocessing job while its data is preprocessed, the plan
+    job while it plans, else its training's. A job made before Forge's jobs went to the Scheduler is not there,
+    and the answer says so."""
     run = _run(db, run_id)
     if run.kind == "task":
         return {**_run_dict(run), "job": None}
@@ -490,7 +491,11 @@ async def get_run(run_id: str, user: User = Depends(get_current_user), token: st
         try:
             job = await control.job(token, job_id)
         except control.ControlError as e:
-            raise _control_failed(e)
+            if e.status != 404:
+                raise _control_failed(e)
+            job = {"job_id": job_id, "status": "unknown",
+                   "error": "not a job of the Scheduler: it was a notebook job of Thinkube Control, made before "
+                            "Forge's jobs went to the Scheduler"}
     return {**_run_dict(run), "job": job}
 
 
@@ -747,7 +752,7 @@ async def queue(user: User = Depends(get_current_user), db: Session = Depends(ge
                       key=lambda r: (r.status not in runs.TRAINING, r.position is None, r.position or 0, r.created_at))
         found.append({"node": node, "slot": window.to_dict() if window else None,
                       "next_slot": upcoming.to_dict() if upcoming else None,
-                      "training_mode": bool(state and state.training_mode), "note": state.note if state else None,
+                      "note": state.note if state else None,
                       "runs": [_run_dict(r) for r in mine]})
     return {"nodes": found, "worker": {**worker.state, "connected": worker.credential(db) is not None}}
 
@@ -869,7 +874,8 @@ async def worker_status(user: User = Depends(get_current_user), db: Session = De
 async def connect_worker(user: User = Depends(get_current_user), token: str = Depends(oauth2_scheme),
                          db: Session = Depends(get_db)):
     """Give the queue worker a Control API token of the signed-in person, made by Control with their session.
-    The worker starts jobs and turns training mode on and off with it, with that person's rights."""
+    The worker gives the runs' jobs to the Scheduler with it, and their scripts call Control with that person's
+    rights."""
     if worker.credential(db) is not None:
         raise HTTPException(status_code=409, detail="the queue is connected already; disconnect it first")
     try:
@@ -1004,7 +1010,7 @@ class ExportRequest(BaseModel):
 @router.post("/runs/{run_id}/export")
 async def export_run(run_id: str, request: ExportRequest, user: User = Depends(get_current_user),
                      token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    """Convert the run's registered model to a GGUF file, served by llama.cpp: a notebook job on the node, without a GPU."""
+    """Convert the run's registered model to a GGUF file, served by llama.cpp: a job of the Scheduler on the node, without a GPU."""
     run = _run(db, run_id)
     if not (run.register and run.status == "completed"):
         raise HTTPException(status_code=409, detail=f"run {run.name} has no registered model to export")
@@ -1070,7 +1076,7 @@ class Nvfp4Request(BaseModel):
 async def export_nvfp4(run_id: str, request: Nvfp4Request, user: User = Depends(get_current_user),
                        token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     """Quantize the run's registered model to NVFP4, calibrated on rows of the split it trained on, and
-    publish it for vLLM: a notebook job with one GPU of a node that computes NVFP4."""
+    publish it for vLLM: a job of the Scheduler with one GPU of a node that computes NVFP4."""
     run = _run(db, run_id)
     if not (run.register and run.status == "completed"):
         raise HTTPException(status_code=409, detail=f"run {run.name} has no registered model to export")

@@ -8,7 +8,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { ArrowDown, ArrowUp, CalendarClock, Gauge, GitCompare, Pause, Play, Plus, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { TkBadge, TkButton } from 'thinkube-style/components/buttons-badges';
+import { TkButton } from 'thinkube-style/components/buttons-badges';
 import { TkCard, TkCardContent, TkCardDescription, TkCardHeader, TkCardTitle } from 'thinkube-style/components/cards-data';
 import { TkErrorAlert, TkInfoAlert, TkLoader, TkWarningAlert } from 'thinkube-style/components/feedback';
 import { TkPageWrapper } from 'thinkube-style/components/utilities';
@@ -54,7 +54,6 @@ function NodeQueue({ node, onChange }: { node: QueueNode; onChange: () => void }
       <TkCardHeader>
         <div className="flex flex-wrap items-center gap-2">
           <TkCardTitle>{node.node}</TkCardTitle>
-          {node.training_mode && <TkBadge status="active">{t('queue.trainingMode')}</TkBadge>}
         </div>
         <TkCardDescription>
           {node.slot

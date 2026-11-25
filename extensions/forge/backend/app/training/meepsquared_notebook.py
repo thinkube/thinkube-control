@@ -1,10 +1,10 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# The cells of the notebook a Forge run executes as a Thinkube Control
-# notebook job, on the meepsquared kernel. Control adds a first cell that sets
-# PARAMETERS, the run as app/services/runs.py builds it. Each "# %%" line
-# starts a cell.
+# The script a Forge run's job runs at the Scheduler (app/services/scheduled.py),
+# in the meepsquared Python environment. PARAMETERS, the run as
+# app/services/runs.py builds it, is set before it from FORGE_PARAMETERS. Each
+# "# %%" line starts a part of it.
 #
 # PARAMETERS["mode"] is "preprocess", "revise", "plan" or "train". A
 # preprocessing job writes the data as Meep²'s examples and preprocesses it
@@ -42,7 +42,7 @@ RUN_DIR = Path.home() / "thinkube" / "models" / "forge" / RUN
 RUN_DIR.mkdir(parents=True, exist_ok=True)
 OUT = RUN_DIR / "output"
 STATUS = RUN_DIR / "status.json"
-# The MLflow artifacts, which the notebook server mounts here
+# The MLflow artifacts, which the job mounts here
 MLFLOW_MOUNT = Path.home() / "thinkube" / "mlflow"
 # Forge puts the stop file among the MLflow run's artifacts; Meep² watches it on the mount
 STOP = MLFLOW_MOUNT / P["stop_file"]

@@ -1,14 +1,14 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A fine-tuning run as Meep² training jobs, run as notebook jobs of Thinkube Control.
+"""A fine-tuning run as Meep² training jobs, run as jobs of the Scheduler (app/services/scheduled.py).
 
 Forge decides the parts of the Meep² job a person chooses: the method, the
 steps or epochs, and any decision of Meep²'s plan the person overrides.
-Meep²'s auto mode decides the rest. The notebook built from
-app/training/meepsquared_notebook.py adds what only the notebook knows, the paths
-of the model mirror, the data and the output, and runs on the meepsquared kernel
-with one GPU: once to ask for the plan, then to train."""
+Meep²'s auto mode decides the rest. The script app/training/meepsquared_notebook.py
+adds what only the job knows, the paths of the model mirror, the data and the
+output, and runs in the meepsquared Python environment with the job's GPUs:
+once to ask for the plan, then to train."""
 
 import math
 import re
@@ -383,7 +383,7 @@ def preprocess_node(nodes: Dict[str, Dict[str, List[int]]], gpu_node: str) -> st
 
 def job_request(run: Run, base: Optional[Dict[str, Any]], mode: str, choices: Dict[str, List[int]],
                 node: Optional[str] = None) -> Dict[str, Any]:
-    """The notebook job of a run: the preprocessing of its data ("preprocess", on `node`, with its cores and
+    """The job of a run: the preprocessing of its data ("preprocess", on `node`, with its cores and
     no GPU), its plan from an earlier plan's measurements ("revise", on `node`, with no GPU: Meep² loads no model),
     its plan ("plan") or its training ("train"), the last two on the run's node with the job's GPUs (one, or
     the node's GPUs a choice job's gpus asks for, one process on each).
@@ -448,6 +448,11 @@ def job_request(run: Run, base: Optional[Dict[str, Any]], mode: str, choices: Di
     if mode == "plan":
         parameters["measured_because"] = measured_because(run)
     request = {
+        # The Scheduler's job (app/services/scheduled.py): a training goes on from its last checkpoint when it
+        # is stopped for work of a higher priority and its turn comes again; the other jobs start over
+        "name": f"Forge {run.name}: {mode}",
+        "priority": run.priority,
+        "resumable": mode == "train",
         "notebook": notebook(),
         "parameters": parameters,
         "kernel_name": MEEPSQUARED_KERNEL,
@@ -522,10 +527,12 @@ def gguf_entry(run: Run, base: Dict[str, Any], quantization: str) -> Dict[str, A
 
 
 def export_request(run: Run, base: Dict[str, Any], quantization: str, node: str) -> Dict[str, Any]:
-    """The notebook job that converts the run's registered model to a GGUF file and publishes it."""
+    """The job that converts the run's registered model to a GGUF file and publishes it."""
     if quantization not in GGUF_QUANTIZATIONS:
         raise ValueError(f"a GGUF export is one of {list(GGUF_QUANTIZATIONS)}")
     return {
+        "name": f"Forge {run.name}: GGUF export",
+        "priority": run.priority,
         "notebook": notebook(KERNEL, EXPORT_SCRIPT),
         "parameters": {
             "run_id": run.id,
@@ -558,10 +565,12 @@ def nvfp4_entry(run: Run, base: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def nvfp4_request(run: Run, base: Dict[str, Any], node: str, calibration_rows: int) -> Dict[str, Any]:
-    """The notebook job that quantizes the run's registered model to NVFP4, calibrated on rows of the
+    """The job that quantizes the run's registered model to NVFP4, calibrated on rows of the
     split it trained on, and publishes it: one GPU of the node, the memory of the base model's 16-bit
     weights and a fixed extra, as a plan job asks."""
     return {
+        "name": f"Forge {run.name}: NVFP4 export",
+        "priority": run.priority,
         "notebook": notebook(NVFP4_KERNEL, NVFP4_SCRIPT),
         "parameters": {
             "run_id": run.id,

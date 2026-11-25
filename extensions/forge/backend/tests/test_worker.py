@@ -1,12 +1,11 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The queue worker's decisions, with Thinkube Control, the run files and the
-clock replaced: one job per node, plans before trainings, the order of the
-queue, failures that let the queue go on, slots with training mode, the fit
-of a run into a slot, two nodes whose slots overlap, priorities against each
-kind of work on a node, pre-emption, and a worker that starts again from the
-database alone."""
+"""The queue worker's decisions, with the Scheduler's jobs, the run files and the clock replaced: one of Forge's
+runs per node, plans before trainings, the order of the queue, failures that let the queue go on, slots, the fit
+of a run into a slot, two nodes whose slots overlap, priorities among Forge's runs, pre-emption, what a job waits
+for at the Scheduler, and a worker that starts again from the database alone. The work outside Forge is the
+Scheduler's to weigh."""
 
 import asyncio
 import uuid
@@ -15,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.models.forge import NodeState, Priority, Run, Slot
+from app.models.forge import Priority, Run, Slot
 from app.services import control, runs, worker
 
 MADRID = ZoneInfo("Europe/Madrid")
@@ -28,50 +27,15 @@ def madrid(*args):
 
 
 class FakeControl:
+    """Thinkube Control and the Scheduler as the worker calls them: the catalogue, the nodes' choices, and the runs'
+    jobs. The work outside Forge (servers_list, allocations) is there to show the worker does not read it."""
+
     def __init__(self):
-        self.mode = None
         self.forge_jobs = {}
         self.started = []
         self.calls = []
         self.refusal = None
-        # The work outside Forge, as Control lists it
-        self.servers_list, self.jobs_list, self.allocations, self.services_list = [], [], {}, []
-
-    async def servers(self):
-        return self.servers_list
-
-    async def stop_server(self, node):
-        self.calls.append(("stop server", node))
-        self.servers_list = [s for s in self.servers_list if s["node"] != node]
-        return {}
-
-    async def jobs(self):
-        return [*self.jobs_list, *self.forge_jobs.values()]
-
-    async def gpu_status(self):
-        return {"nodes": [{"name": n, "allocations": [{"model_id": m} for m in models]}
-                          for n, models in self.allocations.items()]}
-
-    async def services(self):
-        return self.services_list
-
-    async def training_mode(self):
-        return {"on": self.mode is not None, "record": self.mode}
-
-    async def training_mode_on(self, node, reason):
-        if self.mode is not None:
-            raise control.ControlError(409, f"training mode is on for {self.mode['node']}")
-        self.mode = {"node": node, "reason": reason}
-        self.calls.append(("on", node))
-        # Training mode unloads the node's models and stops its apps
-        self.allocations.pop(node, None)
-        self.services_list = [s for s in self.services_list if node not in s["gpu_nodes"]]
-        return self.mode
-
-    async def training_mode_off(self):
-        self.calls.append(("off", self.mode["node"]))
-        self.mode = None
-        return {}
+        self.servers_list, self.allocations = [], {}
 
     async def catalog(self):
         return {"models": [BASE]}
@@ -99,10 +63,6 @@ class FakeControl:
 
     async def cancel_job(self, job_id):
         self.calls.append(("cancel", job_id))
-        outside = next((j for j in self.jobs_list if j["job_id"] == job_id), None)
-        if outside is not None:
-            outside["status"] = "cancelled"
-            return dict(outside)
         self.forge_jobs[job_id]["status"] = "cancelled"
         return dict(self.forge_jobs[job_id])
 
@@ -438,15 +398,14 @@ def test_a_person_pausing_a_queued_run_holds_it(queue):
     assert held.status == "paused" and after.status == "running"
 
 
-def test_a_slot_turns_training_mode_on_starts_its_runs_and_pauses_them_at_its_end(queue):
+def test_a_slot_starts_its_runs_and_pauses_them_at_its_end(queue):
     queue.slot("tkspark", [0], "23:00", "07:00")
     run = queue.run("night", when="slots", position=1, across_slots=True, plan={"estimated_seconds": 20 * 3600})
     queue.tick()
-    assert run.status == "queued" and queue.control.calls == []
+    assert run.status == "queued" and queue.control.started == []
 
     queue.clock.now = madrid(2026, 11, 2, 23, 0)
     queue.tick()
-    assert queue.control.calls == [("on", "tkspark")] and queue.control.mode["reason"].startswith("Forge:")
     assert run.status == "running" and run.id in queue.files.cleared
 
     queue.clock.now = madrid(2026, 11, 3, 7, 0)
@@ -454,13 +413,12 @@ def test_a_slot_turns_training_mode_on_starts_its_runs_and_pauses_them_at_its_en
                                     "checkpoint": None}
     queue.tick()
     assert run.status == "stopping" and run.paused_by == "slot" and run.id in queue.files.stops
-    assert queue.control.mode is not None
 
     queue.files.statuses[run.id] = {"state": "paused", "step": 410, "total_steps": 1000, "seconds_per_step": 70,
                                     "checkpoint": "output/checkpoint-410"}
     queue.control.end(run.job_id)
     queue.tick()
-    assert run.status == "paused" and queue.control.calls[-1] == ("off", "tkspark") and queue.control.mode is None
+    assert run.status == "paused" and queue.control.calls == []
 
     # The next slot opens on the following Monday, and the run goes on from its checkpoint
     queue.clock.now = madrid(2026, 11, 9, 23, 0)
@@ -495,14 +453,6 @@ def test_a_run_for_slots_without_an_estimate_fails_with_why(queue):
     assert run.status == "failed" and "estimated_seconds" in run.error
 
 
-def test_a_slot_without_work_leaves_training_mode_off(queue):
-    queue.slot("tkspark", [0], "23:00", "07:00")
-    queue.run("now", position=1)
-    queue.clock.now = madrid(2026, 11, 2, 23, 0)
-    queue.tick()
-    assert queue.control.calls == []
-
-
 def test_a_run_now_does_not_wait_for_a_slot_and_a_slot_end_does_not_stop_it(queue):
     queue.slot("tkspark", [0], "23:00", "07:00")
     night = queue.run("night", when="slots", position=1)
@@ -513,36 +463,19 @@ def test_a_run_now_does_not_wait_for_a_slot_and_a_slot_end_does_not_stop_it(queu
     queue.tick()
     # Same priority: the slot's run waits for the run that holds the node
     assert night.status == "queued" and night.waiting == "waiting for run now on tkspark, priority 3"
-    assert queue.control.mode is None
     queue.clock.now = madrid(2026, 11, 3, 7, 0)
     queue.tick()
-    assert now.status == "running" and now.id not in queue.files.stops and queue.control.mode is None
+    assert now.status == "running" and now.id not in queue.files.stops
 
 
-def test_overlapping_slots_of_two_nodes_take_training_mode_one_after_the_other(queue):
+def test_overlapping_slots_of_two_nodes_start_their_runs_at_once(queue):
     queue.slot("tkspark", [0], "22:00", "07:00")
     queue.slot("tkgpu", [0], "23:00", "09:00")
     spark = queue.run("spark", node="tkspark", when="slots", position=1, plan={"estimated_seconds": 3600})
     gpu = queue.run("gpu", node="tkgpu", when="slots", position=1, plan={"estimated_seconds": 3600})
     queue.clock.now = madrid(2026, 11, 2, 23, 30)
     queue.tick()
-    assert queue.control.mode["node"] == "tkspark" and spark.status == "running" and gpu.status == "queued"
-    assert "training mode, which is on for tkspark" in gpu.waiting
-    queue.files.statuses[spark.id] = {"state": "completed"}
-    queue.control.end(spark.job_id)
-    queue.clock.now = madrid(2026, 11, 3, 7, 0)
-    queue.tick()
-    assert queue.control.calls == [("on", "tkspark"), ("off", "tkspark"), ("on", "tkgpu")]
-    assert gpu.status == "running"
-
-
-def test_training_mode_turned_on_by_someone_else_keeps_forge_off_the_node(queue):
-    queue.control.mode = {"node": "tkspark", "reason": "a benchmark"}
-    run = queue.run("now", position=1)
-    other = queue.run("elsewhere", node="tkgpu", position=1)
-    queue.tick()
-    assert run.status == "queued" and other.status == "running"
-    assert "outside Forge" in queue.db.get(NodeState, "tkspark").note
+    assert (spark.status, gpu.status) == ("running", "running")
 
 
 def test_a_run_that_does_not_pause_in_time_is_cancelled_so_the_node_comes_back(queue):
@@ -556,8 +489,6 @@ def test_a_run_that_does_not_pause_in_time_is_cancelled_so_the_node_comes_back(q
     queue.clock.now = madrid(2026, 11, 3, 7, 0) + timedelta(seconds=worker.STOP_GRACE_SECONDS + 1)
     queue.tick()
     assert run.status == "failed" and ("cancel", run.job_id) in queue.control.calls
-    queue.tick()
-    assert queue.control.mode is None
 
 
 def test_a_new_worker_re_attaches_to_running_jobs_from_the_database(queue):
@@ -572,7 +503,7 @@ def test_a_new_worker_re_attaches_to_running_jobs_from_the_database(queue):
     fresh = queue.worker()
     queue.clock.now = madrid(2026, 11, 3, 2, 0)
     queue.tick(fresh)
-    assert len(queue.control.started) == 1 and queue.control.calls == [("on", "tkspark")]
+    assert len(queue.control.started) == 1 and queue.control.calls == []
     queue.files.statuses[run.id] = {"state": "completed"}
     queue.control.end(run.job_id)
     queue.tick(queue.worker())
@@ -582,17 +513,6 @@ def test_a_new_worker_re_attaches_to_running_jobs_from_the_database(queue):
     assert waiting.status == "stopping"
 
 
-def test_training_mode_turned_off_outside_forge_is_noted(queue):
-    queue.slot("tkspark", [0], "23:00", "07:00")
-    queue.run("night", when="slots", position=1, across_slots=True)
-    queue.clock.now = madrid(2026, 11, 2, 23, 0)
-    queue.tick()
-    queue.control.mode = None
-    queue.control.mode = {"node": "tkgpu", "reason": "someone"}
-    queue.tick()
-    assert queue.db.get(NodeState, "tkspark").training_mode is False
-
-
 # --- priorities --------------------------------------------------------------
 
 def set_priority(queue, kind, priority):
@@ -600,45 +520,27 @@ def set_priority(queue, kind, priority):
     queue.db.commit()
 
 
-OUTSIDE = {
-    "notebook_server": lambda c: c.servers_list.append({"node": "tkspark", "server_name": "tkspark", "state": "running",
-                                                        "gpus": 1}),
-    "notebook_job": lambda c: c.jobs_list.append({"job_id": "outside-1234", "node": "tkspark", "status": "running",
-                                                  "notebook_path": "lab/eval.ipynb", "gpus": 1}),
-    "served_model": lambda c: c.allocations.setdefault("tkspark", []).append("Qwen/Qwen3.5-9B"),
-    "app": lambda c: c.services_list.append({"name": "comfy", "display_name": "ComfyUI", "namespace": "comfy",
-                                             "gpu_nodes": ["tkspark"]}),
-}
-NAMES = {"notebook_server": "tkspark", "notebook_job": "outside-",
-         "served_model": "Qwen/Qwen3.5-9B", "app": "ComfyUI"}
-
-
-@pytest.mark.parametrize("kind", sorted(OUTSIDE))
-@pytest.mark.parametrize("theirs,outcome", [(2, "waits"), (3, "waits"), (4, "stopped")])
-def test_work_of_a_higher_or_equal_priority_makes_a_run_wait_and_lower_is_stopped(queue, kind, theirs, outcome):
-    set_priority(queue, kind, theirs)
-    OUTSIDE[kind](queue.control)
+def test_work_outside_forge_is_the_schedulers_to_weigh(queue):
+    """A notebook server, a served model or an app on the node is not Forge's to wait for or to stop: the run's
+    job goes to the Scheduler, which gives it its turn among them."""
+    queue.control.servers_list.append({"node": "tkspark", "server_name": "tkspark", "state": "running", "gpus": 1})
+    queue.control.allocations.setdefault("tkspark", []).append("Qwen/Qwen3.5-9B")
     run = queue.run("mine", position=1, priority=3)
     queue.tick()
-    label = {"notebook_server": "notebook server", "notebook_job": "notebook job", "served_model": "served model",
-             "app": "app"}[kind]
-    if outcome == "waits":
-        assert run.status == "queued" and queue.control.started == [] and queue.control.calls == []
-        assert run.waiting.startswith(f"waiting for {label} {NAMES[kind]}")
-        assert run.waiting.endswith(f"on tkspark, priority {theirs}")
-        return
-    stopped = {"notebook_server": ("stop server", "tkspark"), "notebook_job": ("cancel", "outside-1234"),
-               "served_model": ("on", "tkspark"), "app": ("on", "tkspark")}[kind]
-    assert stopped in queue.control.calls
+    assert run.status == "running" and queue.control.calls == []
+    request = queue.control.started[-1]
+    assert (request["priority"], request["resumable"], request["name"]) == (3, True, "Forge mine: train")
+
+
+def test_a_run_says_what_its_job_waits_for_at_the_scheduler(queue):
+    run = queue.run("mine", position=1)
     queue.tick()
-    assert run.status == "running"
-    if kind in ("served_model", "app"):
-        # Training mode was turned on for the run, and is given back when the node has no Forge work
-        assert queue.db.get(NodeState, "tkspark").held_for == "run"
-        queue.files.statuses[run.id] = {"state": "completed"}
-        queue.control.end(run.job_id)
-        queue.tick()
-        assert queue.control.calls[-1] == ("off", "tkspark")
+    queue.control.forge_jobs[run.job_id]["waiting"] = "waiting for 2 GPUs of tkspark (a GPU alone): GPU 0 holds job x"
+    queue.tick()
+    assert run.status == "running" and run.waiting.startswith("waiting for 2 GPUs of tkspark")
+    queue.control.forge_jobs[run.job_id].update(status="running", waiting=None)
+    queue.tick()
+    assert run.waiting is None
 
 
 @pytest.mark.parametrize("theirs,outcome", [(2, "waits"), (3, "waits"), (4, "stopped")])
@@ -685,19 +587,6 @@ def test_the_queue_order_is_by_priority_then_position(queue):
     assert second.status == "running" and first.status == "queued"
 
 
-def test_a_run_does_not_take_training_mode_from_another_node(queue):
-    queue.slot("tkgpu", [0], "22:00", "07:00")
-    gpu = queue.run("gpu night", node="tkgpu", when="slots", position=1, priority=4)
-    queue.control.allocations["tkspark"] = ["Qwen/Qwen3.5-9B"]
-    queue.clock.now = madrid(2026, 11, 2, 23, 0)
-    queue.tick()
-    assert gpu.status == "running" and queue.control.mode["node"] == "tkgpu"
-    urgent = queue.run("urgent", position=1, priority=1)
-    queue.tick()
-    assert urgent.status == "queued" and "training mode, which is on for tkgpu" in urgent.waiting
-    assert gpu.status == "running"
-
-
 def test_the_priorities_of_kinds_are_the_persons(queue):
     from app.services import priorities
 
@@ -724,15 +613,6 @@ def test_a_plan_that_cannot_size_the_training_is_not_queued(queue):
     queue.control.end("j1")
     queue.tick()
     assert run.status == "planned" and "no GPU to measure on" in run.error
-
-
-def test_work_without_a_gpu_leaves_the_node_to_the_queue(queue):
-    queue.control.jobs_list.append({"job_id": "gguf-export", "node": "tkspark", "status": "running", "gpus": 0,
-                                    "notebook_path": "job-runs/x.ipynb"})
-    queue.control.servers_list.append({"node": "tkspark", "server_name": "tkspark", "state": "running", "gpus": 0})
-    run = queue.run("mine", position=1)
-    queue.tick()
-    assert run.status == "running" and queue.control.calls == []
 
 
 # --- Mill's task runs ------------------------------------------------------
@@ -824,20 +704,11 @@ def test_a_task_that_kubernetes_refuses_fails(queue):
     assert run.status == "failed" and "403 Forbidden" in run.error
 
 
-def test_a_task_waits_for_a_notebook_server_of_a_higher_priority(queue):
-    queue.control.servers_list = [{"node": "tkspark", "server_name": "tkspark", "state": "running", "gpus": 1}]
-    run = queue.task("first", priority=3)
-    queue.tick()
-    assert run.status == "queued" and "notebook server" in run.waiting
-    assert queue.pods.started == []
-
-
 def test_a_task_without_a_gpu_runs_beside_a_served_model_and_leaves_it_loaded(queue):
     queue.control.allocations = {"tkspark": ["google/gemma"]}
     run = queue.task("clean", gpus=0)
     queue.tick()
-    assert run.status == "running"
-    assert queue.control.mode is None and queue.control.allocations == {"tkspark": ["google/gemma"]}
+    assert run.status == "running" and queue.control.calls == []
 
 
 def test_cpu_tasks_take_their_lane_in_turn_and_gpu_work_neither_waits_for_them_nor_stops_them(queue):

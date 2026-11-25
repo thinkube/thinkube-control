@@ -391,7 +391,6 @@
     "left": "Quedan {{time}}",
     "loss": "Pérdida {{loss}}",
     "perStep": "{{seconds}} s por paso",
-    "trainingMode": "Modo entrenamiento activo",
     "slotNow": "En una franja ahora: {{window}}",
     "slotNext": "Próxima franja: {{window}}",
     "noSlot": "Este nodo no tiene franjas",

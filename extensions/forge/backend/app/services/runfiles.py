@@ -1,20 +1,20 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A run's files that Forge and its notebook job share: the plan, the status
+"""A run's files that Forge and its jobs share: the plan, the status
 file and the stop file.
 
 They live among the artifacts of the run's MLflow run, in the experiment
 "forge", under forge/. MLflow keeps its artifacts on a JuiceFS volume that
-every notebook server mounts at ~/thinkube/mlflow, so a file Forge puts
-through MLflow's artifact proxy is a file the notebook reads at
+every job mounts at ~/thinkube/mlflow, so a file Forge puts through MLflow's
+artifact proxy is a file the job reads at
 ~/thinkube/mlflow/artifacts/<experiment>/<run>/artifacts/forge/. That folder
-is MLflow's, and a notebook cannot write into it; the notebook sends its
-files through the proxy too, with the MLflow account of the notebook server.
+is MLflow's; a job sends its files through the proxy too, with MLflow's
+account.
 
 - plan.json: Meep²'s plan, written by the plan job.
 - status.json: Meep²'s status file. Meep² writes it on the run's own folder
-  (~/thinkube/models/forge/<run>), and the notebook sends each new version
+  (~/thinkube/models/forge/<run>), and the job sends each new version
   here while the training runs.
 - stop: Forge puts it to stop the training at its next step; Meep²'s
   --stop-file names it on the mount. Forge deletes it before a training
@@ -52,7 +52,7 @@ def folder(experiment_id: str, run_id: str) -> str:
 
 
 def mount_path(experiment_id: str, run_id: str, name: str) -> str:
-    """A file of the run, relative to ~/thinkube/mlflow on a notebook server."""
+    """A file of the run, relative to ~/thinkube/mlflow in a job."""
     return f"artifacts/{folder(experiment_id, run_id)}/{name}"
 
 

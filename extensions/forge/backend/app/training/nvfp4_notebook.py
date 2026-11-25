@@ -1,14 +1,14 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# The cells of the notebook a Forge NVFP4 export executes as a Thinkube
-# Control notebook job, on the nvfp4 kernel, with one GPU of a Blackwell node.
+# The script a Forge NVFP4 export's job runs at the Scheduler, in the nvfp4
+# Python environment, with one GPU of a Blackwell node.
 # It quantizes the merged checkpoint of a registered fine-tune to NVFP4 with
 # NVIDIA's TensorRT Model Optimizer, calibrated on rows of the run's own
 # training split, writes a checkpoint vLLM loads (quantization modelopt_fp4),
-# and publishes it so the LLM Gateway serves it on vLLM. Control adds a first
-# cell that sets PARAMETERS, the export as app/services/runs.py builds it.
-# Each "# %%" line starts a cell.
+# and publishes it so the LLM Gateway serves it on vLLM. PARAMETERS, the
+# export as app/services/runs.py builds it, is set before it from
+# FORGE_PARAMETERS. Each "# %%" line starts a part of it.
 
 # %% Export
 import json

@@ -391,7 +391,6 @@
     "left": "{{time}} left",
     "loss": "Loss {{loss}}",
     "perStep": "{{seconds}} s per step",
-    "trainingMode": "Training mode on",
     "slotNow": "In a slot now: {{window}}",
     "slotNext": "Next slot: {{window}}",
     "noSlot": "No slot for this node",

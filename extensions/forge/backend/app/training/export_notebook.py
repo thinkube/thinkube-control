@@ -1,13 +1,13 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
 # SPDX-License-Identifier: Apache-2.0
 #
-# The cells of the notebook a Forge export executes as a Thinkube Control
-# notebook job, with the fine-tuning kernel and no GPU. It converts the merged
+# The script a Forge export's job runs at the Scheduler, in the fine-tuning
+# Python environment and with no GPU. It converts the merged
 # checkpoint of a registered fine-tune to a GGUF file with llama.cpp's own
 # converter, at the release the llama-cpp backend runs, and publishes it so
-# the LLM Gateway serves it on llama.cpp. Control adds a first cell that sets
-# PARAMETERS, the export as app/services/runs.py builds it.
-# Each "# %%" line starts a cell.
+# the LLM Gateway serves it on llama.cpp. PARAMETERS, the export as
+# app/services/runs.py builds it, is set before it from FORGE_PARAMETERS.
+# Each "# %%" line starts a part of it.
 
 # %% Export
 import os

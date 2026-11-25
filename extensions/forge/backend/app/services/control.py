@@ -70,28 +70,25 @@ async def gpu_status(token: str) -> Dict[str, Any]:
 
 
 async def run_job(token: str, request: Dict[str, Any]) -> Dict[str, Any]:
-    return (await call(token, "POST", "/jupyter/jobs", request))["job"]
+    """Give a job of a run (runs.py's request) to the Scheduler (app/services/scheduled.py); its script reads
+    the token."""
+    from app.services import scheduled
+
+    return await scheduled.start(request, token)
 
 
 async def job(token: str, job_id: str) -> Dict[str, Any]:
-    return (await call(token, "GET", f"/jupyter/jobs/{job_id}"))["job"]
+    """A job's state, from the Scheduler."""
+    from app.services import scheduled
+
+    return await scheduled.get(job_id)
 
 
 async def cancel_job(token: str, job_id: str) -> Dict[str, Any]:
-    return (await call(token, "POST", f"/jupyter/jobs/{job_id}/cancel"))["job"]
+    """Stop a job at the Scheduler."""
+    from app.services import scheduled
 
-
-async def training_mode(token: str) -> Dict[str, Any]:
-    """{"on": bool, "record": {"node", "reason", ...} or None}. Control reserves one node at a time."""
-    return await call(token, "GET", "/training-mode")
-
-
-async def training_mode_on(token: str, node: str, reason: str) -> Dict[str, Any]:
-    return await call(token, "POST", "/training-mode/on", {"node": node, "reason": reason})
-
-
-async def training_mode_off(token: str) -> Dict[str, Any]:
-    return await call(token, "POST", "/training-mode/off")
+    return await scheduled.stop(job_id)
 
 
 async def notebook_servers(token: str) -> list:

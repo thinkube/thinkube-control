@@ -391,7 +391,6 @@
     "left": "Queden {{time}}",
     "loss": "Pèrdua {{loss}}",
     "perStep": "{{seconds}} s per pas",
-    "trainingMode": "Mode entrenament actiu",
     "slotNow": "En una franja ara: {{window}}",
     "slotNext": "Propera franja: {{window}}",
     "noSlot": "Aquest node no té franges",

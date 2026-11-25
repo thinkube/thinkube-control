@@ -312,7 +312,6 @@ export interface QueueNode {
   node: string;
   slot: SlotWindow | null;
   next_slot: SlotWindow | null;
-  training_mode: boolean;
   note: string | null;
   runs: Run[];
 }
