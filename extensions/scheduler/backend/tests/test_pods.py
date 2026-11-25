@@ -25,7 +25,8 @@ def test_a_gpu_job_is_given_its_gpus_by_id_and_asks_kubernetes_for_none():
     assert env["NVIDIA_VISIBLE_DEVICES"] == "GPU-a,GPU-b" and env["HOME"] == "/home/thinkube"
     assert (env["SCHEDULER_JOB_ID"], env["SCHEDULER_START"]) == ("0d6cbb6a-a4e9-4005-a7fd-15fde698ed26", "2")
     assert spec["runtimeClassName"] == "nvidia-legacy"
-    assert container["resources"] == {"requests": {"cpu": "8", "memory": "60Gi"},
+    # All its memory kept, half its cores; it uses all of them while the node has them free
+    assert container["resources"] == {"requests": {"cpu": "4000m", "memory": "60Gi"},
                                       "limits": {"cpu": "8", "memory": "60Gi"}}
     assert container["image"] == "registry.test.com/library/tk-jupyter-base:latest"
     assert (container["command"][0], container["workingDir"]) == ("python", "/work")

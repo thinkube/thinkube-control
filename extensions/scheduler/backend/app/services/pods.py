@@ -73,8 +73,10 @@ def manifest(job: Job, start: int, gpu_ids: List[str]) -> Dict[str, Any]:
         "image": f"{settings.REGISTRY}/{job.image}",
         "command": list(job.command),
         "env": env,
-        # Requests equal limits: the node keeps what the job was given
-        "resources": {"requests": dict(limits), "limits": limits},
+        # The node keeps the job's memory, which cannot be shared, and half its CPU cores, which can: the job uses
+        # all of them while the node has them free, as a notebook server does
+        "resources": {"requests": {"cpu": f"{job.cpu_cores * 500}m", "memory": limits["memory"]},
+                      "limits": limits},
         "volumeMounts": mounts,
         # A process that fails says why in its last lines: they are the job's error
         "terminationMessagePolicy": "FallbackToLogsOnError",
