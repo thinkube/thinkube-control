@@ -376,18 +376,18 @@ def test_only_a_completed_run_with_a_registered_model_is_exported(api):
     assert api.get(f"/api/v1/runs/{run['id']}").json()["export"]["status"] == "completed"
 
 
-def test_a_slot_is_checked_and_shows_its_next_window_and_its_overlaps(api):
+def test_a_slot_is_checked_and_shows_its_next_window(api):
     r = api.post("/api/v1/slots", json={"node": "tkspark", "days": [4, 0], "start": "23:00", "end": "07:00"})
     assert r.status_code == 200, r.text
     spark = r.json()
     assert (spark["days"], spark["timezone"]) == ([0, 4], "Europe/Madrid") and spark["next_window"] is not None
     gpu = api.post("/api/v1/slots", json={"node": "tkgpu", "days": [0], "start": "22:00", "end": "02:00"}).json()
-    assert [o["node"] for o in gpu["overlaps"]] == ["tkspark"]
+    assert "overlaps" not in gpu
     bad = api.post("/api/v1/slots", json={"node": "tkspark", "days": [8], "start": "23:00", "end": "07:00"})
     assert bad.status_code == 422 and "Monday" in bad.json()["detail"]
     moved = api.put(f"/api/v1/slots/{gpu['id']}", json={"node": "tkgpu", "days": [2], "start": "09:00", "end": "17:00",
                                                          "timezone": "UTC"}).json()
-    assert (moved["days"], moved["timezone"], moved["overlaps"]) == ([2], "UTC", [])
+    assert (moved["days"], moved["timezone"]) == ([2], "UTC")
     assert [s["node"] for s in api.get("/api/v1/slots").json()] == ["tkgpu", "tkspark"]
     assert api.delete(f"/api/v1/slots/{gpu['id']}").status_code == 200
     assert api.delete(f"/api/v1/slots/{gpu['id']}").status_code == 404

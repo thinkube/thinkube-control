@@ -661,18 +661,11 @@ class SlotRequest(BaseModel):
 
 
 def _slot_dict(db: Session, slot: Slot) -> Dict[str, Any]:
-    """A slot with its node's next window, and the windows of other nodes it overlaps in the coming week."""
+    """A slot with its node's next window."""
     now = worker.utcnow()
     mine = db.query(Slot).filter(Slot.node == slot.node).all()
     upcoming = slots.active(mine, now) or slots.upcoming(mine, now)
-    others: Dict[str, List[Slot]] = {}
-    for s in db.query(Slot).filter(Slot.node != slot.node).all():
-        others.setdefault(s.node, []).append(s)
-    overlaps = []
-    for node, theirs in sorted(others.items()):
-        for a, b in slots.overlapping([slot], theirs, now):
-            overlaps.append({"node": node, "start": max(a.start, b.start).isoformat(), "end": min(a.end, b.end).isoformat()})
-    return {**slot.to_dict(), "next_window": upcoming.to_dict() if upcoming else None, "overlaps": overlaps}
+    return {**slot.to_dict(), "next_window": upcoming.to_dict() if upcoming else None}
 
 
 def _checked(request: SlotRequest) -> None:

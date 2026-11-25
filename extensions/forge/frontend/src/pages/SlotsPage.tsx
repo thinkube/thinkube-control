@@ -207,11 +207,6 @@ export default function SlotsPage() {
                       </TkTableCell>
                       <TkTableCell className="text-sm">
                         {s.next_window ? windowText(s.next_window.start, s.next_window.end) : '–'}
-                        {s.overlaps.length > 0 && (
-                          <div className="text-xs text-warning">
-                            {t('slots.overlaps', { nodes: [...new Set(s.overlaps.map((o) => o.node))].join(', ') })}
-                          </div>
-                        )}
                       </TkTableCell>
                       <TkTableCell>
                         <div className="flex justify-end gap-1">
@@ -237,7 +232,6 @@ export default function SlotsPage() {
               </TkTable>
             </div>
           )}
-          <p className="text-xs text-muted-foreground">{t('slots.overlapRule')}</p>
         </TkCardContent>
       </TkCard>
 

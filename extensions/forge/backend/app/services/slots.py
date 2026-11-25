@@ -132,12 +132,3 @@ def upcoming(slots: Iterable, moment: datetime) -> Optional[Window]:
     return next((w for w in windows(slots, moment) if w.start > moment), None)
 
 
-def overlapping(first: Iterable, second: Iterable, moment: datetime) -> List[tuple]:
-    """The pairs of windows of two nodes that overlap in the week after `moment`."""
-    horizon = moment + timedelta(days=7)
-    found = []
-    for a in windows(first, moment):
-        for b in windows(second, moment):
-            if a.start < b.end and b.start < a.end and a.end > moment and a.start < horizon:
-                found.append((a, b))
-    return found

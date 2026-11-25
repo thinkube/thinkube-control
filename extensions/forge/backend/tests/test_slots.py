@@ -83,17 +83,6 @@ def test_the_next_window_is_the_first_that_starts_later():
     assert slots.upcoming([], madrid(2026, 11, 2, 12, 0)) is None
 
 
-def test_windows_of_two_nodes_that_overlap_are_found():
-    spark = [slot([FRIDAY], "22:00", "07:00", node="tkspark", id="a")]
-    gpu = [slot([FRIDAY], "23:00", "09:00", node="tkgpu", id="b")]
-    found = slots.overlapping(spark, gpu, madrid(2026, 11, 2, 12, 0))
-    assert len(found) == 1
-    a, b = found[0]
-    assert (max(a.start, b.start), min(a.end, b.end)) == (madrid(2026, 11, 6, 23, 0), madrid(2026, 11, 7, 7, 0))
-    office = [slot([MONDAY], "09:00", "17:00", node="tkgpu", id="c")]
-    assert slots.overlapping(spark, office, madrid(2026, 11, 2, 12, 0)) == []
-
-
 @pytest.mark.parametrize("days,start,end,tz,message", [
     ([], "23:00", "07:00", "Europe/Madrid", "at least one day"),
     ([7], "23:00", "07:00", "Europe/Madrid", "0 \\(Monday\\) to 6"),

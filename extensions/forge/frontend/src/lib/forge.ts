@@ -277,7 +277,6 @@ export interface Slot {
   end: string;
   timezone: string;
   next_window: SlotWindow | null;
-  overlaps: { node: string; start: string; end: string }[];
 }
 
 export interface NewSlot {
