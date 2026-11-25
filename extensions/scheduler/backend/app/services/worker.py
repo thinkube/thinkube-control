@@ -4,9 +4,14 @@
 """The scheduler's worker: every TICK_SECONDS it follows the jobs that run and starts the ones that can.
 
 A job that runs is followed by its Kubernetes job: completed, failed, or still running. A job asked to stop has its
-Kubernetes job deleted, and is stopped once its pod is gone, which frees its GPUs. A waiting job is started when its
-node has the GPUs it asks for (app.services.placement), the jobs of a higher priority first, then the older ones;
-a job that cannot start now says what it waits for and does not hold back the ones behind it.
+Kubernetes job deleted, and is stopped once its pod is gone, which frees its GPUs.
+
+The turn on a node: the waiting jobs that ask for a GPU start in order, the higher priorities first, then the older
+ones. The first one that cannot start says what it waits for, and the ones behind it on that node wait behind it:
+a small job does not take the GPU a larger one ahead of it is waiting for. A job that cannot start stops the
+scheduler's running jobs of a lower priority that hold what it needs (placement.make_room), and no others; a job
+stopped so waits again, and starts when its turn comes: where it stopped if it is resumable, from the beginning
+otherwise. A job that asks for no GPU waits for no turn: Kubernetes places it by its memory and CPU.
 """
 
 import asyncio
@@ -16,7 +21,7 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
-from app.models.jobs import COMPLETED, FAILED, OPEN, RUNNING, STOPPED, STOPPING, WAITING, Job
+from app.models.jobs import COMPLETED, FAILED, OPEN, RUNNING, STOPPED, STOPPING, WAITING, Job, NodeLimit
 from app.services import placement
 from app.services.nodes import NodesError
 from app.services.pods import PodsError
@@ -39,9 +44,10 @@ class Worker:
 
     async def tick(self, db: Session, now: datetime) -> None:
         jobs: List[Job] = db.query(Job).filter(Job.status.in_(OPEN)).all()
+        names = {j.id: j.name for j in jobs}
         for job in jobs:
             if job.status in (RUNNING, STOPPING):
-                await self._follow(job, now)
+                await self._follow(job, now, names)
         waiting = sorted((j for j in jobs if j.status == WAITING), key=lambda j: (j.priority, j.created_at))
         nodes: Dict[str, Dict[str, Any]] = {}
         unread = None
@@ -50,19 +56,35 @@ class Worker:
                 nodes = {n["name"]: n for n in await self.nodes.list()}
             except NodesError as e:
                 unread = str(e)
+        for limit in db.query(NodeLimit).all():
+            if limit.node in nodes and not nodes[limit.node].get("error"):
+                nodes[limit.node]["gpus_at_work"] = limit.gpus_at_work
+        # The first job of each node that could not start: the ones behind it wait behind it
+        ahead: Dict[str, Job] = {}
         for job in waiting:
             if job.gpus and unread is not None:
                 job.waiting = f"waiting for the nodes to be read: {unread}"
                 continue
+            if job.gpus and job.node in ahead:
+                job.waiting = f"waiting behind job {ahead[job.node].name}, which is ahead of it on {job.node}"
+                continue
             await self._place(job, nodes, jobs, now)
+            if job.gpus and job.status == WAITING:
+                ahead[job.node] = job
         db.commit()
 
-    async def _follow(self, job: Job, now: datetime) -> None:
+    async def _follow(self, job: Job, now: datetime, names: Dict[str, str]) -> None:
         try:
             if job.status == STOPPING:
                 await self.pods.stop(job.pod_job)
                 if await self.pods.pod_gone(job.pod_job):
-                    _end(job, STOPPED, now)
+                    if job.preempted_by is None:
+                        _end(job, STOPPED, now)
+                    else:
+                        # Stopped to make room: it waits again, in its place in the order
+                        job.status, job.gpu_ids = WAITING, None
+                        job.waiting = (f"stopped to make room for job "
+                                       f"{names.get(job.preempted_by, job.preempted_by)}; waiting for its turn")
                 return
             found = await self.pods.state(job.pod_job)
         except PodsError as e:
@@ -88,6 +110,13 @@ class Worker:
             _end(job, FAILED, now, str(e))
             return
         if gpu_ids is None:
+            stopping = [j for j in jobs if j.node == job.node and j.status == STOPPING and j.preempted_by == job.id]
+            for other in ([] if stopping else placement.make_room(job, node, jobs, now)):
+                other.status, other.preempted_by = STOPPING, job.id
+                stopping.append(other)
+            if stopping:
+                reason = "making room: stopping " + ", ".join(f"job {j.name} (priority {j.priority})"
+                                                             for j in stopping)
             job.waiting = reason
             return
         try:
@@ -96,7 +125,7 @@ class Worker:
             job.waiting = f"it could not be started, trying again: {e}"
             return
         job.status, job.gpu_ids, job.pod_job, job.starts = RUNNING, gpu_ids, name, job.starts + 1
-        job.started_at, job.waiting, job.error = now, None, None
+        job.started_at, job.waiting, job.error, job.preempted_by = now, None, None, None
 
 
 state: Dict[str, Any] = {"last_tick": None, "error": None}

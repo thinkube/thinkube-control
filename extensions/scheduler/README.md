@@ -24,6 +24,18 @@ yet.
   in the namespace `scheduler-runs`, asks Kubernetes for its memory and CPU
   only, and is given its GPUs by their ids.
 
+- **The turn.** On a node, the waiting jobs that ask for a GPU start in
+  order: the higher priorities first, then the older ones, and a job behind
+  one that waits waits behind it. A job that cannot start stops the
+  scheduler's running jobs of a lower priority that hold what it needs, and
+  no others; a job stopped so waits again and starts when its turn comes.
+  Work of the same or a higher priority, and work the scheduler did not
+  start, is waited for.
+- **A node's limit.** `PUT /api/v1/nodes/<node>/limit`
+  (`scheduler_set_node_limit`): the most of its GPUs that hold work at once,
+  such as a limit of heat. It is not a priority: no running work is stopped
+  for it.
+
 A node's kind says what the work on it shares:
 
 - `separate`: each GPU has memory of its own (tkamd2's cards). Work shares

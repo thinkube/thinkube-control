@@ -53,6 +53,7 @@ export default function NodesPage() {
               {node.kind && KIND_TEXT[node.kind]}
               {node.memory_total_bytes !== undefined && node.memory_available_bytes !== undefined &&
                 `. Memory: ${gib(node.memory_available_bytes)} available of ${gib(node.memory_total_bytes)}.`}
+              {node.gpus_at_work != null && ` Limit: ${node.gpus_at_work} of its GPUs at work at once.`}
             </TkCardDescription>
           </TkCardHeader>
           <TkCardContent>

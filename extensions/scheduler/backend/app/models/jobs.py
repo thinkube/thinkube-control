@@ -50,6 +50,8 @@ class Job(Base):
     # The Kubernetes job of its latest start, and how many times it was started
     pod_job = Column(String, nullable=True)
     starts = Column(Integer, nullable=False)
+    # The id of the job it was stopped to make room for; it waits again and starts when its turn comes
+    preempted_by = Column(String, nullable=True)
     # Why it waits, and why it failed
     waiting = Column(Text, nullable=True)
     error = Column(Text, nullable=True)
@@ -61,3 +63,13 @@ class Job(Base):
         return {c.name: (getattr(self, c.name).isoformat() if c.name.endswith("_at") and getattr(self, c.name)
                          else getattr(self, c.name))
                 for c in self.__table__.columns if c.name != "env"}
+
+
+class NodeLimit(Base):
+    """A limit of a node that is not a priority: the most of its GPUs that hold work at once, such as a limit of
+    heat. A node without a row has none."""
+
+    __tablename__ = "node_limits"
+
+    node = Column(String, primary_key=True)
+    gpus_at_work = Column(Integer, nullable=False)

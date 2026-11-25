@@ -126,3 +126,48 @@ def test_on_a_shared_node_a_job_alone_waits_for_the_other_gpu_jobs():
 def test_a_node_that_could_not_be_read_makes_its_gpu_jobs_wait():
     assert placement.place(job("a"), {"name": "tkamd2", "error": "no answer"}, [], NOW) == (
         None, "waiting for tkamd2 to be read: no answer")
+
+
+def test_room_is_made_by_stopping_as_few_lower_jobs_as_let_the_job_fit():
+    def running(name, card, gpu_memory_gb, priority, minutes):
+        made = job(name, gpu_memory_gb=gpu_memory_gb, status=RUNNING, gpu_ids=[card],
+                   started=NOW - timedelta(minutes=minutes))
+        made.priority = priority
+        return made
+
+    old = running("old", "GPU-0", 10, 4, 60)
+    new = running("new", "GPU-0", 10, 4, 5)
+    lowest = running("lowest", "GPU-1", 20, 5, 30)
+    high = job("high", gpu_memory_gb=12)
+    high.priority = 2
+    node = cards(used=(20.0, 20.0))
+    everyone = [old, new, lowest, high]
+    assert placement.place(high, node, everyone, NOW)[0] is None
+    # Stopping the lowest priority alone frees card 1 for it
+    assert placement.make_room(high, node, everyone, NOW) == [lowest]
+    # A job that wants a card alone needs card 1 free of its one job, not card 0 of its two
+    alone = job("alone")
+    alone.priority = 2
+    assert placement.make_room(alone, node, [old, new, lowest, alone], NOW) == [lowest]
+    # Nothing of the same priority is stopped
+    equal = job("equal")
+    equal.priority = 4
+    assert placement.make_room(equal, node, [old, new, lowest, equal], NOW) == [lowest]
+    lowest.priority = 4
+    assert placement.make_room(equal, node, [old, new, lowest, equal], NOW) == []
+    # Work the scheduler did not start is not made room of
+    outside = cards(used=(22.0, 22.0))
+    assert placement.make_room(alone, outside, [alone], NOW) == []
+
+
+def test_a_limit_of_gpus_at_work_prefers_the_gpus_that_hold_work():
+    node = {**cards(used=(10.0, 0.0)), "gpus_at_work": 1}
+    sharing = job("sharing", gpu_memory_gb=4)
+    assert placement.place(sharing, node, [sharing], NOW) == (["GPU-0"], None)
+    alone = job("alone")
+    assert placement.place(alone, node, [alone], NOW) == (
+        None, "waiting for tkamd2, which is limited to 1 of its GPUs at work at once: 1 hold work")
+    free = {**cards(), "gpus_at_work": 1}
+    assert placement.place(alone, free, [alone], NOW) == (["GPU-0"], None)
+    both = job("both", gpus=2)
+    assert placement.place(both, free, [both], NOW)[0] is None

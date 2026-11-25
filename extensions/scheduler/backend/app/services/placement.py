@@ -10,7 +10,16 @@ reports in use beyond that. On a node whose GPU shares the system's memory a job
 memory holds its memory and its GPU memory together.
 
 MARGIN of a GPU's memory is kept free, since a GPU does not keep one job's memory from another's.
+
+A node may have a limit of the GPUs that hold work at once (node["gpus_at_work"]): a job is not given a GPU that
+holds none when the limit is reached.
+
+A job that does not fit makes room (make_room): the scheduler's running jobs of a lower priority are stopped, as
+few as let it fit, and only on the GPUs it is then given. Work of the same or a higher priority, and work the
+scheduler did not start, is waited for.
 """
+
+import copy
 
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -70,6 +79,20 @@ def _separate(job: Job, node: Dict[str, Any], held: List[Job]) -> Tuple[Optional
                 fitting.append((free, gpu["index"], gpu["id"]))
             else:
                 full.append(f"GPU {gpu['index']} has {gib(max(0, free))} free")
+    limit = node.get("gpus_at_work")
+    if limit is not None:
+        at_work = {g["id"] for g in gpus if g["memory_used_bytes"] > IDLE_BYTES or any(g["id"] in j.gpu_ids
+                                                                                    for j in held)}
+        room = max(0, limit - len(at_work))
+        # The GPUs that hold work already come first; of the others, only as many as the limit leaves
+        busy = sorted(f for f in fitting if f[2] in at_work)
+        idle = sorted(f for f in fitting if f[2] not in at_work)[:room]
+        if len(busy) + len(idle) < job.gpus <= len(fitting):
+            return None, (f"waiting for {node['name']}, which is limited to {limit} of its GPUs at work at once: "
+                          f"{len(at_work)} hold work")
+        fitting = busy + idle
+        if len(fitting) >= job.gpus:
+            return [gpu_id for _, _, gpu_id in fitting[:job.gpus]], None
     if len(fitting) >= job.gpus:
         return [gpu_id for _, _, gpu_id in sorted(fitting)[:job.gpus]], None
     what = "a GPU alone" if need is None else f"{gib(need)} on a GPU"
@@ -115,3 +138,48 @@ def place(job: Job, node: Dict[str, Any], jobs: List[Job], now: datetime) -> Tup
     if node["kind"] == SHARED:
         return _shared(job, node, held, now)
     raise ValueError(f"a node's kind is {SEPARATE!r}, {SHARED!r} or {NONE!r}, not {node['kind']!r}")
+
+
+def _without(node: Dict[str, Any], gone: List[Job], now: datetime) -> Dict[str, Any]:
+    """The node as it will be once the jobs `gone` have ended: their memory is free."""
+    after = copy.deepcopy(node)
+    if after["kind"] == SHARED:
+        after["memory_available_bytes"] += sum((j.memory_gb + (j.gpu_memory_gb or 0)) * GIB for j in gone
+                                               if j.started_at is None or now - j.started_at >= LOADING)
+        return after
+    for gpu in after["gpus"]:
+        for j in gone:
+            if gpu["id"] in j.gpu_ids:
+                gpu["memory_used_bytes"] = (0 if j.gpu_memory_gb is None
+                                            else max(0, gpu["memory_used_bytes"] - int(j.gpu_memory_gb * GIB)))
+    return after
+
+
+def make_room(job: Job, node: Dict[str, Any], jobs: List[Job], now: datetime) -> List[Job]:
+    """The scheduler's running jobs of a lower priority to stop so that the job fits: as few as do it, the lowest
+    priorities and the latest started first. Empty when stopping them all would not make it fit."""
+    if job.gpus == 0 or node.get("error") or node["kind"] == NONE:
+        return []
+    lower = sorted((j for j in holders(jobs, node["name"]) if j.id != job.id and j.priority > job.priority),
+                   key=lambda j: (-j.priority, -(j.started_at.timestamp() if j.started_at else 0)))
+
+    def fits(gone: List[Job]) -> bool:
+        left = [j for j in jobs if j not in gone]
+        try:
+            return place(job, _without(node, gone, now), left, now)[0] is not None
+        except CannotRun:
+            return False
+
+    gone: List[Job] = []
+    for candidate in lower:
+        gone.append(candidate)
+        if fits(gone):
+            break
+    else:
+        return []
+    # Leave running every job whose stop was not needed
+    for candidate in list(gone):
+        rest = [j for j in gone if j is not candidate]
+        if fits(rest):
+            gone = rest
+    return gone

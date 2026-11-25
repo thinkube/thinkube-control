@@ -87,15 +87,93 @@ def test_two_jobs_run_on_the_two_cards_and_the_third_starts_when_one_ends(queue)
     assert (c.status, c.gpu_ids, c.starts, c.waiting) == (RUNNING, ["GPU-0"], 1, None)
 
 
-def test_the_higher_priority_starts_first_and_a_waiting_job_does_not_hold_back_one_that_fits(queue):
+def test_the_jobs_of_a_node_start_in_order_and_one_behind_a_waiting_one_waits_behind_it(queue):
+    queue.nodes.used = [20.0, 0.0]
     both = queue.job("both", gpus=2, priority=2)
     small = queue.job("small", gpu_memory_gb=2)
-    urgent = queue.job("urgent", priority=1)
+    cpu = queue.job("cpu", gpus=0)
     queue.tick()
-    # urgent takes card 0; both cannot have two cards and waits; small fits on the card left
-    assert (urgent.status, urgent.gpu_ids) == (RUNNING, ["GPU-0"])
+    # both cannot have card 0, which holds work the scheduler did not start; small would fit on card 1, and waits
+    # behind both, so that it does not take the card both is waiting for; a job without a GPU waits for no turn
     assert both.status == WAITING and both.waiting.startswith("waiting for 2 GPUs of tkamd2")
-    assert (small.status, small.gpu_ids) == (RUNNING, ["GPU-1"])
+    assert (small.status, small.waiting) == (WAITING, "waiting behind job both, which is ahead of it on tkamd2")
+    assert cpu.status == RUNNING
+    queue.nodes.used = [0.0, 0.0]
+    queue.tick()
+    assert (both.status, both.gpu_ids) == (RUNNING, ["GPU-0", "GPU-1"])
+    assert small.status == WAITING and "GPU 0 is job both's alone" in small.waiting
+
+
+def test_a_higher_priority_stops_the_lower_one_on_the_card_it_needs_and_no_other(queue):
+    low = queue.job("low", priority=4)
+    other = queue.job("other", priority=4)
+    queue.tick()
+    assert (low.gpu_ids, other.gpu_ids) == (["GPU-0"], ["GPU-1"])
+    high = queue.job("high", priority=2)
+    queue.tick()
+    # One card is enough: the latest started of the two is stopped, the other keeps running
+    stopped, kept = (other, low) if other.status == STOPPING else (low, other)
+    assert (stopped.status, stopped.preempted_by, kept.status) == (STOPPING, high.id, RUNNING)
+    assert high.waiting == f"making room: stopping job {stopped.name} (priority 4)"
+    queue.tick()
+    # Its pod is still ending: nothing more is stopped
+    assert kept.status == RUNNING and high.status == WAITING and queue.pods.stopped == [stopped.pod_job]
+    freed = stopped.gpu_ids
+    queue.pods.live.discard(stopped.pod_job)
+    queue.tick()
+    assert (high.status, high.gpu_ids) == (RUNNING, freed)
+    # The stopped job waits again, in its place, and starts when a card is free
+    assert stopped.status == WAITING and kept.status == RUNNING
+    assert "is job high's alone" in stopped.waiting or stopped.waiting.startswith("stopped to make room for job high")
+    queue.pods.states[kept.pod_job] = {"state": "completed"}
+    queue.tick()
+    assert (stopped.status, stopped.starts, stopped.preempted_by) == (RUNNING, 2, None)
+
+
+def test_work_of_the_same_priority_and_work_the_scheduler_did_not_start_is_waited_for(queue):
+    a, b = queue.job("a"), queue.job("b")
+    queue.tick()
+    same = queue.job("same")
+    queue.tick()
+    assert (a.status, b.status, same.status) == (RUNNING, RUNNING, WAITING)
+    assert same.waiting.startswith("waiting for a GPU of tkamd2")
+    # A job on both cards cannot be helped by stopping one lower job while the other card holds outside work
+    queue.pods.states[a.pod_job] = {"state": "completed"}
+    queue.pods.states[b.pod_job] = {"state": "completed"}
+    same.status = STOPPED
+    queue.tick()
+    low = queue.job("low", priority=5)
+    queue.tick()
+    assert low.gpu_ids == ["GPU-0"]
+    queue.nodes.used = [0.0, 22.0]
+    high = queue.job("high", gpus=2, priority=1)
+    queue.tick()
+    assert low.status == RUNNING and high.status == WAITING and "work the scheduler did not start" in high.waiting
+
+
+def test_a_job_asked_to_stop_while_it_makes_room_ends(queue):
+    low = queue.job("low", priority=4, gpus=2)
+    queue.tick()
+    high = queue.job("high", priority=2)
+    queue.tick()
+    assert (low.status, low.preempted_by) == (STOPPING, high.id)
+    # A person stops it meanwhile (the API clears what it was stopped for)
+    low.preempted_by = None
+    queue.pods.live.discard(low.pod_job)
+    queue.tick()
+    assert low.status == STOPPED and high.status == RUNNING
+
+
+def test_a_node_limited_to_one_gpu_at_work_gives_no_second_one(queue, test_db):
+    from app.models.jobs import NodeLimit
+
+    test_db.add(NodeLimit(node="tkamd2", gpus_at_work=1))
+    a, b = queue.job("a", gpu_memory_gb=4), queue.job("b", gpu_memory_gb=4)
+    alone = queue.job("alone")
+    queue.tick()
+    # The two small jobs share the one card at work; the job that wants a card alone waits for the limit
+    assert (a.gpu_ids, b.gpu_ids) == (["GPU-0"], ["GPU-0"])
+    assert alone.waiting == ("waiting for tkamd2, which is limited to 1 of its GPUs at work at once: 1 hold work")
 
 
 def test_a_failed_job_says_why_and_a_vanished_one_is_failed(queue):

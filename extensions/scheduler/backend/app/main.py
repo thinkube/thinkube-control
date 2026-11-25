@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.api.router import api_router
 # Import models to ensure they're registered with Base
 from app.core.api_tokens import APIToken
-from app.models.jobs import Job  # noqa: F401
+from app.models.jobs import Job, NodeLimit  # noqa: F401
 
 
 @asynccontextmanager

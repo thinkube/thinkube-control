@@ -30,6 +30,8 @@ export interface SchedulerNode {
   gpus?: Gpu[];
   memory_total_bytes?: number;
   memory_available_bytes?: number;
+  /** The most of its GPUs that hold work at once, when the node has such a limit. */
+  gpus_at_work?: number | null;
 }
 
 export const KIND_TEXT: Record<NodeKind, string> = {

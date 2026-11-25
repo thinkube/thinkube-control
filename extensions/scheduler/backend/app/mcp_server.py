@@ -14,6 +14,7 @@ from app.core.config import settings
 
 TOOLS = [
     "scheduler_list_nodes",
+    "scheduler_set_node_limit",
     "scheduler_create_job",
     "scheduler_list_jobs",
     "scheduler_get_job",

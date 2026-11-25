@@ -100,7 +100,10 @@ async def stop_job(job_id: str, user: User = Depends(get_current_user), db: Sess
         job.status, job.finished_at, job.waiting = STOPPED, worker.utcnow(), None
     elif job.status == RUNNING:
         job.status = STOPPING
-    elif job.status != STOPPING:
+    elif job.status == STOPPING:
+        # Being stopped to make room, it would wait again; asked to stop, it ends
+        job.preempted_by = None
+    else:
         raise HTTPException(status_code=409, detail=f"job {job.name} is {job.status}; it has ended")
     db.commit()
     return job.to_dict()

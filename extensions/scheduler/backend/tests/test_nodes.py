@@ -69,3 +69,17 @@ def test_nodes_that_cannot_be_listed_are_a_502_with_the_reason(signed_in, monkey
     monkeypatch.setattr(nodes, "nodes", Fake())
     answer = signed_in.get("/api/v1/nodes")
     assert answer.status_code == 502 and "no node-metrics pod" in answer.json()["detail"]
+
+
+def test_a_node_is_given_a_limit_of_gpus_at_work_and_loses_it(signed_in, monkeypatch):
+    class Fake:
+        async def list(self):
+            return [nodes.node_of(metrics("tkamd2", [gpu(0, "GPU-a")]))]
+
+    monkeypatch.setattr(nodes, "nodes", Fake())
+    assert signed_in.get("/api/v1/nodes").json()["nodes"][0]["gpus_at_work"] is None
+    assert signed_in.put("/api/v1/nodes/tkamd2/limit", json={"gpus_at_work": 1}).json() == {
+        "node": "tkamd2", "gpus_at_work": 1}
+    assert signed_in.get("/api/v1/nodes").json()["nodes"][0]["gpus_at_work"] == 1
+    signed_in.put("/api/v1/nodes/tkamd2/limit", json={"gpus_at_work": None})
+    assert signed_in.get("/api/v1/nodes").json()["nodes"][0]["gpus_at_work"] is None
