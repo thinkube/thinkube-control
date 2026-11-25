@@ -281,6 +281,29 @@ def test_a_pod_of_several_models_keeps_its_models_when_it_gives_its_gpus_up(clus
     assert manager.start_again() == [{"backend_type": "ollama", "node": "tkspark", "models": ["a/one", "b/two"]}]
 
 
+def test_a_pod_on_a_hold_found_at_a_further_load_is_not_made_again(cluster, holds, monkeypatch):
+    import app.services.llm_gpu_tracker as trk
+
+    # The node as the gateway knows it: one GPU, asked of Kubernetes as one slot
+    monkeypatch.setattr(trk, "llm_gpu_tracker", SimpleNamespace(get_node=lambda node: SimpleNamespace(
+        gpu_count=1, gpu_replicas=1, total_slots=1)))
+    monkeypatch.setattr(trk, "gpu_slots", lambda node, gpus: gpus)
+    manager = LLMPodManager()
+    monkeypatch.setattr(manager, "check_pod_status", lambda *a: ("running", ""))
+    monkeypatch.setattr(manager, "_sync_deployment_image", lambda *a: None)
+    name = manager._make_deployment_name("ollama", "tkspark", None)
+    manager._create_node_deployment("ollama", "tkspark", 1, None, None, None, ["GPU-s"], "hold-1")
+    # One more model is loaded on the pod: its Deployment is found, with no GPUs given this time
+    assert manager._create_node_deployment("ollama", "tkspark", 1, None, None, None)
+    assert cluster.deleted == [] and holds.ended == []
+    env = cluster.deployments[name].spec.template.spec.containers[0].env
+    assert [e.value for e in env if e.name == "NVIDIA_VISIBLE_DEVICES"] == ["GPU-s"]
+    # Stopped for work of a higher priority, it is not started by a load: it waits for its hold
+    cluster.deployments[name].spec.replicas = 0
+    assert not manager._create_node_deployment("ollama", "tkspark", 1, None, None, None)
+    assert cluster.deleted == [] and cluster.patches == []
+
+
 @pytest.fixture
 def shared(monkeypatch):
     """The trained heads' pod on tkspark, as the lifecycle sees it: whether it runs and on which hold, and the

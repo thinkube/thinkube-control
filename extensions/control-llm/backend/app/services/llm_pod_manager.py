@@ -432,12 +432,18 @@ class LLMPodManager:
                 if existing:
                     # A new hold gives GPUs of its own: the Deployment is made again on them
                     needs_recreate = gpu_ids is not None
+                    # A Deployment on a hold asks Kubernetes for no GPU, and is not made again for that: a pod
+                    # that serves several models is started once and found here at each further load
+                    on_hold = bool((existing.metadata.annotations or {}).get(gpu_holds.HOLD_ANNOTATION))
+                    if on_hold and gpu_ids is None and (existing.spec.replicas or 0) < 1:
+                        raise ValueError(f"{deploy_name} was stopped for work of a higher priority, and starts "
+                                         "again when the Scheduler gives its hold GPUs")
                     if model_env and model_env.get("MODEL_ID"):
                         existing_model_id = self._get_container_env(existing, "MODEL_ID")
                         if existing_model_id and existing_model_id != model_env["MODEL_ID"]:
                             needs_recreate = True
 
-                    if slots and deployment_gpu_request(existing) != slots:
+                    if slots and not on_hold and deployment_gpu_request(existing) != slots:
                         needs_recreate = True
 
                     if gpu_count > 1 and not any(
