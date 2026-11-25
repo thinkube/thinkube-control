@@ -23,6 +23,9 @@ JOB_LABEL = "scheduler.thinkube.io/job"
 GPU_RUNTIME_CLASS = "nvidia-legacy"
 # A finished Kubernetes job stays a day, for its pod's log
 KEEP_FINISHED_SECONDS = 24 * 3600
+# The account of the jobs' pods (thinkube's 14_configure_scheduler_runs.yaml): it may read the key of MLflow's
+# storage, with which a job that registers a model uploads it
+JOB_ACCOUNT = "scheduler-job"
 # The mark Thinkube Control's training mode puts on its node; a job runs there when the scheduler placed it there
 TRAINING_TOLERATION = {"key": "thinkube.io/training", "operator": "Equal", "value": "true", "effect": "NoSchedule"}
 # The folders a job may mount, by name: the claim of the scheduler's namespace or the node's folder, where it is
@@ -85,6 +88,7 @@ def manifest(job: Job, start: int, gpu_ids: List[str]) -> Dict[str, Any]:
         container["workingDir"] = job.working_dir
     spec: Dict[str, Any] = {
         "restartPolicy": "Never",
+        "serviceAccountName": JOB_ACCOUNT,
         "nodeSelector": {"kubernetes.io/hostname": job.node},
         "tolerations": [TRAINING_TOLERATION],
         "terminationGracePeriodSeconds": job.stop_seconds,

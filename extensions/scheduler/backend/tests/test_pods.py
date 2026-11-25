@@ -33,6 +33,7 @@ def test_a_gpu_job_is_given_its_gpus_by_id_and_asks_kubernetes_for_none():
     assert spec["nodeSelector"] == {"kubernetes.io/hostname": "tkamd2"}
     assert (spec["terminationGracePeriodSeconds"], spec["restartPolicy"]) == (600, "Never")
     assert spec["securityContext"] == {"runAsUser": 1000, "runAsGroup": 100}
+    assert spec["serviceAccountName"] == "scheduler-job"
     assert made["spec"]["backoffLimit"] == 0
 
 
