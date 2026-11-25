@@ -60,6 +60,11 @@ def test_a_service_asks_for_a_hold_without_a_user_and_ends_it(client, test_db):
     test_db.flush()
     ended = client.post(f"/internal/scheduler/jobs/{hold['id']}/stop").json()
     assert (ended["status"], ended["gpu_ids"]) == ("stopped", None)
+    other = client.post("/internal/scheduler/holds", json={**HOLD, "name": "another model"}).json()
+    client.post("/internal/scheduler/holds", json={**HOLD, "owner": "someone-else"})
+    # An owner reads its holds that have not ended
+    listed = client.get("/internal/scheduler/jobs", params={"owner": "llm-gateway"}).json()["jobs"]
+    assert [j["id"] for j in listed] == [other["id"]]
     assert client.post("/internal/scheduler/holds", json={**HOLD, "release_url": "ftp://x"}).status_code == 422
 
 

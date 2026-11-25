@@ -17,6 +17,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Tuple
 
+from app.services import gpu_holds
 from app.services.llm_backend_types import llm_backend_types
 
 logger = logging.getLogger(__name__)
@@ -276,11 +277,19 @@ class LLMPodManager:
         model_id: Optional[str] = None,
         mem_limit_gb: Optional[float] = None,
         wait_ready: bool = True,
+        gpu_ids: Optional[List[str]] = None,
+        hold_id: Optional[str] = None,
     ) -> Tuple[bool, Optional[ManagedPod]]:
         """Ensure a pod is running for this backend on the given node.
 
         ``model_id`` names the model of a one-model backend; its pod is that
         model's own Deployment.
+
+        ``gpu_ids`` and ``hold_id``: the GPUs a hold of the Scheduler gave
+        (app.services.gpu_holds). The pod is started on them by their ids and
+        asks Kubernetes for no GPU; its Deployment keeps the hold's id, and
+        the hold ends when the Deployment is deleted. Without them the pod
+        asks Kubernetes for ``gpu_count`` GPUs.
 
         Returns (success, managed_pod). If wait_ready is False, creates the
         Deployment and returns immediately without waiting for pod readiness.
@@ -354,6 +363,8 @@ class LLMPodManager:
                 model_env,
                 mem_limit_gb,
                 model_id,
+                gpu_ids,
+                hold_id,
             )
             if not success:
                 return False, None
@@ -383,6 +394,8 @@ class LLMPodManager:
         model_env: Optional[Dict[str, str]] = None,
         mem_limit_gb: Optional[float] = None,
         model_id: Optional[str] = None,
+        gpu_ids: Optional[List[str]] = None,
+        hold_id: Optional[str] = None,
     ) -> bool:
         """Create a single-replica Deployment targeting a specific node.
 
@@ -408,14 +421,16 @@ class LLMPodManager:
 
             from app.services.llm_gpu_tracker import gpu_slots, llm_gpu_tracker
             gpu_node = llm_gpu_tracker.get_node(node_name)
-            if gpu_count > 0 and gpu_node is None:
+            if gpu_count > 0 and gpu_ids is None and gpu_node is None:
                 raise ValueError(f"{node_name} is not a known GPU node")
-            slots = gpu_slots(gpu_node, gpu_count) if gpu_count > 0 else 0
+            # With the GPUs of a hold the pod asks Kubernetes for none
+            slots = gpu_slots(gpu_node, gpu_count) if gpu_count > 0 and gpu_ids is None else 0
 
             try:
                 existing = apps_v1.read_namespaced_deployment(deploy_name, namespace)
                 if existing:
-                    needs_recreate = False
+                    # A new hold gives GPUs of its own: the Deployment is made again on them
+                    needs_recreate = gpu_ids is not None
                     if model_env and model_env.get("MODEL_ID"):
                         existing_model_id = self._get_container_env(existing, "MODEL_ID")
                         if existing_model_id and existing_model_id != model_env["MODEL_ID"]:
@@ -436,6 +451,7 @@ class LLMPodManager:
 
                     if needs_recreate:
                         apps_v1.delete_namespaced_deployment(deploy_name, namespace)
+                        self._end_hold_of(existing, but=hold_id)
                     else:
                         if (existing.spec.strategy and existing.spec.strategy.type) != "Recreate":
                             apps_v1.patch_namespaced_deployment(
@@ -475,7 +491,18 @@ class LLMPodManager:
                 )
             pod_template.spec.tolerations = tols
 
-            if gpu_count > 0:
+            if gpu_ids is not None:
+                # The GPUs the Scheduler gave, named to the pod by their ids; Kubernetes's own count of GPUs,
+                # which the base Deployment may ask for, is not used
+                pod_template.spec.runtime_class_name = gpu_holds.GPU_RUNTIME_CLASS
+                for container in pod_template.spec.containers:
+                    for part in (container.resources.requests, container.resources.limits):
+                        if part:
+                            part.pop("nvidia.com/gpu", None)
+                    kept = [e for e in (container.env or []) if e.name != "NVIDIA_VISIBLE_DEVICES"]
+                    kept.append(client.V1EnvVar(name="NVIDIA_VISIBLE_DEVICES", value=",".join(gpu_ids)))
+                    container.env = kept
+            elif gpu_count > 0:
                 for container in pod_template.spec.containers:
                     requests = container.resources.requests or {}
                     limits = container.resources.limits or {}
@@ -545,6 +572,7 @@ class LLMPodManager:
                     }),
                     annotations={
                         "argocd.argoproj.io/compare-options": "IgnoreExtraneous",
+                        **({gpu_holds.HOLD_ANNOTATION: hold_id} if hold_id else {}),
                     },
                 ),
                 spec=client.V1DeploymentSpec(
@@ -816,10 +844,14 @@ class LLMPodManager:
                 raise
             if (dep.spec.replicas or 0) == 0:
                 return False
+            # Its hold of GPUs ends with it: started again, it asks for a new one
             apps_v1.patch_namespaced_deployment(
-                deploy_name, namespace, {"spec": {"replicas": 0}}
+                deploy_name, namespace,
+                {"spec": {"replicas": 0}, "metadata": {"annotations": {gpu_holds.HOLD_ANNOTATION: None,
+                                                                      gpu_holds.RELOAD_ANNOTATION: None}}}
             )
             self._managed.pop(self._key(backend_type, node_name, model_id), None)
+            self._end_hold_of(dep)
             logger.info(f"Scaled {deploy_name} to 0 (serves no model)")
             return True
         except Exception as e:
@@ -858,7 +890,9 @@ class LLMPodManager:
                 k8s_config.load_kube_config()
 
             apps_v1 = client.AppsV1Api()
+            found = apps_v1.read_namespaced_deployment(deploy_name, namespace)
             apps_v1.delete_namespaced_deployment(deploy_name, namespace)
+            self._end_hold_of(found)
             return True
         except client.rest.ApiException as e:
             if e.status == 404:
@@ -868,6 +902,131 @@ class LLMPodManager:
         except Exception as e:
             logger.error(f"Delete failed for {namespace}/{deploy_name}: {e}")
             return False
+
+    @staticmethod
+    def _end_hold_of(deployment, but: Optional[str] = None) -> None:
+        """End the hold of GPUs a Deployment that is gone, or stopped, was started with; not the hold `but`. A
+        hold that could not be ended stays the Scheduler's, and is said in the log."""
+        hold_id = (deployment.metadata.annotations or {}).get(gpu_holds.HOLD_ANNOTATION)
+        if not hold_id or hold_id == but:
+            return
+        try:
+            gpu_holds.end_sync(hold_id)
+        except gpu_holds.HoldError as e:
+            logger.error(f"The hold {hold_id} of {deployment.metadata.name} was not ended: {e}")
+
+    def give_up(self, backend_type: str, node_name: str, model_id: Optional[str] = None) -> Optional[str]:
+        """Stop a model's pod for work of a higher priority, to start it again later: its Deployment is kept at
+        no replicas, with its hold's id and RELOAD_ANNOTATION. Returns the hold's id; None when the Deployment has
+        no hold or is gone."""
+        from kubernetes import client, config as k8s_config
+
+        try:
+            k8s_config.load_incluster_config()
+        except k8s_config.ConfigException:
+            k8s_config.load_kube_config()
+        apps_v1 = client.AppsV1Api()
+        namespace = self._get_namespace(backend_type)
+        deploy_name = self._make_deployment_name(backend_type, node_name, model_id)
+        try:
+            dep = apps_v1.read_namespaced_deployment(deploy_name, namespace)
+        except client.rest.ApiException as e:
+            if e.status == 404:
+                return None
+            raise
+        hold_id = (dep.metadata.annotations or {}).get(gpu_holds.HOLD_ANNOTATION)
+        if not hold_id:
+            return None
+        apps_v1.patch_namespaced_deployment(
+            deploy_name, namespace,
+            {"spec": {"replicas": 0}, "metadata": {"annotations": {gpu_holds.RELOAD_ANNOTATION: "true"}}})
+        self._managed.pop(self._key(backend_type, node_name, model_id), None)
+        logger.info(f"Scaled {deploy_name} to 0 for work of a higher priority; it starts again when its hold "
+                    f"{hold_id} has GPUs")
+        return hold_id
+
+    def start_again(self) -> List[str]:
+        """Start the pods stopped by give_up whose holds have GPUs again, on those GPUs. Returns the MODEL_ID of
+        each Deployment started. A Deployment whose hold has ended starts no more: its marks are removed."""
+        from kubernetes import client, config as k8s_config
+
+        try:
+            k8s_config.load_incluster_config()
+        except k8s_config.ConfigException:
+            k8s_config.load_kube_config()
+        apps_v1 = client.AppsV1Api()
+        started: List[str] = []
+        for backend in llm_backend_types.list():
+            try:
+                deploys = apps_v1.list_namespaced_deployment(
+                    backend.namespace, label_selector=f"{GATEWAY_LABEL}={GATEWAY_LABEL_VALUE}")
+            except client.rest.ApiException as e:
+                if e.status == 404:
+                    continue  # the backend is not installed
+                raise
+            for dep in deploys.items:
+                annotations = dep.metadata.annotations or {}
+                hold_id = annotations.get(gpu_holds.HOLD_ANNOTATION)
+                if not hold_id or annotations.get(gpu_holds.RELOAD_ANNOTATION) != "true":
+                    continue
+                try:
+                    hold = gpu_holds.get_sync(hold_id)
+                except gpu_holds.HoldError as e:
+                    logger.warning(f"{dep.metadata.name} waits to start again: {e}")
+                    continue
+                if hold["status"] in ("waiting", "stopping"):
+                    continue
+                if hold["status"] != "running":
+                    apps_v1.patch_namespaced_deployment(
+                        dep.metadata.name, backend.namespace,
+                        {"metadata": {"annotations": {gpu_holds.HOLD_ANNOTATION: None,
+                                                      gpu_holds.RELOAD_ANNOTATION: None}}})
+                    logger.info(f"{dep.metadata.name} starts no more: its hold {hold_id} is {hold['status']}")
+                    continue
+                containers = [{"name": c.name, "env": [{"name": "NVIDIA_VISIBLE_DEVICES",
+                                                        "value": ",".join(hold["gpu_ids"])}]}
+                              for c in dep.spec.template.spec.containers]
+                apps_v1.patch_namespaced_deployment(
+                    dep.metadata.name, backend.namespace,
+                    {"metadata": {"annotations": {gpu_holds.RELOAD_ANNOTATION: None}},
+                     "spec": {"replicas": 1, "template": {"spec": {"containers": containers}}}})
+                model = self._get_container_env(dep, "MODEL_ID")
+                logger.info(f"Started {dep.metadata.name} again on {hold['gpu_ids']}")
+                if model:
+                    started.append(model)
+        return started
+
+    def end_orphan_holds(self) -> List[str]:
+        """End the gateway's holds that none of its Deployments is on, ORPHAN_SECONDS after they were asked for.
+        Returns their ids."""
+        from datetime import datetime, timezone
+
+        from kubernetes import client, config as k8s_config
+
+        try:
+            k8s_config.load_incluster_config()
+        except k8s_config.ConfigException:
+            k8s_config.load_kube_config()
+        apps_v1 = client.AppsV1Api()
+        kept = set()
+        for backend in llm_backend_types.list():
+            try:
+                deploys = apps_v1.list_namespaced_deployment(
+                    backend.namespace, label_selector=f"{GATEWAY_LABEL}={GATEWAY_LABEL_VALUE}")
+            except client.rest.ApiException as e:
+                if e.status == 404:
+                    continue  # the backend is not installed
+                raise
+            kept.update((d.metadata.annotations or {}).get(gpu_holds.HOLD_ANNOTATION) for d in deploys.items)
+        ended = []
+        now = datetime.now(timezone.utc)
+        for hold in gpu_holds.list_sync():
+            age = (now - datetime.fromisoformat(hold["created_at"])).total_seconds()
+            if hold["id"] not in kept and age > gpu_holds.ORPHAN_SECONDS:
+                gpu_holds.end_sync(hold["id"])
+                logger.warning(f"Ended the hold {hold['id']} of {hold['name']}: no Deployment is on it")
+                ended.append(hold["id"])
+        return ended
 
     async def reconcile(self):
         """Discover existing gateway-managed Deployments and sync images on startup."""

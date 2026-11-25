@@ -345,10 +345,27 @@ class LLMModelRegistry:
                     await asyncio.to_thread(self._poll_catalog)
                     await self._refresh_backends()
                     self._reconcile_states()
+                    await self._start_again()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Model registry poll failed: {e}")
+
+    async def _start_again(self):
+        """Start the pods of the models that gave their GPUs up for work of a higher priority, once the Scheduler
+        gives them GPUs again; such a model is loading from then, and is available when its server answers."""
+        from app.services import gpu_holds
+        from app.services.llm_pod_manager import llm_pod_manager
+
+        for model_id in await asyncio.to_thread(llm_pod_manager.start_again):
+            entry = self._models.get(model_id)
+            if entry is not None and entry.state == ModelState.deployable:
+                self.update_model_state(model_id, ModelState.loading, entry.backend_id)
+        try:
+            await asyncio.to_thread(llm_pod_manager.end_orphan_holds)
+        except gpu_holds.HoldError as e:
+            # Tried again at the next poll
+            logger.warning(f"The gateway's holds were not checked: {e}")
 
     async def _refresh_backends(self):
         """Re-probe the backends before reconciling against them.

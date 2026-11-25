@@ -33,6 +33,28 @@ At start the backend takes over the Deployments it created before (label
 `thinkube.io/managed-by=llm-gateway`), then follows the backends every 30
 seconds and the catalogue every 60.
 
+## The GPUs of a model's pod
+
+A model served on a pod of its own (vLLM, text embeddings, llama.cpp and the
+other backends of the driver `per-model-pod`) gets its GPUs from the
+Scheduler (`backend/app/services/gpu_holds.py`):
+
+- A load asks the Scheduler for a hold: the GPUs, and the memory the pod takes
+  on each. The hold takes its turn among the work on the node. A load whose
+  hold is given no GPU within 30 seconds is refused with the Scheduler's
+  reason; while the Scheduler makes room for it, it is waited for.
+- The pod is started on the GPUs the hold was given, named by their ids
+  (`NVIDIA_VISIBLE_DEVICES`, runtime class `nvidia-legacy`), and asks
+  Kubernetes for no GPU. Its Deployment keeps the hold's id, and the hold ends
+  when the Deployment is deleted or scaled to no replicas.
+- When work of a higher priority needs the GPUs, the Scheduler asks the gateway
+  to give them up (`/internal/llm/holds/release`). The model is unloaded, its
+  Deployment kept, and the hold released; the model is loaded again when the
+  Scheduler gives the hold GPUs again.
+
+The pods that serve several models (the trained heads, Ollama) still ask
+Kubernetes for their GPU.
+
 ## Who calls it
 
 - **People and agents** call `/api/v1/llm/...` with a sign-in: through

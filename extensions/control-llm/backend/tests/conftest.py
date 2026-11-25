@@ -107,6 +107,52 @@ def client(test_db: Session) -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 @pytest.fixture(autouse=True)
+def holds(monkeypatch):
+    """The Scheduler, as the gateway asks it for the GPUs of a pod: every hold asked is given GPU-0 at once, unless
+    the test sets `refuse` (the reason no GPU is given) or `status` (what a hold is read as)."""
+    from types import SimpleNamespace
+
+    from app.services import gpu_holds
+
+    seen = SimpleNamespace(asked=[], ended=[], released=[], refuse=None, status="running", gpu_ids=["GPU-0"])
+
+    async def ask(name, node, gpus, gpu_memory_gb, memory_gb=0, on_gpus=None):
+        seen.asked.append({"name": name, "node": node, "gpus": gpus, "gpu_memory_gb": gpu_memory_gb,
+                           "memory_gb": memory_gb, "on_gpus": on_gpus})
+        return {"id": f"hold-{len(seen.asked)}", "status": "waiting"}
+
+    async def granted(hold_id):
+        if seen.refuse:
+            seen.ended.append(hold_id)
+            raise gpu_holds.HoldError(f"the Scheduler gave it no GPU: {seen.refuse}")
+        return list(seen.gpu_ids)
+
+    def read(hold_id):
+        return {"id": hold_id, "status": seen.status, "gpu_ids": list(seen.gpu_ids)}
+
+    async def get(hold_id):
+        return read(hold_id)
+
+    async def end(hold_id):
+        seen.ended.append(hold_id)
+
+    async def release(hold_id):
+        seen.released.append(hold_id)
+
+    monkeypatch.setattr(gpu_holds, "ask", ask)
+    monkeypatch.setattr(gpu_holds, "granted", granted)
+    monkeypatch.setattr(gpu_holds, "get", get)
+    monkeypatch.setattr(gpu_holds, "end", end)
+    monkeypatch.setattr(gpu_holds, "release", release)
+    monkeypatch.setattr(gpu_holds, "get_sync", read)
+    monkeypatch.setattr(gpu_holds, "end_sync", seen.ended.append)
+    monkeypatch.setattr(gpu_holds, "release_sync", seen.released.append)
+    seen.listed = []
+    monkeypatch.setattr(gpu_holds, "list_sync", lambda: list(seen.listed))
+    return seen
+
+
+@pytest.fixture(autouse=True)
 def llm_backend_types_installed(monkeypatch):
     """The backend types the platform ships, as their service ConfigMaps declare them."""
     from app.services.llm_backend_types import BackendType, llm_backend_types
