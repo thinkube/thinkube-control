@@ -24,13 +24,13 @@ A notebook runs in one server pod on one node, with the CPU, memory and GPUs cho
 | Whether a server is running, on which node and with how many cores, GB and GPUs, whether its tools answer, and which servers unattended runs hold.
 
 | `start_notebook_server`
-| Starts the server on `node` with `cpu_cores`, `memory_gb` and `gpus`, and waits until its tools answer. Values you leave out come from *JupyterHub Config*. The ask is checked against the node: its cores and memory, its GPUs, and the GPU slots not held by a served model. On a shared GPU such as the GB10, you can ask for one GPU at most. A server already running must be stopped first.
+| Starts the server on `node` with `cpu_cores`, `memory_gb` and `gpus`. Values you leave out come from *JupyterHub Config*. The ask is checked against the node: its cores, its memory and how many GPUs it has. JupyterHub then asks the Scheduler for the GPUs, with priority 1. With `gpu_memory_gb`, the server takes that much on each GPU and shares the GPU with other work that fits beside it, such as served models; without it the server has its GPUs alone, and served models on them are unloaded for it. A server already running must be stopped first.
 
 | `stop_notebook_server`
 | Stops the server and frees its node, memory and GPUs. Kernels are shut down; notebook files keep their outputs.
 |===
 
-A refusal says why in one sentence, for example `tkspark has 0 GPU slots free of 4; a served model may be holding the rest (llm_unload_model frees one)`.
+A refusal says why in one sentence, for example `gpus must be one of [0, 1] on tkspark`. Whether the GPUs are free is the Scheduler's to say, when the server starts: a start it gives no GPU fails, and the node's `start_error` in `jupyter_notebook_status` carries its reason, for example `the Scheduler gave the notebook server no GPU: waiting for a GPU of tkamd2 (a GPU alone): GPU 0 is job a-training's alone`.
 
 To use a GPU on another node, start an unattended run there, or stop the server and start it on that node.
 
@@ -100,7 +100,7 @@ Over MCP a call that waits for a cell is held open by the agent for a limited ti
 | Operation | What it does
 
 | `run_notebook_job`
-| Runs a notebook on a server of its own: a named server started on `node` with `cpu_cores`, `memory_gb` and `gpus`, the notebook opened with `kernel_name` and run top to bottom, the server stopped when the run ends. Answers a `job_id` at once. The default server, and the tab you may have open in it, are untouched.
+| Runs a notebook on a server of its own: a named server started on `node` with `cpu_cores`, `memory_gb`, `gpus` and `gpu_memory_gb` (its GPUs are asked of the Scheduler with priority 2), the notebook opened with `kernel_name` and run top to bottom, the server stopped when the run ends. Answers a `job_id` at once. The default server, and the tab you may have open in it, are untouched.
 
 | `notebook_job_status`
 | `starting`, `running` with cells done of total, then `completed`, `error` or `cancelled`, with each cell's result. The notebook file keeps the outputs.

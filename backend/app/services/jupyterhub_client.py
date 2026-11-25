@@ -13,6 +13,7 @@ configuration, so nothing else has to name it.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from typing import Any, Dict, Optional
@@ -103,10 +104,40 @@ async def server(name: str, include_stopped: bool = False) -> Optional[Dict[str,
     return (await user(include_stopped)).get("servers", {}).get(name)
 
 
+async def start_failure(name: str) -> Optional[str]:
+    """Why the Hub's last start of a server failed, in the Hub's words: the message of the failed event in the
+    server's progress, such as the Scheduler's reason for giving it no GPU. None when the Hub has no failed start
+    of it to tell."""
+    url = f"{hub_api_url()}/users/{await username()}/{server_path(name)}/progress"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            async with client.stream("GET", url, headers={"Authorization": f"token {_token()}"}) as response:
+                if response.status_code != 200:
+                    return None
+                async for line in response.aiter_lines():
+                    if not line.startswith("data:"):
+                        continue
+                    event = json.loads(line[len("data:"):])
+                    if event.get("failed"):
+                        return event.get("message")
+                    if event.get("ready"):
+                        return None
+    except (httpx.HTTPError, ValueError) as e:
+        logger.warning("the Hub's progress of the server %s could not be read: %s", name, e)
+    return None
+
+
 async def start_server(name: str, user_options: Dict[str, Any]) -> int:
-    """Ask the Hub to start a server. 201 means started, 202 means still starting."""
+    """Ask the Hub to start a server. 201 means started, 202 means still starting. A start that fails while the
+    Hub still answers is raised with the Hub's reason for it."""
     owner = (await user())["name"]
-    status, _ = await request("POST", f"/users/{owner}/{server_path(name)}", json=user_options, timeout=60)
+    try:
+        status, _ = await request("POST", f"/users/{owner}/{server_path(name)}", json=user_options, timeout=60)
+    except HubError as e:
+        reason = await start_failure(name) if e.status is not None and e.status >= 500 else None
+        if reason is None:
+            raise
+        raise HubError(f"the server '{name}' failed to start: {reason}", e.status) from e
     return status
 
 
@@ -143,11 +174,14 @@ async def wait_ready(name: str, timeout: float = 240.0, interval: float = 3.0) -
     while True:
         model = await server(name)
         if model is None:
-            raise HubError(f"the server '{name}' stopped before it was ready; see the Hub's log")
+            reason = await start_failure(name)
+            raise HubError(f"the server '{name}' failed to start: {reason}" if reason
+                           else f"the server '{name}' stopped before it was ready; see the Hub's log")
         if model.get("ready"):
             return model
         if not model.get("pending"):
-            raise HubError(f"the server '{name}' failed to start: {model.get('state') or 'no reason given'}")
+            reason = await start_failure(name)
+            raise HubError(f"the server '{name}' failed to start: {reason or model.get('state') or 'no reason given'}")
         if loop.time() > deadline:
             raise HubError(f"the server '{name}' did not become ready in {int(timeout)} seconds")
         await asyncio.sleep(interval)

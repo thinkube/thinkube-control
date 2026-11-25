@@ -103,3 +103,34 @@ def test_removing_a_server_waits_until_even_a_stopped_one_is_gone(monkeypatch):
     assert calls[0] == ("DELETE", "/users/thinkube/servers/job-1", {"remove": True})
     looks = [c[1] for c in calls if c[0] == "GET"]
     assert looks == ["/users/thinkube?include_stopped_servers=true"] * 2
+
+
+def test_a_start_that_fails_says_the_hubs_reason(monkeypatch):
+    """The Hub answers a failed start with 500, or drops the server while it is waited for; its progress says
+    why, such as the Scheduler's reason for giving the server no GPU."""
+    said = "Spawn failed: the Scheduler gave the notebook server no GPU: GPU 0 is job a training's alone"
+
+    async def fake(method, path, json=None, timeout=30.0):
+        if method == "POST" and "/servers/" in path:
+            raise hub.HubError("JupyterHub answered 500: Internal Server Error", 500)
+        return 200, {"name": "thinkube", "servers": {}}
+
+    async def reason(name):
+        return said
+
+    monkeypatch.setattr(hub, "request", fake)
+    monkeypatch.setattr(hub, "start_failure", reason)
+    monkeypatch.setenv("JUPYTERHUB_USERNAME", "thinkube")
+    with pytest.raises(hub.HubError, match="the server 'tkamd2' failed to start: Spawn failed: the Scheduler gave"):
+        asyncio.run(hub.start_server("tkamd2", {"node": "tkamd2"}))
+    with pytest.raises(hub.HubError, match="the server 'tkamd2' failed to start: Spawn failed: the Scheduler gave"):
+        asyncio.run(hub.wait_ready("tkamd2"))
+
+    async def none(name):
+        return None
+
+    monkeypatch.setattr(hub, "start_failure", none)
+    with pytest.raises(hub.HubError, match="JupyterHub answered 500"):
+        asyncio.run(hub.start_server("tkamd2", {"node": "tkamd2"}))
+    with pytest.raises(hub.HubError, match="stopped before it was ready"):
+        asyncio.run(hub.wait_ready("tkamd2"))

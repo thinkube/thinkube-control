@@ -4,7 +4,10 @@
 """Notebook servers, one per node, and unattended notebook runs.
 
 A notebook server is a pod that JupyterHub starts on one node with a CPU,
-memory and GPU budget. Each node runs at most one interactive server, a
+memory and GPU budget. Its GPUs are asked of the Scheduler by JupyterHub when
+the server starts, with the priority given here: SERVER_PRIORITY for a node's
+interactive server, JOB_PRIORITY for an unattended run. A start the Scheduler
+gives no GPU fails with the Scheduler's reason. Each node runs at most one interactive server, a
 JupyterHub named server called after the node, which starts with the node's
 defaults unless other values are asked for. These endpoints let Claude Code
 and Thinkube IDE see every node's server, start one where the work needs to
@@ -53,6 +56,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/jupyter", tags=["jupyter-server"])
 
 PROFILE = "thinkube-notebooks"
+# The priorities, of 1 (highest) to 5, with which a server's GPUs are asked of the Scheduler
+SERVER_PRIORITY = 1
+JOB_PRIORITY = 2
 JOB_POLL_SECONDS = 15
 JOB_SERVER_PREFIX = jupyter_notebooks.JOB_SERVER_PREFIX
 
@@ -66,14 +72,19 @@ _start_watchers: Dict[str, asyncio.Task] = {}
 # Placement
 # ---------------------------------------------------------------------------
 
+# The form's choice of GPU memory for a server that has its GPUs alone
+WHOLE_GPU = "whole"
+
+
 class Placement(BaseModel):
     node: str
     cpu_cores: int
     memory_gb: int
     gpus: int
-    # What the spawner requests as nvidia.com/gpu: on a node that shares its
-    # GPUs in time slices, every GPU means every slice (see notebook_resources)
-    gpu_slots: int = 0
+    # The memory the server takes on each GPU, with which it shares the GPU;
+    # none: it has its GPUs alone
+    gpu_memory_gb: Optional[int] = None
+    priority: int = SERVER_PRIORITY
     # The spawner requests a quarter of memory_gb, so a server can be placed
     # where memory is short and still grow to its limit. A run that must not
     # be killed for memory asks the node to reserve all of it.
@@ -90,8 +101,9 @@ class Placement(BaseModel):
             "node": self.node,
             "cpu": str(self.cpu_cores),
             "memory": f"{self.memory_gb}G",
-            "enable_gpu": str(self.gpu_slots),
             "gpus": str(self.gpus),
+            "gpu_memory": str(self.gpu_memory_gb) if self.gpu_memory_gb else WHOLE_GPU,
+            "priority": str(self.priority),
         }
 
 
@@ -121,8 +133,10 @@ async def resolve_placement(
     cpu_cores: Optional[int],
     memory_gb: Optional[int],
     gpus: Optional[int],
+    gpu_memory_gb: Optional[int] = None,
 ) -> Placement:
-    """Fill what was not said from the node's defaults and check it against the node."""
+    """Fill what was not said from the node's defaults and check it against the node. Whether the GPUs are free
+    is the Scheduler's to say, when the server starts."""
     nodes = await _nodes()
     if not node:
         raise HTTPException(status_code=422, detail=f"node is required; the nodes are {sorted(nodes)}")
@@ -136,31 +150,23 @@ async def resolve_placement(
         cpu_cores=cpu_cores if cpu_cores is not None else defaults.cpu_cores,
         memory_gb=memory_gb if memory_gb is not None else defaults.memory_gb,
         gpus=gpus if gpus is not None else defaults.gpus,
+        gpu_memory_gb=gpu_memory_gb,
     )
     capacity = res.node_capacity(info)
     choices = res.node_choices(info)
-    free_gpus = int(info["available"].get("gpu", 0))
     problems = []
     if placement.cpu_cores not in choices["cpu_cores"]:
         problems.append(f"cpu_cores must be one of {choices['cpu_cores']} on {node}")
     if placement.memory_gb not in choices["memory_gb"]:
         problems.append(f"memory_gb must be one of {choices['memory_gb']} on {node}")
     if placement.gpus not in choices["gpus"]:
-        if not capacity["gpus"]:
-            problems.append(f"{node} has no GPU")
-        elif capacity["gpu_slices"] > 1:
-            problems.append(f"gpus must be one of {choices['gpus']} on {node}: it shares its GPUs in time slices, "
-                            "so a server takes one slice or every GPU")
-        else:
-            problems.append(f"gpus must be one of {choices['gpus']} on {node}")
-    else:
-        placement.gpu_slots = res.gpu_slots(capacity, placement.gpus)
-        if placement.gpu_slots > free_gpus:
-            problems.append(
-                f"{node} has {free_gpus} GPU slots free of {int(info['capacity'].get('gpu', 0))}; "
-                f"{placement.gpus} GPUs need {placement.gpu_slots}; a served model may be holding the rest "
-                "(llm_unload_model frees one)"
-            )
+        problems.append(f"gpus must be one of {choices['gpus']} on {node}" if capacity["gpus"] else f"{node} has no GPU")
+    if placement.gpu_memory_gb is not None:
+        if not placement.gpus:
+            problems.append("gpu_memory_gb is the memory taken on each GPU, and the server asks for no GPU")
+        elif placement.gpu_memory_gb not in choices["gpu_memory_gb"]:
+            problems.append(f"gpu_memory_gb must be one of {choices['gpu_memory_gb']} on {node}, or left out for "
+                            "the GPUs alone")
     if problems:
         raise HTTPException(status_code=422, detail="; ".join(problems))
     return placement
@@ -173,10 +179,8 @@ def _placement_of(model: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "node": options.get("node"),
         "cpu_cores": int(options["cpu"]) if str(options.get("cpu", "")).isdigit() else None,
         "memory_gb": int(memory) if memory.isdigit() else None,
-        # gpus says how many GPUs; enable_gpu is the slot count the spawner got, and all a server started
-        # before gpus was recorded has
-        "gpus": int(options["gpus"]) if str(options.get("gpus", "")).isdigit()
-        else int(options["enable_gpu"]) if str(options.get("enable_gpu", "")).isdigit() else None,
+        "gpus": int(options["gpus"]) if str(options.get("gpus", "")).isdigit() else None,
+        "gpu_memory_gb": int(options["gpu_memory"]) if str(options.get("gpu_memory", "")).isdigit() else None,
     }
 
 
@@ -203,9 +207,9 @@ class NodeServer(BaseModel):
     cpu_cores: Optional[int] = Field(None, description="What the server was started with; the node's default when stopped.")
     memory_gb: Optional[int] = None
     gpus: Optional[int] = None
+    gpu_memory_gb: Optional[int] = Field(None, description="The memory the server takes on each GPU; none when it has its GPUs alone.")
     defaults: Dict[str, int] = Field(..., description="The node's default cpu_cores, memory_gb and gpus.")
     capacity: Dict[str, int] = Field(..., description="The most a server on this node can be given.")
-    gpus_free: int = Field(0, description="GPU slots on the node not taken now.")
     url: Optional[str] = None
     last_activity: Optional[str] = None
     extension: Optional[Dict[str, Any]] = Field(None, description="tk-notebook-mcp health inside the server, when running.")
@@ -222,6 +226,7 @@ class OtherServer(BaseModel):
     cpu_cores: Optional[int] = None
     memory_gb: Optional[int] = None
     gpus: Optional[int] = None
+    gpu_memory_gb: Optional[int] = None
     url: Optional[str] = None
 
 
@@ -271,9 +276,9 @@ async def _servers_status(db: Session) -> ServersStatus:
                 cpu_cores=placement.get("cpu_cores", defaults.cpu_cores),
                 memory_gb=placement.get("memory_gb", defaults.memory_gb),
                 gpus=placement.get("gpus", defaults.gpus),
+                gpu_memory_gb=placement.get("gpu_memory_gb"),
                 defaults={"cpu_cores": defaults.cpu_cores, "memory_gb": defaults.memory_gb, "gpus": defaults.gpus},
                 capacity=defaults.capacity.model_dump(),
-                gpus_free=int(nodes[defaults.node]["available"].get("gpu", 0)),
                 url=_url(model),
                 last_activity=(model or {}).get("last_activity"),
                 start_error=_start_failures.get(defaults.node) if state == "stopped" else None,
@@ -333,7 +338,8 @@ async def watch_start(node: str) -> None:
 class StartServerRequest(BaseModel):
     cpu_cores: Union[int, str, None] = Field(None, description="CPU cores; defaults to the node's default.")
     memory_gb: Union[int, str, None] = Field(None, description="Memory in GB; defaults to the node's default.")
-    gpus: Union[int, str, None] = Field(None, description="GPUs to reserve, 0 for none; defaults to the node's default. On a node that shares its GPUs in time slices, 1 or every GPU of the node.")
+    gpus: Union[int, str, None] = Field(None, description="GPUs of the node for the server, 0 for none; defaults to the node's default.")
+    gpu_memory_gb: Union[int, str, None] = Field(None, description="GB the server takes on each GPU, with which it shares the GPU with other work that fits beside it, such as served models. Left out, the server has its GPUs alone, and served models on them are unloaded for it.")
 
 
 @router.post("/servers/{node}/start", response_model=NodeServer, operation_id="start_notebook_server")
@@ -343,7 +349,7 @@ async def start_notebook_server(
     current_user: dict = Depends(get_current_user_dual_auth),
     db: Session = Depends(get_db),
 ):
-    """Start the notebook server on a node, for example 'tkspark', with the node's default CPU, memory and GPUs unless others are given. Answers at once with state 'starting'; poll jupyter_notebook_status until the node's state is 'running' (its tools answer when extension.status is 'ok') or 'stopped' with start_error. Servers on other nodes keep running."""
+    """Start the notebook server on a node, for example 'tkspark', with the node's default CPU, memory and GPUs unless others are given. Its GPUs are asked of the Scheduler, with priority 1: work of a lower priority on them is stopped for it, and a start the Scheduler gives no GPU fails with its reason. Answers at once with state 'starting'; poll jupyter_notebook_status until the node's state is 'running' (its tools answer when extension.status is 'ok') or 'stopped' with start_error. Servers on other nodes keep running."""
     request = request or StartServerRequest()
     placement = await resolve_placement(
         db,
@@ -351,6 +357,7 @@ async def start_notebook_server(
         jupyter_notebooks._opt_int(request.cpu_cores, "cpu_cores"),
         jupyter_notebooks._opt_int(request.memory_gb, "memory_gb"),
         jupyter_notebooks._opt_int(request.gpus, "gpus"),
+        jupyter_notebooks._opt_int(request.gpu_memory_gb, "gpu_memory_gb"),
     )
     try:
         current = await hub.server(node)
@@ -405,7 +412,8 @@ class RunNotebookJobRequest(BaseModel):
     node: str = Field(..., description="The node to run on, for example 'tkspark'.")
     cpu_cores: Union[int, str, None] = Field(None, description="CPU cores for the run.")
     memory_gb: Union[int, str, None] = Field(None, description="Memory in GB for the run.")
-    gpus: Union[int, str, None] = Field(None, description="GPUs to reserve for the run, 0 for none. On a node that shares its GPUs in time slices, 1 or every GPU of the node (for a run on several GPUs).")
+    gpus: Union[int, str, None] = Field(None, description="GPUs of the node for the run, 0 for none.")
+    gpu_memory_gb: Union[int, str, None] = Field(None, description="GB the run takes on each GPU, with which it shares the GPU with other work that fits beside it. Left out, the run has its GPUs alone.")
     stop_on_error: Union[bool, str, None] = Field(True, description="Stop at the first cell that raises (default true).")
     cell_timeout_seconds: Union[int, str, None] = Field(None, description="Seconds allowed per cell; default 3600.")
     reserve_memory: Union[bool, str, None] = Field(
@@ -656,7 +664,7 @@ async def run_notebook_job(
     current_user: dict = Depends(get_current_user_dual_auth),
     db: Session = Depends(get_db),
 ):
-    """Run a whole notebook unattended on its own server: started on the node with the GPUs asked for (the node's defaults fill the rest), run top to bottom, stopped when done. Returns a job_id at once; poll notebook_job_status. The notebook file keeps the outputs. A training sets training true and runs on the node training mode is on. With a given notebook or parameters, the job runs its own copy, job-runs/<job_id>.ipynb in the notebooks folder, which keeps the outputs; parameters reach the notebook as the dict PARAMETERS."""
+    """Run a whole notebook unattended on its own server: started on the node with the GPUs asked for (the node's defaults fill the rest), run top to bottom, stopped when done. Its GPUs are asked of the Scheduler, with priority 2. Returns a job_id at once; poll notebook_job_status. The notebook file keeps the outputs. A training sets training true and runs on the node training mode is on. With a given notebook or parameters, the job runs its own copy, job-runs/<job_id>.ipynb in the notebooks folder, which keeps the outputs; parameters reach the notebook as the dict PARAMETERS."""
     is_training = jupyter_notebooks._bool(request.training, False)
     training = await training_mode.status()
     if is_training and training is None:
@@ -675,7 +683,9 @@ async def run_notebook_job(
         jupyter_notebooks._opt_int(request.cpu_cores, "cpu_cores"),
         jupyter_notebooks._opt_int(request.memory_gb, "memory_gb"),
         jupyter_notebooks._opt_int(request.gpus, "gpus"),
+        jupyter_notebooks._opt_int(request.gpu_memory_gb, "gpu_memory_gb"),
     )
+    placement.priority = JOB_PRIORITY
     placement.reserve_memory = jupyter_notebooks._bool(request.reserve_memory, False)
     placement.training_node = training is not None and training["node"] == placement.node
     if request.kernel_name:

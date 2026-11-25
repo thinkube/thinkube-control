@@ -175,15 +175,44 @@ Each step is seen before the next begins.
    job of its own that uses less than it was given hides that much of other
    work on the same GPU. The node-metrics pods could report the memory each
    pod holds on a GPU, which would count both exactly.
-7. **Notebook servers ask.**
+7. **Notebook servers ask.** JupyterHub writes a server's pod, for the form
+   in the browser and for the starts Thinkube Control makes, so JupyterHub
+   asks: its start hook asks the scheduler for a hold, waits for its GPUs,
+   and starts the pod on them. The hold ends when the server stops. A server
+   asks for a number of the node's GPUs and may say the memory it takes on
+   each, with which it shares the GPU with served models; without it the
+   server has its GPUs alone. An interactive server asks with priority 1, an
+   unattended run with priority 2. A start that is given no GPU fails with
+   the scheduler's reason.
+   A hold says where its pod is, and the pod carries the hold's id as a
+   label: the scheduler ends a hold that has its GPUs and no pod for 10
+   minutes, so a server that is gone leaves no hold of priority 1 on a GPU.
    Seen when: a notebook server gets a GPU through the scheduler.
-8. **Apps that use a GPU ask.** Open: either their templates ask the
-   scheduler, or the scheduler reads the GPUs Kubernetes gave them.
+   Open in this step: the priority of each kind of work (notebook server 1,
+   notebook job 2, run 3, served model 4, app 5) is a table a person edits
+   in Forge, and the owners that ask the scheduler today say the default
+   numbers themselves. The table moves to the scheduler with step 4.
+8. **Apps that use a GPU ask.** Decided on 25 November: an app asks, like
+   everything else; the scheduler does not read what Kubernetes gave. An app
+   says the GPUs it needs in its `thinkube.yaml`, and Thinkube Control
+   writes its Kubernetes request from that, so the change is made once, in
+   Thinkube Control, and the templates stay as they are: Control asks for
+   the app's hold when it deploys the app, starts the app's pod on the GPUs
+   the hold was given, scales the app to 0 when the scheduler asks for its
+   GPUs, and back when the hold has GPUs again. An app whose manifest asks
+   Kubernetes for a GPU by hand does not start after step 9.
+   Seen when: an app with a GPU runs on the GPU its hold was given, is
+   scaled to 0 for a job of a higher priority, and comes back when the job
+   has ended.
 9. **Kubernetes hands out no GPUs.** Time slicing is turned off and the GPU
    plugin offers none on the nodes, so a pod that goes around the scheduler
    does not start.
    To check first: that the driver and the runtime keep working without the
    plugin's count.
+   To change with it: Thinkube Control counts a node's GPUs from what
+   Kubernetes offers, divided by the slices (`cluster_resources`), for the
+   notebook servers' choices among others; it counts them from the GPUs the
+   node reports instead.
 
 ## Not in this plan
 

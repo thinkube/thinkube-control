@@ -38,23 +38,27 @@ class FakeDB:
 
 NODES = [
     {
+        # a GPU that takes its memory from the system's
         "name": "tkspark",
-        "capacity": {"cpu": 20, "memory": "119Gi", "gpu": 4, "effective_gpu": 1},
+        "capacity": {"cpu": 20, "memory": "119Gi", "gpu": 4, "physical_gpu": 1},
         "allocated": {"cpu": 2, "memory": "8Gi", "gpu": 1},
         "available": {"cpu": 18, "memory": "111Gi", "gpu": 3},
+        "gpu_details": [{"index": 0, "memory_total": "unified"}],
     },
     {
         "name": "tkamd1",
-        "capacity": {"cpu": 16, "memory": "62Gi", "gpu": 0, "effective_gpu": 0},
+        "capacity": {"cpu": 16, "memory": "62Gi", "gpu": 0, "physical_gpu": 0},
         "allocated": {"cpu": 4, "memory": "16Gi", "gpu": 0},
         "available": {"cpu": 12, "memory": "46Gi", "gpu": 0},
+        "gpu_details": [],
     },
     {
-        # two GPUs shared in two slices each
+        # two GPUs of 24 GB; Kubernetes counts none of them free
         "name": "tkamd2",
-        "capacity": {"cpu": 31, "memory": "116Gi", "gpu": 4, "effective_gpu": 1, "physical_gpu": 2, "gpu_slices": 2},
-        "allocated": {"cpu": 2, "memory": "8Gi", "gpu": 0},
-        "available": {"cpu": 29, "memory": "108Gi", "gpu": 4},
+        "capacity": {"cpu": 31, "memory": "116Gi", "gpu": 4, "physical_gpu": 2},
+        "allocated": {"cpu": 2, "memory": "8Gi", "gpu": 4},
+        "available": {"cpu": 29, "memory": "108Gi", "gpu": 0},
+        "gpu_details": [{"index": 0, "memory_total": "24576 MiB"}, {"index": 1, "memory_total": "24576 MiB"}],
     },
 ]
 
@@ -70,7 +74,7 @@ def nodes(monkeypatch):
 def test_node_defaults_fill_what_was_not_said():
     db = FakeDB(node_rows=[JupyterHubNodeDefaults(node="tkspark", cpu_cores=8, memory_gb=32, gpus=1)])
     placement = asyncio.run(js.resolve_placement(db, "tkspark", None, None, None))
-    assert placement.user_options() == {"profile": "thinkube-notebooks", "reserve_memory": "no", "training_node": "no", "node": "tkspark", "cpu": "8", "memory": "32G", "enable_gpu": "1"}
+    assert placement.user_options() == {"profile": "thinkube-notebooks", "reserve_memory": "no", "training_node": "no", "node": "tkspark", "cpu": "8", "memory": "32G", "gpus": "1", "gpu_memory": "whole", "priority": "1"}
 
 
 def test_a_node_without_its_own_defaults_starts_from_the_fallback():
@@ -97,35 +101,33 @@ def test_values_outside_the_choices_are_refused():
     assert "memory_gb must be one of" in e.value.detail
 
 
-def test_gpu_on_spark_is_capped_to_one_slot():
+def test_a_server_is_given_any_number_of_the_nodes_gpus():
     placement = asyncio.run(js.resolve_placement(FakeDB(), "tkspark", 8, 32, 1))
-    assert placement.gpus == 1 and placement.gpu_slots == 1
+    assert (placement.gpus, placement.gpu_memory_gb) == (1, None)
     with pytest.raises(HTTPException) as e:
         asyncio.run(js.resolve_placement(FakeDB(), "tkspark", 8, 32, 2))
-    assert "gpus must be one of [0, 1]" in e.value.detail
-
-
-def test_a_node_with_two_sliced_gpus_gives_one_or_both():
-    one = asyncio.run(js.resolve_placement(FakeDB(), "tkamd2", 8, 32, 1))
-    assert (one.gpus, one.gpu_slots) == (1, 1) and one.user_options()["enable_gpu"] == "1"
+    assert e.value.detail == "gpus must be one of [0, 1] on tkspark"
+    # Whether the GPUs are free is the Scheduler's to say: Kubernetes's count of them is not asked
     both = asyncio.run(js.resolve_placement(FakeDB(), "tkamd2", 8, 32, 2))
-    assert (both.gpus, both.gpu_slots) == (2, 4)  # every slice of the node: both GPUs, each whole
-    assert both.user_options()["enable_gpu"] == "4" and both.user_options()["gpus"] == "2"
+    assert both.user_options()["gpus"] == "2" and both.user_options()["gpu_memory"] == "whole"
     with pytest.raises(HTTPException) as e:
         asyncio.run(js.resolve_placement(FakeDB(), "tkamd2", 8, 32, 3))
-    assert "gpus must be one of [0, 1, 2]" in e.value.detail and "time slices" in e.value.detail
+    assert e.value.detail == "gpus must be one of [0, 1, 2] on tkamd2"
 
 
-def test_both_gpus_need_every_slot_free(monkeypatch):
-    busy = [dict(n, available={**n["available"], "gpu": 3}) if n["name"] == "tkamd2" else n for n in NODES]
-
-    async def fake():
-        return busy
-
-    monkeypatch.setattr(js, "get_cluster_resources", fake)
+def test_a_server_may_say_the_memory_it_takes_on_each_gpu():
+    shared = asyncio.run(js.resolve_placement(FakeDB(), "tkamd2", 8, 32, 1, 8))
+    assert shared.gpu_memory_gb == 8 and shared.user_options()["gpu_memory"] == "8"
+    # Less than a GPU's memory: the whole GPU is asked for by saying none
     with pytest.raises(HTTPException) as e:
-        asyncio.run(js.resolve_placement(FakeDB(), "tkamd2", 8, 32, 2))
-    assert "3 GPU slots free of 4; 2 GPUs need 4" in e.value.detail
+        asyncio.run(js.resolve_placement(FakeDB(), "tkamd2", 8, 32, 1, 24))
+    assert e.value.detail == ("gpu_memory_gb must be one of [2, 4, 6, 8, 12, 16, 20] on tkamd2, or left out for the "
+                              "GPUs alone")
+    # A GPU that takes its memory from the system's has the node's
+    assert asyncio.run(js.resolve_placement(FakeDB(), "tkspark", 8, 32, 1, 96)).gpu_memory_gb == 96
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(js.resolve_placement(FakeDB(), "tkamd2", 8, 32, 0, 8))
+    assert e.value.detail == "gpu_memory_gb is the memory taken on each GPU, and the server asks for no GPU"
 
 
 def test_no_gpu_node_refuses_a_gpu():
@@ -144,12 +146,11 @@ def test_node_is_required_and_must_exist():
 
 
 def test_placement_read_back_from_hub_options():
-    assert js._placement_of({"user_options": {"node": "tkspark", "cpu": "8", "memory": "32G", "enable_gpu": "1"}}) == {
-        "node": "tkspark", "cpu_cores": 8, "memory_gb": 32, "gpus": 1,
+    assert js._placement_of({"user_options": {"node": "tkspark", "cpu": "8", "memory": "32G", "gpus": "1", "gpu_memory": "whole"}}) == {
+        "node": "tkspark", "cpu_cores": 8, "memory_gb": 32, "gpus": 1, "gpu_memory_gb": None,
     }
-    # a server on every GPU of a sliced node: four slots, two GPUs
-    assert js._placement_of({"user_options": {"node": "tkamd2", "cpu": "8", "memory": "32G", "enable_gpu": "4", "gpus": "2"}})["gpus"] == 2
-    assert js._placement_of(None) == {"node": None, "cpu_cores": None, "memory_gb": None, "gpus": None}
+    assert js._placement_of({"user_options": {"node": "tkamd2", "cpu": "8", "memory": "32G", "gpus": "2", "gpu_memory": "8"}})["gpu_memory_gb"] == 8
+    assert js._placement_of(None) == {"node": None, "cpu_cores": None, "memory_gb": None, "gpus": None, "gpu_memory_gb": None}
 
 
 def test_server_state_from_the_hub_model():
@@ -253,7 +254,7 @@ def start(monkeypatch, fake_hub, node="tkamd1"):
 def test_a_start_answers_once_the_hub_has_it(monkeypatch):
     fake_hub = FakeHub()
     assert start(monkeypatch, fake_hub) == "tkamd1"
-    assert fake_hub.started == [("tkamd1", {"profile": "thinkube-notebooks", "reserve_memory": "no", "training_node": "no", "node": "tkamd1", "cpu": "4", "memory": "8G", "enable_gpu": "0"})]
+    assert fake_hub.started == [("tkamd1", {"profile": "thinkube-notebooks", "reserve_memory": "no", "training_node": "no", "node": "tkamd1", "cpu": "4", "memory": "8G", "gpus": "0", "gpu_memory": "whole", "priority": "1"})]
     assert "tkamd1" not in js._start_failures
 
 
@@ -266,5 +267,5 @@ def test_a_start_the_hub_gives_up_on_keeps_its_reason_until_the_next_start(monke
 
 def test_a_running_server_is_not_started_again(monkeypatch):
     with pytest.raises(HTTPException) as e:
-        start(monkeypatch, FakeHub(model={"ready": True, "user_options": {"enable_gpu": "0"}}))
+        start(monkeypatch, FakeHub(model={"ready": True, "user_options": {"gpus": "0"}}))
     assert e.value.status_code == 409
