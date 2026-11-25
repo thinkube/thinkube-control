@@ -52,10 +52,11 @@ def test_a_model_on_both_gpus_fits_a_node_of_two(tracker):
 
 
 def test_models_on_a_node_are_not_refused_by_a_count_of_slices(tracker):
-    # Four models of 6 GB on the node: the memory left decides, and the Scheduler whether the GPUs are free
+    # Three models of 3 GB on a node of two GPUs: more models than GPUs, and the memory left decides, the Scheduler
+    # whether the GPUs are free
     tracker._allocations["tkamd2"] = [GPUAllocation(
-        model_id=f"m{i}", backend_id=f"vllm-tkamd2/m{i}", node_name="tkamd2", estimated_memory_gb=6.0, slots=1,
-    ) for i in range(4)]
+        model_id=f"m{i}", backend_id=f"vllm-tkamd2/m{i}", node_name="tkamd2", estimated_memory_gb=3.0, slots=1,
+    ) for i in range(3)]
     assert asyncio.run(tracker.plan_sizing("tkamd2", 6.0, 1, weight_gb=4.0))["fits"] is True
     assert "free_slots" not in asyncio.run(tracker.plan_sizing("tkamd2", 6.0, 1, weight_gb=4.0))
 
