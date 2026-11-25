@@ -24,6 +24,15 @@ yet.
   in the namespace `scheduler-runs`, asks Kubernetes for its memory and CPU
   only, and is given its GPUs by their ids.
 
+- **Holds.** A service that starts its own pods, such as the LLM gateway,
+  asks for a hold: GPUs kept for it (`POST /api/v1/holds`, or
+  `/internal/scheduler/holds` inside the cluster, without a user). A hold
+  takes its turn as a job does; once it runs, `gpu_ids` are the GPUs its
+  owner starts the pod on. When a job of a higher priority needs them, the
+  owner is asked at the hold's `release_url` to give them up, frees them,
+  and releases the hold, which then waits again for its turn. A hold may
+  name the GPUs it must be given (`on_gpus`), for a pod that is on them
+  already.
 - **The turn.** On a node, the waiting jobs that ask for a GPU start in
   order: the higher priorities first, then the older ones, and a job behind
   one that waits waits behind it. A job that cannot start stops the

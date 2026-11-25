@@ -12,6 +12,10 @@ a small job does not take the GPU a larger one ahead of it is waiting for. A job
 scheduler's running jobs of a lower priority that hold what it needs (placement.make_room), and no others; a job
 stopped so waits again, and starts when its turn comes: where it stopped if it is resumable, from the beginning
 otherwise. A job that asks for no GPU waits for no turn: Kubernetes places it by its memory and CPU.
+
+A hold takes its turn as a job does, and has no pod here: given its GPUs, it holds them until its owner ends it.
+When a job of a higher priority needs them, its owner is asked to give them up (app.services.owners), and the hold
+waits again once the owner says they are free.
 """
 
 import asyncio
@@ -21,9 +25,10 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
-from app.models.jobs import COMPLETED, FAILED, OPEN, RUNNING, STOPPED, STOPPING, WAITING, Job, NodeLimit
+from app.models.jobs import COMPLETED, FAILED, HOLD, OPEN, RUNNING, STOPPED, STOPPING, WAITING, Job, NodeLimit
 from app.services import placement
 from app.services.nodes import NodesError
+from app.services.owners import OwnerError
 from app.services.pods import PodsError
 
 logger = logging.getLogger(__name__)
@@ -39,8 +44,8 @@ def _end(job: Job, status: str, now: datetime, error: str = None) -> None:
 
 
 class Worker:
-    def __init__(self, nodes, pods) -> None:
-        self.nodes, self.pods = nodes, pods
+    def __init__(self, nodes, pods, owners) -> None:
+        self.nodes, self.pods, self.owners = nodes, pods, owners
 
     async def tick(self, db: Session, now: datetime) -> None:
         jobs: List[Job] = db.query(Job).filter(Job.status.in_(OPEN)).all()
@@ -74,6 +79,16 @@ class Worker:
         db.commit()
 
     async def _follow(self, job: Job, now: datetime, names: Dict[str, str]) -> None:
+        if job.kind == HOLD:
+            # Its owner is asked at every tick until it says the GPUs are free (the hold's release)
+            if job.status == STOPPING:
+                needs = names.get(job.preempted_by, job.preempted_by)
+                try:
+                    await self.owners.ask_release(job.release_url, {"hold": job.id, "name": job.name, "for": needs})
+                    job.waiting = f"its owner {job.owner} was asked to give its GPUs up for job {needs}"
+                except OwnerError as e:
+                    job.waiting = f"its owner {job.owner} could not be asked to give its GPUs up, trying again: {e}"
+            return
         try:
             if job.status == STOPPING:
                 await self.pods.stop(job.pod_job)
@@ -119,11 +134,13 @@ class Worker:
                                                              for j in stopping)
             job.waiting = reason
             return
-        try:
-            name = await self.pods.start(job, job.starts + 1, gpu_ids)
-        except PodsError as e:
-            job.waiting = f"it could not be started, trying again: {e}"
-            return
+        name = None
+        if job.kind != HOLD:
+            try:
+                name = await self.pods.start(job, job.starts + 1, gpu_ids)
+            except PodsError as e:
+                job.waiting = f"it could not be started, trying again: {e}"
+                return
         job.status, job.gpu_ids, job.pod_job, job.starts = RUNNING, gpu_ids, name, job.starts + 1
         job.started_at, job.waiting, job.error, job.preempted_by = now, None, None, None
 

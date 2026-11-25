@@ -19,7 +19,7 @@ vi.mock('@/lib/axios', () => ({
 const mockedApi = vi.mocked(api);
 
 const base = {
-  owner: 'forge', node: 'tkamd2', command: ['python', 'train.py'], memory_gb: 60, cpu_cores: 8, priority: 3,
+  kind: 'job', owner: 'forge', node: 'tkamd2', command: ['python', 'train.py'], memory_gb: 60, cpu_cores: 8, priority: 3,
   starts: 1, waiting: null, error: null, created_at: '2026-11-25T10:00:00+00:00', started_at: null, finished_at: null,
 };
 const jobs = [
@@ -27,6 +27,8 @@ const jobs = [
     gpu_ids: ['GPU-a', 'GPU-b'] },
   { ...base, id: 'j2', name: 'embeddings', owner: 'mill', gpus: 1, gpu_memory_gb: 4, status: 'waiting', gpu_ids: null,
     waiting: 'waiting for a GPU of tkamd2 (4.0 GiB on a GPU): GPU 0 is job training of run 7\'s alone' },
+  { ...base, id: 'j4', kind: 'hold', name: 'google/gemma-4-31B-it', owner: 'llm-gateway', command: null, gpus: 1,
+    gpu_memory_gb: 21.6, status: 'running', gpu_ids: ['GPU-b'] },
   { ...base, id: 'j3', name: 'clean', owner: 'mill', gpus: 0, gpu_memory_gb: null, status: 'failed', gpu_ids: null,
     error: "the job's process exited with code 1" },
 ];
@@ -50,6 +52,9 @@ describe('JobsPage', () => {
     const waiting = within(screen.getByTestId('job-j2'));
     expect(waiting.getByText(/1 GPU, 4 GiB on each/)).toBeTruthy();
     expect(waiting.getByText(/waiting for a GPU of tkamd2/)).toBeTruthy();
+    const hold = within(screen.getByTestId('job-j4'));
+    expect(hold.getByText(/llm-gateway, which starts the pod itself/)).toBeTruthy();
+    expect(hold.getByText('1 GPU, 21.6 GiB on each')).toBeTruthy();
     const failed = within(screen.getByTestId('job-j3'));
     expect(failed.getByText(/no GPU/)).toBeTruthy();
     expect(failed.getByText("the job's process exited with code 1")).toBeTruthy();

@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.models.jobs import COMPLETED, FAILED, RUNNING, STOPPED, STOPPING, WAITING, Job
-from app.services import pods, worker
+from app.services import owners, pods, worker
 from app.services.nodes import NodesError
 
 GIB = 2**30
@@ -52,15 +52,26 @@ class FakePods:
         return name not in self.live
 
 
+class FakeOwners:
+    def __init__(self):
+        self.asked, self.refuse = [], None
+
+    async def ask_release(self, url, payload):
+        if self.refuse:
+            raise owners.OwnerError(self.refuse)
+        self.asked.append((url, payload["hold"], payload["for"]))
+
+
 @pytest.fixture
 def queue(test_db):
     class Queue:
-        nodes, pods = FakeNodes(), FakePods()
+        nodes, pods, owners = FakeNodes(), FakePods(), FakeOwners()
         count = 0
 
         def job(self, name, **fields):
             self.count += 1
-            base = dict(id=f"{self.count:08d}-{name}", name=name, owner="person", created_by="u", node="tkamd2",
+            base = dict(id=f"{self.count:08d}-{name}", kind="job", name=name, owner="person", created_by="u",
+                        node="tkamd2",
                         image="library/x:1", command=["true"], env={}, mounts=[], gpus=1, memory_gb=4, cpu_cores=1,
                         priority=3, resumable=False, stop_seconds=60, status=WAITING, starts=0,
                         created_at=NOW + timedelta(seconds=self.count))
@@ -70,7 +81,11 @@ def queue(test_db):
             return made
 
         def tick(self):
-            asyncio.run(worker.Worker(self.nodes, self.pods).tick(test_db, NOW + timedelta(minutes=1)))
+            asyncio.run(worker.Worker(self.nodes, self.pods, self.owners).tick(test_db, NOW + timedelta(minutes=1)))
+
+        def hold(self, name, **fields):
+            return self.job(name, **{"kind": "hold", "owner": "llm-gateway", "image": None, "command": None,
+                                     "priority": 4, "release_url": "http://gateway/release", **fields})
 
     return Queue()
 
@@ -223,3 +238,74 @@ def test_a_job_its_node_can_never_run_fails_and_one_without_a_gpu_needs_no_node(
     elsewhere = queue.job("elsewhere", node="tkamd9")
     queue.tick()
     assert elsewhere.status == WAITING and "tkamd9: it has no node-metrics pod running" in elsewhere.waiting
+
+
+def test_a_hold_is_given_its_gpus_and_no_pod(queue):
+    model = queue.hold("embeddings", gpu_memory_gb=2)
+    queue.tick()
+    assert (model.status, model.gpu_ids, model.pod_job, model.starts) == (RUNNING, ["GPU-0"], None, 1)
+    assert queue.pods.started == []
+    # It holds them tick after tick, and a job that fits beside it shares the card
+    small = queue.job("small", gpu_memory_gb=4)
+    queue.tick()
+    assert model.status == RUNNING and small.gpu_ids == ["GPU-0"]
+
+
+def test_a_holds_owner_is_asked_to_give_its_gpus_up_and_the_hold_waits_again(queue):
+    one, two = queue.hold("one"), queue.hold("two")
+    queue.tick()
+    training = queue.job("training", gpus=2, priority=3)
+    queue.tick()
+    assert (one.status, two.status, one.preempted_by) == (STOPPING, STOPPING, training.id)
+    assert training.waiting == "making room: stopping job one (priority 4), job two (priority 4)" or \
+        training.waiting == "making room: stopping job two (priority 4), job one (priority 4)"
+    queue.tick()
+    assert sorted(queue.owners.asked) == [("http://gateway/release", one.id, "training"),
+                                          ("http://gateway/release", two.id, "training")]
+    assert one.waiting == "its owner llm-gateway was asked to give its GPUs up for job training"
+    # The owner frees one, then the other (the API's release); the training starts when both are free
+    one.status, one.gpu_ids = WAITING, None
+    queue.tick()
+    assert training.status == WAITING and two.status == STOPPING
+    two.status, two.gpu_ids = WAITING, None
+    queue.tick()
+    assert (training.status, training.gpu_ids) == (RUNNING, ["GPU-0", "GPU-1"])
+    assert one.status == WAITING and "is job training's alone" in one.waiting
+    queue.pods.states[training.pod_job] = {"state": "completed"}
+    queue.tick()
+    # The holds are given GPUs again, and their owner reads that in their status
+    assert (one.status, two.status, one.preempted_by, one.starts) == (RUNNING, RUNNING, None, 2)
+
+
+def test_an_owner_that_cannot_be_asked_is_asked_again_and_a_hold_without_an_address_is_waited_for(queue):
+    asked = queue.hold("asked", gpus=2)
+    queue.tick()
+    queue.owners.refuse = "http://gateway/release did not answer"
+    high = queue.job("high", priority=1)
+    queue.tick()
+    queue.tick()
+    assert asked.status == STOPPING and asked.waiting == (
+        "its owner llm-gateway could not be asked to give its GPUs up, trying again: http://gateway/release did "
+        "not answer")
+    asked.status, asked.gpu_ids, asked.preempted_by = STOPPED, None, None
+    high.status = STOPPED
+    silent = queue.hold("silent", gpus=2, release_url=None)
+    queue.tick()
+    other = queue.job("other", priority=1)
+    queue.tick()
+    assert silent.status == RUNNING and other.status == WAITING
+    assert "GPU 0 is job silent's alone" in other.waiting
+
+
+def test_a_hold_on_the_gpu_its_pod_is_on_waits_for_that_gpu(queue):
+    queue.nodes.used = [0.0, 20.0]
+    pinned = queue.hold("one more model", gpu_memory_gb=6, on_gpus=["GPU-1"])
+    queue.tick()
+    assert pinned.status == WAITING and pinned.waiting == (
+        "waiting for a GPU of tkamd2 (6.0 GiB on a GPU): GPU 1 has 2.8 GiB free")
+    queue.nodes.used = [0.0, 10.0]
+    queue.tick()
+    assert (pinned.status, pinned.gpu_ids) == (RUNNING, ["GPU-1"])
+    wrong = queue.hold("wrong", on_gpus=["GPU-9"])
+    queue.tick()
+    assert wrong.status == FAILED and "it must be given the GPUs ['GPU-9']" in wrong.error

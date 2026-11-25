@@ -45,11 +45,13 @@ export type JobStatus = 'waiting' | 'running' | 'stopping' | 'completed' | 'fail
 /** A job: a command the scheduler runs in a pod on a node, on the GPUs it chooses. */
 export interface Job {
   id: string;
+  /** A job's pod is the scheduler's; a hold keeps GPUs for work whose pod its owner starts. */
+  kind: 'job' | 'hold';
   name: string;
   /** The service the job is of, such as forge or mill. */
   owner: string;
   node: string;
-  command: string[];
+  command: string[] | null;
   gpus: number;
   /** The memory it takes on each GPU; null when it has its GPUs alone. */
   gpu_memory_gb: number | null;

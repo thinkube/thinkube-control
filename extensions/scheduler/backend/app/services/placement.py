@@ -11,6 +11,9 @@ memory holds its memory and its GPU memory together.
 
 MARGIN of a GPU's memory is kept free, since a GPU does not keep one job's memory from another's.
 
+A hold may name the GPUs it must be given (on_gpus): its owner's pod is on them already, as when a pod that serves
+several models takes one more.
+
 A node may have a limit of the GPUs that hold work at once (node["gpus_at_work"]): a job is not given a GPU that
 holds none when the limit is reached.
 
@@ -24,7 +27,7 @@ import copy
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
-from app.models.jobs import HOLDING, Job
+from app.models.jobs import HOLD, HOLDING, Job
 from app.services.nodes import NONE, SEPARATE, SHARED
 
 GIB = 2**30
@@ -54,6 +57,12 @@ def _separate(job: Job, node: Dict[str, Any], held: List[Job]) -> Tuple[Optional
     if job.gpus > len(gpus):
         raise CannotRun(f"{node['name']} has {len(gpus)} GPUs, and the job asks for {job.gpus}")
     need = None if job.gpu_memory_gb is None else job.gpu_memory_gb * GIB
+    if job.on_gpus:
+        unknown = sorted(set(job.on_gpus) - {g["id"] for g in gpus})
+        if unknown or len(job.on_gpus) != job.gpus:
+            raise CannotRun(f"it must be given the GPUs {job.on_gpus}, {job.gpus} of them, and {node['name']} has "
+                            f"{[g['id'] for g in gpus]}")
+        gpus = [g for g in gpus if g["id"] in job.on_gpus]
     fitting, full = [], []
     for gpu in gpus:
         if need is not None and need > gpu["memory_total_bytes"] * (1 - MARGIN):
@@ -160,7 +169,9 @@ def make_room(job: Job, node: Dict[str, Any], jobs: List[Job], now: datetime) ->
     priorities and the latest started first. Empty when stopping them all would not make it fit."""
     if job.gpus == 0 or node.get("error") or node["kind"] == NONE:
         return []
-    lower = sorted((j for j in holders(jobs, node["name"]) if j.id != job.id and j.priority > job.priority),
+    # A hold whose owner cannot be asked to give it up is waited for
+    lower = sorted((j for j in holders(jobs, node["name"]) if j.id != job.id and j.priority > job.priority
+                    and (j.kind != HOLD or j.release_url)),
                    key=lambda j: (-j.priority, -(j.started_at.timestamp() if j.started_at else 0)))
 
     def fits(gone: List[Job]) -> bool:

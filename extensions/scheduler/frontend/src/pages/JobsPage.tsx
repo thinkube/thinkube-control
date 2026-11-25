@@ -58,7 +58,9 @@ export default function JobsPage() {
         <TkCardHeader className="flex flex-row items-center justify-between">
           <div>
             <TkCardTitle>Jobs</TkCardTitle>
-            <TkCardDescription>Every job given to the scheduler, the newest first.</TkCardDescription>
+            <TkCardDescription>
+              Every job given to the scheduler, and every hold of GPUs a service asked for, the newest first.
+            </TkCardDescription>
           </div>
           <TkButton intent="ghost" onClick={load} className="gap-2">
             <RefreshCw className="w-4 h-4" />
@@ -85,7 +87,10 @@ export default function JobsPage() {
                   <TkTableRow key={job.id} data-testid={`job-${job.id}`}>
                     <TkTableCell>
                       <div className="font-medium">{job.name}</div>
-                      <div className="text-xs text-muted-foreground">{job.owner}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {job.owner}
+                        {job.kind === 'hold' && ', which starts the pod itself'}
+                      </div>
                     </TkTableCell>
                     <TkTableCell>
                       <div>{job.status}</div>
@@ -99,7 +104,8 @@ export default function JobsPage() {
                       )}
                     </TkTableCell>
                     <TkTableCell className="text-sm">
-                      {gpuNeed(job)}; {job.memory_gb} GiB, {job.cpu_cores} cores
+                      {gpuNeed(job)}
+                      {job.kind === 'job' && `; ${job.memory_gb} GiB, ${job.cpu_cores} cores`}
                     </TkTableCell>
                     <TkTableCell>{job.priority}</TkTableCell>
                     <TkTableCell>

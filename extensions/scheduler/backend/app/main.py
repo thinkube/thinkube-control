@@ -18,12 +18,12 @@ async def lifespan(app: FastAPI):
     import asyncio
 
     from app.db.session import get_session_local
-    from app.services import nodes, pods, worker
+    from app.services import nodes, owners, pods, worker
 
     # The worker follows the jobs and starts the ones that can run
     loop = None
     if settings.SCHEDULER_WORKER:
-        loop = asyncio.create_task(worker.run_forever(get_session_local(), worker.Worker(nodes.nodes, pods.Pods())))
+        loop = asyncio.create_task(worker.run_forever(get_session_local(), worker.Worker(nodes.nodes, pods.Pods(), owners.Owners())))
     yield
     if loop is not None:
         loop.cancel()
@@ -49,6 +49,11 @@ if settings.BACKEND_CORS_ORIGINS:
 
 # Include the API router
 app.include_router(api_router, prefix=settings.API_V1_STR)
+
+# The routes for the other parts of the platform, outside /api (app/api/internal.py)
+from app.api import internal  # noqa: E402
+
+app.include_router(internal.router)
 
 # The MCP server, over the routes above
 from app import mcp_server  # noqa: E402

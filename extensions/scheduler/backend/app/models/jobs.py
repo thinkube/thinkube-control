@@ -1,7 +1,8 @@
 # Copyright Alejandro Martínez Corriá and the Thinkube contributors
 # SPDX-License-Identifier: MIT
 
-"""A job: a command the scheduler runs in a pod on a node, on the GPUs it chooses."""
+"""A job: a command the scheduler runs in a pod on a node, on the GPUs it chooses. And a hold: GPUs the scheduler
+keeps for work whose pod its owner starts, such as a model the LLM gateway serves."""
 
 from sqlalchemy import JSON, Boolean, Column, DateTime, Float, Integer, String, Text
 
@@ -14,20 +15,23 @@ COMPLETED, FAILED, STOPPED = "completed", "failed", "stopped"
 OPEN = (WAITING, RUNNING, STOPPING)
 # The states in which a job holds its GPUs
 HOLDING = (RUNNING, STOPPING)
+# The scheduler runs a job's pod; a hold's pod is its owner's
+JOB, HOLD = "job", "hold"
 
 
 class Job(Base):
     __tablename__ = "jobs"
 
     id = Column(String, primary_key=True)
+    kind = Column(String, nullable=False)
     name = Column(String, nullable=False)
     # The service the job is of ("forge", "mill"), or "person" for one a person gave
     owner = Column(String, nullable=False)
     created_by = Column(String, nullable=False)
     node = Column(String, nullable=False, index=True)
-    # What runs: the image (a path in the cluster's registry), the command, its variables and its folder
-    image = Column(String, nullable=False)
-    command = Column(JSON, nullable=False)
+    # What runs, of a job: the image (a path in the cluster's registry), the command, its variables and its folder
+    image = Column(String, nullable=True)
+    command = Column(JSON, nullable=True)
     env = Column(JSON, nullable=False)
     working_dir = Column(String, nullable=True)
     # The folders it mounts, by the names of app.services.pods.MOUNTS
@@ -37,6 +41,10 @@ class Job(Base):
     gpu_memory_gb = Column(Float, nullable=True)
     memory_gb = Column(Integer, nullable=False)
     cpu_cores = Column(Integer, nullable=False)
+    # Of a hold: the GPUs it must be given, when its pod is on them already; and the address its owner is asked at
+    # to give its GPUs up, when work of a higher priority needs them
+    on_gpus = Column(JSON, nullable=True)
+    release_url = Column(String, nullable=True)
     # 1 (highest) to 5
     priority = Column(Integer, nullable=False)
     # Whether it goes on where it stopped when it is started again (a training with checkpoints), or starts over
