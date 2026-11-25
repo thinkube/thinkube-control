@@ -120,6 +120,12 @@ Each step is seen before the next begins.
    four changes above, with the work it did not start read from the GPUs.
    Seen when: a job of a higher priority stops one of a lower priority on the
    card they share, and a job on the other card keeps running.
+   Seen, 25 November, on tkspark: a job of priority 2 that asked for the GPU
+   alone stopped a running job of priority 4; the stopped job waited again,
+   and ran a second time when the first had ended. A node's limit of GPUs at
+   work, and the order on a node, are in the tests.
+   Not seen yet: the same on tkamd2 with a job on the other card that keeps
+   running. It is checked with step 2's check, when the cards are free.
 4. **Forge's trainings run as jobs.** Preprocessing, the plan, the training
    and the registration: each a command in a job. Forge keeps no queue for
    them and starts no notebook job.
