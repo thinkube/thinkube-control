@@ -161,6 +161,16 @@ Each step is seen before the next begins.
    Mill's pods, and its CPU lane.
    Seen when: a transformation started in Mill runs on a node with no Forge
    run made for it.
+   Built so, 25 November: mill_run_on_node gives a task to the scheduler,
+   with the priority of Mill tasks; each start is a run of Mill of its own.
+   Forge lost the run kind "task", its task pods, its CPU lane and its
+   rights on Kubernetes jobs; its one open task run, paused by a person, was
+   ended, saying so, with its state folder kept.
+   Seen, 25 November, on tkspark: platform-checks/mill_node_env.py, given to
+   Mill with 1 GPU and 4 GiB of it, the meepsquared environment and a
+   mirrored model, ran as a job of the scheduler with no Forge run: it saw
+   the GB10 by its id and computed on it, read the model's folder, wrote its
+   state folder, and its run completed in Mill.
 6. **The gateway asks for a model's GPUs.** It starts the model's pod on the
    GPUs it was given. Training mode is no longer turned on by Forge.
    Seen when: a model loads on the card a training does not use, while the
