@@ -23,6 +23,14 @@ what is built and what is not yet.
   README is the reference of the task standard.
 - **The main pod** (the backend). It runs the tasks that need no GPU, as
   processes of `mill run`, as the user that owns the tasks repository.
+- **A task on a node** (`backend/app/services/scheduled.py`). A task that
+  must run on a chosen node, or with GPUs, is a job Mill gives the
+  Scheduler, which decides its turn among all the work on the node with the
+  priority of Mill tasks. Its pod runs `mill run` with the shared file
+  system mounted where the main pod has it. Each start of the job is a run
+  of its own (`mill-<job>-<start>`); a task stopped for work of a higher
+  priority starts again from the beginning, and one that goes on where it
+  stopped keeps its state in `MILL_STATE_DIR`.
 - **The control center** (the frontend, and the API in
   `backend/app/api/runs.py`). A run reports through NATS wherever it
   executes: the main pod, the IDE, or a pod on a GPU node. The backend reads
@@ -49,6 +57,11 @@ the Runs page says what is wrong.
 | `POST /api/v1/runs` | `mill_start_run` | start a run in the main pod |
 | `POST /api/v1/runs/{id}/stop` | `mill_stop_run` | stop a run, wherever it executes |
 | `PUT /api/v1/runs/{id}/tags` | `mill_tag_run` | attach tags to a run; `GET /api/v1/runs?tag=name=value` finds runs by tag |
+| `POST /api/v1/jobs` | `mill_run_on_node` | run a task on a chosen node, with or without GPUs, when the Scheduler gives it its turn |
+| `GET /api/v1/jobs` | `mill_list_jobs` | the tasks given to the Scheduler: their status there, what they wait for, the runs of their starts |
+| `GET /api/v1/jobs/{id}` | `mill_get_job` | one task given to the Scheduler |
+| `GET /api/v1/jobs/{id}/log` | `mill_get_job_log` | the last lines its pod wrote |
+| `POST /api/v1/jobs/{id}/stop` | `mill_stop_job` | stop a task given to the Scheduler |
 
 The tools are the MCP server at `/api/v1/mcp`.
 

@@ -180,7 +180,7 @@ def repository(tmp_path, monkeypatch, db_engine):
 
     asyncio.run(delete_stream())
     with db_engine.begin() as connection:
-        connection.execute(text("TRUNCATE mill_runs, mill_failures, mill_logs"))
+        connection.execute(text("TRUNCATE mill_runs, mill_failures, mill_logs, mill_jobs"))
 
 
 @pytest.fixture

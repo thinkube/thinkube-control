@@ -54,3 +54,22 @@ class MillLog(Base):
     run_id = Column(String, primary_key=True)
     seq = Column(Integer, primary_key=True)
     text = Column(Text, nullable=False)
+
+
+class MillJob(Base):
+    """A task run on a chosen node: a job Mill gave the Scheduler. Each start of the job is a run of its own,
+    whose id begins with the job's (app.services.scheduled.run_prefix)."""
+
+    __tablename__ = "mill_jobs"
+
+    id = Column(String, primary_key=True)
+    # The Scheduler's job
+    scheduler_id = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    node = Column(String, nullable=False)
+    # What was asked: the task (file, task, inputs, outputs, settings, limit, venv), its models' folders, its GPUs,
+    # GPU memory, memory, CPU cores and priority
+    request = Column(JSON, nullable=False)
+    tags = Column(JSON, nullable=True)
+    created_by = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, index=True)

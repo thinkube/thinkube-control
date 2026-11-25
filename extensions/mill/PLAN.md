@@ -36,11 +36,11 @@ Work done in a notebook has three problems:
   state, a progress bar for each stage, live samples (input and output side
   by side), running totals, failures, the log, and the commit it ran from.
   Runs are started and stopped there.
-- **GPU work goes through Forge.** Forge gets a new kind of run: a command
-  from the tasks repository at a commit, with an image, a node, GPUs,
-  memory and a priority. Forge schedules it with its existing queue,
-  priorities, training mode and slots. It makes no assumption about the
-  technology, so a new training method runs with no change to Forge.
+- **Work on a chosen node goes to the Scheduler.** A task that must run on
+  a node, with or without GPUs, is a job Mill gives the platform's
+  Scheduler, which decides its turn among all the work on the node. It
+  first went through Forge's queue (step 5 below); since 25 November Mill
+  gives it to the Scheduler itself, as the Scheduler's plan, step 5, says.
 - **A script that does not follow the standard still runs.** It shows its
   state and its log, with no progress bar.
 
@@ -224,6 +224,11 @@ Found while preparing it, and part of it:
   model would have turned training mode on and unloaded the model.
 
 Next: part 4.
+
+Changed on 25 November: Mill gives a task on a node to the Scheduler
+itself (`mill_run_on_node`, `backend/app/services/scheduled.py`); Forge no
+longer runs tasks, and part 4 is made so. The Scheduler's plan, step 5, says
+what was seen.
 
 Open point, to settle in step 5 or 6: a task reads the platform's datasets
 and models at paths that differ between the IDE, the main pod and a

@@ -21,6 +21,11 @@ TOOLS = [
     "mill_describe_tasks",
     "mill_start_run",
     "mill_stop_run",
+    "mill_run_on_node",
+    "mill_list_jobs",
+    "mill_get_job",
+    "mill_get_job_log",
+    "mill_stop_job",
 ]
 # Reading a file's tasks loads the file, which may import heavy libraries
 TIMEOUT = httpx.Timeout(120.0)
@@ -32,7 +37,8 @@ def mount(app: FastAPI) -> FastApiMCP:
         app,
         name="mill",
         description="Thinkube Mill: the runs of data transformation tasks, with their progress, samples, "
-                    "failures and logs, and starting and stopping a run",
+                    "failures and logs, starting and stopping a run, and running a task on a chosen node when the "
+                    "Scheduler gives it its turn",
         include_operations=TOOLS,
         http_client=httpx.AsyncClient(transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
                                       base_url="http://apiserver", timeout=TIMEOUT),

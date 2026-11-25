@@ -151,7 +151,7 @@ def start_run(request: StartRequest, current_user: User = Depends(get_current_us
 @router.put("/runs/{run_id}/tags", operation_id="mill_tag_run")
 def tag_run(run_id: str, request: TagsRequest, current_user: User = Depends(get_current_user),
             db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """Attach tags to a run, wherever it executed (the main pod, the IDE, or a pod Forge started on a
+    """Attach tags to a run, wherever it executed (the main pod, the IDE, or a pod the Scheduler started on a
     node): names and values that link it with what it is for, such as experiment, claim or setup. A tag
     given with an empty value is removed. Answers the run's tags. mill_list_runs finds runs by tag."""
     return _do(runs.tag_run, db, run_id, request.tags)

@@ -12,7 +12,7 @@ from app.db.session import Base
 
 # Import all models to ensure they're registered with Base
 from app.core.api_tokens import APIToken
-from app.models.runs import MillFailure, MillLog, MillRun
+from app.models.runs import MillFailure, MillJob, MillLog, MillRun
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
