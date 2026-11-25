@@ -263,10 +263,22 @@ Each step is seen before the next begins.
    does not start.
    To check first: that the driver and the runtime keep working without the
    plugin's count.
-   To change with it: Thinkube Control counts a node's GPUs from what
-   Kubernetes offers, divided by the slices (`cluster_resources`), for the
-   notebook servers' choices among others; it counts them from the GPUs the
-   node reports instead.
+   Done, 25 November. Before the plugin went off, everything that counted
+   GPUs through Kubernetes was moved to GPU feature discovery's label
+   `nvidia.com/gpu.count`: Control's node view and the notebook servers'
+   choices, the namespace quota of GPU apps, and the gateway, which also
+   stopped counting time slices. No pod asks Kubernetes for a GPU: a
+   component's base Deployment asks for none, the gateway makes a pod with
+   GPUs only on a hold's, and the trained heads' pod on tkspark was made
+   again on a hold. Then the GPU operator was deployed with the device plugin
+   off, and time slicing was cleared from the nodes.
+   Seen, 25 November: allocatable `nvidia.com/gpu` 0 on tkamd2 and tkspark,
+   `gpu.replicas` 1; the operator's CUDA test, on a GPU given by its id, and
+   its validator passed; the served models came back by themselves; a job of
+   the scheduler ran on a 3090 of tkamd2 by its id; the gateway and the
+   notebook servers count 2 GPUs on tkamd2 and 1 on tkspark.
+   Left: training mode, which nothing turns on now but a person; it is
+   removed next.
 
 ## Not in this plan
 
