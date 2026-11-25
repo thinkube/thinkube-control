@@ -140,6 +140,14 @@ Each step is seen before the next begins.
    GPUs it was given. Training mode is no longer turned on by Forge.
    Seen when: a model loads on the card a training does not use, while the
    training runs.
+   Open in this step: a server that takes a share of a GPU's memory whatever
+   the model needs (vLLM, SGLang, Flare) is held by the gateway's estimate of
+   the model, and counted for the rest by what the GPU reports once it has
+   loaded. A backend type could say that it takes a share, so that its hold
+   says the share from the start.
+   Open in this step: the gateway still refuses a load by its own count of
+   GPU slots, two models on a card of tkamd2. That count goes with time
+   slicing (step 9).
 7. **Notebook servers ask.**
    Seen when: a notebook server gets a GPU through the scheduler.
 8. **Apps that use a GPU ask.** Open: either their templates ask the

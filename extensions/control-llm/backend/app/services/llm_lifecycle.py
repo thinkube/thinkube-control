@@ -854,8 +854,8 @@ class LLMLifecycleManager:
             from app.services import gpu_holds
 
             try:
-                hold = await gpu_holds.ask(model_id, node, gpu_count, *self._hold_memory(
-                    node, gpu_count, estimated_memory, payload.get("gpu_memory_utilization")))
+                hold = await gpu_holds.ask(model_id, node, gpu_count,
+                                           *self._hold_memory(node, gpu_count, estimated_memory))
                 gpu_ids = await gpu_holds.granted(hold["id"])
             except gpu_holds.HoldError as e:
                 llm_model_registry.update_model_state(model_id, ModelState.deployable, error=str(e))
@@ -895,20 +895,16 @@ class LLMLifecycleManager:
             )
 
     @staticmethod
-    def _hold_memory(node: str, gpu_count: int, estimated_memory: float,
-                     utilization: Optional[float]) -> tuple:
+    def _hold_memory(node: str, gpu_count: int, estimated_memory: float) -> tuple:
         """(the memory a model's pod takes on each of its GPUs, the memory it takes beside it), in GiB, as its
-        hold says them to the Scheduler. On a node whose GPU takes its memory from the system's, the estimate is
-        the pod's whole footprint. On GPUs with memory of their own, a server given a share of each GPU's memory
-        (vLLM's gpu_memory_utilization) takes that share whatever the model needs; another takes the estimate,
-        spread over its GPUs."""
+        hold says them to the Scheduler: the gateway's estimate of the model's footprint, whole on a node whose
+        GPU takes its memory from the system's, spread over its GPUs on a node of GPUs with memory of their own.
+        A server that takes more of a GPU than the model needs (a share of its memory, as vLLM does) is counted
+        by the Scheduler for what the GPU reports once it has loaded."""
         from app.services.llm_gpu_tracker import llm_gpu_tracker
 
-        if llm_gpu_tracker.is_uma(node):
+        if llm_gpu_tracker.memory_type(node) == "uma":
             return round(estimated_memory, 2), 0
-        per_gpu = llm_gpu_tracker.get_node(node).per_gpu_vram_gb
-        if utilization is not None:
-            return round(utilization * per_gpu, 2), 0
         return round(estimated_memory / gpu_count, 2), 0
 
     async def give_up(self, hold_id: str, model_id: str, needed_for: str) -> str:

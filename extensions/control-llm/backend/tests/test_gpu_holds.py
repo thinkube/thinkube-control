@@ -35,8 +35,8 @@ def world(monkeypatch):
 
     released = []
     monkeypatch.setattr(trk, "llm_gpu_tracker", SimpleNamespace(
-        release_allocation=released.append, is_uma=lambda node: node == "tkspark",
-        get_node=lambda node: SimpleNamespace(per_gpu_vram_gb=24.0)))
+        release_allocation=released.append,
+        memory_type=lambda node: "uma" if node == "tkspark" else "discrete"))
     monkeypatch.setattr(reg, "llm_model_registry", registry)
     made, deleted, given_up = [], [], []
 
@@ -60,10 +60,8 @@ def world(monkeypatch):
                            released=released, state=state)
 
 
-def load(estimated=3.0, utilization=None, node="tkamd2", gpus=1):
+def load(estimated=3.0, node="tkamd2", gpus=1):
     payload = {"model_id": MODEL, "task": "feature-extraction"}
-    if utilization is not None:
-        payload["gpu_memory_utilization"] = utilization
     asyncio.run(LLMLifecycleManager()._load_performance_background(MODEL, "vllm", node, gpus, payload, estimated))
 
 
@@ -76,16 +74,14 @@ def test_a_models_pod_is_started_on_the_gpus_its_hold_was_given(world, holds):
     assert world.entry.state == ModelState.loading
 
 
-def test_the_hold_says_the_memory_the_pod_really_takes(world, holds):
-    # A server given a share of each GPU's memory takes that share, whatever the model needs
-    load(estimated=3.0, utilization=0.9, gpus=2)
+def test_the_hold_says_the_models_estimated_memory(world, holds):
     # On a node whose GPU takes its memory from the system's, the estimate is the whole footprint
     world.entry.backend_id = f"vllm-tkspark/{model_slug(MODEL)}"
     load(estimated=31.5, node="tkspark")
-    # Another server takes the estimate, spread over its GPUs
+    # On GPUs with memory of their own, it is spread over the pod's GPUs
     world.entry.backend_id = BACKEND
     load(estimated=30.0, gpus=2)
-    assert [(a["gpus"], a["gpu_memory_gb"]) for a in holds.asked] == [(2, 21.6), (1, 31.5), (2, 15.0)]
+    assert [(a["gpus"], a["gpu_memory_gb"]) for a in holds.asked] == [(1, 31.5), (2, 15.0)]
 
 
 def test_a_load_the_scheduler_gives_no_gpu_is_refused_with_its_reason(world, holds):

@@ -49,7 +49,7 @@ def world(monkeypatch):
     allocated = []
     monkeypatch.setattr(trk, "llm_gpu_tracker", SimpleNamespace(
         release_allocation=released.append, get_eviction_candidates=lambda: [],
-        is_uma=lambda node: False, get_node=lambda node: SimpleNamespace(per_gpu_vram_gb=24.0),
+        memory_type=lambda node: "discrete",
         record_allocation=lambda model_id, *a, **k: allocated.append(model_id)))
     monkeypatch.setattr(reg, "llm_model_registry", registry)
     monkeypatch.setattr(life, "llm_lifecycle", SimpleNamespace(planned_memory_gb=lambda model_id: 24.0))
