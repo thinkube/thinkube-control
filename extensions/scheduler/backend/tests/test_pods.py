@@ -39,12 +39,14 @@ def test_a_job_mounts_the_folders_it_names_and_shared_memory():
     spec = pods.manifest(job(), 1, ["GPU-a"])["spec"]["template"]["spec"]
     mounts = {m["name"]: (m["mountPath"], m.get("readOnly")) for m in spec["containers"][0]["volumeMounts"]}
     assert mounts == {"shm": ("/dev/shm", None), "models": ("/home/thinkube/thinkube/models", False),
-                      "mlflow": ("/home/thinkube/thinkube/mlflow", True),
+                      "mlflow": ("/home/thinkube/thinkube/mlflow", False),
                       "venvs": ("/var/lib/jupyterhub-venvs", True)}
     volumes = {v["name"]: v for v in spec["volumes"]}
     assert volumes["shm"]["emptyDir"] == {"medium": "Memory"}
     assert volumes["models"]["persistentVolumeClaim"] == {"claimName": "models", "readOnly": False}
-    assert volumes["mlflow"]["persistentVolumeClaim"] == {"claimName": "mlflow-root", "readOnly": True}
+    assert volumes["mlflow"]["persistentVolumeClaim"] == {"claimName": "mlflow-root", "readOnly": False}
+    # A process that fails says why in its last lines
+    assert spec["containers"][0]["terminationMessagePolicy"] == "FallbackToLogsOnError"
     assert volumes["venvs"]["hostPath"] == {"path": "/var/lib/jupyterhub-venvs", "type": "Directory"}
 
 

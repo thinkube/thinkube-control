@@ -33,7 +33,7 @@ class NewJob(BaseModel):
     mounts: List[str] = Field(default_factory=list, description=f"the folders it mounts, of {sorted(pods.MOUNTS)}: "
                               "'shared' the shared file system at /storage/thinkube-shared, 'models' the "
                               "notebooks' models folder at /home/thinkube/thinkube/models, 'mlflow' MLflow's "
-                              "files at /home/thinkube/thinkube/mlflow (read-only), 'venvs' the node's Python "
+                              "files at /home/thinkube/thinkube/mlflow, 'venvs' the node's Python "
                               "environments at /var/lib/jupyterhub-venvs (read-only)")
     gpus: int = Field(0, ge=0, le=16, description="how many GPUs of the node it needs")
     gpu_memory_gb: Optional[float] = Field(None, gt=0, description="the memory it takes on each GPU, with which "
@@ -71,6 +71,27 @@ class NewHold(BaseModel):
                                    "hold's id. Given, the scheduler ends the hold when it has its GPUs and no "
                                    "such pod has been there for 10 minutes, so a pod that is gone leaves no hold. "
                                    "Not given, the hold lasts until its owner ends it")
+
+
+def check_job(request: NewJob) -> None:
+    """422 when the job names a folder no job mounts, or GPU memory without a GPU."""
+    unknown = sorted(set(request.mounts) - set(pods.MOUNTS))
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"{unknown} are not folders a job mounts; they are "
+                                                    f"{sorted(pods.MOUNTS)}")
+    if request.gpu_memory_gb is not None and not request.gpus:
+        raise HTTPException(status_code=422, detail="gpu_memory_gb is the memory taken on each GPU, and the job "
+                                                    "asks for no GPU")
+
+
+async def job_log(job: Job, lines: int) -> Dict[str, Optional[str]]:
+    """The last lines the job's latest start wrote; None when its pod is gone."""
+    if job.pod_job is None:
+        return {"log": None}
+    try:
+        return {"log": await pods.Pods().log(job.pod_job, lines)}
+    except pods.PodsError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 def create(db: Session, request: BaseModel, kind: str, created_by: str) -> Job:
@@ -157,13 +178,7 @@ def _job(db: Session, job_id: str) -> Job:
 async def create_job(request: NewJob, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Give the scheduler a job. It waits for its turn on its node and runs when the node has the GPUs it asks
     for; its status says where it is, and `waiting` what it waits for."""
-    unknown = sorted(set(request.mounts) - set(pods.MOUNTS))
-    if unknown:
-        raise HTTPException(status_code=422, detail=f"{unknown} are not folders a job mounts; they are "
-                                                    f"{sorted(pods.MOUNTS)}")
-    if request.gpu_memory_gb is not None and not request.gpus:
-        raise HTTPException(status_code=422, detail="gpu_memory_gb is the memory taken on each GPU, and the job "
-                                                    "asks for no GPU")
+    check_job(request)
     return create(db, request, JOB, user.preferred_username).to_dict()
 
 
@@ -221,10 +236,4 @@ async def resize_hold(job_id: str, request: Memory, user: User = Depends(get_cur
 async def get_job_log(job_id: str, lines: int = Query(200, ge=1, le=5000), user: User = Depends(get_current_user),
                       db: Session = Depends(get_db)):
     """The last lines the job's latest start wrote; null when its pod is gone (a day after it ended)."""
-    job = _job(db, job_id)
-    if job.pod_job is None:
-        return {"log": None}
-    try:
-        return {"log": await pods.Pods().log(job.pod_job, lines)}
-    except pods.PodsError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    return await job_log(_job(db, job_id), lines)

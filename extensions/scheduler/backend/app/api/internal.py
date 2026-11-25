@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.api import jobs
 from app.db.session import get_db
-from app.models.jobs import HOLD, OPEN, Job, NodeLimit
+from app.models.jobs import HOLD, JOB, OPEN, Job, NodeLimit
 from app.services import nodes
 
 router = APIRouter(prefix="/internal/scheduler", include_in_schema=False)
@@ -30,6 +30,18 @@ async def list_nodes(db: Session = Depends(get_db)):
 @router.post("/holds")
 async def create_hold(request: jobs.NewHold, db: Session = Depends(get_db)):
     return jobs.create(db, request, HOLD, request.owner).to_dict()
+
+
+@router.post("/jobs")
+async def create_job(request: jobs.NewJob, db: Session = Depends(get_db)):
+    """A job of a part of the platform, such as a Forge run's training, made in the background."""
+    jobs.check_job(request)
+    return jobs.create(db, request, JOB, request.owner).to_dict()
+
+
+@router.get("/jobs/{job_id}/log")
+async def job_log(job_id: str, lines: int = 200, db: Session = Depends(get_db)):
+    return await jobs.job_log(jobs._job(db, job_id), lines)
 
 
 @router.get("/jobs")

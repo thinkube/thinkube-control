@@ -30,7 +30,8 @@ TRAINING_TOLERATION = {"key": "thinkube.io/training", "operator": "Equal", "valu
 MOUNTS: Dict[str, Dict[str, Any]] = {
     "shared": {"claim": "thinkube-shared", "path": "/storage/thinkube-shared", "read_only": False},
     "models": {"claim": "models", "path": "/home/thinkube/thinkube/models", "read_only": False},
-    "mlflow": {"claim": "mlflow-root", "path": "/home/thinkube/thinkube/mlflow", "read_only": True},
+    # Written by a job that registers a model: the platform's registry stages it there
+    "mlflow": {"claim": "mlflow-root", "path": "/home/thinkube/thinkube/mlflow", "read_only": False},
     # The Python environments built on each node
     "venvs": {"host_path": "/var/lib/jupyterhub-venvs", "path": "/var/lib/jupyterhub-venvs", "read_only": True},
 }
@@ -75,6 +76,8 @@ def manifest(job: Job, start: int, gpu_ids: List[str]) -> Dict[str, Any]:
         # Requests equal limits: the node keeps what the job was given
         "resources": {"requests": dict(limits), "limits": limits},
         "volumeMounts": mounts,
+        # A process that fails says why in its last lines: they are the job's error
+        "terminationMessagePolicy": "FallbackToLogsOnError",
     }
     if job.working_dir:
         container["workingDir"] = job.working_dir

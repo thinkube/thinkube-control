@@ -120,3 +120,19 @@ def test_a_holds_memory_is_changed_and_a_growth_its_gpu_does_not_hold_is_refused
     assert signed_in.post(f"/api/v1/jobs/{pod['id']}/memory", json={"gpu_memory_gb": 3}).json()["gpu_memory_gb"] == 3
     alone = signed_in.post("/api/v1/holds", json=HOLD).json()
     assert signed_in.post(f"/api/v1/jobs/{alone['id']}/memory", json={"gpu_memory_gb": 3}).status_code == 409
+
+
+def test_a_part_of_the_platform_gives_a_job_without_a_user(client):
+    made = client.post("/internal/scheduler/jobs", json={
+        "name": "forge run x: train", "owner": "forge", "node": "tkamd2", "image": "library/tk-jupyter-base:latest",
+        "command": ["python", "-c", "print(1)"], "mounts": ["models", "mlflow", "venvs"], "gpus": 2,
+        "memory_gb": 60, "cpu_cores": 8, "priority": 3, "resumable": True, "stop_seconds": 300})
+    assert made.status_code == 200, made.text
+    job = made.json()
+    assert (job["kind"], job["owner"], job["created_by"], job["status"], job["resumable"]) == (
+        "job", "forge", "forge", "waiting", True)
+    assert client.get(f"/internal/scheduler/jobs/{job['id']}/log").json() == {"log": None}
+    refused = client.post("/internal/scheduler/jobs", json={
+        "name": "x", "owner": "forge", "node": "tkamd2", "image": "i", "command": ["true"], "mounts": ["home"],
+        "memory_gb": 1, "cpu_cores": 1})
+    assert refused.status_code == 422 and "not folders a job mounts" in refused.text
