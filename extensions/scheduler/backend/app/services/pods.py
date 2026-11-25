@@ -11,10 +11,10 @@ the process gets SIGTERM and the job's stop_seconds to end.
 """
 
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from app.core.config import settings
-from app.models.jobs import Job
+from app.models.jobs import HOLD_LABEL, Job
 
 # The label that names the scheduler's job a Kubernetes job belongs to
 JOB_LABEL = "scheduler.thinkube.io/job"
@@ -168,6 +168,13 @@ class Pods:
     async def pod_gone(self, name: str) -> bool:
         """Whether a stopped job's pod has ended and gone, so that its GPUs are free."""
         return await self._pod(name) is None
+
+    async def holds_with_pod(self, namespace: str) -> Set[str]:
+        """The ids of the holds that have a pod in the namespace: the pods that carry HOLD_LABEL and have not
+        ended."""
+        pods = await self._call(f"list the pods of the holds in {namespace}", self._core.list_namespaced_pod,
+                                namespace, label_selector=HOLD_LABEL)
+        return {p.metadata.labels[HOLD_LABEL] for p in pods.items if p.status.phase not in ("Succeeded", "Failed")}
 
     async def log(self, name: str, lines: int) -> Optional[str]:
         """The last lines the job's pod wrote; None when the pod is gone."""

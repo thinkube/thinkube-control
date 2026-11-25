@@ -15,13 +15,15 @@ otherwise. A job that asks for no GPU waits for no turn: Kubernetes places it by
 
 A hold takes its turn as a job does, and has no pod here: given its GPUs, it holds them until its owner ends it.
 When a job of a higher priority needs them, its owner is asked to give them up (app.services.owners), and the hold
-waits again once the owner says they are free.
+waits again once the owner says they are free. A hold that says where its pod is (pods_in) is ended here when it
+has its GPUs and its pod has not been there for POD_SECONDS: its owner stopped the pod, or never started it, and
+did not end the hold.
 """
 
 import asyncio
 import logging
-from datetime import datetime, timezone
-from typing import Any, Dict, List
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Set
 
 from sqlalchemy.orm import Session
 
@@ -33,6 +35,8 @@ from app.services.pods import PodsError
 
 logger = logging.getLogger(__name__)
 TICK_SECONDS = 5
+# How long a hold keeps its GPUs without its pod: the time its owner has to start the pod once the hold has GPUs
+POD_SECONDS = 600
 
 
 def utcnow() -> datetime:
@@ -50,9 +54,10 @@ class Worker:
     async def tick(self, db: Session, now: datetime) -> None:
         jobs: List[Job] = db.query(Job).filter(Job.status.in_(OPEN)).all()
         names = {j.id: j.name for j in jobs}
+        with_pod = await self._holds_with_pod(jobs)
         for job in jobs:
             if job.status in (RUNNING, STOPPING):
-                await self._follow(job, now, names)
+                await self._follow(job, now, names, with_pod)
         waiting = sorted((j for j in jobs if j.status == WAITING), key=lambda j: (j.priority, j.created_at))
         nodes: Dict[str, Dict[str, Any]] = {}
         unread = None
@@ -78,8 +83,30 @@ class Worker:
                 ahead[job.node] = job
         db.commit()
 
-    async def _follow(self, job: Job, now: datetime, names: Dict[str, str]) -> None:
+    async def _holds_with_pod(self, jobs: List[Job]) -> Dict[str, Optional[Set[str]]]:
+        """For each namespace the running holds name: the ids of the holds that have a pod there, or None when
+        its pods could not be read."""
+        found: Dict[str, Optional[Set[str]]] = {}
+        for namespace in {j.pods_in for j in jobs if j.kind == HOLD and j.status == RUNNING and j.pods_in}:
+            try:
+                found[namespace] = await self.pods.holds_with_pod(namespace)
+            except PodsError as e:
+                logger.warning("the pods of the holds in %s could not be read: %s", namespace, e)
+                found[namespace] = None
+        return found
+
+    async def _follow(self, job: Job, now: datetime, names: Dict[str, str],
+                      with_pod: Dict[str, Optional[Set[str]]]) -> None:
         if job.kind == HOLD:
+            # A hold that has its GPUs and no pod for POD_SECONDS is ended; pods that could not be read say
+            # nothing about it
+            if job.status == RUNNING and job.pods_in and with_pod.get(job.pods_in) is not None:
+                if job.id in with_pod[job.pods_in]:
+                    job.pod_seen_at = now
+                elif now - (job.pod_seen_at or job.started_at) > timedelta(seconds=POD_SECONDS):
+                    _end(job, STOPPED, now, f"ended by the scheduler: no pod in {job.pods_in} has carried its label "
+                                            f"for {POD_SECONDS // 60} minutes, and its owner {job.owner} did not "
+                                            "end it")
             # Its owner is asked at every tick until it says the GPUs are free (the hold's release)
             if job.status == STOPPING:
                 needs = names.get(job.preempted_by, job.preempted_by)
@@ -143,6 +170,7 @@ class Worker:
                 return
         job.status, job.gpu_ids, job.pod_job, job.starts = RUNNING, gpu_ids, name, job.starts + 1
         job.started_at, job.waiting, job.error, job.preempted_by = now, None, None, None
+        job.pod_seen_at = None
 
 
 state: Dict[str, Any] = {"last_tick": None, "error": None}

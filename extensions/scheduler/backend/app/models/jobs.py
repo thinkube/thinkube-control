@@ -17,6 +17,8 @@ OPEN = (WAITING, RUNNING, STOPPING)
 HOLDING = (RUNNING, STOPPING)
 # The scheduler runs a job's pod; a hold's pod is its owner's
 JOB, HOLD = "job", "hold"
+# The label of a hold's pod, whose value is the hold's id
+HOLD_LABEL = "scheduler.thinkube.io/hold"
 
 
 class Job(Base):
@@ -45,6 +47,10 @@ class Job(Base):
     # to give its GPUs up, when work of a higher priority needs them
     on_gpus = Column(JSON, nullable=True)
     release_url = Column(String, nullable=True)
+    # Of a hold: the namespace of its owner's pod, which carries the hold's id in the label HOLD_LABEL; and when
+    # that pod was last there. A hold that names no namespace is ended by its owner alone
+    pods_in = Column(String, nullable=True)
+    pod_seen_at = Column(DateTime(timezone=True), nullable=True)
     # 1 (highest) to 5
     priority = Column(Integer, nullable=False)
     # Whether it goes on where it stopped when it is started again (a training with checkpoints), or starts over

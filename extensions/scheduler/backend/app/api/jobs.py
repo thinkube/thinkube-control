@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.core.security import User, get_current_user
 from app.db.session import get_db
-from app.models.jobs import HOLD, JOB, OPEN, RUNNING, STOPPED, STOPPING, WAITING, Job
+from app.models.jobs import HOLD, HOLD_LABEL, JOB, OPEN, RUNNING, STOPPED, STOPPING, WAITING, Job
 from app.services import nodes, placement, pods, worker
 
 router = APIRouter()
@@ -66,6 +66,11 @@ class NewHold(BaseModel):
                                        "the GPUs up when work of a higher priority needs them: a POST with "
                                        "{hold, name, for}. The owner frees them and then releases the hold. Not "
                                        "given, the hold is never asked, and higher work waits for it")
+    pods_in: Optional[str] = Field(None, pattern=r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$", description="the "
+                                   f"namespace of the owner's pod, which carries the label {HOLD_LABEL} with the "
+                                   "hold's id. Given, the scheduler ends the hold when it has its GPUs and no "
+                                   "such pod has been there for 10 minutes, so a pod that is gone leaves no hold. "
+                                   "Not given, the hold lasts until its owner ends it")
 
 
 def create(db: Session, request: BaseModel, kind: str, created_by: str) -> Job:
@@ -166,7 +171,8 @@ async def create_job(request: NewJob, user: User = Depends(get_current_user), db
 async def create_hold(request: NewHold, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Ask the scheduler for GPUs for work whose pod the caller starts. The hold waits for its turn as a job
     does; once its status is running, gpu_ids are the GPUs to start the pod on (NVIDIA_VISIBLE_DEVICES, with the
-    runtime class nvidia-legacy, and no nvidia.com/gpu asked of Kubernetes). Stop it when the pod is gone."""
+    runtime class nvidia-legacy, and no nvidia.com/gpu asked of Kubernetes). Stop it when the pod is gone; with
+    pods_in and the hold's label on the pod, the scheduler also ends it when the pod is gone."""
     return create(db, request, HOLD, user.preferred_username).to_dict()
 
 

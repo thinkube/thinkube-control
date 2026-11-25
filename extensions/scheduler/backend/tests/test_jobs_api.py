@@ -66,6 +66,11 @@ def test_a_service_asks_for_a_hold_without_a_user_and_ends_it(client, test_db):
     listed = client.get("/internal/scheduler/jobs", params={"owner": "llm-gateway"}).json()["jobs"]
     assert [j["id"] for j in listed] == [other["id"]]
     assert client.post("/internal/scheduler/holds", json={**HOLD, "release_url": "ftp://x"}).status_code == 422
+    # A hold may say the namespace of its pod
+    server = client.post("/internal/scheduler/holds", json={**HOLD, "owner": "jupyterhub", "release_url": None,
+                                                            "pods_in": "jupyterhub"}).json()
+    assert (server["pods_in"], server["pod_seen_at"]) == ("jupyterhub", None)
+    assert client.post("/internal/scheduler/holds", json={**HOLD, "pods_in": "Not A Namespace"}).status_code == 422
 
 
 def test_a_hold_is_released_only_when_it_was_asked_to_give_its_gpus_up(signed_in, test_db):

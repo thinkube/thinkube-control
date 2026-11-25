@@ -32,6 +32,8 @@ class FakeNodes:
 class FakePods:
     def __init__(self):
         self.started, self.stopped, self.states, self.live, self.refuse = [], [], {}, set(), None
+        # The ids of the holds that have a pod, by namespace; a namespace that is missing cannot be read
+        self.held = {}
 
     async def start(self, job, start, gpu_ids):
         if self.refuse:
@@ -50,6 +52,11 @@ class FakePods:
 
     async def pod_gone(self, name):
         return name not in self.live
+
+    async def holds_with_pod(self, namespace):
+        if namespace not in self.held:
+            raise pods.PodsError(f"Kubernetes refused to list the pods of the holds in {namespace}: 500")
+        return self.held[namespace]
 
 
 class FakeOwners:
@@ -80,8 +87,9 @@ def queue(test_db):
             test_db.flush()
             return made
 
-        def tick(self):
-            asyncio.run(worker.Worker(self.nodes, self.pods, self.owners).tick(test_db, NOW + timedelta(minutes=1)))
+        def tick(self, minutes=1):
+            asyncio.run(worker.Worker(self.nodes, self.pods, self.owners).tick(test_db,
+                                                                                NOW + timedelta(minutes=minutes)))
 
         def hold(self, name, **fields):
             return self.job(name, **{"kind": "hold", "owner": "llm-gateway", "image": None, "command": None,
@@ -309,3 +317,39 @@ def test_a_hold_on_the_gpu_its_pod_is_on_waits_for_that_gpu(queue):
     wrong = queue.hold("wrong", on_gpus=["GPU-9"])
     queue.tick()
     assert wrong.status == FAILED and "it must be given the GPUs ['GPU-9']" in wrong.error
+
+
+def test_a_hold_that_says_where_its_pod_is_ends_when_the_pod_is_gone(queue):
+    server = queue.hold("jupyter-thinkube--tkamd2", owner="jupyterhub", priority=1, release_url=None,
+                        pods_in="jupyterhub")
+    queue.pods.held["jupyterhub"] = set()
+    queue.tick()
+    assert (server.status, server.pod_seen_at) == (RUNNING, None)
+    # Its owner has POD_SECONDS to start the pod
+    queue.tick(minutes=9)
+    assert server.status == RUNNING
+    queue.pods.held["jupyterhub"] = {server.id}
+    queue.tick(minutes=10)
+    assert server.status == RUNNING and server.pod_seen_at is not None
+    # The pod is gone: the hold lasts POD_SECONDS from when it was last there
+    queue.pods.held["jupyterhub"] = set()
+    queue.tick(minutes=19)
+    assert server.status == RUNNING
+    # Pods that cannot be read say nothing about the hold
+    del queue.pods.held["jupyterhub"]
+    queue.tick(minutes=30)
+    assert server.status == RUNNING
+    queue.pods.held["jupyterhub"] = set()
+    queue.tick(minutes=31)
+    assert (server.status, server.gpu_ids) == (STOPPED, None)
+    assert server.error == ("ended by the scheduler: no pod in jupyterhub has carried its label for 10 minutes, and "
+                            "its owner jupyterhub did not end it")
+
+
+def test_a_hold_that_never_had_its_pod_ends_and_one_that_names_no_namespace_is_its_owners(queue):
+    never = queue.hold("never started", owner="jupyterhub", pods_in="jupyterhub")
+    plain = queue.hold("a model")
+    queue.pods.held["jupyterhub"] = set()
+    queue.tick()
+    queue.tick(minutes=12)
+    assert (never.status, plain.status) == (STOPPED, RUNNING)

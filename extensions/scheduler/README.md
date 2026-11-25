@@ -35,7 +35,11 @@ yet.
   already. Its owner changes the memory it takes
   (`POST /api/v1/jobs/<id>/memory`) as the work on its pod grows or shrinks;
   a hold that has its GPUs grows only while they hold it beside the other
-  work on them.
+  work on them. A hold may say the namespace of its pod (`pods_in`), and
+  the pod then carries the label `scheduler.thinkube.io/hold` with the
+  hold's id: the scheduler ends such a hold when it has its GPUs and no pod
+  with its label has been there for 10 minutes, so a pod that is gone
+  leaves no hold behind.
 - **The turn.** On a node, the waiting jobs that ask for a GPU start in
   order: the higher priorities first, then the older ones, and a job behind
   one that waits waits behind it. A job that cannot start stops the
