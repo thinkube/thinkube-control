@@ -7,12 +7,13 @@ import { useEffect, type ReactNode } from 'react';
 import { Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { TkAppLayout, type TkNavItem } from 'thinkube-style';
-import { ListChecks, Server, Settings, Key } from 'lucide-react';
+import { Gauge, ListChecks, Server, Settings, Key } from 'lucide-react';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { LanguageMenu } from '@/components/LanguageMenu';
 import { UserMenu } from '@/components/UserMenu';
 import NodesPage from '@/pages/NodesPage';
 import JobsPage from '@/pages/JobsPage';
+import PrioritiesPage from '@/pages/PrioritiesPage';
 import ApiTokensPage from '@/pages/ApiTokensPage';
 import NotFoundPage from '@/pages/NotFoundPage';
 import { publicValue } from '@/lib/publicConfig';
@@ -21,6 +22,7 @@ import { publicValue } from '@/lib/publicConfig';
 const NAV_ROUTES: Record<string, string> = {
   nodes: '/',
   jobs: '/jobs',
+  priorities: '/priorities',
   'api-tokens': '/tokens',
 };
 
@@ -38,6 +40,7 @@ export default function App() {
       children: [
         { id: 'nodes', label: t('nav.home'), lucideIcon: Server, href: '/' },
         { id: 'jobs', label: t('nav.jobs'), lucideIcon: ListChecks, href: '/jobs' },
+        { id: 'priorities', label: t('nav.priorities'), lucideIcon: Gauge, href: '/priorities' },
       ],
     },
     {
@@ -55,9 +58,17 @@ export default function App() {
     ? 'api-tokens'
     : location.pathname.startsWith('/jobs')
       ? 'jobs'
-      : 'nodes';
+      : location.pathname.startsWith('/priorities')
+        ? 'priorities'
+        : 'nodes';
   const pageTitle =
-    activeItem === 'api-tokens' ? t('apiTokens.title') : activeItem === 'jobs' ? t('nav.jobs') : t('nav.home');
+    activeItem === 'api-tokens'
+      ? t('apiTokens.title')
+      : activeItem === 'jobs'
+        ? t('nav.jobs')
+        : activeItem === 'priorities'
+          ? t('nav.priorities')
+          : t('nav.home');
 
   // The deployment names the application; the translated default is what a
   // developer sees running it locally.
@@ -98,6 +109,7 @@ export function AppRoutes({ children }: { children?: ReactNode }) {
     <Routes>
       <Route path="/" element={<NodesPage />} />
       <Route path="/jobs" element={<JobsPage />} />
+      <Route path="/priorities" element={<PrioritiesPage />} />
       {children}
       <Route path="*" element={<NotFoundPage />} />
     </Routes>

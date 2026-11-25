@@ -88,3 +88,22 @@ export function failureText(err: unknown): string {
 export function gib(bytes: number): string {
   return `${(bytes / 2 ** 30).toFixed(1)} GiB`;
 }
+
+/** A kind of work on the nodes and the priority a person gave it. */
+export interface KindPriority {
+  kind: string;
+  label: string;
+  priority: number;
+  default: number;
+  /** How its work gives its GPUs up for work of a higher priority. */
+  gives_up: string;
+}
+
+/** 1 is the highest priority, 5 the lowest. */
+export const PRIORITY_TEXT: Record<number, string> = {
+  1: '1 (highest)',
+  2: '2',
+  3: '3',
+  4: '4',
+  5: '5 (lowest)',
+};

@@ -9,7 +9,8 @@
     "apiTokens": "Tokens API",
     "account": "Cuenta",
     "logout": "Cerrar sesion",
-    "jobs": "Trabajos"
+    "jobs": "Trabajos",
+    "priorities": "Prioridades"
   },
   "apiTokens": {
     "title": "Tokens API",

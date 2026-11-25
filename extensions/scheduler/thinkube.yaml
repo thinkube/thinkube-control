@@ -28,6 +28,9 @@ spec:
       - label: Jobs
         path: /jobs
         icon: list-checks
+      - label: Priorities
+        path: /priorities
+        icon: gauge
 
   containers:
     - name: backend

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.api import jobs
 from app.db.session import get_db
 from app.models.jobs import HOLD, JOB, OPEN, Job, NodeLimit
-from app.services import nodes
+from app.services import nodes, priorities
 
 router = APIRouter(prefix="/internal/scheduler", include_in_schema=False)
 
@@ -25,6 +25,12 @@ async def list_nodes(db: Session = Depends(get_db)):
         raise HTTPException(status_code=502, detail=str(e))
     limits = {limit.node: limit.gpus_at_work for limit in db.query(NodeLimit).all()}
     return {"nodes": [{**node, "gpus_at_work": limits.get(node["name"])} for node in found]}
+
+
+@router.get("/priorities")
+async def get_priorities(db: Session = Depends(get_db)):
+    """{kind: priority}: the priority each part of the platform gives its work."""
+    return priorities.table(db)
 
 
 @router.post("/holds")

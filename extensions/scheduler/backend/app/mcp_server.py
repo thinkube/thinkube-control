@@ -23,6 +23,8 @@ TOOLS = [
     "scheduler_get_job",
     "scheduler_stop_job",
     "scheduler_get_job_log",
+    "scheduler_get_priorities",
+    "scheduler_set_priorities",
 ]
 TIMEOUT = httpx.Timeout(60.0)
 PATH = f"{settings.API_V1_STR}/mcp"

@@ -13,6 +13,7 @@ from app.db.session import Base
 # Import all models to ensure they're registered with Base
 from app.core.api_tokens import APIToken
 from app.models.jobs import Job, NodeLimit  # noqa: F401
+from app.models.priorities import Priority  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

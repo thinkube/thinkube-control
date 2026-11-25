@@ -9,7 +9,8 @@
     "apiTokens": "Tokens API",
     "account": "Compte",
     "logout": "Tancar sessio",
-    "jobs": "Feines"
+    "jobs": "Feines",
+    "priorities": "Prioritats"
   },
   "apiTokens": {
     "title": "Tokens API",
