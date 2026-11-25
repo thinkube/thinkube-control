@@ -134,7 +134,7 @@ class Worker:
     async def _follow(self, db: Session) -> None:
         for run in db.query(Run).filter(Run.status == "preprocessing").all():
             if (run.preprocess or {}).get("job_id") is None:
-                await self._start_preprocess(db, run)
+                await self._start_preprocess(db, run, tuple((run.preprocess or {}).get("tried") or ()))
             else:
                 await self._follow_preprocess(db, run)
         for run in db.query(Run).filter(Run.status == "revising").all():
@@ -160,14 +160,17 @@ class Worker:
             run.waiting = job["waiting"]
         return job
 
-    async def _start_preprocess(self, db: Session, run: Run) -> None:
-        """Start the preprocessing of the run's data on a CPU node; it needs no GPU and waits for nothing."""
+    async def _start_preprocess(self, db: Session, run: Run, tried: tuple = ()) -> None:
+        """Start the preprocessing of the run's data, which needs no GPU, on the first node of
+        runs.preprocess_nodes that is not among `tried`, the nodes where its job found no room."""
         try:
             nodes = await self.control.nodes_choices()
         except control.ControlError as e:
             run.error = f"waiting for Control: {e.detail}"
             return
-        node = runs.preprocess_node(nodes, run.node)
+        node = next((n for n in runs.preprocess_nodes(nodes, run.node) if n not in tried), None)
+        if node is None:
+            return
         try:
             request = runs.job_request(run, None, "preprocess", nodes[node], node=node)
         except ValueError as e:
@@ -181,12 +184,35 @@ class Worker:
                 return
             self._fail(run, e.detail)
             return
-        run.preprocess = {"node": node, "job_id": job["job_id"]}
+        run.preprocess = {"node": node, "job_id": job["job_id"], **({"tried": [*tried, node]} if tried else {})}
         run.error = None
         db.commit()
 
+    async def _move_preprocess(self, db: Session, run: Run) -> None:
+        """A preprocessing job the Scheduler cannot place on its node is cancelled and started on the next node of
+        runs.preprocess_nodes; on the last one it stays and waits."""
+        tried = tuple(run.preprocess.get("tried") or [run.preprocess["node"]])
+        try:
+            nodes = await self.control.nodes_choices()
+        except control.ControlError as e:
+            logger.warning("run %s: the nodes could not be read, asking again at the next tick: %s", run.id, e)
+            return
+        if all(n in tried for n in runs.preprocess_nodes(nodes, run.node)):
+            return
+        try:
+            await self.control.cancel_job(run.preprocess["job_id"])
+        except control.ControlError as e:
+            logger.warning("run %s: its preprocessing job could not be cancelled, asking again at the next tick: %s",
+                           run.id, e)
+            return
+        run.preprocess = {"node": run.preprocess["node"], "tried": list(tried)}
+        await self._start_preprocess(db, run, tried)
+
     async def _follow_preprocess(self, db: Session, run: Run) -> None:
         job = await self._job(run, run.preprocess["job_id"])
+        if job is not None and job["status"] in runs.JOB_OPEN and job.get("waiting"):
+            await self._move_preprocess(db, run)
+            return
         if job is None or job["status"] in runs.JOB_OPEN:
             return
         if job["status"] != "completed":

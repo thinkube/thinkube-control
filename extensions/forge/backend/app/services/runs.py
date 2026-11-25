@@ -370,15 +370,20 @@ def sized(run: Run) -> bool:
     return run.memory_gb is not None or (run.plan or {}).get("memory_request_bytes") is not None
 
 
-def preprocess_node(nodes: Dict[str, Dict[str, List[int]]], gpu_node: str) -> str:
-    """The node a run's data is preprocessed on: of the GPU nodes other than the run's, the one with the
-    largest CPU choice (Control's /jupyterhub/config), of two alike the one of fewer GPUs; the run's node itself
-    when no other node has a GPU. The job runs in Meep²'s kernel, a venv that needs a GPU, which Control keeps
+def preprocess_nodes(nodes: Dict[str, Dict[str, List[int]]], gpu_node: str) -> List[str]:
+    """The nodes a run's data may be preprocessed on, in the order they are tried: the GPU nodes other than the
+    run's, the one with the largest CPU choice (Control's /jupyterhub/config) first, of two alike the one of fewer
+    GPUs; then the run's node itself. The job runs in Meep²'s kernel, a venv that needs a GPU, which Control keeps
     only on the nodes with a GPU, even for a job that uses none."""
     others = [node for node in nodes if node != gpu_node and max(nodes[node].get("gpus") or [0]) > 0]
-    if not others:
-        return gpu_node
-    return max(others, key=lambda node: (max(nodes[node]["cpu_cores"]), -max(nodes[node].get("gpus") or [0]), node))
+    others.sort(key=lambda node: (max(nodes[node]["cpu_cores"]), -max(nodes[node].get("gpus") or [0]), node),
+                reverse=True)
+    return others + [gpu_node]
+
+
+def preprocess_node(nodes: Dict[str, Dict[str, List[int]]], gpu_node: str) -> str:
+    """The node a run's data is preprocessed on first (preprocess_nodes)."""
+    return preprocess_nodes(nodes, gpu_node)[0]
 
 
 def job_request(run: Run, base: Optional[Dict[str, Any]], mode: str, choices: Dict[str, List[int]],

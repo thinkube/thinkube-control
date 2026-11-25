@@ -181,6 +181,27 @@ def test_a_new_run_has_its_data_preprocessed_on_a_cpu_node_then_plans(queue):
     assert run.plan_job_id == "j2" and queue.control.started[1]["parameters"]["preprocessed"] == "/p/k9"
 
 
+def test_a_preprocessing_job_with_no_room_on_its_node_moves_to_the_runs_own_node(queue):
+    run = queue.run("a", status="preprocessing", plan=None)
+    queue.tick()
+    assert run.preprocess == {"node": "tkamd2", "job_id": "j1"}
+    queue.control.forge_jobs["j1"]["waiting"] = "the pod waits for room on its node: 1 Insufficient memory"
+    queue.tick()
+    assert ("cancel", "j1") in queue.control.calls
+    assert run.preprocess == {"node": "tkspark", "job_id": "j2", "tried": ["tkamd2", "tkspark"]}
+    assert queue.control.started[1]["node"] == "tkspark" and queue.control.started[1]["gpus"] == 0
+    # On the last node it stays and waits, and the run says what for
+    queue.control.forge_jobs["j2"]["waiting"] = "the pod waits for room on its node: 1 Insufficient memory"
+    queue.tick()
+    assert run.preprocess["job_id"] == "j2" and len(queue.control.started) == 2
+    assert run.status == "preprocessing" and "waits for room" in run.waiting
+    queue.control.forge_jobs["j2"]["waiting"] = None
+    queue.files.preprocesses[run.id] = {"key": "k9", "folder": "/p/k9", "found": False, "report": {"rows": 3}}
+    queue.control.end("j2")
+    queue.tick()
+    assert run.status == "planning" and run.preprocess["node"] == "tkspark"
+
+
 def test_a_preprocessing_job_that_fails_fails_its_run(queue):
     run = queue.run("a", status="preprocessing", plan=None)
     queue.tick()

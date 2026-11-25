@@ -128,6 +128,13 @@ def test_the_data_is_preprocessed_on_the_gpu_node_with_the_most_cores_other_than
     assert runs.preprocess_node({k: NODES[k] for k in ("tkamd1", "tkamd2")}, "tkamd2") == "tkamd2"
 
 
+def test_the_nodes_tried_for_preprocessing_end_with_the_runs_own():
+    assert runs.preprocess_nodes(NODES, "tkspark") == ["tkamd2", "tkspark"]
+    tkamd3 = {"memory_gb": [2, 4, 8], "cpu_cores": [1, 2, 4, 8, 16], "gpus": [0, 1]}
+    assert runs.preprocess_nodes({**NODES, "tkamd3": tkamd3}, "tkspark") == ["tkamd2", "tkamd3", "tkspark"]
+    assert runs.preprocess_nodes({"tkspark": CHOICES}, "tkspark") == ["tkspark"]
+
+
 def test_a_preprocessing_job_runs_on_the_cpu_node_with_its_cores_and_no_gpu():
     run = a_run()
     run.preprocess = None
