@@ -221,6 +221,12 @@ Each step is seen before the next begins.
    pods.
    Seen when: an app with a GPU runs on the GPU its hold was given, stops
    for a job of a higher priority, and comes back when the job has ended.
+   Seen, 25 November, on tkspark, with a test app that took 2 GiB of a GPU:
+   its manifests pinned it to tkspark, Control's hold of priority 5 was
+   given the GB10, and the app computed there, asking Kubernetes for no GPU.
+   A job of priority 2 that needed the GPU alone had the app's pod stopped;
+   the pod waited without starting while the job ran, and the app came back
+   by itself on the GPU when the job had ended. The app was deleted after.
 9. **Kubernetes hands out no GPUs.** Time slicing is turned off and the GPU
    plugin offers none on the nodes, so a pod that goes around the scheduler
    does not start.
