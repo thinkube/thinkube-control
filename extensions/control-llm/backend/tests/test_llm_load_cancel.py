@@ -52,7 +52,9 @@ def world(monkeypatch):
         memory_type=lambda node: "discrete",
         record_allocation=lambda model_id, *a, **k: allocated.append(model_id)))
     monkeypatch.setattr(reg, "llm_model_registry", registry)
-    monkeypatch.setattr(life, "llm_lifecycle", SimpleNamespace(planned_memory_gb=lambda model_id: 24.0))
+    awaiting = set()
+    monkeypatch.setattr(life, "llm_lifecycle", SimpleNamespace(planned_memory_gb=lambda model_id: 24.0,
+                                                               awaits_gpus=lambda model_id: model_id in awaiting))
     deleted = []
 
     async def delete_pod(backend_type, node, model_id=None):
@@ -62,7 +64,8 @@ def world(monkeypatch):
     monkeypatch.setattr(pods, "llm_pod_manager", SimpleNamespace(
         delete_pod=delete_pod, check_pod_status=lambda t, n, m=None: ("progressing", ""),
         scale_to_zero=lambda t, n, m=None: None, gpu_slots_of=lambda t, n, m=None: 1))
-    return SimpleNamespace(registry=registry, entry=entry, deleted=deleted, released=released, listed=listed)
+    return SimpleNamespace(registry=registry, entry=entry, deleted=deleted, released=released, listed=listed,
+                           awaiting=awaiting, pods=pods)
 
 
 def serving(world):
@@ -108,3 +111,15 @@ def test_a_load_cancelled_before_its_deployment_existed_deletes_it_once_made(wor
     assert made == [("vllm", "tkamd2", MODEL)]
     assert world.deleted == [("vllm", "tkamd2", MODEL), ("vllm", "tkamd2", MODEL)]
     assert world.entry.state == ModelState.deployable
+
+
+def test_a_load_that_waits_for_its_gpus_is_not_failed_for_having_no_deployment(world):
+    """The pod's Deployment is made once the Scheduler has given its GPUs; until then a loading model has none."""
+    world.pods.llm_pod_manager.check_pod_status = lambda t, n, m=None: ("absent", "")
+    world.awaiting.add(MODEL)
+    world.registry._reconcile_states()
+    assert world.entry.state == ModelState.loading and world.entry.last_error is None
+    # Once the load has its GPUs, a Deployment that is absent is a failed load
+    world.awaiting.clear()
+    world.registry._reconcile_states()
+    assert world.entry.state == ModelState.deployable and world.entry.last_error == "Deployment disappeared on tkamd2"

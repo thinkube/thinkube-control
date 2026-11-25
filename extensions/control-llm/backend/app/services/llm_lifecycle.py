@@ -106,6 +106,13 @@ class LLMLifecycleManager:
         self._loading_locks: dict[str, asyncio.Event] = {}
         # Node memory planned for each calibrated model at its last load, in GiB.
         self._planned_gb: dict[str, float] = {}
+        # The models whose load waits for the Scheduler to give its pod GPUs; the pod's Deployment is made
+        # once it has them
+        self._awaiting_gpus: set[str] = set()
+
+    def awaits_gpus(self, model_id: str) -> bool:
+        """Whether a load of the model waits for its pod's GPUs: it is loading and has no Deployment yet."""
+        return model_id in self._awaiting_gpus
 
     # Default serving context when the caller doesn't specify one. Keeps every
     # caller (UI and MCP/API) consistent and avoids deploying at the model's full
@@ -418,13 +425,21 @@ class LLMLifecycleManager:
             # The pod's GPUs are the Scheduler's to give, and to refuse when they do not hold this model too
             from app.services import gpu_holds
 
+            self._awaiting_gpus.add(model_id)
             try:
-                pod_gpus = await self._shared_pod_gpus(backend_type, target_node, gpu_count, estimated_memory)
-            except gpu_holds.HoldError as e:
-                llm_model_registry.update_model_state(model_id, ModelState.deployable, error=str(e))
-                return
-            success, managed_pod = await llm_pod_manager.ensure_pod(backend_type, target_node, gpu_count=gpu_count,
-                                                                    **pod_gpus)
+                try:
+                    pod_gpus = await self._shared_pod_gpus(backend_type, target_node, gpu_count, estimated_memory)
+                except gpu_holds.HoldError as e:
+                    llm_model_registry.update_model_state(model_id, ModelState.deployable, error=str(e))
+                    return
+                success, managed_pod = await llm_pod_manager.ensure_pod(backend_type, target_node,
+                                                                        gpu_count=gpu_count, wait_ready=False,
+                                                                        **pod_gpus)
+            finally:
+                self._awaiting_gpus.discard(model_id)
+            if success:
+                success, managed_pod = await llm_pod_manager.ensure_pod(backend_type, target_node,
+                                                                        gpu_count=gpu_count)
             if not success or managed_pod is None:
                 if pod_gpus:
                     await gpu_holds.end(pod_gpus["hold_id"])
@@ -897,21 +912,25 @@ class LLMLifecycleManager:
             # The pod's GPUs are the Scheduler's to give: the model takes its turn among the work on the node
             from app.services import gpu_holds
 
+            self._awaiting_gpus.add(model_id)
             try:
-                hold = await gpu_holds.ask(model_id, node, gpu_count,
-                                           *self._hold_memory(node, gpu_count, estimated_memory))
-                gpu_ids = await gpu_holds.granted(hold["id"])
-            except gpu_holds.HoldError as e:
-                llm_model_registry.update_model_state(model_id, ModelState.deployable, error=str(e))
-                return
+                try:
+                    hold = await gpu_holds.ask(model_id, node, gpu_count,
+                                               *self._hold_memory(node, gpu_count, estimated_memory))
+                    gpu_ids = await gpu_holds.granted(hold["id"])
+                except gpu_holds.HoldError as e:
+                    llm_model_registry.update_model_state(model_id, ModelState.deployable, error=str(e))
+                    return
 
-            success, _ = await llm_pod_manager.ensure_pod(
-                perf_type, node, gpu_count=gpu_count, model_env=model_env,
-                model_id=model_id,
-                mem_limit_gb=payload.get("pod_mem_limit_gb"),
-                wait_ready=False,
-                gpu_ids=gpu_ids, hold_id=hold["id"],
-            )
+                success, _ = await llm_pod_manager.ensure_pod(
+                    perf_type, node, gpu_count=gpu_count, model_env=model_env,
+                    model_id=model_id,
+                    mem_limit_gb=payload.get("pod_mem_limit_gb"),
+                    wait_ready=False,
+                    gpu_ids=gpu_ids, hold_id=hold["id"],
+                )
+            finally:
+                self._awaiting_gpus.discard(model_id)
             if not success:
                 await gpu_holds.end(hold["id"])
                 llm_model_registry.update_model_state(

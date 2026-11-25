@@ -526,6 +526,11 @@ class LLMModelRegistry:
                     entry._loading_since = None
                     if backend_type:
                         entry.last_error = f"Backend type '{backend_type}' is not installed"
+                elif llm_lifecycle.awaits_gpus(model_id):
+                    # The load waits for the Scheduler to give its pod GPUs: its Deployment is
+                    # made once it has them, and the time to start counts from then. The load
+                    # itself ends the wait, with the Scheduler's reason when it is given none.
+                    entry._loading_since = None
                 else:
                     # Stamp when we first observed this load in flight.
                     if getattr(entry, "_loading_since", None) is None:
