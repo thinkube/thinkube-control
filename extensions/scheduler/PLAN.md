@@ -140,6 +140,20 @@ Each step is seen before the next begins.
    GPUs it was given. Training mode is no longer turned on by Forge.
    Seen when: a model loads on the card a training does not use, while the
    training runs.
+   This step was made before steps 4 and 5, as the person decided on 25
+   November: while trainings still run as before, a model the scheduler knows
+   is never in a training's way, and a training that moved first would have
+   waited for every model it could not see.
+   Done, 25 November: holds, GPUs the scheduler keeps for work whose pod its
+   owner starts, with the owner asked to give them up for work of a higher
+   priority; and the gateway's pods of one model on them. Seen on tkspark: a
+   model's pod started on the GPU its hold was given, named by its id and
+   asking Kubernetes for none; a job of priority 2 that needed the GPU alone
+   had the model unloaded, ran, and the model was loaded again by itself.
+   Not done yet: the gateway's pods that serve several models (the trained
+   heads, Ollama), which still ask Kubernetes for their GPU.
+   Not seen yet: a model on the card a training does not use, on tkamd2. It
+   is checked with step 2's check, when the cards are free.
    Open in this step: a server that takes a share of a GPU's memory whatever
    the model needs (vLLM, SGLang, Flare) is held by the gateway's estimate of
    the model, and counted for the rest by what the GPU reports once it has
