@@ -352,16 +352,38 @@ class LLMModelRegistry:
                 logger.error(f"Model registry poll failed: {e}")
 
     async def _start_again(self):
-        """Start the pods of the models that gave their GPUs up for work of a higher priority, once the Scheduler
-        gives them GPUs again; such a model is loading from then, and is available when its server answers."""
+        """Start the pods that gave their GPUs up for work of a higher priority, once the Scheduler gives them
+        GPUs again. A model on a pod of its own is loading from then, and available when its server answers; the
+        models of a pod that serves several are loaded on it again. And keep the hold of each pod that serves
+        several models at the memory of the models on it, as they leave."""
         from app.services import gpu_holds
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+        from app.services.llm_lifecycle import llm_lifecycle
         from app.services.llm_pod_manager import llm_pod_manager
 
-        for model_id in await asyncio.to_thread(llm_pod_manager.start_again):
-            entry = self._models.get(model_id)
-            if entry is not None and entry.state == ModelState.deployable:
-                self.update_model_state(model_id, ModelState.loading, entry.backend_id)
+        for started in await asyncio.to_thread(llm_pod_manager.start_again):
+            if "model" in started:
+                entry = self._models.get(started["model"])
+                if entry is not None and entry.state == ModelState.deployable:
+                    self.update_model_state(started["model"], ModelState.loading, entry.backend_id)
+                continue
+            for model_id in started["models"]:
+                answer = await llm_lifecycle.load_model(
+                    model_id, backend=f"{started['backend_type']}-{started['node']}")
+                logger.info(f"Loading {model_id} again on the {started['backend_type']} pod of "
+                            f"{started['node']}: {answer.message}")
         try:
+            for backend_type, node, hold_id in await asyncio.to_thread(llm_pod_manager.shared_holds):
+                backend_id = f"{backend_type}-{node}"
+                on_it = sum(a.estimated_memory_gb for a in llm_gpu_tracker._allocations.get(node, [])
+                            if a.backend_id == backend_id)
+                hold = await gpu_holds.get(hold_id)
+                if on_it <= 0 or hold["status"] != "running" or hold["gpu_memory_gb"] is None:
+                    continue
+                fitted = llm_lifecycle._hold_memory(node, hold["gpus"], on_it)[0]
+                # Smaller only: a model's load asks for the larger amount itself, before it loads
+                if fitted < hold["gpu_memory_gb"] - 0.05:
+                    await gpu_holds.resize(hold_id, fitted)
             await asyncio.to_thread(llm_pod_manager.end_orphan_holds)
         except gpu_holds.HoldError as e:
             # Tried again at the next poll

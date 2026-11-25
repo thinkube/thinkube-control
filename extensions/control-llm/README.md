@@ -52,8 +52,18 @@ Scheduler (`backend/app/services/gpu_holds.py`):
   Deployment kept, and the hold released; the model is loaded again when the
   Scheduler gives the hold GPUs again.
 
-The pods that serve several models (the trained heads, Ollama) still ask
-Kubernetes for their GPU.
+A pod that serves several models (the trained heads, Ollama) has one hold,
+for the memory of the models on it:
+
+- The first model's load asks for the hold, and the pod starts on the GPU it
+  was given. A further model's load asks the Scheduler to let the hold grow
+  first; refused, the load is refused with the Scheduler's reason. The hold
+  shrinks as models leave, and ends with the pod.
+- Asked to give its GPU up, the pod is stopped with the ids of its models kept
+  on its Deployment, and they are loaded on it again when the hold has GPUs.
+- A pod that was running before this, with a GPU asked of Kubernetes, stays so
+  until it is made again: when its last model is unloaded, the pod is deleted,
+  and the next load makes it on a hold.
 
 ## Who calls it
 

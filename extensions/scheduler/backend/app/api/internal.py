@@ -49,6 +49,11 @@ async def stop_job(job_id: str, db: Session = Depends(get_db)):
     return jobs.end(db, jobs._job(db, job_id)).to_dict()
 
 
+@router.post("/jobs/{job_id}/memory")
+async def resize_hold(job_id: str, request: jobs.Memory, db: Session = Depends(get_db)):
+    return (await jobs.resize(db, jobs._job(db, job_id), request.gpu_memory_gb)).to_dict()
+
+
 @router.post("/jobs/{job_id}/release")
 async def release_hold(job_id: str, db: Session = Depends(get_db)):
     return jobs.release(db, jobs._job(db, job_id)).to_dict()

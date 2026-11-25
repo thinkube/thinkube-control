@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.security import User, get_current_user
 from app.db.session import get_db
 from app.models.jobs import HOLD, JOB, OPEN, RUNNING, STOPPED, STOPPING, WAITING, Job
-from app.services import pods, worker
+from app.services import nodes, placement, pods, worker
 
 router = APIRouter()
 
@@ -109,6 +109,38 @@ def release(db: Session, job: Job) -> Job:
     return job
 
 
+class Memory(BaseModel):
+    gpu_memory_gb: float = Field(..., gt=0, description="the memory the hold's pod takes on each of its GPUs")
+
+
+async def resize(db: Session, job: Job, gpu_memory_gb: float) -> Job:
+    """Change the memory a hold takes on each of its GPUs, as the work on its pod grows or shrinks. A hold that
+    has its GPUs takes more only when they hold it beside the other work on them; refused, it keeps what it had."""
+    if job.kind != HOLD:
+        raise HTTPException(status_code=409, detail=f"{job.name} is a job; its memory is as it was given")
+    if job.status not in (WAITING, RUNNING):
+        raise HTTPException(status_code=409, detail=f"hold {job.name} is {job.status}; its memory is changed "
+                                                    "while it waits or holds its GPUs")
+    if job.gpu_memory_gb is None:
+        raise HTTPException(status_code=409, detail=f"hold {job.name} has its GPUs alone; it shares no memory")
+    if job.status == RUNNING and gpu_memory_gb > job.gpu_memory_gb:
+        try:
+            node = next((n for n in await nodes.nodes.list() if n["name"] == job.node), None)
+        except nodes.NodesError as e:
+            raise HTTPException(status_code=502, detail=str(e))
+        if node is None or node.get("error"):
+            raise HTTPException(status_code=502, detail=f"{job.node} could not be read: "
+                                                        f"{(node or {}).get('error') or 'it has no node-metrics pod'}")
+        others = db.query(Job).filter(Job.node == job.node, Job.status.in_(OPEN)).all()
+        refused = placement.grow(job, gpu_memory_gb, node, others, worker.utcnow())
+        if refused:
+            raise HTTPException(status_code=409, detail=f"hold {job.name} cannot take {gpu_memory_gb:g} GiB on its "
+                                                        f"GPUs: {refused}")
+    job.gpu_memory_gb = gpu_memory_gb
+    db.commit()
+    return job
+
+
 def _job(db: Session, job_id: str) -> Job:
     job = db.get(Job, job_id)
     if job is None:
@@ -169,6 +201,14 @@ async def stop_job(job_id: str, user: User = Depends(get_current_user), db: Sess
 async def release_hold(job_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Of a hold asked to give its GPUs up: its owner has freed them. The hold waits again for its turn."""
     return release(db, _job(db, job_id)).to_dict()
+
+
+@router.post("/jobs/{job_id}/memory", operation_id="scheduler_resize_hold")
+async def resize_hold(job_id: str, request: Memory, user: User = Depends(get_current_user),
+                      db: Session = Depends(get_db)):
+    """Change the memory a hold takes on each of its GPUs: the work on its pod grew or shrank, as when a pod that
+    serves several models takes one more. Refused with the reason when its GPUs do not hold the larger amount."""
+    return (await resize(db, _job(db, job_id), request.gpu_memory_gb)).to_dict()
 
 
 @router.get("/jobs/{job_id}/log", operation_id="scheduler_get_job_log")

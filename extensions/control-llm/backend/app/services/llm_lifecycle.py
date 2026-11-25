@@ -415,8 +415,19 @@ class LLMLifecycleManager:
 
         try:
             gpu_count = self._gpus_needed(estimated_memory, target_node)
-            success, managed_pod = await llm_pod_manager.ensure_pod(backend_type, target_node, gpu_count=gpu_count)
+            # The pod's GPUs are the Scheduler's to give, and to refuse when they do not hold this model too
+            from app.services import gpu_holds
+
+            try:
+                pod_gpus = await self._shared_pod_gpus(backend_type, target_node, gpu_count, estimated_memory)
+            except gpu_holds.HoldError as e:
+                llm_model_registry.update_model_state(model_id, ModelState.deployable, error=str(e))
+                return
+            success, managed_pod = await llm_pod_manager.ensure_pod(backend_type, target_node, gpu_count=gpu_count,
+                                                                    **pod_gpus)
             if not success or managed_pod is None:
+                if pod_gpus:
+                    await gpu_holds.end(pod_gpus["hold_id"])
                 llm_model_registry.update_model_state(
                     model_id, ModelState.deployable,
                     error=f"Failed to start Ollama pod on {target_node}",
@@ -535,6 +546,30 @@ class LLMLifecycleManager:
             raise ValueError(f"{entry.id}'s base {base_id} is not in the catalogue")
         return round((self._weight_gb(base) or 0.0) + own + 1.0, 1)
 
+    async def _shared_pod_gpus(self, backend_type: str, node: str, gpu_count: int, estimated: float) -> dict:
+        """What ensure_pod needs to start a node's pod that serves several models, before one more model is
+        loaded on it: the GPUs of a new hold when the pod does not run, or nothing when it runs, its hold grown
+        by the model's memory first. gpu_holds.HoldError, with the Scheduler's reason, when the GPUs do not hold
+        the model. A pod that runs without a hold asked Kubernetes for its GPU, and stays so until it is made
+        again."""
+        from app.services import gpu_holds
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+        from app.services.llm_pod_manager import llm_pod_manager
+
+        runs, hold_id = await asyncio.to_thread(llm_pod_manager.shared_pod, backend_type, node)
+        if runs and hold_id is None:
+            return {}
+        if runs:
+            backend_id = f"{backend_type}-{node}"
+            on_it = sum(a.estimated_memory_gb for a in llm_gpu_tracker._allocations.get(node, [])
+                        if a.backend_id == backend_id)
+            gpus = (await gpu_holds.get(hold_id))["gpus"]
+            await gpu_holds.resize(hold_id, self._hold_memory(node, gpus, on_it + estimated)[0])
+            return {}
+        hold = await gpu_holds.ask(f"{backend_type}-{node}", node, gpu_count,
+                                   *self._hold_memory(node, gpu_count, estimated))
+        return {"gpu_ids": await gpu_holds.granted(hold["id"]), "hold_id": hold["id"]}
+
     async def _load_shared(self, model_id: str, backend_type: str, node: str) -> ModelLoadResponse:
         from app.services.llm_gpu_tracker import llm_gpu_tracker
         from app.services.llm_model_registry import llm_model_registry
@@ -549,10 +584,19 @@ class LLMLifecycleManager:
         if not can_load:
             return ModelLoadResponse(model_id=model_id, state=entry.state,
                                      message=f"Insufficient GPU resources on {node}: {reason}")
+        # The pod's GPU is the Scheduler's to give, and to refuse when it does not hold this model too
+        from app.services import gpu_holds
+
+        try:
+            pod_gpus = await self._shared_pod_gpus(backend_type, node, 1, estimated)
+        except gpu_holds.HoldError as e:
+            return ModelLoadResponse(model_id=model_id, state=entry.state, message=str(e))
         # The pod's Deployment exists before the model is marked loading: the reconcile takes a loading model
         # whose Deployment is absent for a failed load
-        created, _ = await llm_pod_manager.ensure_pod(backend_type, node, gpu_count=1, wait_ready=False)
+        created, _ = await llm_pod_manager.ensure_pod(backend_type, node, gpu_count=1, wait_ready=False, **pod_gpus)
         if not created:
+            if pod_gpus:
+                await gpu_holds.end(pod_gpus["hold_id"])
             return ModelLoadResponse(model_id=model_id, state=entry.state,
                                      message=f"The {backend_type} pod on {node} could not be created")
         backend_id = f"{backend_type}-{node}"
@@ -919,6 +963,12 @@ class LLMLifecycleManager:
         if (await gpu_holds.get(hold_id))["status"] != "stopping":
             return "the hold is not asked to give its GPUs up; nothing was done"
         entry = llm_model_registry.get_model(model_id)
+        if entry is None:
+            # The hold of a pod that serves several models is named after the pod
+            pod_type, pod_node = parse_backend_id(model_id)
+            pod = llm_backend_types.get(pod_type) if pod_type else None
+            if pod is not None and pod.shared and pod_node:
+                return await self._give_up_shared(hold_id, pod_type, pod_node, needed_for)
         backend_type, node = parse_backend_id((entry.backend_id or "") if entry else "")
         described = llm_backend_types.get(backend_type) if backend_type else None
         if entry is None or described is None or not node or described.shared:
@@ -938,6 +988,29 @@ class LLMLifecycleManager:
             llm_gpu_tracker.release_allocation(model_id)
         await gpu_holds.release(hold_id)
         return f"{model_id} was unloaded from {node}, and is loaded again when its GPUs are free"
+
+    async def _give_up_shared(self, hold_id: str, backend_type: str, node: str, needed_for: str) -> str:
+        """give_up, of a node's pod that serves several models: the pod is stopped with the ids of its models
+        kept on its Deployment, and they are loaded again when the hold has GPUs."""
+        from app.services import gpu_holds
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+        from app.services.llm_model_registry import llm_model_registry
+        from app.services.llm_pod_manager import llm_pod_manager
+
+        backend_id = f"{backend_type}-{node}"
+        on_it = [a.model_id for a in llm_gpu_tracker._allocations.get(node, []) if a.backend_id == backend_id]
+        kept = await asyncio.to_thread(llm_pod_manager.give_up, backend_type, node, None, on_it)
+        if kept != hold_id:
+            await gpu_holds.end(hold_id)
+            return f"the {backend_type} pod on {node} is not on this hold's GPUs; the hold was ended"
+        for model_id in on_it:
+            llm_model_registry.update_model_state(
+                model_id, ModelState.deployable,
+                error=f"unloaded to make room for {needed_for}; it is loaded again when its GPUs are free")
+            llm_gpu_tracker.release_allocation(model_id)
+        await gpu_holds.release(hold_id)
+        return (f"the {backend_type} pod on {node} was stopped with {len(on_it)} models, which are loaded again "
+                "when its GPUs are free")
 
     async def unload_model(self, model_id: str, force: bool = False) -> ModelLoadResponse:
         from app.services.llm_model_registry import llm_model_registry

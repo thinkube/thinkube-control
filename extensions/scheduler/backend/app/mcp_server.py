@@ -18,6 +18,7 @@ TOOLS = [
     "scheduler_create_job",
     "scheduler_create_hold",
     "scheduler_release_hold",
+    "scheduler_resize_hold",
     "scheduler_list_jobs",
     "scheduler_get_job",
     "scheduler_stop_job",

@@ -138,7 +138,9 @@ def cluster(monkeypatch):
     """The Deployments of the namespace vllm, as the pod manager reads and changes them."""
     import kubernetes
 
-    state = SimpleNamespace(deployments={"vllm-inference": base_deployment()}, patches=[], deleted=[])
+    state = SimpleNamespace(deployments={"vllm-inference": base_deployment(), "ollama": base_deployment()},
+                            patches=[], deleted=[])
+    bases = ("vllm-inference", "ollama")
 
     class Apps:
         def read_namespaced_deployment(self, name, ns):
@@ -159,7 +161,7 @@ def cluster(monkeypatch):
 
         def list_namespaced_deployment(self, ns, label_selector):
             return SimpleNamespace(items=[d for name, d in state.deployments.items()
-                                          if ns == "vllm" and name != "vllm-inference"])
+                                          if name not in bases and d.metadata.namespace == ns])
 
     monkeypatch.setattr(kubernetes.config, "load_incluster_config", lambda: None)
     monkeypatch.setattr(kubernetes.client, "AppsV1Api", Apps)
@@ -202,7 +204,7 @@ def test_a_deployment_scaled_to_zero_ends_its_hold(cluster, holds):
     assert manager.scale_to_zero("vllm", "tkamd2", MODEL)
     assert holds.ended == ["hold-1"]
     assert cluster.patches == [(name, {"spec": {"replicas": 0}, "metadata": {"annotations": {
-        gpu_holds.HOLD_ANNOTATION: None, gpu_holds.RELOAD_ANNOTATION: None}}})]
+        gpu_holds.HOLD_ANNOTATION: None, gpu_holds.RELOAD_ANNOTATION: None, gpu_holds.MODELS_ANNOTATION: None}}})]
 
 
 def test_a_deployment_that_gave_its_gpus_up_starts_again_when_its_hold_has_gpus(cluster, holds):
@@ -222,9 +224,9 @@ def test_a_deployment_that_gave_its_gpus_up_starts_again_when_its_hold_has_gpus(
     assert manager.start_again() == [] and cluster.patches == []
     # The hold has GPUs again, other ones: the pod starts on them
     holds.status, holds.gpu_ids = "running", ["GPU-b"]
-    assert manager.start_again() == [MODEL]
+    assert manager.start_again() == [{"model": MODEL}]
     assert cluster.patches == [(name, {
-        "metadata": {"annotations": {gpu_holds.RELOAD_ANNOTATION: None}},
+        "metadata": {"annotations": {gpu_holds.RELOAD_ANNOTATION: None, gpu_holds.MODELS_ANNOTATION: None}},
         "spec": {"replicas": 1, "template": {"spec": {"containers": [
             {"name": "inference", "env": [{"name": "NVIDIA_VISIBLE_DEVICES", "value": "GPU-b"}]}]}}}})]
     # A hold someone ended starts nothing more: the Deployment's marks are removed
@@ -232,7 +234,8 @@ def test_a_deployment_that_gave_its_gpus_up_starts_again_when_its_hold_has_gpus(
     holds.status = "stopped"
     assert manager.start_again() == []
     assert cluster.patches == [(name, {"metadata": {"annotations": {gpu_holds.HOLD_ANNOTATION: None,
-                                                                    gpu_holds.RELOAD_ANNOTATION: None}}})]
+                                                                    gpu_holds.RELOAD_ANNOTATION: None,
+                                                                    gpu_holds.MODELS_ANNOTATION: None}}})]
     # A Deployment without a hold gives nothing up
     made.metadata.annotations = {}
     assert manager.give_up("vllm", "tkamd2", MODEL) is None
@@ -250,3 +253,98 @@ def test_a_hold_no_deployment_is_on_is_ended_once_it_is_old(cluster, holds):
         {"id": "hold-3", "name": "left behind", "created_at": (now - timedelta(hours=2)).isoformat()},
     ]
     assert manager.end_orphan_holds() == ["hold-3"] and holds.ended == ["hold-3"]
+
+
+# --- a pod that serves several models -----------------------------------------
+
+def test_a_pod_of_several_models_keeps_its_models_when_it_gives_its_gpus_up(cluster, holds):
+    manager = LLMPodManager()
+    name = manager._make_deployment_name("ollama", "tkspark", None)
+    assert manager.shared_pod("ollama", "tkspark") == (False, None)
+    manager._create_node_deployment("ollama", "tkspark", 1, None, None, None, ["GPU-s"], "hold-1")
+    assert manager.shared_pod("ollama", "tkspark") == (True, "hold-1")
+    assert manager.shared_holds() == [("ollama", "tkspark", "hold-1")]
+    assert manager.give_up("ollama", "tkspark", None, ["a/one", "b/two"]) == "hold-1"
+    assert cluster.patches == [(name, {"spec": {"replicas": 0}, "metadata": {"annotations": {
+        gpu_holds.RELOAD_ANNOTATION: "true", gpu_holds.MODELS_ANNOTATION: '["a/one", "b/two"]'}}})]
+    made = cluster.deployments[name]
+    made.metadata.annotations.update({gpu_holds.RELOAD_ANNOTATION: "true",
+                                      gpu_holds.MODELS_ANNOTATION: '["a/one", "b/two"]'})
+    made.spec.replicas = 0
+    # Stopped, it is no running pod, and asked again it keeps the models it kept
+    assert manager.shared_pod("ollama", "tkspark") == (False, None) and manager.shared_holds() == []
+    cluster.patches.clear()
+    manager.give_up("ollama", "tkspark", None, [])
+    assert cluster.patches == [(name, {"spec": {"replicas": 0},
+                                       "metadata": {"annotations": {gpu_holds.RELOAD_ANNOTATION: "true"}}})]
+    holds.gpu_ids = ["GPU-s"]
+    assert manager.start_again() == [{"backend_type": "ollama", "node": "tkspark", "models": ["a/one", "b/two"]}]
+
+
+@pytest.fixture
+def shared(monkeypatch):
+    """The trained heads' pod on tkspark, as the lifecycle sees it: whether it runs and on which hold, and the
+    models allocated on it."""
+    import app.services.llm_gpu_tracker as trk
+    import app.services.llm_model_registry as reg
+    import app.services.llm_pod_manager as pods
+
+    registry = LLMModelRegistry.__new__(LLMModelRegistry)
+    registry._models = {m: ModelEntry(id=m, name=m, server_type=["heads"], serving_name=m,
+                                      state=ModelState.available, backend_id="heads-tkspark")
+                        for m in ("kubexlat/ja-seg", "kubexlat/ja-parse")}
+    state = SimpleNamespace(pod=(False, None), given_up=[], released=[], kept="hold-1")
+    allocations = [SimpleNamespace(model_id=m, backend_id="heads-tkspark", estimated_memory_gb=1.6)
+                   for m in registry._models]
+    monkeypatch.setattr(trk, "llm_gpu_tracker", SimpleNamespace(
+        _allocations={"tkspark": allocations}, memory_type=lambda node: "uma",
+        release_allocation=state.released.append))
+    monkeypatch.setattr(reg, "llm_model_registry", registry)
+
+    def give_up(backend_type, node, model_id=None, models=None):
+        state.given_up.append((backend_type, node, models))
+        return state.kept
+
+    monkeypatch.setattr(pods, "llm_pod_manager", SimpleNamespace(
+        shared_pod=lambda backend_type, node: state.pod, give_up=give_up))
+    state.registry = registry
+    return state
+
+
+def test_the_first_model_of_a_pod_asks_for_its_hold_and_the_next_ones_for_more_memory(shared, holds):
+    manager = LLMLifecycleManager()
+    # No pod runs: a hold for the pod, named after it, with the first model's memory
+    holds.gpu_ids = ["GPU-s"]
+    assert asyncio.run(manager._shared_pod_gpus("heads", "tkspark", 1, 4.6)) == {"gpu_ids": ["GPU-s"],
+                                                                                "hold_id": "hold-1"}
+    assert holds.asked == [{"name": "heads-tkspark", "node": "tkspark", "gpus": 1, "gpu_memory_gb": 4.6,
+                            "memory_gb": 0, "on_gpus": None}]
+    # The pod runs on its hold: the hold grows to the two models on it and the new one, before the load
+    shared.pod = (True, "hold-1")
+    assert asyncio.run(manager._shared_pod_gpus("heads", "tkspark", 1, 1.6)) == {}
+    assert holds.resized == [("hold-1", 4.8)]
+    # The Scheduler refuses when the GPU does not hold the model too
+    holds.refuse_resize = "waiting for 40.0 GiB of memory on tkspark"
+    with pytest.raises(gpu_holds.HoldError, match="waiting for 40.0 GiB of memory on tkspark"):
+        asyncio.run(manager._shared_pod_gpus("heads", "tkspark", 1, 36.8))
+    # A pod that runs without a hold asked Kubernetes for its GPU, and stays so
+    shared.pod = (True, None)
+    assert asyncio.run(manager._shared_pod_gpus("heads", "tkspark", 1, 1.6)) == {}
+    assert len(holds.asked) == 1 and len(holds.resized) == 1
+
+
+def test_a_pod_of_several_models_gives_its_gpu_up_with_its_models(shared, holds, llm_backend_types_installed,
+                                                                 monkeypatch):
+    from app.services.llm_backend_types import BackendType, llm_backend_types
+
+    monkeypatch.setattr(llm_backend_types, "_types", {**llm_backend_types_installed, "heads": BackendType(
+        type="heads", display_name="Trained heads", namespace="heads", deployment="heads", port=7860,
+        api_path="/v1", health_path="/health", driver="shared-pod", tier="performance")})
+    holds.status = "stopping"
+    said = asyncio.run(LLMLifecycleManager().give_up("hold-1", "heads-tkspark", "training of run 7"))
+    assert shared.given_up == [("heads", "tkspark", ["kubexlat/ja-seg", "kubexlat/ja-parse"])]
+    assert holds.released == ["hold-1"] and shared.released == ["kubexlat/ja-seg", "kubexlat/ja-parse"]
+    assert all(e.state == ModelState.deployable and "loaded again when its GPUs are free" in e.last_error
+               for e in shared.registry._models.values())
+    assert said == ("the heads pod on tkspark was stopped with 2 models, which are loaded again when its GPUs are "
+                    "free")

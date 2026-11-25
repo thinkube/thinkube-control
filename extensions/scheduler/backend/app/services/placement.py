@@ -194,3 +194,15 @@ def make_room(job: Job, node: Dict[str, Any], jobs: List[Job], now: datetime) ->
         if fits(rest):
             gone = rest
     return gone
+
+
+def grow(job: Job, gpu_memory_gb: float, node: Dict[str, Any], jobs: List[Job], now: datetime) -> Optional[str]:
+    """Why a hold that has its GPUs cannot take this much memory on each of them, or None when it can: its GPUs
+    must hold the new amount beside the other work on them, counted as for a new job."""
+    probe = Job(id=job.id, kind=job.kind, name=job.name, node=job.node, gpus=job.gpus, gpu_memory_gb=gpu_memory_gb,
+                memory_gb=job.memory_gb, on_gpus=list(job.gpu_ids), priority=job.priority)
+    try:
+        # What the hold takes now is in its node's figures: it is counted out, and the new amount in
+        return place(probe, _without(node, [job], now), jobs, now)[1]
+    except CannotRun as e:
+        return str(e)

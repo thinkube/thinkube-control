@@ -150,8 +150,11 @@ Each step is seen before the next begins.
    model's pod started on the GPU its hold was given, named by its id and
    asking Kubernetes for none; a job of priority 2 that needed the GPU alone
    had the model unloaded, ran, and the model was loaded again by itself.
-   Not done yet: the gateway's pods that serve several models (the trained
-   heads, Ollama), which still ask Kubernetes for their GPU.
+   The gateway's pods that serve several models (the trained heads, Ollama)
+   have one hold each, for the memory of the models on them: it grows before
+   a model is loaded, when the scheduler lets it, and shrinks as models
+   leave. Asked to give its GPU up, such a pod is stopped and its models are
+   loaded again when it has a GPU.
    Not seen yet: a model on the card a training does not use, on tkamd2. It
    is checked with step 2's check, when the cards are free.
    Open in this step: a server that takes a share of a GPU's memory whatever
@@ -162,6 +165,11 @@ Each step is seen before the next begins.
    Open in this step: the gateway still refuses a load by its own count of
    GPU slots, two models on a card of tkamd2. That count goes with time
    slicing (step 9).
+   Open in this step: the scheduler counts the work it did not start on a
+   GPU as what the GPU reports in use beyond what its own jobs were given. A
+   job of its own that uses less than it was given hides that much of other
+   work on the same GPU. The node-metrics pods could report the memory each
+   pod holds on a GPU, which would count both exactly.
 7. **Notebook servers ask.**
    Seen when: a notebook server gets a GPU through the scheduler.
 8. **Apps that use a GPU ask.** Open: either their templates ask the

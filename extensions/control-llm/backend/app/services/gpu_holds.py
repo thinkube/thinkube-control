@@ -12,6 +12,12 @@ When work of a higher priority needs the GPUs, the Scheduler asks the gateway to
 gateway stops the pod, keeping its Deployment at no replicas with RELOAD_ANNOTATION, and releases the hold, which
 waits again for its turn; the model is loaded again when the hold has GPUs.
 
+A pod that serves several models (the trained heads, Ollama) has one hold, for the memory of the models on it:
+the first model's load asks for it, a further model's load asks the Scheduler to let it grow first (resize), which
+the Scheduler refuses when the GPU does not hold the model too, and it shrinks as models leave. Asked to give its
+GPUs up, the pod is stopped with the ids of its models kept on its Deployment (MODELS_ANNOTATION), and they are
+loaded again when the hold has GPUs.
+
 A hold that no Deployment of the gateway is on, ORPHAN_SECONDS after it was asked for, is ended: a gateway that
 stopped between asking for a hold and starting its pod left one.
 
@@ -36,6 +42,7 @@ MODEL_PRIORITY = 4
 RELEASE_URL = "http://control-llm-backend:8000/internal/llm/holds/release"
 HOLD_ANNOTATION = "scheduler.thinkube.io/hold"
 RELOAD_ANNOTATION = "scheduler.thinkube.io/reload"
+MODELS_ANNOTATION = "scheduler.thinkube.io/models"
 # The runtime class with which NVIDIA_VISIBLE_DEVICES takes a GPU's id
 GPU_RUNTIME_CLASS = "nvidia-legacy"
 GRANT_SECONDS = 30
@@ -85,6 +92,13 @@ async def end(hold_id: str) -> None:
 async def release(hold_id: str) -> None:
     """The GPUs the Scheduler asked for are free; the hold waits again for its turn."""
     await _call("POST", f"/jobs/{hold_id}/release", f"release the hold {hold_id}")
+
+
+async def resize(hold_id: str, gpu_memory_gb: float) -> None:
+    """Change the memory a hold takes on each of its GPUs. HoldError, with the Scheduler's reason, when its GPUs
+    do not hold the larger amount."""
+    await _call("POST", f"/jobs/{hold_id}/memory", f"give the hold {hold_id} {gpu_memory_gb:g} GiB on each GPU",
+                {"gpu_memory_gb": gpu_memory_gb})
 
 
 async def granted(hold_id: str) -> List[str]:
@@ -139,3 +153,12 @@ def list_sync() -> List[Dict[str, Any]]:
             return _answer(http.get(f"{SCHEDULER_URL}/jobs", params={"owner": OWNER}), "list the gateway's holds")["jobs"]
     except httpx.HTTPError as e:
         raise HoldError(f"the Scheduler did not answer (list the gateway's holds): {e}") from e
+
+
+def resize_sync(hold_id: str, gpu_memory_gb: float) -> None:
+    try:
+        with httpx.Client(timeout=30.0) as http:
+            _answer(http.post(f"{SCHEDULER_URL}/jobs/{hold_id}/memory", json={"gpu_memory_gb": gpu_memory_gb}),
+                    f"give the hold {hold_id} {gpu_memory_gb:g} GiB on each GPU")
+    except httpx.HTTPError as e:
+        raise HoldError(f"the Scheduler did not answer (resize the hold {hold_id}): {e}") from e

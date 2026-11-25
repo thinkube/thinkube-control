@@ -171,3 +171,19 @@ def test_a_limit_of_gpus_at_work_prefers_the_gpus_that_hold_work():
     assert placement.place(alone, free, [alone], NOW) == (["GPU-0"], None)
     both = job("both", gpus=2)
     assert placement.place(both, free, [both], NOW)[0] is None
+
+
+def test_a_hold_grows_only_while_its_gpu_holds_it_beside_the_other_work():
+    pod = job("heads", gpu_memory_gb=6, status=RUNNING, gpu_ids=["GPU-0"])
+    neighbour = job("neighbour", gpu_memory_gb=10, status=RUNNING, gpu_ids=["GPU-0"])
+    # The card reports the 16 GiB the two took; 5% of 24 GiB is kept free: 22.8 hold 10 and up to 12.8
+    node = cards(used=(16.0, 0.0))
+    assert placement.grow(pod, 12, node, [pod, neighbour], NOW) is None
+    assert placement.grow(pod, 14, node, [pod, neighbour], NOW) == (
+        "waiting for a GPU of tkamd2 (14.0 GiB on a GPU): GPU 0 has 12.8 GiB free")
+    assert placement.grow(pod, 30, node, [pod, neighbour], NOW).startswith("the job takes 30.0 GiB on a GPU")
+    # On a node whose GPU shares the system's memory, by the memory available beside what the hold takes now
+    shared = job("heads", node="tkspark", gpu_memory_gb=6, memory_gb=0, status=RUNNING, gpu_ids=["GPU-s"],
+                 started=NOW - timedelta(hours=1))
+    assert placement.grow(shared, 20, spark(available=15), [shared], NOW) is None
+    assert "waiting for 30.0 GiB of memory on tkspark" in placement.grow(shared, 30, spark(available=15), [shared], NOW)

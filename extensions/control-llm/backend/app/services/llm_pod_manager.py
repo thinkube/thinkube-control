@@ -12,10 +12,11 @@ the chosen node and GPU. Unloading the last model on a pod deletes that Deployme
 
 import asyncio
 import hashlib
+import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.services import gpu_holds
 from app.services.llm_backend_types import llm_backend_types
@@ -848,7 +849,8 @@ class LLMPodManager:
             apps_v1.patch_namespaced_deployment(
                 deploy_name, namespace,
                 {"spec": {"replicas": 0}, "metadata": {"annotations": {gpu_holds.HOLD_ANNOTATION: None,
-                                                                      gpu_holds.RELOAD_ANNOTATION: None}}}
+                                                                      gpu_holds.RELOAD_ANNOTATION: None,
+                                                                      gpu_holds.MODELS_ANNOTATION: None}}}
             )
             self._managed.pop(self._key(backend_type, node_name, model_id), None)
             self._end_hold_of(dep)
@@ -915,10 +917,12 @@ class LLMPodManager:
         except gpu_holds.HoldError as e:
             logger.error(f"The hold {hold_id} of {deployment.metadata.name} was not ended: {e}")
 
-    def give_up(self, backend_type: str, node_name: str, model_id: Optional[str] = None) -> Optional[str]:
-        """Stop a model's pod for work of a higher priority, to start it again later: its Deployment is kept at
-        no replicas, with its hold's id and RELOAD_ANNOTATION. Returns the hold's id; None when the Deployment has
-        no hold or is gone."""
+    def give_up(self, backend_type: str, node_name: str, model_id: Optional[str] = None,
+                models: Optional[List[str]] = None) -> Optional[str]:
+        """Stop a pod for work of a higher priority, to start it again later: its Deployment is kept at no
+        replicas, with its hold's id and RELOAD_ANNOTATION. `models`: of a pod that serves several, the ids of the
+        models on it, kept on the Deployment to load again. Returns the hold's id; None when the Deployment has no
+        hold or is gone."""
         from kubernetes import client, config as k8s_config
 
         try:
@@ -937,17 +941,22 @@ class LLMPodManager:
         hold_id = (dep.metadata.annotations or {}).get(gpu_holds.HOLD_ANNOTATION)
         if not hold_id:
             return None
+        marks = {gpu_holds.RELOAD_ANNOTATION: "true"}
+        if models is not None and (dep.spec.replicas or 0) > 0:
+            # Asked again once the pod is stopped, the models kept the first time stay
+            marks[gpu_holds.MODELS_ANNOTATION] = json.dumps(models)
         apps_v1.patch_namespaced_deployment(
-            deploy_name, namespace,
-            {"spec": {"replicas": 0}, "metadata": {"annotations": {gpu_holds.RELOAD_ANNOTATION: "true"}}})
+            deploy_name, namespace, {"spec": {"replicas": 0}, "metadata": {"annotations": marks}})
         self._managed.pop(self._key(backend_type, node_name, model_id), None)
         logger.info(f"Scaled {deploy_name} to 0 for work of a higher priority; it starts again when its hold "
                     f"{hold_id} has GPUs")
         return hold_id
 
-    def start_again(self) -> List[str]:
-        """Start the pods stopped by give_up whose holds have GPUs again, on those GPUs. Returns the MODEL_ID of
-        each Deployment started. A Deployment whose hold has ended starts no more: its marks are removed."""
+    def start_again(self) -> List[Dict[str, Any]]:
+        """Start the pods stopped by give_up whose holds have GPUs again, on those GPUs. Returns each one started:
+        {"model"} for a pod of one model (its MODEL_ID), {"backend_type", "node", "models"} for a pod that serves
+        several, with the ids of the models to load on it again. A Deployment whose hold has ended starts no
+        more: its marks are removed."""
         from kubernetes import client, config as k8s_config
 
         try:
@@ -955,7 +964,7 @@ class LLMPodManager:
         except k8s_config.ConfigException:
             k8s_config.load_kube_config()
         apps_v1 = client.AppsV1Api()
-        started: List[str] = []
+        started: List[Dict[str, Any]] = []
         for backend in llm_backend_types.list():
             try:
                 deploys = apps_v1.list_namespaced_deployment(
@@ -980,7 +989,8 @@ class LLMPodManager:
                     apps_v1.patch_namespaced_deployment(
                         dep.metadata.name, backend.namespace,
                         {"metadata": {"annotations": {gpu_holds.HOLD_ANNOTATION: None,
-                                                      gpu_holds.RELOAD_ANNOTATION: None}}})
+                                                      gpu_holds.RELOAD_ANNOTATION: None,
+                                                      gpu_holds.MODELS_ANNOTATION: None}}})
                     logger.info(f"{dep.metadata.name} starts no more: its hold {hold_id} is {hold['status']}")
                     continue
                 containers = [{"name": c.name, "env": [{"name": "NVIDIA_VISIBLE_DEVICES",
@@ -988,13 +998,66 @@ class LLMPodManager:
                               for c in dep.spec.template.spec.containers]
                 apps_v1.patch_namespaced_deployment(
                     dep.metadata.name, backend.namespace,
-                    {"metadata": {"annotations": {gpu_holds.RELOAD_ANNOTATION: None}},
+                    {"metadata": {"annotations": {gpu_holds.RELOAD_ANNOTATION: None,
+                                                  gpu_holds.MODELS_ANNOTATION: None}},
                      "spec": {"replicas": 1, "template": {"spec": {"containers": containers}}}})
-                model = self._get_container_env(dep, "MODEL_ID")
                 logger.info(f"Started {dep.metadata.name} again on {hold['gpu_ids']}")
-                if model:
-                    started.append(model)
+                labels = dep.metadata.labels or {}
+                if labels.get(MODEL_LABEL):
+                    model = self._get_container_env(dep, "MODEL_ID")
+                    if model:
+                        started.append({"model": model})
+                else:
+                    started.append({"backend_type": backend.type, "node": labels.get(TARGET_NODE_LABEL, ""),
+                                    "models": json.loads(annotations.get(gpu_holds.MODELS_ANNOTATION) or "[]")})
         return started
+
+    def shared_pod(self, backend_type: str, node_name: str) -> Tuple[bool, Optional[str]]:
+        """Of a node's pod that serves several models: (whether its Deployment runs, the id of its hold of GPUs).
+        A Deployment that runs without a hold asked Kubernetes for its GPU."""
+        from kubernetes import client, config as k8s_config
+
+        try:
+            k8s_config.load_incluster_config()
+        except k8s_config.ConfigException:
+            k8s_config.load_kube_config()
+        try:
+            dep = client.AppsV1Api().read_namespaced_deployment(
+                self._make_deployment_name(backend_type, node_name, None), self._get_namespace(backend_type))
+        except client.rest.ApiException as e:
+            if e.status == 404:
+                return False, None
+            raise
+        if (dep.spec.replicas or 0) < 1:
+            return False, None
+        return True, (dep.metadata.annotations or {}).get(gpu_holds.HOLD_ANNOTATION)
+
+    def shared_holds(self) -> List[Tuple[str, str, str]]:
+        """(backend type, node, hold id) of every running pod that serves several models and has a hold."""
+        from kubernetes import client, config as k8s_config
+
+        try:
+            k8s_config.load_incluster_config()
+        except k8s_config.ConfigException:
+            k8s_config.load_kube_config()
+        apps_v1 = client.AppsV1Api()
+        found = []
+        for backend in llm_backend_types.list():
+            if not backend.shared:
+                continue
+            try:
+                deploys = apps_v1.list_namespaced_deployment(
+                    backend.namespace, label_selector=f"{GATEWAY_LABEL}={GATEWAY_LABEL_VALUE}")
+            except client.rest.ApiException as e:
+                if e.status == 404:
+                    continue  # the backend is not installed
+                raise
+            for dep in deploys.items:
+                hold_id = (dep.metadata.annotations or {}).get(gpu_holds.HOLD_ANNOTATION)
+                node = (dep.metadata.labels or {}).get(TARGET_NODE_LABEL)
+                if hold_id and node and (dep.spec.replicas or 0) > 0:
+                    found.append((backend.type, node, hold_id))
+        return found
 
     def end_orphan_holds(self) -> List[str]:
         """End the gateway's holds that none of its Deployments is on, ORPHAN_SECONDS after they were asked for.

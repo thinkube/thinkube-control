@@ -81,3 +81,37 @@ def test_a_hold_is_released_only_when_it_was_asked_to_give_its_gpus_up(signed_in
     assert (released["status"], released["gpu_ids"]) == ("waiting", None)
     job = signed_in.post("/api/v1/jobs", json=NEW).json()
     assert signed_in.post(f"/api/v1/jobs/{job['id']}/release").status_code == 409
+
+
+def test_a_holds_memory_is_changed_and_a_growth_its_gpu_does_not_hold_is_refused(signed_in, test_db, monkeypatch):
+    from app.services import nodes
+
+    GIB = 2**30
+
+    class Fake:
+        async def list(self):
+            return [{"name": "tkamd2", "kind": "separate", "memory_available_bytes": 100 * GIB,
+                     "gpus": [{"id": "GPU-0", "index": 0, "memory_total_bytes": 24 * GIB,
+                               "memory_used_bytes": used["gib"] * GIB}]}]
+
+    # What the card reports in use: 10 GiB of other work, and what the hold's pod has taken
+    used = {"gib": 16}
+    monkeypatch.setattr(nodes, "nodes", Fake())
+    pod = signed_in.post("/api/v1/holds", json={**HOLD, "name": "heads-tkamd2", "gpus": 1, "gpu_memory_gb": 6}).json()
+    # Waiting, it asks for what it will need
+    assert signed_in.post(f"/api/v1/jobs/{pod['id']}/memory", json={"gpu_memory_gb": 8}).json()["gpu_memory_gb"] == 8
+    row = test_db.get(Job, pod["id"])
+    row.status, row.gpu_ids, row.gpu_memory_gb = RUNNING, ["GPU-0"], 6
+    test_db.flush()
+    # The card reports 16 GiB in use, 6 of them the hold's: 22.8 less the other 10 hold up to 12.8
+    assert signed_in.post(f"/api/v1/jobs/{pod['id']}/memory", json={"gpu_memory_gb": 12}).json()["gpu_memory_gb"] == 12
+    used["gib"] = 22
+    refused = signed_in.post(f"/internal/scheduler/jobs/{pod['id']}/memory", json={"gpu_memory_gb": 14})
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == ("hold heads-tkamd2 cannot take 14 GiB on its GPUs: waiting for a GPU of tkamd2 "
+                                        "(14.0 GiB on a GPU): GPU 0 has 12.8 GiB free")
+    assert test_db.get(Job, pod["id"]).gpu_memory_gb == 12
+    # It shrinks without a question
+    assert signed_in.post(f"/api/v1/jobs/{pod['id']}/memory", json={"gpu_memory_gb": 3}).json()["gpu_memory_gb"] == 3
+    alone = signed_in.post("/api/v1/holds", json=HOLD).json()
+    assert signed_in.post(f"/api/v1/jobs/{alone['id']}/memory", json={"gpu_memory_gb": 3}).status_code == 409

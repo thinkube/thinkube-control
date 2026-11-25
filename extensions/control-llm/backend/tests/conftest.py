@@ -114,7 +114,8 @@ def holds(monkeypatch):
 
     from app.services import gpu_holds
 
-    seen = SimpleNamespace(asked=[], ended=[], released=[], refuse=None, status="running", gpu_ids=["GPU-0"])
+    seen = SimpleNamespace(asked=[], ended=[], released=[], resized=[], refuse=None, status="running",
+                           gpu_ids=["GPU-0"], gpus=1, gpu_memory_gb=4.0, refuse_resize=None)
 
     async def ask(name, node, gpus, gpu_memory_gb, memory_gb=0, on_gpus=None):
         seen.asked.append({"name": name, "node": node, "gpus": gpus, "gpu_memory_gb": gpu_memory_gb,
@@ -128,7 +129,17 @@ def holds(monkeypatch):
         return list(seen.gpu_ids)
 
     def read(hold_id):
-        return {"id": hold_id, "status": seen.status, "gpu_ids": list(seen.gpu_ids)}
+        return {"id": hold_id, "status": seen.status, "gpu_ids": list(seen.gpu_ids), "gpus": seen.gpus,
+                "gpu_memory_gb": seen.gpu_memory_gb}
+
+    def resize_now(hold_id, gpu_memory_gb):
+        if seen.refuse_resize:
+            raise gpu_holds.HoldError(f"the Scheduler refused to give the hold {hold_id} {gpu_memory_gb:g} GiB on "
+                                      f"each GPU: 409 {seen.refuse_resize}")
+        seen.resized.append((hold_id, gpu_memory_gb))
+
+    async def resize(hold_id, gpu_memory_gb):
+        resize_now(hold_id, gpu_memory_gb)
 
     async def get(hold_id):
         return read(hold_id)
@@ -147,6 +158,8 @@ def holds(monkeypatch):
     monkeypatch.setattr(gpu_holds, "get_sync", read)
     monkeypatch.setattr(gpu_holds, "end_sync", seen.ended.append)
     monkeypatch.setattr(gpu_holds, "release_sync", seen.released.append)
+    monkeypatch.setattr(gpu_holds, "resize", resize)
+    monkeypatch.setattr(gpu_holds, "resize_sync", resize_now)
     seen.listed = []
     monkeypatch.setattr(gpu_holds, "list_sync", lambda: list(seen.listed))
     return seen
