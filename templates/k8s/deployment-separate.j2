@@ -2,6 +2,10 @@
 # Generated deployments for separate_pods mode
 # Each container gets its own deployment
 {% for container in thinkube_spec.spec.containers %}
+{# A container's GPUs are the Scheduler's to give (scripts/gpu_placement.py), except a component's, whose pods the
+   LLM gateway starts #}
+{% set held_gpus = container.gpu is defined and container.gpu.count is defined
+   and (thinkube_spec.spec.deployment.type | default('app')) != 'component' %}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -12,6 +16,14 @@ metadata:
     app.kubernetes.io/name: {{ project_name }}
     app.kubernetes.io/component: {{ container.name }}
     app.kubernetes.io/managed-by: argocd
+{% if held_gpus %}
+  # Thinkube Control asks the Scheduler for these GPUs and writes the ids of
+  # the ones it is given into the ConfigMap {{ project_name }}-{{ container.name }}-gpus;
+  # the pod does not start before.
+  annotations:
+    scheduler.thinkube.io/gpus: "{{ container.gpu.count }}"
+    scheduler.thinkube.io/gpu-memory-gb: "{{ container.gpu.memory | replace('Gi', '') }}"
+{% endif %}
 spec:
   replicas: {{ thinkube_spec.spec.deployment.replicas }}
   selector:
@@ -27,6 +39,10 @@ spec:
       labels:
         app.kubernetes.io/name: {{ project_name }}
         app.kubernetes.io/component: {{ container.name }}
+{% if held_gpus %}
+      annotations:
+        scheduler.thinkube.io/gpus: "{{ container.gpu.count }}"
+{% endif %}
     spec:
       priorityClassName: thinkube-workload
       imagePullSecrets:
@@ -48,7 +64,15 @@ spec:
       nodeSelector:
         kubernetes.io/hostname: {{ home_node }}
 {% endif %}
-{% set gpu_affinity = container.gpu is defined and container.gpu.memory is defined %}
+{% if held_gpus %}
+      # The node whose GPUs hold this container, chosen when the manifests
+      # were rendered; the pod is given its GPUs by their ids, with the
+      # runtime class that takes ids, and asks Kubernetes for none.
+      nodeSelector:
+        kubernetes.io/hostname: {{ gpu_nodes[container.name] }}
+      runtimeClassName: nvidia-legacy
+{% endif %}
+{% set gpu_affinity = container.gpu is defined and container.gpu.memory is defined and not held_gpus %}
 {% set arch_affinity = thinkube_spec.spec.architectures is defined %}
 {% if gpu_affinity or arch_affinity %}
       affinity:
@@ -264,6 +288,16 @@ spec:
                 secretKeyRef:
                   name: {{ project_name }}-storage-credentials
                   key: secret-key
+{% if held_gpus %}
+            # The GPUs the Scheduler gave, by their ids
+            - name: NVIDIA_VISIBLE_DEVICES
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ project_name }}-{{ container.name }}-gpus
+                  key: NVIDIA_VISIBLE_DEVICES
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: "compute,utility"
+{% endif %}
 {% if container.gpu is defined and container.gpu.count is defined %}
             # Persist FlashInfer's JIT kernel cache on the NVMe hostPath so the
             # ~150s kernel build is reused across restarts instead of recompiled
@@ -341,7 +375,8 @@ spec:
               cpu: "500m"
             {% endif %}
 {%- endif %}
-{% if container.gpu is defined and container.gpu.count is defined and container.gpu.memory is defined %}
+{% if held_gpus %}
+{% elif container.gpu is defined and container.gpu.count is defined and container.gpu.memory is defined %}
 {% if container.size is not defined %}
 
           resources:

@@ -210,6 +210,11 @@ async def app_lifespan(app: FastAPI):
     cluster_resources_task = asyncio.create_task(refresh_cluster_resources_loop())
     logger.info("Started cluster resources refresh task (15s interval)")
 
+    # The apps' GPUs, asked of the Scheduler (app.services.app_gpus)
+    from app.services import app_gpus
+    app_gpus_task = asyncio.create_task(app_gpus.run_forever())
+    logger.info("Started the apps' GPU loop")
+
     # Unattended notebook runs that were in flight when thinkube-control last stopped
     from app.api.jupyter_servers import resume_notebook_jobs
     try:
@@ -301,6 +306,7 @@ async def app_lifespan(app: FastAPI):
     build_cleanup_task.cancel()
     discovery_task.cancel()
     cluster_resources_task.cancel()
+    app_gpus_task.cancel()
     for task in [health_check_task, discovery_task]:
         try:
             await task

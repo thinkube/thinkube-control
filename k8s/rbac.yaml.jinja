@@ -36,6 +36,18 @@ rules:
     - pods/eviction
   verbs: ["create"]
 
+# The apps' GPUs (backend/app/services/app_gpus.py): Control writes the
+# ConfigMap that names the GPUs the Scheduler gave an app, and deletes the
+# app's pods so that they start on them, or stop when the GPUs are asked back.
+- apiGroups: [""]
+  resources:
+    - configmaps
+  verbs: ["create", "update"]
+- apiGroups: [""]
+  resources:
+    - pods
+  verbs: ["delete"]
+
 # Pod exec (LLM model creation via Ollama CLI)
 - apiGroups: [""]
   resources:

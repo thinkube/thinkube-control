@@ -44,6 +44,7 @@ from manifest_plan import (
     artifact_repository_name, has_extension_access, home_folder_vars,
 )
 from platform_credentials import artifact_secret_name
+import gpu_placement
 from template_folder import fetch_folder, folder_name, replace_checkout
 from template_version import github_git_env, template_ref
 from thinkube_yaml_placeholders import substitute as substitute_placeholders
@@ -1271,6 +1272,7 @@ git fetch origin main
             'artifact_secret': artifact_secret_name(self.app_name, self.is_extension),
             'extension_filesystems': EXTENSION_FILESYSTEMS,
             'platform_addresses': PLATFORM_ADDRESSES,
+            'gpu_nodes': self.gpu_nodes,
             **home_folder_vars(os.environ),
         }
 
@@ -1552,6 +1554,29 @@ spec:
 
     # ==================== PHASE 4: Git Operations ====================
 
+    async def _place_gpu_containers(self) -> Dict[str, str]:
+        """The node of each container whose GPUs the Scheduler gives (scripts/gpu_placement.py): the one its
+        Deployment runs on when that node still holds it, else the node with the most GPU memory free for it."""
+        held = gpu_placement.held_containers(self.thinkube_config)
+        if not held:
+            return {}
+        current = {}
+        for container in held:
+            name = f"{self.app_name}-{container['name']}"
+            try:
+                found = await self.k8s_apps.read_namespaced_deployment(name, self.namespace)
+            except ApiException as e:
+                if e.status != 404:
+                    raise
+                found = None
+            if gpu_placement.node_of(found):
+                current[container['name']] = gpu_placement.node_of(found)
+        nodes = await asyncio.to_thread(gpu_placement.read_nodes)
+        chosen = gpu_placement.choose(self.thinkube_config, self.app_name, current, nodes)
+        for container, node in chosen.items():
+            DeploymentLogger.log(f"Container {container} runs on {node}; the Scheduler gives its GPUs there")
+        return chosen
+
     async def phase4_git_operations(self):
         """Phase 4: Sequential git operations, ending when the build has started.
 
@@ -1576,6 +1601,7 @@ spec:
         self._gpu_quota = await self._compute_gpu_namespace_quota(_has_gpu, _containers)
         # Dependencies are resolved before the manifests that inject them are rendered.
         await self._resolve_dependencies()
+        self.gpu_nodes = await self._place_gpu_containers()
 
         # Generate k8s manifests from thinkube.yaml (mirrors Ansible generate_k8s_manifests.yaml)
         # Run in thread pool to avoid blocking the event loop

@@ -28,6 +28,30 @@ REPLICAS_BEFORE_DISABLE = "thinkube.io/replicas-before-disable"
 CHI_GROUP, CHI_VERSION, CHI_PLURAL = "clickhouse.altinity.com", "v1", "clickhouseinstallations"
 
 
+
+# The runtime class with which a pod is given GPUs by their ids, and the annotation of an app's pod that says how
+# many its Deployment asks the Scheduler for (templates/k8s/deployment-separate.j2)
+GPU_RUNTIME_CLASS = "nvidia-legacy"
+APP_GPUS_ANNOTATION = "scheduler.thinkube.io/gpus"
+
+
+def pod_gpus(pod) -> int:
+    """The GPUs a pod holds: those it asks Kubernetes for (nvidia.com/gpu), or, for a pod given GPUs by their ids,
+    the ids named in NVIDIA_VISIBLE_DEVICES; an app's pod that reads them from its ConfigMap holds the count its
+    annotation says once a container runs, and none while it waits for them."""
+    asked = sum(int((c.resources.limits or {}).get("nvidia.com/gpu", 0)) for c in pod.spec.containers
+                if c.resources and c.resources.limits)
+    if asked or pod.spec.runtime_class_name != GPU_RUNTIME_CLASS:
+        return asked
+    for container in pod.spec.containers:
+        for env in container.env or []:
+            if env.name == "NVIDIA_VISIBLE_DEVICES" and env.value and env.value not in ("void", "none"):
+                return len([i for i in env.value.split(",") if i])
+    started = any(s.state is not None and s.state.running is not None
+                  for s in (pod.status.container_statuses or [] if pod.status else []))
+    annotated = (pod.metadata.annotations or {}).get(APP_GPUS_ANNOTATION)
+    return int(annotated) if started and annotated and annotated.isdigit() else 0
+
 class K8sServiceManager:
     """Manage Kubernetes deployments and services"""
 
@@ -168,15 +192,11 @@ class K8sServiceManager:
                         logger.debug(f"Skipping pod {pod.metadata.name} with ContainerStatusUnknown")
                         continue
 
-                for container in pod.spec.containers:
-                    if container.resources:
-                        # Check limits (what's actually allocated)
-                        if container.resources.limits:
-                            gpu_count = container.resources.limits.get("nvidia.com/gpu", 0)
-                            if gpu_count:
-                                total_gpus += int(gpu_count)
-                                if pod.spec.node_name:
-                                    gpu_nodes.add(pod.spec.node_name)
+                gpu_count = pod_gpus(pod)
+                if gpu_count:
+                    total_gpus += gpu_count
+                    if pod.spec.node_name:
+                        gpu_nodes.add(pod.spec.node_name)
             
             if total_gpus > 0:
                 return {
@@ -216,15 +236,13 @@ class K8sServiceManager:
                         continue
 
                 ns = pod.metadata.namespace
-                for container in pod.spec.containers:
-                    if container.resources and container.resources.limits:
-                        gpu_count = container.resources.limits.get("nvidia.com/gpu", 0)
-                        if gpu_count:
-                            if ns not in gpu_by_namespace:
-                                gpu_by_namespace[ns] = {"total_gpus": 0, "gpu_nodes": set()}
-                            gpu_by_namespace[ns]["total_gpus"] += int(gpu_count)
-                            if pod.spec.node_name:
-                                gpu_by_namespace[ns]["gpu_nodes"].add(pod.spec.node_name)
+                gpu_count = pod_gpus(pod)
+                if gpu_count:
+                    if ns not in gpu_by_namespace:
+                        gpu_by_namespace[ns] = {"total_gpus": 0, "gpu_nodes": set()}
+                    gpu_by_namespace[ns]["total_gpus"] += gpu_count
+                    if pod.spec.node_name:
+                        gpu_by_namespace[ns]["gpu_nodes"].add(pod.spec.node_name)
 
             # Convert sets to lists for JSON serialization
             for ns_info in gpu_by_namespace.values():

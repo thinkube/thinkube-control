@@ -58,6 +58,7 @@ from manifest_parameters import (
     recorded_values as _recorded_parameter_values,
 )
 import spec_env as _spec_env
+import gpu_placement as _gpu_placement
 import service_config as _service_config
 from dependency_resolution import knative_url, knative_view, service_url, service_view
 from build_architectures import (
@@ -254,6 +255,26 @@ class ManifestGenerator:
             raise RuntimeError(f"Listing services failed: {e.reason}") from e
         return service_url([service_view(s) for s in svc_list.items], dep_type)
 
+    def _place_gpu_containers(self) -> Dict[str, str]:
+        """The node of each container whose GPUs the Scheduler gives (scripts/gpu_placement.py): the one its
+        Deployment runs on when that node still holds it, else the node with the most GPU memory free for it."""
+        held = _gpu_placement.held_containers(self.thinkube_config)
+        if not held:
+            return {}
+        config.load_incluster_config()
+        apps = client.AppsV1Api()
+        current = {}
+        for container in held:
+            try:
+                found = apps.read_namespaced_deployment(f"{self.app_name}-{container['name']}", self.namespace)
+            except ApiException as e:
+                if e.status != 404:
+                    raise
+                found = None
+            if _gpu_placement.node_of(found):
+                current[container['name']] = _gpu_placement.node_of(found)
+        return _gpu_placement.choose(self.thinkube_config, self.app_name, current, _gpu_placement.read_nodes())
+
     def regenerate(self) -> Dict[str, str]:
         """Regenerate all k8s/ manifests and return them as a dict of {filename: content}.
 
@@ -347,6 +368,7 @@ class ManifestGenerator:
             'artifact_secret': _artifact_secret_name(self.app_name, self.is_extension),
             'extension_filesystems': _EXTENSION_FILESYSTEMS,
             'platform_addresses': _PLATFORM_ADDRESSES,
+            'gpu_nodes': self._place_gpu_containers(),
             **_home_folder_vars(os.environ),
         }
 

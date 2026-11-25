@@ -204,16 +204,23 @@ Each step is seen before the next begins.
    numbers themselves. The table moves to the scheduler with step 4.
 8. **Apps that use a GPU ask.** Decided on 25 November: an app asks, like
    everything else; the scheduler does not read what Kubernetes gave. An app
-   says the GPUs it needs in its `thinkube.yaml`, and Thinkube Control
-   writes its Kubernetes request from that, so the change is made once, in
-   Thinkube Control, and the templates stay as they are: Control asks for
-   the app's hold when it deploys the app, starts the app's pod on the GPUs
-   the hold was given, scales the app to 0 when the scheduler asks for its
-   GPUs, and back when the hold has GPUs again. An app whose manifest asks
-   Kubernetes for a GPU by hand does not start after step 9.
-   Seen when: an app with a GPU runs on the GPU its hold was given, is
-   scaled to 0 for a job of a higher priority, and comes back when the job
-   has ended.
+   says the GPUs it needs in its `thinkube.yaml` (`gpu: count, memory`), and
+   Thinkube Control writes its manifests from that, so the change is made
+   once, in Thinkube Control, and the templates stay as they are.
+   Built so: when the manifests are rendered, a container with `gpu` is
+   pinned to the node whose GPUs hold it with the most memory free (the node
+   it is on already while it still fits). Its pod asks Kubernetes for no GPU,
+   runs with `nvidia-legacy`, and reads `NVIDIA_VISIBLE_DEVICES` from the
+   ConfigMap `<deployment>-gpus`, which Control writes. A loop in Control
+   asks for a hold for each such Deployment that has replicas (priority 5),
+   writes the GPU ids once the hold has them, and the pod starts. Asked for
+   the GPUs, Control takes the ids out and deletes the pods, which wait
+   without starting, and releases the hold once none runs. Replicas are
+   never changed, so an Argo CD sync of the app undoes nothing. A
+   component's containers keep asking Kubernetes: the gateway starts their
+   pods.
+   Seen when: an app with a GPU runs on the GPU its hold was given, stops
+   for a job of a higher priority, and comes back when the job has ended.
 9. **Kubernetes hands out no GPUs.** Time slicing is turned off and the GPU
    plugin offers none on the nodes, so a pod that goes around the scheduler
    does not start.
