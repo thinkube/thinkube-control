@@ -254,14 +254,14 @@ def start(
     limit: Optional[int],
     token: Optional[str] = None,
     tags: Optional[Dict[str, str]] = None,
-    secrets: Optional[Dict[str, str]] = None,
+    given_secrets: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Start a run of a task in this pod. Answers once the run's first status is stored.
 
     A path of an input or an output is relative to the root of the tasks
     repository, or absolute. `token` is the caller's token, which the task
     calls the platform's services with; `tags` are attached to the run;
-    `secrets` are given to the task as environment variables of their names.
+    `given_secrets` are given to the task as environment variables of their names.
     """
     path = _file_in_repository(file)
     tags = _checked_tags(tags or {})
@@ -280,7 +280,7 @@ def start(
     command += ["--run-id", run_id]
 
     child = Child(subprocess.Popen(
-        command, cwd=repository(), env=_task_env(token, secrets), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        command, cwd=repository(), env=_task_env(token, given_secrets), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         errors="replace", start_new_session=True, **_as_task_user(),
     ))
     _children[run_id] = child
