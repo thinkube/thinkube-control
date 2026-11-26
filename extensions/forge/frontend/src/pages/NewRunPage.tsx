@@ -36,6 +36,9 @@ import {
   type DecisionValue,
   type GpuNode,
   type Method,
+  LM_METHODS,
+  TAGGING_METHODS,
+  taskOfKind,
   type Preview,
   type Run,
   type When,
@@ -228,6 +231,10 @@ export default function NewRunPage() {
 
   const chosenNode = useMemo(() => nodes?.find((n) => n.name === node), [nodes, node]);
   const chosenDataset = useMemo(() => datasets?.find((d) => d.id === datasetId), [datasets, datasetId]);
+  // A dataset of words trains a tagger and parser on an encoder: its own methods, no milestones, no registration
+  const task = taskOfKind(chosenDataset?.mapping.kind);
+  const tagging = task === 'tagging';
+  const baseModels = useMemo(() => (models ?? []).filter((m) => m.trains.includes(task)), [models, task]);
 
   // The splits of the version picked; the dataset's own until its versions are read
   const splits = useMemo(
@@ -243,6 +250,13 @@ export default function NewRunPage() {
 
   const pickDataset = (id: string) => {
     const d = datasets!.find((x) => x.id === id)!;
+    const nextTask = taskOfKind(d.mapping.kind);
+    if (nextTask !== task) {
+      setBaseModel('');
+      setMethod(nextTask === 'tagging' ? 'bottleneck' : 'lora');
+      setRegister(nextTask === 'sft');
+      if (nextTask === 'tagging') setMilestonesOn(false);
+    }
     setDatasetId(id);
     setDatasetVersion(d.version);
     setVersions(null);
@@ -386,7 +400,7 @@ export default function NewRunPage() {
 
             <div className="space-y-1">
               <TkLabel>{t('newRun.baseModel')}</TkLabel>
-              {models && models.length === 0 ? (
+              {models && baseModels.length === 0 ? (
                 <TkWarningAlert>{t('newRun.noModels')}</TkWarningAlert>
               ) : (
                 <TkSelect value={baseModel} onValueChange={setBaseModel}>
@@ -394,7 +408,7 @@ export default function NewRunPage() {
                     <TkSelectValue placeholder={t('newRun.pickModel')} />
                   </TkSelectTrigger>
                   <TkSelectContent>
-                    {(models ?? []).map((m) => (
+                    {baseModels.map((m) => (
                       <TkSelectItem key={m.id} value={m.id}>
                         {m.name} {m.params_b ? `· ${m.params_b}B` : ''}
                       </TkSelectItem>
@@ -521,7 +535,7 @@ export default function NewRunPage() {
             <div className="space-y-2">
               <TkLabel>{t('newRun.method')}</TkLabel>
               <TkRadioGroup value={method} onValueChange={(v) => setMethod(v as Method)}>
-                {(['lora', 'qlora', 'fp8', 'nvfp4'] as Method[]).map((m) => (
+                {(tagging ? TAGGING_METHODS : LM_METHODS).map((m) => (
                   <label key={m} className="flex items-start gap-2 text-sm">
                     <TkRadioGroupItem value={m} className="mt-0.5" />
                     <span>
@@ -552,6 +566,7 @@ export default function NewRunPage() {
               )}
             </div>
 
+            {!tagging && (
             <label className="flex items-center gap-3 text-sm md:col-span-2">
               <TkSwitch checked={register} onCheckedChange={setRegister} />
               <span>
@@ -559,7 +574,10 @@ export default function NewRunPage() {
                 <span className="block text-muted-foreground">{t('newRun.registerHelp')}</span>
               </span>
             </label>
+            )}
 
+            {tagging && <p className="text-xs text-muted-foreground md:col-span-2">{t('newRun.taggingScored')}</p>}
+            {!tagging && (
             <label className="flex items-center gap-3 text-sm md:col-span-2">
               <TkSwitch checked={milestonesOn} onCheckedChange={setMilestonesOn} />
               <span>
@@ -567,6 +585,7 @@ export default function NewRunPage() {
                 <span className="block text-muted-foreground">{t('newRun.milestonesHelp')}</span>
               </span>
             </label>
+            )}
             {milestonesOn && (
               <>
                 <div className="space-y-1">
@@ -620,7 +639,7 @@ export default function NewRunPage() {
                           </TkSelectTrigger>
                           <TkSelectContent>
                             <TkSelectItem value={SAME_WEIGHTS}>{t('newRun.milestoneWeightsSame')}</TkSelectItem>
-                            {(['lora', 'qlora', 'fp8', 'nvfp4'] as Method[]).map((m) => (
+                            {LM_METHODS.map((m) => (
                               <TkSelectItem key={m} value={m}>{t(`method.${m}`)}</TkSelectItem>
                             ))}
                           </TkSelectContent>

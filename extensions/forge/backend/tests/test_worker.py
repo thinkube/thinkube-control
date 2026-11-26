@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.models.forge import Run, Slot
-from app.services import control, runs, worker
+from app.services import control, runfiles, runs, worker
 
 MADRID = ZoneInfo("Europe/Madrid")
 BASE = {"id": "BSC-LT/salamandraTA-2b-instruct", "name": "SalamandraTA 2B", "params_b": 2.25,
@@ -73,6 +73,7 @@ class FakeControl:
 class FakeFiles:
     def __init__(self):
         self.plans, self.statuses, self.stops = {}, {}, set()
+        self.scores, self.unreadable_scores = {}, set()
         self.preprocesses = {}
         self.revisions = {}
         self.cleared = []
@@ -88,6 +89,11 @@ class FakeFiles:
 
     async def status(self, run):
         return self.statuses.get(run.id)
+
+    async def tagging_scores(self, run):
+        if run.id in self.unreadable_scores:
+            raise runfiles.RunFilesError("MLflow answered the download with 504")
+        return self.scores.get(run.id)
 
     async def request_stop(self, run):
         self.stops.add(run.id)
@@ -136,11 +142,12 @@ def queue(test_db):
 
         def run(self, name, status="queued", node="tkspark", when="now", position=None, plan=None, **fields):
             fields.setdefault("memory_gb", 32)
+            fields.setdefault("job", runs.meepsquared_job("lora", 100, None, {}))
             if status != "preprocessing":
                 fields.setdefault("preprocess", {"node": "tkamd2", "job_id": "j0", "key": "k", "folder": "/p/k",
                                                  "found": True})
             r = Run(id=str(uuid.uuid4()), name=name, dataset_id="d1", dataset_version=1, base_model=BASE["id"], method="lora",
-                    node=node, register=False, job=runs.meepsquared_job("lora", 100, None, {}),
+                    node=node, register=False,
                     status=status, when=when, position=position, plan=plan or {"estimated_seconds": 3600},
                     mlflow_experiment_id="5", mlflow_run_id=f"m-{name}",
                     dataset={"train": {"split": "train", "path": "p", "rows": 1}}, created_by="u",
@@ -600,3 +607,27 @@ def test_a_task_run_kept_from_before_is_not_forges_to_run(queue):
     queue.tick()
     assert old.status == "queued" and fine_tune.status == "running"
     assert [r["parameters"]["run_id"] for r in queue.control.started] == [fine_tune.id]
+
+
+def test_a_tagging_runs_progress_holds_the_scores_of_each_epoch(queue):
+    run = queue.run("tagger", position=1, job=runs.meepsquared_job("bottleneck", None, 20, {}, task="tagging"))
+    queue.tick()
+    queue.files.statuses[run.id] = {"state": "training", "step": 900, "total_steps": 9000}
+    queue.tick()
+    assert run.progress["epoch_scores"] == []
+    epoch = {"epoch": 1, "step": 450, "upos": 0.97, "uas": 0.88, "las": 0.84, "words": 12000, "score": 0.9}
+    queue.files.scores[run.id] = [epoch]
+    queue.tick()
+    assert run.progress["epoch_scores"] == [epoch] and run.progress["step"] == 900
+
+
+def test_a_tagging_runs_progress_waits_while_its_scores_cannot_be_read(queue):
+    run = queue.run("tagger", position=1, job=runs.meepsquared_job("bottleneck", None, 20, {}, task="tagging"))
+    queue.tick()
+    queue.files.statuses[run.id] = {"state": "training", "step": 900, "total_steps": 9000}
+    queue.files.scores[run.id] = [{"epoch": 1, "las": 0.84}]
+    queue.tick()
+    queue.files.unreadable_scores.add(run.id)
+    queue.files.statuses[run.id] = {"state": "training", "step": 1800, "total_steps": 9000}
+    queue.tick()
+    assert run.progress["step"] == 900 and run.progress["epoch_scores"] == [{"epoch": 1, "las": 0.84}]

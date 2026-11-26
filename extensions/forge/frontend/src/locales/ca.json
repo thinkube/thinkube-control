@@ -146,7 +146,9 @@
     "fp8": "LoRA sobre pesos FP8",
     "fp8Help": "Els pesos congelats en FP8: menys memòria, més ràpid en GPU amb nuclis tensorials FP8. El pla ho rebutja on la GPU no en té.",
     "nvfp4": "LoRA sobre pesos NVFP4",
-    "nvfp4Help": "Els pesos congelats i les seves entrades en NVFP4, en els nuclis tensorials FP4 de Blackwell: unes dues vegades més ràpid que en 16 bits en un DGX Spark. El pla ho rebutja on la GPU no en té."
+    "nvfp4Help": "Els pesos congelats i les seves entrades en NVFP4, en els nuclis tensorials FP4 de Blackwell: unes dues vegades més ràpid que en 16 bits en un DGX Spark. El pla ho rebutja on la GPU no en té.",
+    "bottleneck": "Adaptadors de coll d'ampolla",
+    "bottleneckHelp": "Un adaptador petit després de cada capa del codificador congelat, amb un cap per tasca i un analitzador. El mètode de Meep² per a etiquetadors."
   },
   "modelState": {
     "registered": "Registrat",
@@ -243,7 +245,8 @@
     "milestoneWeightsSame": "Els pesos del mateix entrenament",
     "milestoneWeightsHelp": "Les fites d'una execució d'elecció es poden respondre amb altres pesos que els de l'entrenament, com la base NF4 de QLoRA, que serveix una GPU de 24 GB: Meep² carrega una segona còpia de la base així i hi copia l'adaptador i el cap a cada fita.",
     "preprocessing": "Meep² està preprocessant les dades a {{node}}: tokenitzades, comprovades i tallades un sol cop…",
-    "preprocessWaits": "S'està iniciant la feina de preprocessament."
+    "preprocessWaits": "S'està iniciant la feina de preprocessament.",
+    "taggingScored": "Una execució d'etiquetatge es puntua amb la seva partició d'avaluació al final de cada època: l'exactitud de cada tasca, UAS i LAS. No té fites, i el seu etiquetador es publica per al backend heads, no com a model de llenguatge."
   },
   "run": {
     "status": {
@@ -516,5 +519,14 @@
     "runningSince": "va començar a les {{time}}",
     "runningShort": "fita {{pct}}%",
     "runningLabel": "Files respostes per la fita del pas {{step}}"
+  },
+  "epochScores": {
+    "title": "Puntuacions per època",
+    "description": "L'exactitud de cada tasca i l'UAS i LAS de l'analitzador a la partició d'avaluació, en percentatge, al final de cada època.",
+    "none": "Encara no ha acabat cap època.",
+    "epoch": "Època",
+    "step": "Pas",
+    "score": "Puntuació",
+    "best": "La millor fins ara: època {{epoch}}, la mitjana de les exactituds i el LAS."
   }
 }

@@ -492,3 +492,31 @@ def test_milestones_at_growing_distances_reach_meepsquared():
                                                           runs.milestones_of(0.01, None, [], "train", None, None, []))
     with pytest.raises(ValueError, match="growth is above 1"):
         runs.milestones_of(0.01, None, [], "train", None, None, [], growth=1.0)
+
+
+def test_a_dataset_of_words_trains_a_tagger_and_parser():
+    assert runs.task_of("words") == "tagging"
+    assert runs.task_of("choice") == "choice"
+    assert runs.task_of("messages") == "sft"
+
+
+def test_a_tagging_job_trains_bottleneck_adapters_with_meepsquareds_tagging_recipe():
+    job = runs.meepsquared_job("bottleneck", None, 20, {"bottleneck": 256, "tokens_per_update": 4096,
+                                                        "learning_rate": 5e-4, "keep": "best"}, task="tagging")
+    assert job == {"task": "tagging", "method": "bottleneck", "report_to": "mlflow", "epochs": 20,
+                   "recipe": {"bottleneck": 256, "tokens_per_update": 4096, "learning_rate": 5e-4, "keep": "best"}}
+    assert runs.meepsquared_job("lora", None, 2, {}, task="tagging")["method"] == "lora"
+
+
+def test_a_tagging_job_takes_the_tagging_methods_and_a_language_model_job_does_not():
+    with pytest.raises(ValueError, match="tagging run's method"):
+        runs.meepsquared_job("qlora", None, 2, {}, task="tagging")
+    with pytest.raises(ValueError, match="sft run's method"):
+        runs.meepsquared_job("bottleneck", None, 2, {})
+
+
+def test_a_tagging_job_is_scored_every_epoch_and_has_no_milestones():
+    with pytest.raises(ValueError, match="every epoch"):
+        runs.milestones_of(0.1, None, [], "dev", None, None, [], task="tagging")
+    with pytest.raises(ValueError, match="every epoch"):
+        runs.meepsquared_job("bottleneck", None, 2, {"eval_every": 100}, {"split": "dev"}, task="tagging")

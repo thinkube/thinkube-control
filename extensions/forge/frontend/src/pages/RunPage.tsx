@@ -19,6 +19,7 @@ import { ExportCard } from '@/components/ExportCard';
 import { Nvfp4Card } from '@/components/Nvfp4Card';
 import { LossChart } from '@/components/LossChart';
 import { MilestonesCard } from '@/components/MilestonesCard';
+import { EpochScoresCard } from '@/components/EpochScoresCard';
 import { PlanCard } from '@/components/PlanCard';
 import { RunStateBadge } from '@/components/RunStateBadge';
 import { TrainingProgress } from '@/components/TrainingProgress';
@@ -351,6 +352,10 @@ export default function RunPage() {
             </p>
           </TkCardContent>
         </TkCard>
+      )}
+
+      {run.job_spec?.task === 'tagging' && (
+        <EpochScoresCard records={run.progress?.epoch_scores ?? []} epochs={run.job_spec?.epochs as number | undefined} />
       )}
 
       {run.milestones && (

@@ -54,6 +54,12 @@ ENDED = ("completed", "failed", "cancelled")
 UNSUCCESSFUL = ("failed", "cancelled")
 WHEN = ("now", "slots")
 METHODS = ("lora", "qlora", "fp8", "nvfp4")
+# The methods of a tagging run (Meep²'s task tagging): bottleneck adapters or LoRA on a frozen encoder
+TAGGING_METHODS = ("bottleneck", "lora")
+# A run's task, from its dataset's format (Datasets' /training): a choice dataset trains Meep²'s task choice, a
+# dataset of words with their labels its task tagging (a tagger and a dependency parser), any other SFT
+TASK_OF_FORMAT = {"choice": "choice", "words": "tagging"}
+TASKS = ("sft", "choice", "tagging")
 # A model id the catalogue gives a fine-tune: forge/<name of the run>
 MODEL_NAMESPACE = "forge"
 # The memory a plan job asks for: the base model's 16-bit weights, which it
@@ -86,7 +92,9 @@ RECIPE_FIELDS = ("rank", "alpha", "dropout", "targets", "learning_rate", "schedu
                  "weight_decay", "experts", "answers_only",
                  # a choice job's (Meep²'s task choice)
                  "choice_head", "head_learning_rate", "candidates_per_pass", "head_only", "set_layers",
-                 "none_output")
+                 "none_output",
+                 # a tagging job's (Meep²'s task tagging)
+                 "labels", "words", "bottleneck", "head_dropout", "keep", "average_last", "decode")
 OVERRIDE_FIELDS = ("attention", "liger", "padding_free", "fused_lora", "compile_layers", "checkpointed_layers",
                    "selective_layers", "micro_batch", "milestone_engine")
 # Decisions that are fields of the job itself: how many steps apart the evaluations are, and the GPUs of the node a
@@ -94,6 +102,11 @@ OVERRIDE_FIELDS = ("attention", "liger", "padding_free", "fused_lora", "compile_
 JOB_FIELDS = ("eval_every", "gpus")
 # The largest share of the training split a run may hold out to evaluate on (Meep²'s eval_share)
 MAX_HOLDOUT = 0.5
+
+
+def task_of(dataset_format: str) -> str:
+    """The task a run on a dataset of this format trains."""
+    return TASK_OF_FORMAT.get(dataset_format, "sft")
 
 
 def notebook_cells(script: str) -> List[Dict[str, Any]]:
@@ -201,6 +214,9 @@ def milestones_of(every: Optional[float], training: Optional[Dict[str, Any]], co
     the NF4 base a 24 GB GPU serves, when it is not the training's. growth: the milestones at growing distances,
     the first distance `every` of the planned steps and each next one growth times the one before (Meep²'s
     milestone_growth)."""
+    if task == "tagging" and (every is not None or training is not None):
+        raise ValueError("a tagging run is scored on its evaluation data at the end of every epoch; it has no "
+                         "milestones")
     if growth is not None and not growth > 1:
         raise ValueError(f"milestones.growth is above 1, the factor from one distance between milestones to the next, "
                          f"not {growth}")
@@ -275,16 +291,22 @@ def meepsquared_job(method: str, steps: Optional[int], epochs: Optional[float], 
     run asks for one; auto mode decides every field not given. A run that
     evaluates on a split gets its eval_data from the notebook, which writes
     the split's examples. task is "choice" for a dataset of the mapping kind
-    choice (Meep²'s task choice), "sft" for any other. start_from, a choice
+    choice (Meep²'s task choice), "tagging" for one of the kind words (Meep²'s
+    task tagging, with the methods bottleneck or lora, scored on its
+    evaluation data at the end of every epoch), "sft" for any other. start_from, a choice
     job's only: the state the training goes on from, below the notebooks'
     models folder (~/thinkube/models), which the notebook resolves: a
     checkpoint folder of another run on the same data
     (forge/<run id>/output/checkpoint-<N>), or a .pt file of a state saved
     outside Meep²."""
-    if method not in METHODS:
-        raise ValueError(f"method is one of {list(METHODS)}, not {method!r}")
-    if task not in ("sft", "choice"):
-        raise ValueError(f"task is 'sft' or 'choice', not {task!r}")
+    if task not in TASKS:
+        raise ValueError(f"task is one of {list(TASKS)}, not {task!r}")
+    methods = TAGGING_METHODS if task == "tagging" else METHODS
+    if method not in methods:
+        raise ValueError(f"a {task} run's method is one of {list(methods)}, not {method!r}")
+    if task == "tagging" and milestones is not None:
+        raise ValueError("a tagging run is scored on its evaluation data at the end of every epoch; it has no "
+                         "milestones")
     if (steps is None) == (epochs is None):
         raise ValueError("give the steps or the epochs to train, one of them")
     parts = split_decisions(chosen)
@@ -304,6 +326,8 @@ def meepsquared_job(method: str, steps: Optional[int], epochs: Optional[float], 
         job["epochs"] = epochs
     if (evaluation or {}).get("holdout"):
         job["eval_share"] = evaluation["holdout"]
+    if "eval_every" in parts["job"] and task == "tagging":
+        raise ValueError("eval_every: a tagging run is scored at the end of every epoch")
     if "eval_every" in parts["job"] and not evaluation:
         raise ValueError("eval_every is for a run that evaluates; choose an evaluation split or a held-out share")
     if "gpus" in parts["job"] and task != "choice":

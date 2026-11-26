@@ -23,7 +23,7 @@ account.
 """
 
 import json
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -37,6 +37,8 @@ PREPROCESS = "preprocess.json"
 # What a revision job made: {"plan": ...}, or {"measure_again": Meep²'s reason}
 REVISION = "revision.json"
 STATUS = "status.json"
+# A tagging run's scores of each epoch, a JSON list of Meep²'s records (tagging-scores.jsonl)
+TAGGING_SCORES = "tagging-scores.json"
 STOP = "stop"
 TIMEOUT = httpx.Timeout(30.0)
 PROXY_SCHEME = "mlflow-artifacts:/"
@@ -161,6 +163,9 @@ class RunFiles:
 
     async def status(self, run) -> Optional[Dict[str, Any]]:
         return await read_json(*self._of(run), STATUS)
+
+    async def tagging_scores(self, run) -> Optional[List[Dict[str, Any]]]:
+        return await read_json(*self._of(run), TAGGING_SCORES)
 
     async def request_stop(self, run) -> None:
         await _send("PUT", *self._of(run), STOP, b"stop\n")

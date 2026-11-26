@@ -109,10 +109,21 @@ SHAREGPT_ROLES = {"system": "system", "human": "user", "user": "user", "gpt": "a
                   "assistant": "assistant", "tool": "tool"}
 
 
+# The parts of a row of words (Datasets' mapping kind words), each a list of one value per word: Meep²'s task
+# tagging learns each label column it is given, and head (from 1, 0 the root) with deprel as the parser
+WORD_PARTS = ("tokens", "upos", "xpos", "feats", "lemma", "head", "deprel")
+
+
 def example(row, mapping):
-    """One row as {"messages": [...]}, {"text": ...} or, for Meep²'s task choice, {"prompt", "candidates", "target",
-    "right", "none"}; the Datasets extension maps the same way and checks the rows."""
+    """One row as {"messages": [...]}, {"text": ...}, for Meep²'s task choice {"prompt", "candidates", "target",
+    "right", "none"}, or for its task tagging {"tokens", and each label column mapped}; the Datasets extension maps
+    the same way and checks the rows."""
     kind, cols = mapping["kind"], mapping["columns"]
+    if kind == "words":
+        found = {part: list(row[cols[part]]) for part in WORD_PARTS if cols.get(part)}
+        if "head" in found:
+            found["head"] = [int(h) for h in found["head"]]
+        return found
     if kind == "choice":
         found = {"prompt": row[cols["prompt"]], "candidates": list(row[cols["candidates"]])}
         for part in ("target", "right"):
@@ -362,13 +373,26 @@ if MODE == "train":
 
     reader = threading.Thread(target=echo, daemon=True)
     reader.start()
-    sent = None
+    # A tagging run's scores of each epoch (Meep²'s tagging-scores.jsonl in the output folder), sent as one JSON list
+    SCORES = OUT / "tagging-scores.jsonl"
+    SCORES_SENT = RUN_DIR / "tagging-scores.json"
+    sent = scores_sent = None
+
+    def send_scores():
+        records = [json.loads(line) for line in SCORES.read_text().splitlines() if line.strip()]
+        SCORES_SENT.write_text(json.dumps(records))
+        send(SCORES_SENT, "tagging-scores.json")
+
     while True:
         ended = process.poll() is not None
         changed = interrupted_again(lambda: STATUS.stat().st_mtime if STATUS.exists() else sent)
         if changed != sent:
             sent = changed
             interrupted_again(lambda: send(STATUS, "status.json"))
+        scored = interrupted_again(lambda: SCORES.stat().st_mtime if SCORES.exists() else scores_sent)
+        if scored != scores_sent:
+            scores_sent = scored
+            interrupted_again(send_scores)
         if ended:
             break
         time.sleep(10)

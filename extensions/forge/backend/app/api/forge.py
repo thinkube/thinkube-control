@@ -38,16 +38,29 @@ async def _catalog(token: str) -> List[Dict[str, Any]]:
         raise _control_failed(e)
 
 
-def trainable(model: Dict[str, Any]) -> bool:
-    """A mirrored text model in 16-bit weights, which LoRA and QLoRA train."""
-    return (model.get("is_downloaded") and model.get("task") == "text-generation"
-            and model.get("quantization") == "BF16" and not model.get("is_finetuned"))
+def trainable(model: Dict[str, Any], task: str = "sft") -> bool:
+    """For SFT and choice runs, a mirrored text model in 16-bit weights, which LoRA and QLoRA train. For a tagging
+    run, a mirrored pretrained encoder (the catalogue's task fill-mask, such as XLM-RoBERTa), which Meep² freezes
+    and trains through adapters."""
+    if not model.get("is_downloaded") or model.get("is_finetuned"):
+        return False
+    if task == "tagging":
+        return model.get("task") == "fill-mask"
+    return model.get("task") == "text-generation" and model.get("quantization") == "BF16"
+
+
+def trains(model: Dict[str, Any]) -> List[str]:
+    """The tasks a run on this base model can train."""
+    if trainable(model):
+        return ["sft", "choice"]
+    return ["tagging"] if trainable(model, "tagging") else []
 
 
 @router.get("/models", operation_id="forge_list_models")
 async def list_models(user: User = Depends(get_current_user), token: str = Depends(oauth2_scheme)):
-    """The models Forge can fine-tune: the mirrored BF16 text models of the catalogue."""
-    return [m for m in await _catalog(token) if trainable(m)]
+    """The models Forge can fine-tune: the mirrored BF16 text models of the catalogue (SFT and choice runs) and the
+    mirrored encoders (tagging runs), each with `trains`, the tasks a run on it can train."""
+    return [{**m, "trains": trains(m)} for m in await _catalog(token) if trains(m)]
 
 
 @router.get("/nodes", operation_id="forge_list_nodes")
@@ -104,6 +117,12 @@ async def preview(dataset_id: str, model: str, version: int, split: str = "train
         raise HTTPException(status_code=422, detail=f"the first row of {split} does not fit the dataset's mapping")
     if "text" in example:
         return {"text": example["text"], "templated": False}
+    if "tokens" in example:
+        # A sentence of words for a tagging run: a line per word with its labels, as the encoder's heads learn them
+        parts = [p for p in ("tokens", "upos", "xpos", "feats", "lemma", "head", "deprel") if p in example]
+        lines = ["\t".join(parts)] + ["\t".join(str(example[p][i]) for p in parts)
+                                       for i in range(len(example["tokens"]))]
+        return {"text": "\n".join(lines), "templated": False}
     try:
         chat = chat_template.template_of(await mlflow.model_file(model, "tokenizer_config.json"),
                                          await mlflow.model_file(model, "chat_template.jinja"))
@@ -190,7 +209,8 @@ class NewRun(BaseModel):
     eval_split: Optional[str] = None
     eval_holdout: float = Field(0, ge=0, le=runs.MAX_HOLDOUT)
     base_model: str
-    method: Literal["lora", "qlora", "fp8", "nvfp4"] = "lora"
+    # lora, qlora, fp8 or nvfp4 for an SFT or choice run; bottleneck or lora for a tagging run
+    method: Literal["lora", "qlora", "fp8", "nvfp4", "bottleneck"] = "lora"
     node: str
     register_model: bool = Field(True, alias="register")
     steps: Optional[int] = Field(None, gt=0, le=10_000_000)
@@ -257,11 +277,16 @@ async def create_run(new: NewRun, user: User = Depends(get_current_user), token:
         raise _datasets_failed(e)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    # A choice dataset trains Meep²'s task choice: a model that scores candidates, which the LLM Gateway cannot serve
-    task = "choice" if dataset["format"] == "choice" else "sft"
+    # A choice dataset trains Meep²'s task choice: a model that scores candidates, which the LLM Gateway cannot serve.
+    # A dataset of words trains Meep²'s task tagging: a tagger and a parser, which the heads backend serves
+    task = runs.task_of(dataset["format"])
     if task == "choice" and new.register_model:
         raise HTTPException(status_code=422, detail=f"{dataset['name']} is a choice dataset: its model scores "
                                                     "candidates and is not registered for the LLM Gateway; set "
+                                                    "register to false")
+    if task == "tagging" and new.register_model:
+        raise HTTPException(status_code=422, detail=f"{dataset['name']} is a dataset of words: its tagger is not "
+                                                    "registered as a language model for the LLM Gateway; set "
                                                     "register to false")
     milestones = await _milestones(token, new.milestones, task)
     try:
@@ -273,8 +298,10 @@ async def create_run(new: NewRun, user: User = Depends(get_current_user), token:
         raise HTTPException(status_code=422, detail="across_slots is for a run that waits for slots")
     await _meepsquared_environment(token)
     base = next((m for m in await _catalog(token) if m["id"] == new.base_model), None)
-    if base is None or not trainable(base):
-        raise HTTPException(status_code=422, detail=f"{new.base_model} is not a mirrored BF16 text model of the catalogue")
+    if base is None or not trainable(base, task):
+        kind = ("a mirrored encoder (task fill-mask) of the catalogue, which a tagging run trains" if task == "tagging"
+                else "a mirrored BF16 text model of the catalogue")
+        raise HTTPException(status_code=422, detail=f"{new.base_model} is not {kind}")
     model = None
     if new.register_model:
         try:

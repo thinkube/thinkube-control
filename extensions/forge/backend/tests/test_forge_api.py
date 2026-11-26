@@ -16,6 +16,9 @@ MODELS = [
     {"id": "BSC-LT/salamandraTA-2b-instruct", "name": "SalamandraTA 2B", "params_b": 2.25, "context_length": 8192,
      "quantization": "BF16", "task": "text-generation", "is_downloaded": True, "is_finetuned": False,
      "server_type": ["vllm"]},
+    {"id": "FacebookAI/xlm-roberta-large", "name": "XLM-RoBERTa large", "params_b": 0.56, "context_length": 512,
+     "quantization": "FP32", "task": "fill-mask", "is_downloaded": True, "is_finetuned": False,
+     "server_type": ["transformers"]},
     {"id": "nvidia/Qwen3.8-27B-NVFP4", "name": "Qwen", "params_b": 27, "context_length": 262144,
      "quantization": "NVFP4", "task": "text-generation", "is_downloaded": True, "is_finetuned": False,
      "server_type": ["vllm"]},
@@ -153,7 +156,8 @@ def put(api, run_id, **fields):
 
 
 def test_only_mirrored_bf16_text_models_are_offered(api):
-    assert [m["id"] for m in api.get("/api/v1/models").json()] == ["BSC-LT/salamandraTA-2b-instruct"]
+    assert [(m["id"], m["trains"]) for m in api.get("/api/v1/models").json()] == [
+        ("BSC-LT/salamandraTA-2b-instruct", ["sft", "choice"]), ("FacebookAI/xlm-roberta-large", ["tagging"])]
 
 
 def test_the_datasets_are_those_of_the_datasets_extension(api):
@@ -626,3 +630,59 @@ def test_forge_runs_no_task_of_mill(api):
     api.db.commit()
     refused = api.post(f"/api/v1/runs/{old.id}/resume")
     assert refused.status_code == 409 and "mill_run_on_node" in refused.json()["detail"]
+
+
+WORDS = {
+    "id": "d1", "name": "UD German", "format": "words",
+    "mapping": {"kind": "words", "columns": {p: p for p in ("tokens", "upos", "feats", "lemma", "head", "deprel")}},
+    "splits": [
+        {"name": "train", "rows": 9, "bytes": 1, "path": "artifacts/3/r1/artifacts/data/train.parquet"},
+        {"name": "dev", "rows": 2, "bytes": 1, "path": "artifacts/3/r1/artifacts/data/dev.parquet"},
+    ],
+}
+TAGGER = {"name": "German tagger", "dataset_id": "d1", "base_model": "FacebookAI/xlm-roberta-large",
+          "node": "tkspark", "method": "bottleneck", "epochs": 20, "eval_split": "dev", "register": False,
+          "decisions": {"bottleneck": 256, "tokens_per_update": 4096, "learning_rate": 5e-4, "keep": "best"}}
+
+
+@pytest.fixture
+def words(api, monkeypatch):
+    async def training(token, dataset_id, version):
+        return {**WORDS, "version": version or 1}
+
+    monkeypatch.setattr(datasets, "training", training)
+    return api
+
+
+def test_a_dataset_of_words_trains_a_tagger_on_an_encoder(words):
+    r = words.post("/api/v1/runs", json=TAGGER)
+    assert r.status_code == 200, r.text
+    run = r.json()
+    assert run["job_spec"] == {"task": "tagging", "method": "bottleneck", "report_to": "mlflow", "epochs": 20,
+                               "recipe": TAGGER["decisions"]}
+    assert run["dataset"]["eval"]["split"] == "dev" and run["model_id"] is None
+
+
+def test_a_tagging_run_needs_an_encoder_and_registers_no_language_model(words):
+    r = words.post("/api/v1/runs", json={**TAGGER, "base_model": "BSC-LT/salamandraTA-2b-instruct"})
+    assert r.status_code == 422 and "encoder" in r.json()["detail"]
+    r = words.post("/api/v1/runs", json={**TAGGER, "register": True})
+    assert r.status_code == 422 and "register to false" in r.json()["detail"]
+    r = words.post("/api/v1/runs", json={**TAGGER, "method": "qlora"})
+    assert r.status_code == 422 and "tagging run's method" in r.json()["detail"]
+
+
+def test_an_encoder_does_not_train_a_language_model(api):
+    r = api.post("/api/v1/runs", json={**RUN, "base_model": "FacebookAI/xlm-roberta-large"})
+    assert r.status_code == 422 and "BF16 text model" in r.json()["detail"]
+
+
+def test_the_preview_of_a_sentence_of_words_is_a_line_per_word(words, monkeypatch):
+    async def first_example(token, dataset_id, version, split):
+        return {"tokens": ["Er", "kam"], "upos": ["PRON", "VERB"], "head": [2, 0], "deprel": ["nsubj", "root"]}
+
+    monkeypatch.setattr(datasets, "first_example", first_example)
+    r = words.get("/api/v1/datasets/d1/preview", params={"model": "FacebookAI/xlm-roberta-large", "version": 1})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"text": "tokens\tupos\thead\tdeprel\nEr\tPRON\t2\tnsubj\nkam\tVERB\t0\troot",
+                        "templated": False}

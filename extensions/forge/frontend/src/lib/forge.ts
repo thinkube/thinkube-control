@@ -6,6 +6,9 @@
 import { isAxiosError } from 'axios';
 import api from '@/lib/axios';
 
+/** The tasks of a run: SFT and choice train a language model, tagging an encoder's tagger and parser. */
+export type Task = 'sft' | 'choice' | 'tagging';
+
 export interface BaseModel {
   id: string;
   name: string;
@@ -13,6 +16,8 @@ export interface BaseModel {
   context_length: number | null;
   description: string | null;
   license: string | null;
+  /** The tasks a run on this base model can train */
+  trains: Task[];
 }
 
 export interface GpuNode {
@@ -97,7 +102,38 @@ export interface Preview {
   templated: boolean;
 }
 
-export type Method = 'lora' | 'qlora' | 'fp8' | 'nvfp4';
+export type Method = 'lora' | 'qlora' | 'fp8' | 'nvfp4' | 'bottleneck';
+
+/** The methods of a run on a language model (SFT, choice), and of a tagging run on an encoder */
+export const LM_METHODS: Method[] = ['lora', 'qlora', 'fp8', 'nvfp4'];
+export const TAGGING_METHODS: Method[] = ['bottleneck', 'lora'];
+
+/** The task a run on a dataset of this mapping kind trains, as Forge's backend decides it */
+export function taskOfKind(kind: string | undefined): Task {
+  return kind === 'choice' ? 'choice' : kind === 'words' ? 'tagging' : 'sft';
+}
+
+/**
+ * The scores of one epoch of a tagging run on its evaluation data (Meep²'s tagging-scores.jsonl): each tagging
+ * task's accuracy by its name (upos, feats, lemma, ...), uas and las for the parser, the words scored, score (the
+ * mean of the tasks' accuracies and LAS, which keep "best" ranks by) and the seconds the scoring took.
+ */
+export interface EpochScores {
+  epoch: number;
+  step: number;
+  words?: number;
+  score?: number;
+  seconds?: number;
+  [metric: string]: number | undefined;
+}
+
+/** The metrics of a tagging run's epoch records, in a stable order: the tasks' accuracies, then UAS and LAS */
+export function epochMetrics(records: EpochScores[]): string[] {
+  const skip = new Set(['epoch', 'step', 'words', 'score', 'seconds', 'uas', 'las']);
+  const tasks = [...new Set(records.flatMap((r) => Object.keys(r)))].filter((k) => !skip.has(k)).sort();
+  const parser = ['uas', 'las'].filter((k) => records.some((r) => r[k] !== undefined));
+  return [...tasks, ...parser];
+}
 
 /** A new run: a Meep² job; auto mode decides every decision not named in `decisions`. */
 export interface NewRun {
@@ -227,6 +263,8 @@ export interface TrainingStatus {
   updated: string | null;
   eval_loss?: number | null;
   eval_step?: number | null;
+  /** A tagging run's: the scores of each epoch on its evaluation data, added by Forge's worker */
+  epoch_scores?: EpochScores[];
   milestones?: MilestoneRecord[] | null;
   milestone_seconds?: number | null;
   next_milestone?: number | null;

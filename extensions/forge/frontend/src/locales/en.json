@@ -146,7 +146,9 @@
     "fp8": "LoRA on FP8 weights",
     "fp8Help": "The frozen weights held in FP8: less memory, faster on GPUs with FP8 tensor cores. The plan refuses it where the GPU has none.",
     "nvfp4": "LoRA on NVFP4 weights",
-    "nvfp4Help": "The frozen weights and their inputs held in NVFP4, on Blackwell's FP4 tensor cores: about twice as fast as 16 bits on a DGX Spark. The plan refuses it where the GPU has none."
+    "nvfp4Help": "The frozen weights and their inputs held in NVFP4, on Blackwell's FP4 tensor cores: about twice as fast as 16 bits on a DGX Spark. The plan refuses it where the GPU has none.",
+    "bottleneck": "Bottleneck adapters",
+    "bottleneckHelp": "A small adapter after each layer of the frozen encoder, with a head per task and a parser. Meep²'s method for taggers."
   },
   "modelState": {
     "registered": "Registered",
@@ -243,7 +245,8 @@
     "milestoneWeightsSame": "The training's own weights",
     "milestoneWeightsHelp": "A choice run's milestones can be answered on other weights than the training's, such as QLoRA's NF4 base, which a 24 GB GPU serves: Meep² loads a second copy of the base so and copies the adapter and the head into it at each milestone.",
     "preprocessing": "Meep² is preprocessing the data on {{node}}: tokenized, checked and cut once…",
-    "preprocessWaits": "The preprocessing job is being started."
+    "preprocessWaits": "The preprocessing job is being started.",
+    "taggingScored": "A tagging run is scored on its evaluation split at the end of every epoch: each task's accuracy, UAS and LAS. It has no milestones, and its tagger is published for the heads backend, not as a language model."
   },
   "run": {
     "status": {
@@ -516,5 +519,14 @@
     "runningSince": "started at {{time}}",
     "runningShort": "milestone {{pct}}%",
     "runningLabel": "Rows answered by the milestone at step {{step}}"
+  },
+  "epochScores": {
+    "title": "Scores by epoch",
+    "description": "Each task's accuracy and the parser's UAS and LAS on the evaluation split, in percent, at the end of every epoch.",
+    "none": "No epoch has ended yet.",
+    "epoch": "Epoch",
+    "step": "Step",
+    "score": "Score",
+    "best": "Best so far: epoch {{epoch}}, the mean of the accuracies and LAS."
   }
 }

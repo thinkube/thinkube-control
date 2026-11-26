@@ -146,7 +146,9 @@
     "fp8": "LoRA sobre pesos FP8",
     "fp8Help": "Los pesos congelados en FP8: menos memoria, más rápido en GPU con núcleos tensoriales FP8. El plan lo rechaza donde la GPU no los tiene.",
     "nvfp4": "LoRA sobre pesos NVFP4",
-    "nvfp4Help": "Los pesos congelados y sus entradas en NVFP4, en los núcleos tensoriales FP4 de Blackwell: unas dos veces más rápido que en 16 bits en un DGX Spark. El plan lo rechaza donde la GPU no los tiene."
+    "nvfp4Help": "Los pesos congelados y sus entradas en NVFP4, en los núcleos tensoriales FP4 de Blackwell: unas dos veces más rápido que en 16 bits en un DGX Spark. El plan lo rechaza donde la GPU no los tiene.",
+    "bottleneck": "Adaptadores de cuello de botella",
+    "bottleneckHelp": "Un adaptador pequeño tras cada capa del codificador congelado, con una cabeza por tarea y un analizador. El método de Meep² para etiquetadores."
   },
   "modelState": {
     "registered": "Registrado",
@@ -243,7 +245,8 @@
     "milestoneWeightsSame": "Los pesos del propio entrenamiento",
     "milestoneWeightsHelp": "Los hitos de una ejecución de elección pueden responderse con otros pesos que los del entrenamiento, como la base NF4 de QLoRA, que sirve una GPU de 24 GB: Meep² carga una segunda copia de la base así y copia en ella el adaptador y la cabeza en cada hito.",
     "preprocessing": "Meep² está preprocesando los datos en {{node}}: tokenizados, comprobados y cortados una sola vez…",
-    "preprocessWaits": "Se está iniciando el trabajo de preprocesamiento."
+    "preprocessWaits": "Se está iniciando el trabajo de preprocesamiento.",
+    "taggingScored": "Una ejecución de etiquetado se puntúa con su partición de evaluación al final de cada época: la exactitud de cada tarea, UAS y LAS. No tiene hitos, y su etiquetador se publica para el backend heads, no como modelo de lenguaje."
   },
   "run": {
     "status": {
@@ -516,5 +519,14 @@
     "runningSince": "empezó a las {{time}}",
     "runningShort": "hito {{pct}}%",
     "runningLabel": "Filas respondidas por el hito del paso {{step}}"
+  },
+  "epochScores": {
+    "title": "Puntuaciones por época",
+    "description": "La exactitud de cada tarea y el UAS y LAS del analizador en la partición de evaluación, en porcentaje, al final de cada época.",
+    "none": "Aún no ha terminado ninguna época.",
+    "epoch": "Época",
+    "step": "Paso",
+    "score": "Puntuación",
+    "best": "La mejor hasta ahora: época {{epoch}}, la media de las exactitudes y el LAS."
   }
 }

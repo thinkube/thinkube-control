@@ -329,6 +329,14 @@ class Worker:
         except runfiles.RunFilesError as e:
             logger.warning("run %s: its status file could not be read: %s", run.id, e)
             status = None
+        if status is not None and (run.job or {}).get("task") == "tagging":
+            # A tagging run's scores of each epoch on its evaluation data: each task's accuracy, UAS and LAS
+            try:
+                status = {**status, "epoch_scores": await self.files.tagging_scores(run) or []}
+            except runfiles.RunFilesError as e:
+                # The progress is left as it was, its status and scores together, until they are read again
+                logger.warning("run %s: its tagging scores could not be read: %s", run.id, e)
+                status = None
         if status is not None:
             run.progress = status
         if job["status"] in runs.JOB_OPEN:
