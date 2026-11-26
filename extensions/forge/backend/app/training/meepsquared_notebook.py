@@ -256,7 +256,9 @@ if JOB.get("start_from"):
 # Where the preprocessed data is kept, under its key; a plan or training job reads the folder its
 # preprocessing job made
 PREPROCESSED_DIR = Path.home() / "thinkube" / "models" / "forge" / "preprocessed"
-if MODE != "preprocess":
+# Meep²'s task tagging encodes its sentences when the plan or the training starts: it has no preprocessed folder
+TAGGING = JOB["task"] == "tagging"
+if MODE != "preprocess" and not TAGGING:
     if not P.get("preprocessed"):
         raise ValueError("a plan or training job names the folder of its preprocessed data")
     JOB["preprocessed"] = P["preprocessed"]
@@ -269,11 +271,18 @@ print(JOB_FILE.read_text())
 if MODE == "preprocess":
     from meepsquared.job import TrainingJob
 
-    outcome = TrainingJob.from_dict(JOB).preprocess(PREPROCESSED_DIR)
-    print(f"{'found' if outcome.found else 'built'}: {outcome.folder}")
-    print(outcome.report["decision"]["text"])
     PREPROCESS_FILE = RUN_DIR / "preprocess.json"
-    PREPROCESS_FILE.write_text(json.dumps(outcome.to_dict(), indent=2, default=str))
+    if TAGGING:
+        # The data files above are the run's data; Meep² encodes the sentences in the plan and the training
+        made = {"folder": None, "key": None, "found": False,
+                "report": {"decision": {"text": "a tagging job encodes its sentences when its plan or training "
+                                                "starts; Meep² preprocesses only SFT and choice data"}}}
+    else:
+        outcome = TrainingJob.from_dict(JOB).preprocess(PREPROCESSED_DIR)
+        print(f"{'found' if outcome.found else 'built'}: {outcome.folder}")
+        made = outcome.to_dict()
+    print(made["report"]["decision"]["text"])
+    PREPROCESS_FILE.write_text(json.dumps(made, indent=2, default=str))
     send(PREPROCESS_FILE, "preprocess.json")
 
 # %% Revise: the plan from an earlier plan's measurements, or Meep²'s reason they do not hold

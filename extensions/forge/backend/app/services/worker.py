@@ -231,6 +231,10 @@ class Worker:
         run.error = None
         # The plan reuses an earlier plan's measurements when one may hold: the run's own last plan on its node,
         # else another run's of the same model, method and task on it; Meep² decides, and the run measures when not
+        if (run.job or {}).get("task") == "tagging":
+            # A revision reads the preprocessed rows, which a tagging job has none of: its plan measures
+            run.reuse, run.status = None, "planning"
+            return
         if not run.measure and run.reuse is not None and run.reuse.get("node") != run.node:
             run.reuse = None
         if not run.measure and run.reuse is None:

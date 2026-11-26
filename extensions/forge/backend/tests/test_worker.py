@@ -631,3 +631,18 @@ def test_a_tagging_runs_progress_waits_while_its_scores_cannot_be_read(queue):
     queue.files.statuses[run.id] = {"state": "training", "step": 1800, "total_steps": 9000}
     queue.tick()
     assert run.progress["step"] == 900 and run.progress["epoch_scores"] == [{"epoch": 1, "las": 0.84}]
+
+
+def test_a_tagging_run_plans_on_its_data_files_with_no_preprocessed_folder(queue):
+    run = queue.run("tagger", status="preprocessing", plan=None,
+                    job=runs.meepsquared_job("bottleneck", None, 20, {}, task="tagging"))
+    queue.tick()
+    queue.files.preprocesses[run.id] = {"key": None, "folder": None, "found": False,
+                                        "report": {"decision": {"text": "a tagging job encodes its sentences"}}}
+    queue.control.end("j1")
+    queue.tick()
+    # No revision: it reads preprocessed rows, which a tagging job has none of
+    assert run.status == "planning" and run.reuse is None
+    queue.tick()
+    plan = queue.control.started[1]["parameters"]
+    assert plan["mode"] == "plan" and plan["preprocessed"] is None

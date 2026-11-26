@@ -457,7 +457,8 @@ def job_request(run: Run, base: Optional[Dict[str, Any]], mode: str, choices: Di
             needed = plan_memory_gb(base) * job_gpus(run) if mode == "plan" else train_memory_gb(run)
             memory = allowed_memory(needed, choices["memory_gb"], run.node)
         cores = run.cpu_cores if run.cpu_cores is not None else job_cores(choices["cpu_cores"], run.node)
-    if mode != "preprocess":
+    # A tagging job has no preprocessed folder: Meep² encodes its sentences when its plan or training starts
+    if mode != "preprocess" and (run.job or {}).get("task") != "tagging":
         if folder is None:
             raise ValueError(f"run {run.name}: its data has not been preprocessed; a {mode} job reads the "
                              "preprocessed data")
