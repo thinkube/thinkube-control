@@ -43,6 +43,7 @@ func mediaBackend(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/v1/images/generations", echo)
 	mux.HandleFunc("/v1/rerank", echo)
 	mux.HandleFunc("/v1/heads", echo)
+	mux.HandleFunc("/v1/translation-quality", echo)
 	mux.HandleFunc("/v1/audio/speech", echo)
 	mux.HandleFunc("/v1/audio/transcriptions", echo)
 	srv = httptest.NewServer(mux)
@@ -111,6 +112,26 @@ func TestAHeadsRequestReachesItsPartWithItsKindsFields(t *testing.T) {
 	}
 	sentences, _ := got["sentences"].([]any)
 	if got["model"] != "org/media" || len(sentences) != 1 || got["probabilities"] == nil {
+		t.Fatalf("the model server got %v", got)
+	}
+}
+
+func TestATranslationQualityRequestReachesItsModelWithItsTexts(t *testing.T) {
+	backend := mediaBackend(t)
+	defer backend.Close()
+
+	rec := httptest.NewRecorder()
+	mediaHandler(backend.URL).TranslationQuality(rec, httptest.NewRequest("POST", "/v1/translation-quality",
+		strings.NewReader(`{"model":"an-alias","hypotheses":["hola"],"sources":["hello"],"references":["hola"]}`)))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("the model server got no JSON: %s", rec.Body.String())
+	}
+	if got["model"] != "org/media" || got["hypotheses"] == nil || got["sources"] == nil || got["references"] == nil {
 		t.Fatalf("the model server got %v", got)
 	}
 }

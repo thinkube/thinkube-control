@@ -323,6 +323,14 @@ func (h *OpenAIHandler) Heads(w http.ResponseWriter, r *http.Request) {
 	h.forwardJSON(w, r, "/heads", "heads")
 }
 
+// TranslationQuality forwards a request to a translation quality model (a
+// COMET model; see tkt-translation-quality): the body names the model and
+// carries the hypotheses with their sources and references; the backend
+// answers with a score per hypothesis and the system score.
+func (h *OpenAIHandler) TranslationQuality(w http.ResponseWriter, r *http.Request) {
+	h.forwardJSON(w, r, "/translation-quality", "translation quality")
+}
+
 // ImageGenerations forwards an image request; the backend answers with the
 // images as base64 JSON or URLs.
 func (h *OpenAIHandler) ImageGenerations(w http.ResponseWriter, r *http.Request) {
