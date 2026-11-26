@@ -79,10 +79,16 @@ def _as_task_user() -> Dict[str, Any]:
     return {"user": settings.MILL_TASK_UID, "group": settings.MILL_TASK_GID}
 
 
-def _task_env(token: Optional[str] = None) -> Dict[str, str]:
+# The environment variables Mill gives a task in this pod, which a secret's name may not take
+GIVEN_ENV = ["PATH", "HOME", "PYTHONUNBUFFERED", "MILL_RUNNER", "MILL_NATS_URL", "MILL_SUBJECTS", "LLM_GATEWAY_URL",
+             "THINKUBE_API_TOKEN", "NODE_NAME"]
+
+
+def _task_env(token: Optional[str] = None, secrets: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     """What a task's process is given. A task that calls a model reads the LLM Gateway's address as
-    LLM_GATEWAY_URL and calls it with THINKUBE_API_TOKEN, the token of whoever started the run; the token is in
-    the process's environment only, never in the run's record."""
+    LLM_GATEWAY_URL and calls it with THINKUBE_API_TOKEN, the token of whoever started the run; each secret it
+    asked for is a variable of its name. The token and the secrets are in the process's environment only, never in
+    the run's record."""
     home = Path(settings.MILL_TASK_HOME)
     home.mkdir(parents=True, exist_ok=True)
     if os.geteuid() != settings.MILL_TASK_UID:
@@ -101,6 +107,7 @@ def _task_env(token: Optional[str] = None) -> Dict[str, str]:
     node = os.environ.get("NODE_NAME")
     if node:
         env["NODE_NAME"] = node
+    env.update(secrets or {})
     return env
 
 
@@ -247,12 +254,14 @@ def start(
     limit: Optional[int],
     token: Optional[str] = None,
     tags: Optional[Dict[str, str]] = None,
+    secrets: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Start a run of a task in this pod. Answers once the run's first status is stored.
 
     A path of an input or an output is relative to the root of the tasks
     repository, or absolute. `token` is the caller's token, which the task
-    calls the platform's services with; `tags` are attached to the run.
+    calls the platform's services with; `tags` are attached to the run;
+    `secrets` are given to the task as environment variables of their names.
     """
     path = _file_in_repository(file)
     tags = _checked_tags(tags or {})
@@ -271,7 +280,7 @@ def start(
     command += ["--run-id", run_id]
 
     child = Child(subprocess.Popen(
-        command, cwd=repository(), env=_task_env(token), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        command, cwd=repository(), env=_task_env(token, secrets), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         errors="replace", start_new_session=True, **_as_task_user(),
     ))
     _children[run_id] = child

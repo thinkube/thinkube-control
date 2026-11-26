@@ -93,36 +93,6 @@ def test_a_task_in_a_venv_runs_on_the_notebook_servers_image_with_the_nodes_envi
     assert spec["env"]["THINKUBE_API_TOKEN"] == "tok"
 
 
-@pytest.fixture
-def control_secrets(monkeypatch):
-    """Thinkube Control's secrets as Mill reads them: their values, by name, with the token they were read with."""
-    import httpx
-
-    seen = {"tokens": []}
-    values = {"JEV_API_KEY": "jev-value"}
-
-    class Client:
-        def __init__(self, *a, **k):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *a):
-            return False
-
-        async def post(self, url, headers=None):
-            name = url.rsplit("/", 1)[1]
-            seen["tokens"].append((headers or {}).get("Authorization"))
-            request = httpx.Request("POST", url)
-            if name not in values:
-                return httpx.Response(404, json={"detail": "Secret not found"}, request=request)
-            return httpx.Response(200, json={"value": values[name]}, request=request)
-
-    monkeypatch.setattr("app.api.jobs.httpx.AsyncClient", Client)
-    return seen
-
-
 def test_a_task_gets_the_secrets_it_names_as_environment_variables(signed_in, scheduler, control_secrets):
     made = signed_in.post("/api/v1/jobs", json={**TASK, "gpus": 0, "secrets": ["JEV_API_KEY"]})
     assert made.status_code == 200, made.text

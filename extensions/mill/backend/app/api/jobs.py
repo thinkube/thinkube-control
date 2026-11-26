@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.api.runs import bearer
+from app.api.runs import bearer, secret_values
 from app.core.config import settings
 from app.core.security import User, get_current_user
 from app.db.session import get_db
@@ -24,8 +24,6 @@ from app.services import scheduled
 router = APIRouter()
 
 TAG_NAME = re.compile(r"^[a-z][a-z0-9_.-]{0,39}$")
-# A secret is given to the task as an environment variable of its name
-ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class NewJob(BaseModel):
@@ -86,30 +84,6 @@ async def _check_venv(token: Optional[str], name: str, gpus: int) -> None:
     if found.get("needs_gpu") and not gpus:
         raise HTTPException(status_code=422, detail=f"venv: {name} needs a GPU, which Control keeps only on the GPU "
                                                     "nodes; give the task one")
-
-
-async def _secret_values(token: Optional[str], names: List[str], taken: List[str]) -> Dict[str, str]:
-    """Each secret's value, read from Thinkube Control with the caller's token."""
-    values = {}
-    for name in names:
-        if not ENV_NAME.match(name):
-            raise HTTPException(status_code=422, detail=f"secrets: {name!r} cannot be an environment variable's name; "
-                                                        "it is letters, digits and _, not starting with a digit")
-        if name in taken:
-            raise HTTPException(status_code=422, detail=f"secrets: {name} is a variable Mill gives every task")
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-                r = await client.post(f"{settings.CONTROL_API_URL}/secrets/decrypt/{name}",
-                                      headers={"Authorization": f"Bearer {token}"} if token else {})
-        except httpx.HTTPError as e:
-            raise HTTPException(status_code=502, detail=f"Thinkube Control did not answer for the secret {name}: {e}")
-        if r.status_code == 404:
-            raise HTTPException(status_code=422, detail=f"secrets: Thinkube Control has no secret {name}")
-        if r.status_code >= 400:
-            raise HTTPException(status_code=502, detail=f"Thinkube Control answered the secret {name} with "
-                                                        f"{r.status_code}: {r.text[:300]}")
-        values[name] = r.json()["value"]
-    return values
 
 
 def _runs(db: Session, job: MillJob) -> List[Dict[str, Any]]:
@@ -177,7 +151,7 @@ async def run_on_node(new: NewJob, user: User = Depends(get_current_user), db: S
             "settings": new.settings, "limit": new.limit, "venv": new.venv}
     request = {"name": new.name, "task": task, "node": new.node, "gpus": new.gpus, "gpu_memory_gb": new.gpu_memory_gb,
                "memory_gb": new.memory_gb, "cpu_cores": new.cpu_cores, "models": folders, "secrets": new.secrets}
-    secrets = await _secret_values(token, new.secrets, scheduled.GIVEN_ENV)
+    secrets = await secret_values(token, new.secrets, scheduled.GIVEN_ENV)
     try:
         given = await scheduled.give(scheduled.job_spec(job_id, request, folders, priority, token, secrets))
     except scheduled.SchedulerError as e:

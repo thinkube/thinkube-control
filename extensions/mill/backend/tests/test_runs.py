@@ -161,6 +161,40 @@ def test_a_task_is_given_the_gateway_and_the_callers_token(signed_in, repository
     assert json.loads((repository / "data" / "seen-2.json").read_text())["token"] is None
 
 
+SECRET = """
+    import os
+    from thinkube_mill import task
+
+    @task(outputs={"seen": "json"})
+    def secret():
+        "Whether a task is given the secret it asked for."
+        return {"seen": {"key": os.environ.get("JEV_API_KEY")}}
+"""
+
+
+def test_a_task_gets_the_secrets_it_names_as_environment_variables(signed_in, repository, control_secrets):
+    (repository / "demo").mkdir()
+    (repository / "demo" / "secret.py").write_text(textwrap.dedent(SECRET), encoding="utf-8")
+    (repository / "data").mkdir()
+    job = {"file": "demo/secret.py", "outputs": {"seen": "data/seen.json"}, "secrets": ["JEV_API_KEY"]}
+    made = signed_in.post("/api/v1/runs", json=job, headers={"Authorization": "Bearer tk_of_the_caller"})
+    assert made.status_code == 200, made.text
+    answer = wait_for(signed_in, made.json()["id"], "completed")
+    assert json.loads((repository / "data" / "seen.json").read_text()) == {"key": "jev-value"}
+    # Control is asked with the caller's token, and the run's record does not keep the value
+    assert control_secrets["tokens"] == ["Bearer tk_of_the_caller"]
+    assert "jev-value" not in json.dumps(answer)
+
+
+def test_a_run_refuses_a_secret_control_does_not_have_or_that_would_replace_a_variable_of_mill(
+        signed_in, work, control_secrets):
+    missing = signed_in.post("/api/v1/runs", json={**work, "secrets": ["NOPE"]})
+    assert missing.status_code == 422 and "has no secret NOPE" in missing.text
+    taken = signed_in.post("/api/v1/runs", json={**work, "secrets": ["LLM_GATEWAY_URL"]})
+    assert taken.status_code == 422 and "a variable Mill gives every task" in taken.text
+    assert signed_in.get("/api/v1/runs").json()["total"] == 0
+
+
 def test_limit_and_settings_reach_the_task(signed_in, work):
     r = signed_in.post("/api/v1/runs", json={**work, "limit": 4, "settings": {"pause": 0.01}})
     assert r.status_code == 200, r.text

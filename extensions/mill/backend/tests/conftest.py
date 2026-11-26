@@ -200,3 +200,33 @@ def signed_in(client, mock_user):
         assert time.monotonic() < deadline, consumer.consumer.problem
         time.sleep(0.1)
     return client
+
+
+@pytest.fixture
+def control_secrets(monkeypatch):
+    """Thinkube Control's secrets as Mill reads them: their values, by name, with the token they were read with."""
+    import httpx
+
+    seen = {"tokens": []}
+    values = {"JEV_API_KEY": "jev-value"}
+
+    class Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, headers=None):
+            name = url.rsplit("/", 1)[1]
+            seen["tokens"].append((headers or {}).get("Authorization"))
+            request = httpx.Request("POST", url)
+            if name not in values:
+                return httpx.Response(404, json={"detail": "Secret not found"}, request=request)
+            return httpx.Response(200, json={"value": values[name]}, request=request)
+
+    monkeypatch.setattr("app.api.runs.httpx.AsyncClient", Client)
+    return seen

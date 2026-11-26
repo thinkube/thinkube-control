@@ -4,18 +4,25 @@
 """The control center: the runs of Mill tasks, their progress, samples,
 failures and logs, and starting and stopping a run in the main pod."""
 
+import re
 from typing import Any, Dict, List, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.security import User, get_current_user
 from app.db.session import get_db
 from app.services import consumer, runs
 
 router = APIRouter()
+
+# A secret is given to the task as an environment variable of its name
+ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class StartRequest(BaseModel):
@@ -33,11 +40,37 @@ class StartRequest(BaseModel):
     tags: Dict[str, str] = Field(default_factory=dict, description="Names and values attached to the run, to find "
                                  "it again and to link it with other work, for example {\"experiment\": "
                                  "\"vote-of-finders\"}.")
+    secrets: List[str] = Field(default_factory=list, description="Secrets of Thinkube Control, by their names; the "
+                               "task gets each one's value as an environment variable of the same name.")
 
 
 class TagsRequest(BaseModel):
     tags: Dict[str, str] = Field(..., description="The tags to attach, by name. A tag given with an empty value is "
                                  "removed; the run's other tags stay.")
+
+
+async def secret_values(token: Optional[str], names: List[str], taken: List[str]) -> Dict[str, str]:
+    """Each secret's value, read from Thinkube Control with the caller's token."""
+    values = {}
+    for name in names:
+        if not ENV_NAME.match(name):
+            raise HTTPException(status_code=422, detail=f"secrets: {name!r} cannot be an environment variable's name; "
+                                                        "it is letters, digits and _, not starting with a digit")
+        if name in taken:
+            raise HTTPException(status_code=422, detail=f"secrets: {name} is a variable Mill gives every task")
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+                r = await client.post(f"{settings.CONTROL_API_URL}/secrets/decrypt/{name}",
+                                      headers={"Authorization": f"Bearer {token}"} if token else {})
+        except httpx.HTTPError as e:
+            raise HTTPException(status_code=502, detail=f"Thinkube Control did not answer for the secret {name}: {e}")
+        if r.status_code == 404:
+            raise HTTPException(status_code=422, detail=f"secrets: Thinkube Control has no secret {name}")
+        if r.status_code >= 400:
+            raise HTTPException(status_code=502, detail=f"Thinkube Control answered the secret {name} with "
+                                                        f"{r.status_code}: {r.text[:300]}")
+        values[name] = r.json()["value"]
+    return values
 
 
 def bearer(request: Request) -> Optional[str]:
@@ -135,17 +168,19 @@ def describe_tasks(
 
 
 @router.post("/runs", operation_id="mill_start_run")
-def start_run(request: StartRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
-              token: Optional[str] = Depends(bearer)) -> Dict[str, Any]:
+async def start_run(request: StartRequest, current_user: User = Depends(get_current_user),
+                    db: Session = Depends(get_db), token: Optional[str] = Depends(bearer)) -> Dict[str, Any]:
     """Start a run of a task in the control center's pod, which has no GPU: for work that calls models
     through the platform's services, cleans data or scores results. The task's process is given the LLM
-    Gateway's address as LLM_GATEWAY_URL and your token as THINKUBE_API_TOKEN, so it calls a model as you.
+    Gateway's address as LLM_GATEWAY_URL and your token as THINKUBE_API_TOKEN, so it calls a model as you, and
+    each secret of Thinkube Control named in secrets as an environment variable of its name.
     tags are attached to the run: use them to link the run with what it is for (an experiment, a claim).
     Answers the run's id once the run's first status is stored; follow it with mill_get_run and
     mill_get_run_samples. A task that cannot start (a missing input, an unknown setting) is refused with
     the reason."""
-    return _do(runs.start, db, request.file, request.task, request.inputs, request.outputs, request.settings,
-               request.limit, token, request.tags)
+    secrets = await secret_values(token, request.secrets, runs.GIVEN_ENV)
+    return await run_in_threadpool(_do, runs.start, db, request.file, request.task, request.inputs, request.outputs,
+                                   request.settings, request.limit, token, request.tags, secrets)
 
 
 @router.put("/runs/{run_id}/tags", operation_id="mill_tag_run")
