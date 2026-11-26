@@ -8,6 +8,7 @@ import type { RunState } from '@/lib/mill';
 
 /** A run's state as a badge. */
 export function RunStateBadge({ state }: { state: RunState }) {
+  if (state === 'queued') return <TkBadge appearance="outlined">queued</TkBadge>;
   if (state === 'running') return <TkBadge status="pending">running</TkBadge>;
   if (state === 'completed') return <TkBadge status="healthy">completed</TkBadge>;
   if (state === 'failed') return <TkBadge status="unhealthy">failed</TkBadge>;

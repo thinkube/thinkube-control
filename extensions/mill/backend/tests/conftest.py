@@ -167,6 +167,8 @@ def repository(tmp_path, monkeypatch, db_engine):
             child.process.kill()
         child.process.wait()
     runs._children.clear()
+    runs._waiting.clear()
+    runs._reserved.clear()
 
     async def delete_stream():
         nc = await nats.connect(settings.MILL_NATS_URL, connect_timeout=5)
@@ -180,7 +182,7 @@ def repository(tmp_path, monkeypatch, db_engine):
 
     asyncio.run(delete_stream())
     with db_engine.begin() as connection:
-        connection.execute(text("TRUNCATE mill_runs, mill_failures, mill_logs, mill_jobs"))
+        connection.execute(text("TRUNCATE mill_runs, mill_failures, mill_logs, mill_jobs, mill_queued_runs"))
 
 
 @pytest.fixture

@@ -107,14 +107,16 @@ def list_runs(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Dict[str, Any]:
-    """The newest runs of Mill tasks, wherever they execute: each with its task, its state (running,
-    completed, failed, stopped), its stages (name, total, done), its numbers of samples and failures, the
+    """The newest runs of Mill tasks, wherever they execute: each with its task, its state (queued, running,
+    completed, failed, stopped), its position in the queue when it is queued, its stages (name, total, done), its numbers of samples and failures, the
     host it runs on, its tags, and the commit of the tasks repository it ran from (dirty when it had changes
     not committed). With tag, only the runs that carry it: this is how the runs of one experiment are found.
-    problem says why the control center receives nothing from the runs, when it does not; the runs listed
-    are then as they were when it last did."""
+    problem says why the control center receives nothing from the runs, when it does not (the runs listed
+    are then as they were when it last did), or why the queue does not start its next run."""
     answer = _do(runs.list_runs, db, limit, _tags(tag))
-    answer["problem"] = consumer.consumer.problem if consumer.consumer is not None else None
+    problems = [p for p in (consumer.consumer.problem if consumer.consumer is not None else None,
+                            runs.dispatch_problem) if p]
+    answer["problem"] = "; ".join(problems) or None
     return answer
 
 
@@ -177,9 +179,12 @@ async def start_run(request: StartRequest, current_user: User = Depends(get_curr
     tags are attached to the run: use them to link the run with what it is for (an experiment, a claim).
     Answers the run's id once the run's first status is stored; follow it with mill_get_run and
     mill_get_run_samples. A task that cannot start (a missing input, an unknown setting) is refused with
-    the reason."""
+    the reason. The pod runs at most a few runs at once (its memory sets how many); a run asked while it runs
+    that many waits in a queue: it is answered at once with the state queued and its position, starts in order
+    as earlier runs end, and can be cancelled with mill_stop_run until it starts. A queued run that cannot
+    start ends failed, with the reason, in its record."""
     secrets = await secret_values(token, request.secrets, runs.GIVEN_ENV)
-    return await run_in_threadpool(_do, runs.start, db, request.file, request.task, request.inputs, request.outputs,
+    return await run_in_threadpool(_do, runs.submit, db, request.file, request.task, request.inputs, request.outputs,
                                    request.settings, request.limit, token, request.tags, secrets)
 
 
@@ -195,9 +200,12 @@ def tag_run(run_id: str, request: TagsRequest, current_user: User = Depends(get_
 @router.post("/runs/{run_id}/stop", operation_id="mill_stop_run")
 async def stop_run(run_id: str, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> Dict[str, Any]:
     """Stop a running run, wherever it executes: the control center asks the run's process through NATS,
-    and the task ends at once with the state stopped; its outputs stay as partial files. Refused when the
-    run is not running, or when no process answers for it."""
+    and the task ends at once with the state stopped; its outputs stay as partial files. A queued run is taken
+    out of the queue and ends stopped without starting. Refused when the run is neither queued nor running, or
+    when no process answers for it."""
     state = _do(runs.get_run, db, run_id)["status"]["state"]
+    if state == "queued":
+        return _do(runs.cancel, run_id)
     if state != "running":
         raise HTTPException(status_code=409, detail=f"run {run_id} is {state}; only a running run is stopped")
     if consumer.consumer is None:

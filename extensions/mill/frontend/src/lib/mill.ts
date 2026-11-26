@@ -5,7 +5,7 @@
 
 /** What the Mill backend answers about runs, and how the pages word it. */
 
-export type RunState = 'running' | 'completed' | 'failed' | 'stopped';
+export type RunState = 'queued' | 'running' | 'completed' | 'failed' | 'stopped';
 
 export interface Stage {
   name: string;
@@ -28,6 +28,8 @@ export interface RunSummary {
   // Names and values attached to the run, such as the experiment it belongs to
   tags?: Record<string, string>;
   state: RunState;
+  // Its place in the queue of the main pod while it waits, 1 for the next to start; null otherwise
+  position?: number | null;
   error: string | null;
   started_at: string;
   updated_at: string;
@@ -46,6 +48,8 @@ export interface Measure {
 
 export interface RunStatus {
   state: RunState;
+  // Its place in the queue of the main pod while it waits, 1 for the next to start; null otherwise
+  position?: number | null;
   error: string | null;
   started_at: string;
   updated_at: string;

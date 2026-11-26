@@ -123,6 +123,27 @@ describe('RunPage', () => {
     await waitFor(() => expect(mockedApi.post).toHaveBeenCalledWith(`/runs/${ID}/stop`));
   });
 
+  it('says where a queued run waits and cancels it', async () => {
+    mockedApi.get.mockImplementation((url: string) => {
+      if (url === `/runs/${ID}`) {
+        const queued = detail('queued', true);
+        return Promise.resolve({
+          data: { ...queued, status: { ...queued.status, position: 2, ended_at: null, stages: [] }, has_log: false },
+        });
+      }
+      if (url === `/runs/${ID}/samples`) return Promise.resolve({ data: { latest: [], spaced: [] } });
+      if (url === `/runs/${ID}/failures`) return Promise.resolve({ data: { failures: [], total: 0 } });
+      return Promise.reject(new Error(`unexpected GET ${url}`));
+    });
+    mockedApi.post.mockResolvedValue({ data: { id: ID, state: 'stopped' } });
+    open();
+
+    expect(await screen.findByText(/Waiting in the queue of the main pod, position 2/)).toBeTruthy();
+    expect(screen.getByText('queued')).toBeTruthy();
+    fireEvent.click(screen.getByText('Cancel'));
+    await waitFor(() => expect(mockedApi.post).toHaveBeenCalledWith(`/runs/${ID}/stop`));
+  });
+
   it('says why a run that does not exist could not be read', async () => {
     mockedApi.get.mockRejectedValue({ response: { data: { detail: `there is no run ${ID}` } } });
     open();

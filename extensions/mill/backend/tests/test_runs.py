@@ -342,3 +342,94 @@ def test_stopping_a_run_no_process_answers_for_is_refused(signed_in):
     stop = signed_in.post("/api/v1/runs/gone/stop")
     assert stop.status_code == 409
     assert "no process answers for run gone" in stop.json()["detail"]
+
+
+SLEEP = """
+    import time
+    from thinkube_mill import task
+
+    @task(outputs={"slept": "json"}, settings={"seconds": 0.0})
+    def sleep(settings):
+        "Sleep a while, then say so."
+        time.sleep(settings["seconds"])
+        return {"slept": {"seconds": settings["seconds"]}}
+"""
+
+
+@pytest.fixture
+def sleeper(repository):
+    (repository / "demo").mkdir()
+    (repository / "demo" / "sleep.py").write_text(textwrap.dedent(SLEEP), encoding="utf-8")
+    (repository / "data").mkdir()
+    return lambda name, seconds: {"file": "demo/sleep.py", "outputs": {"slept": f"data/{name}.json"},
+                                  "settings": {"seconds": seconds}}
+
+
+def test_runs_beyond_the_limit_wait_in_order_and_start_as_earlier_ones_end(signed_in, sleeper, monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "MILL_MAX_RUNS", 1)
+
+    first = signed_in.post("/api/v1/runs", json=sleeper("first", 3))
+    assert first.status_code == 200 and first.json()["state"] == "running", first.text
+    second = signed_in.post("/api/v1/runs", json={**sleeper("second", 0), "tags": {"experiment": "queue"}}).json()
+    third = signed_in.post("/api/v1/runs", json=sleeper("third", 0)).json()
+    assert (second["state"], second["position"]) == ("queued", 1)
+    assert (third["state"], third["position"]) == ("queued", 2)
+
+    # The list and the run say they wait, and where
+    listed = {r["id"]: r for r in signed_in.get("/api/v1/runs").json()["runs"]}
+    assert (listed[second["id"]]["state"], listed[second["id"]]["position"]) == ("queued", 1)
+    assert (listed[third["id"]]["state"], listed[third["id"]]["position"]) == ("queued", 2)
+    assert listed[first["id"]]["position"] is None
+    detail = signed_in.get(f"/api/v1/runs/{third['id']}").json()
+    assert detail["status"]["state"] == "queued" and detail["status"]["position"] == 2 and detail["can_stop"]
+    assert signed_in.get("/api/v1/runs", params={"tag": "experiment=queue"}).json()["runs"][0]["id"] == second["id"]
+
+    # Each starts once the one before it has ended, in order, under the id it was given, with its tags
+    wait_for(signed_in, first["id"], "completed")
+    ended = {r: wait_for(signed_in, r, "completed", seconds=60) for r in (second["id"], third["id"])}
+    assert ended[second["id"]]["tags"] == {"experiment": "queue"}
+    assert ended[second["id"]]["status"]["started_at"] >= wait_for(signed_in, first["id"], "completed")["status"]["ended_at"]
+    assert ended[third["id"]]["status"]["started_at"] >= ended[second["id"]]["status"]["ended_at"]
+    assert signed_in.get("/api/v1/runs").json()["total"] == 3
+
+
+def test_a_queued_run_is_cancelled_and_never_starts(signed_in, sleeper, repository, monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "MILL_MAX_RUNS", 1)
+
+    first = signed_in.post("/api/v1/runs", json=sleeper("first", 3)).json()
+    waiting = signed_in.post("/api/v1/runs", json=sleeper("waiting", 0)).json()
+    assert waiting["state"] == "queued"
+    cancelled = signed_in.post(f"/api/v1/runs/{waiting['id']}/stop")
+    assert cancelled.json() == {"id": waiting["id"], "state": "stopped"}, cancelled.text
+    detail = signed_in.get(f"/api/v1/runs/{waiting['id']}").json()
+    assert detail["status"]["state"] == "stopped" and detail["status"]["error"] == "cancelled before it started"
+    assert not detail["can_stop"]
+    assert signed_in.post(f"/api/v1/runs/{waiting['id']}/stop").status_code == 409
+
+    wait_for(signed_in, first["id"], "completed")
+    time.sleep(3)
+    assert signed_in.get(f"/api/v1/runs/{waiting['id']}").json()["status"]["state"] == "stopped"
+    assert not (repository / "data" / "waiting.json").exists()
+
+
+def test_a_run_a_restarted_pod_left_in_the_queue_ends_stopped_with_the_reason(signed_in):
+    import datetime
+
+    from app.models.runs import MillQueuedRun
+    from app.services import runs
+
+    session = get_session_local()()
+    try:
+        session.add(MillQueuedRun(id="left-behind", state="queued", tags={},
+                                  queued_at=datetime.datetime.now(datetime.timezone.utc),
+                                  request={"file": "demo/sleep.py", "task": None, "inputs": {}, "outputs": {},
+                                           "settings": {}, "limit": None, "secrets": []}))
+        session.commit()
+    finally:
+        session.close()
+    assert runs.stop_waiting_after_restart() == ["left-behind"]
+    detail = signed_in.get("/api/v1/runs/left-behind").json()
+    assert detail["status"]["state"] == "stopped" and detail["status"]["error"] == runs.RESTARTED
+

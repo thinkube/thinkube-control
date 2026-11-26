@@ -22,8 +22,15 @@ async def lifespan(app: FastAPI):
     consumer.consumer = consumer.Consumer()
     consumer.consumer.start()
 
+    # Runs a former pod left in the queue cannot start (their token went with it); the queue then moves on
+    from app.services import runs
+    runs.stop_waiting_after_restart()
+    dispatcher = runs.Dispatcher()
+    dispatcher.start()
+
     yield
 
+    dispatcher.stop()
     await consumer.consumer.stop()
     consumer.consumer = None
     # Shutdown: Clean up resources if needed

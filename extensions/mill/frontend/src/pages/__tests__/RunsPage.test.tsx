@@ -64,6 +64,20 @@ describe('RunsPage', () => {
     expect(mockedApi.get.mock.calls[0][0]).toBe('/runs');
   });
 
+  it('says that a queued run waits, and where', async () => {
+    const queued = { ...run, id: '20261116-160100-clean-cd34', state: 'queued', position: 1, stages: [], samples: 0,
+                     failures: 0, host: null, commit: null, dirty: null, tags: {} };
+    mockedApi.get.mockResolvedValue({ data: { runs: [queued, run], total: 2 } });
+    render(
+      <MemoryRouter>
+        <RunsPage />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText('queued')).toBeTruthy();
+    expect(screen.getByText('position 1 in the queue')).toBeTruthy();
+    expect(screen.getByText('running')).toBeTruthy();
+  });
+
   it('says so when there is no run', async () => {
     mockedApi.get.mockResolvedValue({ data: { runs: [], total: 0 } });
     render(

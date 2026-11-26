@@ -34,6 +34,24 @@ class MillRun(Base):
     seen_at = Column(DateTime(timezone=True), nullable=False)
 
 
+class MillQueuedRun(Base):
+    """A run asked of this pod while it ran as many runs as it may (settings.MILL_MAX_RUNS): it waits here and
+    starts in order as earlier runs end. Once it starts, its row goes and the run's own record takes its place. The
+    caller's token and the secrets' values are kept only in the memory of the pod that queued it."""
+
+    __tablename__ = "mill_queued_runs"
+
+    id = Column(String, primary_key=True)
+    # What was asked: file, task, inputs, outputs, settings, limit, and the names of the secrets
+    request = Column(JSON, nullable=False)
+    tags = Column(JSON, nullable=True)
+    # queued; stopped when it was cancelled or the pod restarted before it started; failed when it could not start
+    state = Column(String, nullable=False)
+    error = Column(Text, nullable=True)
+    queued_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    ended_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class MillFailure(Base):
     """An item a run reported as failed."""
 

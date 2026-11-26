@@ -23,6 +23,13 @@ what is built and what is not yet.
   README is the reference of the task standard.
 - **The main pod** (the backend). It runs the tasks that need no GPU, as
   processes of `mill run`, as the user that owns the tasks repository.
+  It runs at most `MILL_MAX_RUNS` of them at once (3, sized to the pod's
+  512 MiB). A run asked beyond that waits in a queue: it is answered at
+  once with the state `queued` and its position, starts in order as earlier
+  runs end, and can be cancelled with `mill_stop_run` until it starts. The
+  caller's token and secrets of a queued run are kept only in the pod's
+  memory, so a run still queued when the pod restarts ends `stopped` and
+  says so.
 - **A task on a node** (`backend/app/services/scheduled.py`). A task that
   must run on a chosen node, or with GPUs, is a job Mill gives the
   Scheduler, which decides its turn among all the work on the node with the

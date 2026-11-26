@@ -75,8 +75,8 @@ export default function RunPage() {
     let gone = false;
     const follow = async () => {
       const state = await load();
-      // A run that ended does not change any more
-      if (!gone && (state === 'running' || state === null)) timer = setTimeout(follow, POLL_MS);
+      // A run that ended does not change any more; a queued one starts
+      if (!gone && (state === 'queued' || state === 'running' || state === null)) timer = setTimeout(follow, POLL_MS);
     };
     follow();
     return () => {
@@ -137,11 +137,16 @@ export default function RunPage() {
           {detail.can_stop && (
             <TkButton intent="secondary" onClick={stop} disabled={stopping} className="gap-2">
               <Square className="w-4 h-4" />
-              Stop
+              {status.state === 'queued' ? 'Cancel' : 'Stop'}
             </TkButton>
           )}
         </TkCardHeader>
         <TkCardContent className="space-y-4">
+          {status.state === 'queued' && (
+            <p className="text-sm text-muted-foreground">
+              Waiting in the queue of the main pod, position {status.position}. It starts when an earlier run ends.
+            </p>
+          )}
           <StageBars stages={status.stages} failed={status.state === 'failed'} />
           <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-4 text-sm">
             <div>

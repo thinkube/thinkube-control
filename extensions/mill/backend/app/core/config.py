@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     # The home folder of a task's process
     MILL_TASK_HOME: str = "/tmp/mill-home"
 
+    # The most runs this pod runs at once; further runs wait in a queue and start in order as earlier ones end.
+    # The pod has 512 MiB (size medium in thinkube.yaml). The control center takes about 110 MiB, and one task
+    # process that imports thinkube_mill and the Anthropic SDK about 90 MiB at its peak, so three runs leave about
+    # 130 MiB for the data the tasks hold. Sixteen runs started at once took the pod past its limit and it was
+    # killed, with every run on it.
+    MILL_MAX_RUNS: int = 3
+
     # The platform's LLM Gateway, in the cluster: a task that calls a model reads it as LLM_GATEWAY_URL
     MILL_LLM_GATEWAY_URL: str = "http://llm-proxy.thinkube-control.svc.cluster.local:8080"
 

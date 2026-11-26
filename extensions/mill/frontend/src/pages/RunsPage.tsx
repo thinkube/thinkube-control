@@ -106,6 +106,9 @@ export default function RunsPage() {
                     </TkTableCell>
                     <TkTableCell>
                       <RunStateBadge state={run.state} />
+                      {run.state === 'queued' && run.position != null && (
+                        <div className="text-xs text-muted-foreground mt-1">position {run.position} in the queue</div>
+                      )}
                       {run.failures > 0 && (
                         <div className="text-xs text-muted-foreground mt-1">{run.failures} failed items</div>
                       )}
