@@ -6,8 +6,9 @@
 import { useTranslation } from 'react-i18next';
 import { TkProgress } from 'thinkube-style/components/feedback';
 import { duration, type Run } from '@/lib/forge';
+import { MilestoneRunning } from '@/components/MilestoneRunning';
 
-/** A run's progress from meepsquared's status file: steps done, and the time left. */
+/** A run's progress from meepsquared's status file: steps done, the time left, and a milestone answering its rows. */
 export function TrainingProgress({ run, compact = false }: { run: Run; compact?: boolean }) {
   const { t } = useTranslation();
   const p = run.progress;
@@ -17,6 +18,7 @@ export function TrainingProgress({ run, compact = false }: { run: Run; compact?:
     ) : null;
   }
   const share = p.total_steps > 0 ? (100 * p.step) / p.total_steps : 0;
+  const milestone = run.status === 'running' ? p.milestone_running : null;
   return (
     <div className={compact ? 'min-w-40 space-y-1' : 'space-y-2'}>
       <TkProgress value={share} aria-label={t('queue.progressLabel', { step: p.step, total: p.total_steps })} />
@@ -30,7 +32,9 @@ export function TrainingProgress({ run, compact = false }: { run: Run; compact?:
         {!compact && p.seconds_per_step != null && (
           <span>{t('queue.perStep', { seconds: p.seconds_per_step.toFixed(2) })}</span>
         )}
+        {compact && milestone && <MilestoneRunning running={milestone} updated={p.updated} compact />}
       </div>
+      {!compact && milestone && <MilestoneRunning running={milestone} updated={p.updated} />}
     </div>
   );
 }

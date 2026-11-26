@@ -155,6 +155,24 @@ export interface RunMilestones {
 }
 
 /** A milestone Meep² made: its step, its folder and, with an evaluation, each group's scores. */
+/** A milestone answering its rows, from Meep²'s status file: for which step, how many rows of how many are answered
+ * (with several GPUs, the sum over the processes), and when it started. */
+export interface MilestoneRunning {
+  step: number;
+  answered: number;
+  rows: number;
+  started_at: string;
+}
+
+/** The time a running milestone has left at the pace of its rows so far, in seconds, as of the status file's update;
+ * null before it has answered a row. */
+export function milestoneLeft(running: MilestoneRunning, updated: string | null | undefined): number | null {
+  if (!updated || running.answered <= 0) return null;
+  const elapsed = (Date.parse(updated) - Date.parse(running.started_at)) / 1000;
+  if (!(elapsed > 0)) return null;
+  return ((running.rows - running.answered) * elapsed) / running.answered;
+}
+
 export interface MilestoneRecord {
   step: number;
   planned_steps: number;
@@ -212,6 +230,7 @@ export interface TrainingStatus {
   milestones?: MilestoneRecord[] | null;
   milestone_seconds?: number | null;
   next_milestone?: number | null;
+  milestone_running?: MilestoneRunning | null;
 }
 
 /** A run's place in the training queue. */

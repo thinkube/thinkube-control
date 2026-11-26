@@ -511,6 +511,10 @@
     "step": "Step",
     "share": "Of the training",
     "seconds": "Seconds",
-    "next": "Next milestone at step {{step}}."
+    "next": "Next milestone at step {{step}}.",
+    "running": "Milestone at step {{step}}: {{answered}} of {{rows}} rows answered ({{pct}}%)",
+    "runningSince": "started at {{time}}",
+    "runningShort": "milestone {{pct}}%",
+    "runningLabel": "Rows answered by the milestone at step {{step}}"
   }
 }

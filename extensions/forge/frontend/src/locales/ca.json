@@ -511,6 +511,10 @@
     "step": "Pas",
     "share": "De l'entrenament",
     "seconds": "Segons",
-    "next": "Propera fita al pas {{step}}."
+    "next": "Propera fita al pas {{step}}.",
+    "running": "Fita al pas {{step}}: {{answered}} de {{rows}} files respostes ({{pct}}%)",
+    "runningSince": "va començar a les {{time}}",
+    "runningShort": "fita {{pct}}%",
+    "runningLabel": "Files respostes per la fita del pas {{step}}"
   }
 }

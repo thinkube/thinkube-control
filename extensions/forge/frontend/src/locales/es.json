@@ -511,6 +511,10 @@
     "step": "Paso",
     "share": "Del entrenamiento",
     "seconds": "Segundos",
-    "next": "Próximo hito en el paso {{step}}."
+    "next": "Próximo hito en el paso {{step}}.",
+    "running": "Hito en el paso {{step}}: {{answered}} de {{rows}} filas respondidas ({{pct}}%)",
+    "runningSince": "empezó a las {{time}}",
+    "runningShort": "hito {{pct}}%",
+    "runningLabel": "Filas respondidas por el hito del paso {{step}}"
   }
 }
