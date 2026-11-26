@@ -450,8 +450,12 @@ def test_a_choice_run_starts_from_a_state_below_the_models_folder():
                                start_from="forge/starts/jev-3000.pt")
     assert job["start_from"] == "forge/starts/jev-3000.pt"
     assert job["recipe"] == {"head_only": 500, "choice_head": "set"}
-    for wrong in ("/etc/jev.pt", "../jev.pt", "forge/starts/jev.bin"):
-        with pytest.raises(ValueError, match="start_from is a .pt file"):
+    moved = runs.meepsquared_job("qlora", None, 1, {}, task="choice",
+                                 start_from="forge/953fbad5/output/checkpoint-1500")
+    assert moved["start_from"] == "forge/953fbad5/output/checkpoint-1500"
+    for wrong in ("/etc/jev.pt", "../jev.pt", "forge/starts/jev.bin", "forge/953fbad5/output",
+                  "forge/953fbad5/output/checkpoint-last"):
+        with pytest.raises(ValueError, match="start_from is a checkpoint folder or a .pt file"):
             runs.meepsquared_job("qlora", None, 1, {}, task="choice", start_from=wrong)
     with pytest.raises(ValueError, match="start_from is a choice run's"):
         runs.meepsquared_job("qlora", None, 1, {}, start_from="forge/starts/jev-3000.pt")

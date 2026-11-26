@@ -214,10 +214,11 @@ JOB = {**P["job"], "model": tkm.mirrored_model_path(P["base_model"]), "data": st
        **MILESTONE_FIELDS}
 if EVAL is not None:
     JOB["eval_data"] = str(EVAL)
-# A choice job's state saved outside Meep², below the models folder
+# The state a choice job goes on from, below the models folder: a checkpoint folder of another run, or a file
+# of a state saved outside Meep²
 if JOB.get("start_from"):
     START = Path.home() / "thinkube" / "models" / JOB["start_from"]
-    if not START.is_file():
+    if not START.exists():
         raise FileNotFoundError(f"start_from: {START} is not there")
     JOB["start_from"] = str(START)
 # Where the preprocessed data is kept, under its key; a plan or training job reads the folder its

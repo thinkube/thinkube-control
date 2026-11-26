@@ -276,8 +276,11 @@ def meepsquared_job(method: str, steps: Optional[int], epochs: Optional[float], 
     evaluates on a split gets its eval_data from the notebook, which writes
     the split's examples. task is "choice" for a dataset of the mapping kind
     choice (Meep²'s task choice), "sft" for any other. start_from, a choice
-    job's only: a state saved outside Meep² to start from, a .pt file below the
-    notebooks' models folder (~/thinkube/models), which the notebook resolves."""
+    job's only: the state the training goes on from, below the notebooks'
+    models folder (~/thinkube/models), which the notebook resolves: a
+    checkpoint folder of another run on the same data
+    (forge/<run id>/output/checkpoint-<N>), or a .pt file of a state saved
+    outside Meep²."""
     if method not in METHODS:
         raise ValueError(f"method is one of {list(METHODS)}, not {method!r}")
     if task not in ("sft", "choice"):
@@ -288,11 +291,12 @@ def meepsquared_job(method: str, steps: Optional[int], epochs: Optional[float], 
     job: Dict[str, Any] = {"task": task, "method": method, "report_to": "mlflow"}
     if start_from is not None:
         if task != "choice":
-            raise ValueError("start_from is a choice run's: a state saved outside Meep² to start from")
+            raise ValueError("start_from is a choice run's: the state its training goes on from")
         parts_of = Path(start_from).parts
-        if Path(start_from).is_absolute() or ".." in parts_of or Path(start_from).suffix != ".pt":
-            raise ValueError(f"start_from is a .pt file below the models folder, such as forge/starts/run.pt, "
-                             f"not {start_from!r}")
+        if Path(start_from).is_absolute() or ".." in parts_of or not (
+                Path(start_from).suffix == ".pt" or re.fullmatch(r"checkpoint-\d+", Path(start_from).name)):
+            raise ValueError("start_from is a checkpoint folder or a .pt file below the models folder, such as "
+                             f"forge/<run id>/output/checkpoint-1500 or forge/starts/run.pt, not {start_from!r}")
         job["start_from"] = start_from
     if steps is not None:
         job["steps"] = steps

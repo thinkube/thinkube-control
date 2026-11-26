@@ -198,9 +198,12 @@ class NewRun(BaseModel):
     # Decisions of Meep²'s plan the person sets, by name: fields of Meep²'s Recipe or Overrides
     decisions: Dict[str, Any] = Field({}, description=DECISIONS)
     milestones: Optional[Milestones] = None
-    start_from: Optional[str] = Field(None, description="a choice run's: a state saved outside Meep² to start from, "
-                                                        "a .pt file below the notebooks' models folder "
-                                                        "(~/thinkube/models), such as forge/starts/jev-3000.pt")
+    start_from: Optional[str] = Field(None, description="a choice run's: the state its training goes on from, "
+                                                        "below the notebooks' models folder (~/thinkube/models): a "
+                                                        "checkpoint folder of another run on the same data, such "
+                                                        "as forge/<run id>/output/checkpoint-1500, which moves a "
+                                                        "training to another node, or a .pt file of a state saved "
+                                                        "outside Meep², such as forge/starts/jev-3000.pt")
     when: Literal["now", "slots"] = "now"
     across_slots: bool = False
     # 1 (highest) to 5 (lowest); the priority of Forge runs on the Priorities page when not given
