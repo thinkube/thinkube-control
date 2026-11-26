@@ -369,8 +369,9 @@ def test_runs_beyond_the_limit_wait_in_order_and_start_as_earlier_ones_end(signe
     from app.core.config import settings
     monkeypatch.setattr(settings, "MILL_MAX_RUNS", 1)
 
-    first = signed_in.post("/api/v1/runs", json=sleeper("first", 3))
-    assert first.status_code == 200 and first.json()["state"] == "running", first.text
+    made = signed_in.post("/api/v1/runs", json=sleeper("first", 3))
+    assert made.status_code == 200 and made.json()["state"] == "running", made.text
+    first = made.json()
     second = signed_in.post("/api/v1/runs", json={**sleeper("second", 0), "tags": {"experiment": "queue"}}).json()
     third = signed_in.post("/api/v1/runs", json=sleeper("third", 0)).json()
     assert (second["state"], second["position"]) == ("queued", 1)
