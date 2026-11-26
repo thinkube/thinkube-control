@@ -46,7 +46,7 @@ def test_shards_of_a_split_are_combined(tmp_path):
 
 
 def test_an_unknown_file_type_is_refused():
-    with pytest.raises(tables.TableError, match=".jsonl, .json, .csv or .parquet"):
+    with pytest.raises(tables.TableError, match=".jsonl, .json, .csv, .parquet or .conllu"):
         tables.reader("data.xlsx")
 
 
