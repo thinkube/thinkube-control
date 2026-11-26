@@ -6,3 +6,6 @@ tqdm>=4.60
 
 # The runs report, and are asked to stop, through NATS
 nats-py>=2.7
+
+# Tasks call the Anthropic API (Message Batches) with the official SDK
+anthropic==2.14.0
