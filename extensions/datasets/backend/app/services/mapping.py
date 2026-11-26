@@ -12,6 +12,7 @@ A mapping names the kind of rows and the columns that hold each part:
 - text:        {"text": col}
 - choice:      {"prompt": col, "candidates": col, "target": col or absent, "right": col or absent,
                 "none": col or absent}
+- words:       {"tokens": col, "upos", "xpos", "feats", "lemma", "head", "deprel": col or absent}
 
 Every kind but text and choice becomes chat turns, {"messages": [...]}, which
 the trainer formats with the model's chat template. text is trained on as it
@@ -19,7 +20,10 @@ is. choice is one shared text (prompt) and candidates that each continue it,
 for Meep²'s task "choice": target, the probability of each candidate, which a
 training needs; right, whether each candidate is right, which a milestone's
 evaluation needs; none, the index of the candidate that says no candidate
-applies, which a head with a none output needs.
+applies, which a head with a none output needs. words is a sentence's words
+and a label of each, for Meep²'s task "tagging": one list per part, one value
+per word; head, the word each word depends on (from 1, 0 for the root), and
+deprel, the relation's name, are the parser and are mapped together.
 """
 
 from typing import Any, Dict, List, Optional
@@ -31,13 +35,18 @@ KINDS = {
     "instruction": ({"instruction", "output"}, {"input"}),
     "text": ({"text"}, set()),
     "choice": ({"prompt", "candidates"}, {"target", "right", "none"}),
+    "words": ({"tokens"}, {"upos", "xpos", "feats", "lemma", "head", "deprel"}),
 }
+# The parts of a words row that are text labels; head is the parser's word numbers
+WORD_LABELS = ("upos", "xpos", "feats", "lemma", "deprel")
 ROLES = {"system", "user", "assistant", "tool"}
 SHAREGPT_ROLES = {"system": "system", "human": "user", "user": "user", "gpt": "assistant",
                   "assistant": "assistant", "tool": "tool"}
 
 # Column names a dataset commonly uses for each part, in the order they are tried
 GUESSES = [
+    ("words", {"tokens": ["tokens"], "upos": ["upos"], "xpos": ["xpos"], "feats": ["feats"], "lemma": ["lemma"],
+               "head": ["head"], "deprel": ["deprel"]}),
     ("messages", {"messages": ["messages"]}),
     ("sharegpt", {"conversations": ["conversations", "conversation"]}),
     ("prompt", {"prompt": ["prompt"], "completion": ["completion", "response", "chosen"]}),
@@ -65,6 +74,8 @@ def check(mapping: Dict[str, Any], columns: List[str]) -> Dict[str, Any]:
     unknown = set(given) - required - optional
     if unknown:
         raise MappingError(f"a {kind} mapping has no part {sorted(unknown)}")
+    if kind == "words" and ("head" in given) != ("deprel" in given):
+        raise MappingError("a words mapping maps head and deprel together: they are the parser")
     absent = [c for c in given.values() if c not in columns]
     if absent:
         raise MappingError(f"the dataset has no column {absent}; it has {columns}")
@@ -80,13 +91,16 @@ def guess(columns: List[str]) -> Optional[Dict[str, Any]]:
             found = next((lowered[n] for n in names if n in lowered), None)
             if found:
                 chosen[part] = found
+        if kind == "words" and ("head" in chosen) != ("deprel" in chosen):
+            chosen.pop("head", None)
+            chosen.pop("deprel", None)
         if KINDS[kind][0] <= set(chosen):
             return {"kind": kind, "columns": chosen}
     return None
 
 
 def output_format(mapping: Dict[str, Any]) -> str:
-    return mapping["kind"] if mapping["kind"] in ("text", "choice") else "messages"
+    return mapping["kind"] if mapping["kind"] in ("text", "choice", "words") else "messages"
 
 
 # The largest difference from 1 of the sum of a choice row's target
@@ -121,6 +135,34 @@ def _choice(row: Dict[str, Any], cols: Dict[str, str]) -> Dict[str, Any]:
     return example
 
 
+def _words(row: Dict[str, Any], cols: Dict[str, str]) -> Dict[str, Any]:
+    """One sentence: its words and each mapped part's value of every word."""
+    which = f"row {row['_row']}" if "_row" in row else (f"sentence {row['sent_id']}" if row.get("sent_id") else "a row")
+    tokens = row.get(cols["tokens"])
+    if not isinstance(tokens, list) or not tokens or not all(isinstance(t, str) and t for t in tokens):
+        raise MappingError(f"{which}: column {cols['tokens']} is not a list of words")
+    example: Dict[str, Any] = {"tokens": tokens}
+    for part in WORD_LABELS:
+        if cols.get(part):
+            values = row.get(cols[part])
+            if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
+                raise MappingError(f"{which}: column {cols[part]} is not a list of text labels")
+            if len(values) != len(tokens):
+                raise MappingError(f"{which}: column {cols[part]} has {len(values)} values for {len(tokens)} words")
+            example[part] = values
+    if cols.get("head"):
+        heads = row.get(cols["head"])
+        if not isinstance(heads, list) or not all(isinstance(h, int) and not isinstance(h, bool) for h in heads):
+            raise MappingError(f"{which}: column {cols['head']} is not a list of word numbers")
+        if len(heads) != len(tokens):
+            raise MappingError(f"{which}: column {cols['head']} has {len(heads)} values for {len(tokens)} words")
+        wrong = [h for h in heads if not 0 <= h <= len(tokens)]
+        if wrong:
+            raise MappingError(f"{which}: column {cols['head']} has the heads {wrong[:5]}, outside 0..{len(tokens)}")
+        example["head"] = heads
+    return example
+
+
 def _text(value: Any, what: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise MappingError(f"{what} is not text")
@@ -132,6 +174,8 @@ def apply(row: Dict[str, Any], mapping: Dict[str, Any]) -> Dict[str, Any]:
     kind, cols = mapping["kind"], mapping["columns"]
     if kind == "choice":
         return _choice(row, cols)
+    if kind == "words":
+        return _words(row, cols)
     if kind == "text":
         return {"text": _text(row.get(cols["text"]), f"column {cols['text']}")}
     if kind == "messages":

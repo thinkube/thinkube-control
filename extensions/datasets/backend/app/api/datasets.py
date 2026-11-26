@@ -24,7 +24,7 @@ from app.core.config import settings
 from app.core.security import User, get_current_user
 from app.db.session import get_db, get_session_local
 from app.models.dataset import Dataset, DatasetVersion
-from app.services import huggingface, mapping, storage, tables, workflows
+from app.services import huggingface, mapping, storage, tables, ud, workflows
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -92,7 +92,7 @@ async def upload_target(user: User = Depends(get_current_user)):
         "method": "POST",
         "url": url,
         "headers": {"Authorization": "Bearer <the token this call was made with: a Thinkube Control API token>"},
-        "form": {"file": f"the file, .jsonl, .json, .csv or .parquet, at most {MAX_UPLOAD_BYTES // 1024 ** 3} GiB; "
+        "form": {"file": f"the file, .jsonl, .json, .csv, .parquet or .conllu (one row per sentence), at most {MAX_UPLOAD_BYTES // 1024 ** 3} GiB; "
                          f"it becomes the split {UPLOAD_SPLIT} of version 1",
                  "name": "the dataset's name; the file's name without its extension when not given"},
         "curl": f"curl -fsS -H \"Authorization: Bearer $TOKEN\" -F file=@<path> -F name=<name> {url}",
@@ -261,28 +261,25 @@ async def _follow(version_id: str) -> None:
         _following.pop(version_id, None)
 
 
-@router.post("/huggingface", operation_id="datasets_import_huggingface")
-async def import_from_hub(request: HubImport, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Start importing a Hugging Face dataset as an Argo workflow; it is listed
-    as importing until the workflow has ended."""
-    try:
-        by_split = huggingface.choose(await huggingface.files(request.repo), request.config, request.splits)
-    except huggingface.HubError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    config = next(iter(by_split.values()))[0]["config"]
-    dataset = Dataset(id=str(uuid.uuid4()), name=request.name or request.repo.split("/")[-1], source="huggingface",
-                      origin=f"{request.repo}:{config}", next_row=0, created_by=user.preferred_username)
+class UdImport(BaseModel):
+    treebanks: List[str] = Field(..., min_length=1, max_length=50)
+    tag: str = Field(..., min_length=2, max_length=64, pattern=r"^[\w.-]+$")
+    name: Optional[str] = Field(None, max_length=255)
+
+
+async def _start_import(dataset: Dataset, by_split: Dict[str, List[Dict[str, str]]], job: str,
+                        db: Session) -> Dict:
+    """Make version 1 of the dataset as an import's workflow, and follow it."""
     version = _first_version(dataset, "import", "importing")
     try:
         version.mlflow_experiment_id, version.mlflow_run_id = await storage.create(dataset.name, dataset.id,
                                                                                    version.number)
     except storage.StorageError as e:
         raise HTTPException(status_code=502, detail=str(e))
-    files = {split: [{"url": f["url"]} for f in shards] for split, shards in by_split.items()}
     try:
         version.workflow = await asyncio.to_thread(workflows.submit_import, dataset.id, version.number,
                                                    version.mlflow_experiment_id, version.mlflow_run_id,
-                                                   dataset.next_row, files)
+                                                   dataset.next_row, by_split, job)
     except workflows.WorkflowsError as e:
         try:
             await storage.delete(version.mlflow_experiment_id, version.mlflow_run_id)
@@ -294,6 +291,45 @@ async def import_from_hub(request: HubImport, user: User = Depends(get_current_u
     db.refresh(dataset)
     follow(version.id)
     return dataset.to_dict()
+
+
+@router.post("/ud", operation_id="datasets_import_ud")
+async def import_from_ud(request: UdImport, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Start importing Universal Dependencies treebanks at a release tag as one dataset of words: its splits
+    train, dev and test each hold every treebank that has the split, one row per sentence, the column treebank
+    naming its source. Its description keeps each treebank's licence. It is listed as importing until its
+    Argo workflow has ended."""
+    if len(set(request.treebanks)) != len(request.treebanks):
+        raise HTTPException(status_code=422, detail="each treebank is named once")
+    bad = [t for t in request.treebanks if not ud.TREEBANK.match(t)]
+    if bad:
+        raise HTTPException(status_code=422, detail=f"{bad} are not treebank names such as UD_German-GSD")
+    try:
+        listings = [await ud.listing(t, request.tag) for t in request.treebanks]
+    except ud.UdError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    origin = f"{','.join(request.treebanks)}@{request.tag}"
+    if len(origin) > 512:
+        raise HTTPException(status_code=422, detail="the treebanks' names are too long together; import fewer at once")
+    dataset = Dataset(id=str(uuid.uuid4()), name=request.name or origin[:255], source="ud", origin=origin,
+                      description=ud.description(listings, request.tag), next_row=0,
+                      created_by=user.preferred_username)
+    return await _start_import(dataset, ud.by_split(listings), "ud_import", db)
+
+
+@router.post("/huggingface", operation_id="datasets_import_huggingface")
+async def import_from_hub(request: HubImport, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Start importing a Hugging Face dataset as an Argo workflow; it is listed
+    as importing until the workflow has ended."""
+    try:
+        by_split = huggingface.choose(await huggingface.files(request.repo), request.config, request.splits)
+    except huggingface.HubError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    config = next(iter(by_split.values()))[0]["config"]
+    dataset = Dataset(id=str(uuid.uuid4()), name=request.name or request.repo.split("/")[-1], source="huggingface",
+                      origin=f"{request.repo}:{config}", next_row=0, created_by=user.preferred_username)
+    files = {split: [{"url": f["url"]} for f in shards] for split, shards in by_split.items()}
+    return await _start_import(dataset, files, "hub_import", db)
 
 
 async def _cached(dataset: Dataset, version: DatasetVersion, split: str) -> Path:

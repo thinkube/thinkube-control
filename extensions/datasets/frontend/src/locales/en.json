@@ -189,7 +189,8 @@
     "prompt": "Prompt and completion",
     "instruction": "Instruction, input and output",
     "text": "Plain text",
-    "choice": "A shared text and candidates"
+    "choice": "A shared text and candidates",
+    "words": "A sentence's words and their labels"
   },
   "part": {
     "messages": "Turns",
@@ -204,7 +205,14 @@
     "candidates": "Candidates",
     "target": "Target probabilities",
     "right": "Right candidates",
-    "none": "None candidate (its index)"
+    "none": "None candidate (its index)",
+    "tokens": "Words",
+    "upos": "Part of speech (UPOS)",
+    "xpos": "Treebank tag (XPOS)",
+    "feats": "Features (FEATS)",
+    "lemma": "Lemma",
+    "head": "Head word (from 1, 0 for the root)",
+    "deprel": "Dependency relation"
   },
   "status": {
     "ready": "Ready",

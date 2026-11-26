@@ -92,3 +92,51 @@ def test_a_choice_row_names_its_none_candidate_by_index():
     assert apply(row, m)["none"] == 1
     shown = preview([{**row, "n": 2}, {**row, "n": True}], m)
     assert all("not the index of one of the 2 candidates" in s["error"] for s in shown)
+
+
+# A sentence's words and a label of each, for Meep²'s task tagging
+WORDS_ALL = {"tokens": "tokens", "upos": "upos", "xpos": "xpos", "feats": "feats", "lemma": "lemma",
+             "head": "head", "deprel": "deprel"}
+SENTENCE = {"_row": 7, "tokens": ["Das", "ist", "gut"], "upos": ["PRON", "AUX", "ADJ"], "xpos": ["PDS", "VAFIN", "ADJD"],
+            "feats": ["Case=Nom", "_", "Degree=Pos"], "lemma": ["der", "sein", "gut"], "head": [3, 3, 0],
+            "deprel": ["nsubj", "cop", "root"]}
+
+
+def test_a_treebanks_columns_are_guessed_as_words():
+    columns = ["tokens", "lemma", "upos", "xpos", "feats", "head", "deprel", "treebank", "sent_id", "text"]
+    assert guess(columns) == {"kind": "words", "columns": WORDS_ALL}
+
+
+def test_words_without_the_parser_columns_are_guessed_without_them():
+    assert guess(["tokens", "upos", "head"]) == {"kind": "words", "columns": {"tokens": "tokens", "upos": "upos"}}
+
+
+def test_a_words_row_keeps_only_the_mapped_parts():
+    m = {"kind": "words", "columns": {"tokens": "tokens", "upos": "upos", "head": "head", "deprel": "deprel"}}
+    assert apply(SENTENCE, m) == {"tokens": ["Das", "ist", "gut"], "upos": ["PRON", "AUX", "ADJ"],
+                                  "head": [3, 3, 0], "deprel": ["nsubj", "cop", "root"]}
+    assert output_format(m) == "words"
+
+
+def test_every_part_of_a_words_row():
+    assert apply(SENTENCE, {"kind": "words", "columns": WORDS_ALL}) == {k: v for k, v in SENTENCE.items() if k != "_row"}
+
+
+def test_head_and_deprel_are_mapped_together():
+    with pytest.raises(MappingError, match="head and deprel together"):
+        check({"kind": "words", "columns": {"tokens": "tokens", "head": "head"}}, list(SENTENCE))
+    with pytest.raises(MappingError, match="head and deprel together"):
+        check({"kind": "words", "columns": {"tokens": "tokens", "deprel": "deprel"}}, list(SENTENCE))
+    assert check({"kind": "words", "columns": WORDS_ALL}, list(SENTENCE)) == {"kind": "words", "columns": WORDS_ALL}
+
+
+@pytest.mark.parametrize("change,message", [
+    ({"upos": ["PRON", "AUX"]}, "row 7: column upos has 2 values for 3 words"),
+    ({"head": [3, 4, 0]}, r"row 7: column head has the heads \[4\], outside 0..3"),
+    ({"head": [3, "3", 0]}, "row 7: column head is not a list of word numbers"),
+    ({"tokens": []}, "row 7: column tokens is not a list of words"),
+    ({"deprel": ["nsubj", 1, "root"]}, "row 7: column deprel is not a list of text labels"),
+])
+def test_a_words_row_that_does_not_line_up_is_refused_naming_the_row(change, message):
+    with pytest.raises(MappingError, match=message):
+        apply({**SENTENCE, **change}, {"kind": "words", "columns": WORDS_ALL})

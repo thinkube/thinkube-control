@@ -86,9 +86,16 @@ def logs_url(name: str) -> str:
     return f"{_env()['WORKFLOWS_UI_URL']}/{name}"
 
 
+# The import steps: a Hugging Face dataset's Parquet files, or Universal Dependencies treebanks' CoNLL-U files
+JOBS = ("hub_import", "ud_import")
+
+
 def import_workflow(env: Dict[str, str], dataset_id: str, version: int, experiment_id: str, run_id: str,
-                    first_row: int, by_split: Dict[str, List[Dict[str, Any]]]) -> Workflow:
-    """The workflow of a Hugging Face import: one step, app.jobs.hub_import."""
+                    first_row: int, by_split: Dict[str, List[Dict[str, Any]]], job: str = "hub_import") -> Workflow:
+    """The workflow of an import: one step, app.jobs.<job>."""
+    if job not in JOBS:
+        raise WorkflowsError(f"there is no import step {job}; the steps are {list(JOBS)}")
+    step_name = job.replace("_", "-")
     mlflow_secret = f"{env['APP_NAME']}-mlflow-credentials"
     with Workflow(
         generate_name=f"{env['APP_NAME']}-import-",
@@ -102,9 +109,9 @@ def import_workflow(env: Dict[str, str], dataset_id: str, version: int, experime
         ttl_strategy=TTLStrategy(seconds_after_completion=KEEP_SECONDS),
     ) as workflow:
         step = Container(
-            name="hub-import",
+            name=step_name,
             image=env["CONTAINER_IMAGE_BACKEND"],
-            command=["python", "-m", "app.jobs.hub_import"],
+            command=["python", "-m", f"app.jobs.{job}"],
             args=["--experiment", experiment_id, "--run", run_id, "--first-row", str(first_row),
                   "--files", json.dumps(by_split), "--result", RESULT],
             env=[SecretEnv(name=name, secret_name=mlflow_secret, secret_key=key)
@@ -115,15 +122,15 @@ def import_workflow(env: Dict[str, str], dataset_id: str, version: int, experime
             outputs=[Parameter(name="result", value_from=ValueFrom(path=RESULT))],
         )
         with Steps(name="import"):
-            step(name="hub-import")
+            step(name=step_name)
     return workflow
 
 
 def submit_import(dataset_id: str, version: int, experiment_id: str, run_id: str, first_row: int,
-                  by_split: Dict[str, List[Dict[str, Any]]]) -> str:
+                  by_split: Dict[str, List[Dict[str, Any]]], job: str = "hub_import") -> str:
     """Submit the import's workflow and return its name."""
     env = _env()
-    workflow = import_workflow(env, dataset_id, version, experiment_id, run_id, first_row, by_split)
+    workflow = import_workflow(env, dataset_id, version, experiment_id, run_id, first_row, by_split, job)
     workflow.workflows_service = _service(env)
     try:
         return workflow.create().metadata.name

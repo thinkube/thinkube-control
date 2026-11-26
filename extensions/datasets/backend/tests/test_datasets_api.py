@@ -15,7 +15,7 @@ import pytest
 
 from app.api import datasets as api_module
 from app.core.security import get_current_user
-from app.jobs import hub_import
+from app.jobs import hub_import, ud_import
 from app.services import huggingface, storage, tables, workflows
 
 
@@ -45,12 +45,14 @@ class Argo:
 
     def __init__(self):
         self.submitted = {}
+        self.jobs = {}
         self.states = {}
         self.deleted = []
 
-    def submit_import(self, dataset_id, version, experiment_id, run_id, first_row, by_split):
+    def submit_import(self, dataset_id, version, experiment_id, run_id, first_row, by_split, job="hub_import"):
         name = f"datasets-import-{len(self.submitted) + 1}"
         self.submitted[name] = (experiment_id, run_id, first_row, by_split)
+        self.jobs[name] = job
         self.states[name] = workflows.WorkflowState("Running", None, None)
         return name
 
@@ -66,7 +68,8 @@ class Argo:
 
     def run_step(self, name, work):
         experiment_id, run_id, first_row, by_split = self.submitted[name]
-        made = asyncio.run(hub_import.run(experiment_id, run_id, first_row, by_split, work))
+        step = {"hub_import": hub_import, "ud_import": ud_import}[self.jobs[name]]
+        made = asyncio.run(step.run(experiment_id, run_id, first_row, by_split, work))
         self.states[name] = workflows.WorkflowState("Succeeded", None, made)
 
 
@@ -313,3 +316,115 @@ def test_a_hub_dataset_with_several_configs_needs_one_chosen():
     with pytest.raises(huggingface.HubError, match=r"configs \['en', 'es'\]"):
         huggingface.choose(listed, None, None)
     assert list(huggingface.choose(listed, "es", None)) == ["train"]
+
+
+# Universal Dependencies treebanks on a fake GitHub
+def conllu_file(sent_ids):
+    return "".join(f"# sent_id = {s}\n# text = Ja.\n1\tJa\tja\tINTJ\tITJ\t_\t0\troot\t_\t_\n\n" for s in sent_ids)
+
+
+TREEBANKS = {
+    "UD_German-GSD": {"de_gsd-ud-train.conllu": conllu_file(["g1", "g2"]),
+                      "de_gsd-ud-dev.conllu": conllu_file(["g3"]),
+                      "de_gsd-ud-test.conllu": conllu_file(["g4"]),
+                      "README.md": "# Summary\n\n# Changelog\n\n=== Machine-readable metadata ===\nLicense: CC BY-SA 4.0\n",
+                      "LICENSE.txt": "ignored, the README says it"},
+    "UD_German-HDT": {"de_hdt-ud-train-a-1.conllu": conllu_file(["h1"]),
+                      "de_hdt-ud-train-a-2.conllu": conllu_file(["h2", "h3"]),
+                      "de_hdt-ud-test.conllu": conllu_file(["h4"]),
+                      "README.md": "no metadata here\n",
+                      "LICENSE.txt": "\nCC BY-SA 4.0 (Attribution-ShareAlike 4.0 International)\nmore text\n"},
+    "UD_German-PUD": {"de_pud-ud-test.conllu": conllu_file(["p1"]), "README.md": "License: CC BY-SA 4.0\n"},
+}
+
+
+def github(api, monkeypatch, treebanks=TREEBANKS, tag="r2.18"):
+    import httpx
+    from app.services import ud
+
+    def answer(request):
+        url = str(request.url)
+        if url.startswith("https://raw/"):
+            name, file = url[len("https://raw/"):].split("/", 1)
+            return httpx.Response(200, text=treebanks[name][file])
+        name = request.url.path.split("/")[3]
+        if name not in treebanks:
+            return httpx.Response(404, json={"message": "Not Found"})
+        if request.url.params.get("ref") != tag:
+            return httpx.Response(404, json={"message": f"No commit found for the ref {request.url.params.get('ref')}"})
+        return httpx.Response(200, json=[{"type": "file", "name": f, "download_url": f"https://raw/{name}/{f}"}
+                                         for f in treebanks[name]] + [{"type": "dir", "name": "not-to-release"}])
+
+    monkeypatch.setattr(ud, "_client", lambda timeout: httpx.AsyncClient(transport=httpx.MockTransport(answer)))
+
+
+def test_treebanks_are_imported_as_one_dataset_of_words_split_by_split(api, monkeypatch, tmp_path):
+    github(api, monkeypatch)
+    started = api.post("/api/v1/datasets/ud", json={"treebanks": ["UD_German-GSD", "UD_German-HDT", "UD_German-PUD"],
+                                                     "tag": "r2.18", "name": "German"})
+    assert started.status_code == 200, started.text
+    started = started.json()
+    assert (started["source"], started["origin"]) == ("ud", "UD_German-GSD,UD_German-HDT,UD_German-PUD@r2.18")
+    assert started["description"] == ("Universal Dependencies r2.18. UD_German-GSD: licence CC BY-SA 4.0; "
+                                      "UD_German-HDT: licence CC BY-SA 4.0 (Attribution-ShareAlike 4.0 International); "
+                                      "UD_German-PUD: licence CC BY-SA 4.0")
+    assert api.argo.jobs["datasets-import-1"] == "ud_import"
+    _, _, _, by_split = api.argo.submitted["datasets-import-1"]
+    # A split holds the treebanks that have it, the parts of a large split in file-name order
+    assert {s: [f["name"] for f in files] for s, files in by_split.items()} == {
+        "train": ["de_gsd-ud-train.conllu", "de_hdt-ud-train-a-1.conllu", "de_hdt-ud-train-a-2.conllu"],
+        "dev": ["de_gsd-ud-dev.conllu"],
+        "test": ["de_gsd-ud-test.conllu", "de_hdt-ud-test.conllu", "de_pud-ud-test.conllu"]}
+
+    work = tmp_path / "step"
+    work.mkdir()
+    api.argo.run_step("datasets-import-1", work)
+    found = settled(api, started["id"])
+    assert found["status"] == "ready", found
+    assert {s["name"]: s["rows"] for s in found["splits"]} == {"train": 5, "dev": 1, "test": 3}
+    assert found["mapping"]["kind"] == "words" and found["mapping"]["columns"]["deprel"] == "deprel"
+    rows = api.get(f"/api/v1/datasets/{started['id']}/rows", params={"split": "test"}).json()
+    assert [(r["treebank"], r["sent_id"]) for r in rows["rows"]] == [
+        ("UD_German-GSD", "g4"), ("UD_German-HDT", "h4"), ("UD_German-PUD", "p1")]
+    assert rows["examples"][0]["example"]["head"] == [0]
+    training = api.get(f"/api/v1/datasets/{started['id']}/training").json()
+    assert training["format"] == "words"
+
+
+def test_a_tag_a_treebank_does_not_have_is_refused_naming_it(api, monkeypatch):
+    github(api, monkeypatch)
+    r = api.post("/api/v1/datasets/ud", json={"treebanks": ["UD_German-GSD"], "tag": "r9.99"})
+    assert r.status_code == 422 and r.json()["detail"] == "UniversalDependencies/UD_German-GSD has no tag r9.99"
+    assert api.argo.submitted == {}
+
+
+def test_a_missing_treebank_is_refused_naming_it(api, monkeypatch):
+    github(api, monkeypatch)
+    r = api.post("/api/v1/datasets/ud", json={"treebanks": ["UD_German-GSD", "UD_German-XYZ"], "tag": "r2.18"})
+    assert r.status_code == 422 and "has no treebank UD_German-XYZ" in r.json()["detail"]
+
+
+def test_a_treebank_without_conllu_files_is_refused_naming_it(api, monkeypatch):
+    github(api, monkeypatch, {"UD_German-Empty": {"README.md": "License: CC0\n"}})
+    r = api.post("/api/v1/datasets/ud", json={"treebanks": ["UD_German-Empty"], "tag": "r2.18"})
+    assert r.status_code == 422
+    assert r.json()["detail"] == ("UniversalDependencies/UD_German-Empty at r2.18 has no -ud-train, -ud-dev or "
+                                  "-ud-test .conllu file")
+
+
+def test_a_treebank_that_states_no_licence_is_refused(api, monkeypatch):
+    github(api, monkeypatch, {"UD_German-Quiet": {"de_q-ud-test.conllu": conllu_file(["q1"])}})
+    r = api.post("/api/v1/datasets/ud", json={"treebanks": ["UD_German-Quiet"], "tag": "r2.18"})
+    assert r.status_code == 422 and "states no licence" in r.json()["detail"]
+
+
+def test_a_name_that_is_not_a_treebank_is_refused(api, monkeypatch):
+    github(api, monkeypatch)
+    r = api.post("/api/v1/datasets/ud", json={"treebanks": ["../etc"], "tag": "r2.18"})
+    assert r.status_code == 422 and "not treebank names" in r.json()["detail"]
+
+
+def test_an_uploaded_conllu_file_is_a_dataset_of_words(api):
+    dataset = upload(api, "de_x-ud-train.conllu", conllu_file(["u1", "u2"]).encode())
+    assert dataset["splits"] == [{"name": "train", "rows": 2, "bytes": dataset["splits"][0]["bytes"]}]
+    assert dataset["mapping"]["kind"] == "words"

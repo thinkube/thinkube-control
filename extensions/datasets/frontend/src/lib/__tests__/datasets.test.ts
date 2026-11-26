@@ -18,6 +18,13 @@ describe('mapping', () => {
     expect(complete({ kind: 'instruction', columns: { instruction: 'i' } })).toBe(false);
     expect(complete({ kind: 'instruction', columns: { instruction: 'i', output: 'o' } })).toBe(true);
   });
+
+  it('maps a sentence of words with its labels and its parser columns', () => {
+    expect(
+      cleanMapping('words', { tokens: 'tokens', upos: 'upos', head: 'head', deprel: 'deprel', text: 'text' }),
+    ).toEqual({ kind: 'words', columns: { tokens: 'tokens', upos: 'upos', head: 'head', deprel: 'deprel' } });
+    expect(complete({ kind: 'words', columns: { upos: 'upos' } })).toBe(false);
+  });
 });
 
 describe('size', () => {

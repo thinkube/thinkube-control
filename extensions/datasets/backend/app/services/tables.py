@@ -3,8 +3,10 @@
 
 """A dataset's split is one Parquet file; DuckDB reads and writes it.
 
-An uploaded file is JSON Lines, a JSON array, CSV or Parquet. It is turned
-into Parquet once, and every later read is DuckDB on that file.
+An uploaded file is JSON Lines, a JSON array, CSV, Parquet or CoNLL-U. It is
+turned into Parquet once, and every later read is DuckDB on that file. A
+CoNLL-U file becomes one row per sentence (app/services/conllu.py), its
+treebank the file's name.
 
 Every split file carries two columns besides the data:
 
@@ -35,6 +37,8 @@ READERS = {
     ".csv": "read_csv_auto({src})",
     ".parquet": "read_parquet({src})",
 }
+# Read by app/services/conllu.py, not by a DuckDB reader
+CONLLU = ".conllu"
 
 
 IDENTITY = {"_row", "_origin"}
@@ -67,13 +71,19 @@ class TableError(ValueError):
 
 def reader(filename: str) -> str:
     suffix = Path(filename).suffix.lower()
+    if suffix == CONLLU:
+        return CONLLU
     if suffix not in READERS:
-        raise TableError(f"{filename} must be .jsonl, .json, .csv or .parquet")
+        raise TableError(f"{filename} must be .jsonl, .json, .csv, .parquet or .conllu")
     return READERS[suffix]
 
 
 def to_parquet(source: Path, filename: str, target: Path) -> None:
     """Write the rows of an uploaded file to a Parquet file."""
+    if reader(filename) == CONLLU:
+        from app.services import conllu
+        conllu.to_parquet([(source, Path(filename).stem)], target)
+        return
     try:
         with _connect() as db:
             relation = db.sql("SELECT * FROM " + reader(filename).format(src=_literal(source)))

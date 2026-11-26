@@ -71,3 +71,25 @@ def test_the_step_starts_with_only_the_variables_its_workflow_gives_it(tmp_path)
     found = subprocess.run([sys.executable, "-m", "app.jobs.hub_import", "--help"], cwd=BACKEND, env=step_env,
                            capture_output=True, text=True)
     assert found.returncode == 0, found.stderr
+
+
+def test_a_treebank_import_runs_its_own_step():
+    files = {"train": [{"url": "https://raw/de_gsd-ud-train.conllu", "name": "de_gsd-ud-train.conllu",
+                        "treebank": "UD_German-GSD"}]}
+    found = workflows.import_workflow(ENV, "d1", 1, "3", "r1", 0, files, "ud_import").to_dict()
+    [step] = [t for t in found["spec"]["templates"] if t["name"] == "ud-import"]
+    assert step["container"]["command"] == ["python", "-m", "app.jobs.ud_import"]
+    assert step["container"]["resources"]["limits"] == {"cpu": "1", "memory": "2Gi"}
+
+
+def test_an_unknown_import_step_is_refused():
+    with pytest.raises(workflows.WorkflowsError, match="there is no import step nothing"):
+        workflows.import_workflow(ENV, "d1", 1, "3", "r1", 0, {}, "nothing")
+
+
+def test_the_treebank_step_starts_with_only_the_variables_its_workflow_gives_it():
+    step_env = {"PATH": os.environ["PATH"], "DOMAIN_NAME": "test.com",
+                **{name: "x" for name in workflows.MLFLOW_SECRET_KEYS}}
+    found = subprocess.run([sys.executable, "-m", "app.jobs.ud_import", "--help"], cwd=BACKEND, env=step_env,
+                           capture_output=True, text=True)
+    assert found.returncode == 0, found.stderr

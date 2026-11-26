@@ -6,7 +6,7 @@
 import { AxiosError } from 'axios';
 import api from './axios';
 
-export type MappingKind = 'messages' | 'sharegpt' | 'prompt' | 'instruction' | 'text' | 'choice';
+export type MappingKind = 'messages' | 'sharegpt' | 'prompt' | 'instruction' | 'text' | 'choice' | 'words';
 
 export interface Mapping {
   kind: MappingKind;
@@ -30,8 +30,10 @@ export type Status = 'importing' | 'identifying' | 'ready' | 'failed';
 export interface Dataset {
   id: string;
   name: string;
-  source: 'upload' | 'huggingface';
+  source: 'upload' | 'huggingface' | 'ud';
   origin: string;
+  /** What the source says of itself, such as each Universal Dependencies treebank's licence */
+  description: string | null;
   created_by: string;
   created_at: string;
   versions: number;
@@ -90,6 +92,7 @@ export const PARTS: Record<MappingKind, { required: string[]; optional: string[]
   instruction: { required: ['instruction', 'output'], optional: ['input'] },
   text: { required: ['text'], optional: [] },
   choice: { required: ['prompt', 'candidates'], optional: ['target', 'right', 'none'] },
+  words: { required: ['tokens'], optional: ['upos', 'xpos', 'feats', 'lemma', 'head', 'deprel'] },
 };
 
 /** The mapping with only the parts of its kind that name a column. */

@@ -121,6 +121,9 @@ export default function DatasetPage() {
         <p className="text-muted-foreground mt-1 break-all">
           {dataset.origin} · {t('dataset.versionShown', { number: dataset.version })}
         </p>
+        {dataset.description && (
+          <p className="text-sm text-muted-foreground mt-1 break-words">{dataset.description}</p>
+        )}
       </div>
 
       <TkCard>

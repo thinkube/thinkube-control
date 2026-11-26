@@ -189,7 +189,8 @@
     "prompt": "Prompt i resposta",
     "instruction": "Instrucció, entrada i sortida",
     "text": "Text pla",
-    "choice": "Un text comú i candidats"
+    "choice": "Un text comú i candidats",
+    "words": "Les paraules d'una oració i les seves etiquetes"
   },
   "part": {
     "messages": "Torns",
@@ -204,7 +205,14 @@
     "candidates": "Candidats",
     "target": "Probabilitats objectiu",
     "right": "Candidats correctes",
-    "none": "Candidat «cap» (el seu índex)"
+    "none": "Candidat «cap» (el seu índex)",
+    "tokens": "Paraules",
+    "upos": "Categoria gramatical (UPOS)",
+    "xpos": "Etiqueta del treebank (XPOS)",
+    "feats": "Trets (FEATS)",
+    "lemma": "Lema",
+    "head": "Paraula nucli (des d'1, 0 per a l'arrel)",
+    "deprel": "Relació de dependència"
   },
   "status": {
     "ready": "Llest",

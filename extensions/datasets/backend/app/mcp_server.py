@@ -20,6 +20,7 @@ TOOLS = [
     "datasets_get_version",
     "datasets_upload_target",
     "datasets_import_huggingface",
+    "datasets_import_ud",
     "datasets_rows",
     "datasets_set_mapping",
     "datasets_training",

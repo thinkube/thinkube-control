@@ -35,9 +35,11 @@ class Dataset(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(255), nullable=False)
-    # upload or huggingface, and the file name or repo[:config] it came from
+    # upload, huggingface or ud, and the file name, repo[:config], or treebanks@tag it came from
     source = Column(String(16), nullable=False)
     origin = Column(String(512), nullable=False)
+    # What the source says of itself that a user must see, such as each Universal Dependencies treebank's licence
+    description = Column(Text, nullable=True)
     # The `_row` the next new row of any version gets
     next_row = Column(BigInteger, nullable=False, server_default="0")
     created_by = Column(String(255), nullable=False)
@@ -59,6 +61,7 @@ class Dataset(Base):
             "name": self.name,
             "source": self.source,
             "origin": self.origin,
+            "description": self.description,
             "created_by": self.created_by,
             "created_at": self.created_at.isoformat(),
             "versions": len(self.versions),

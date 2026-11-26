@@ -9,8 +9,10 @@ navigation and draws its pages. Other apps in Control's namespace read it at
 
 ## What it does
 
-- **Upload**: a `.jsonl`, `.json`, `.csv` or `.parquet` file of up to 2 GB
-  becomes the split `train` (`backend/app/services/tables.py`, with DuckDB).
+- **Upload**: a `.jsonl`, `.json`, `.csv`, `.parquet` or `.conllu` file of
+  up to 2 GB becomes the split `train` (`backend/app/services/tables.py`,
+  with DuckDB). A CoNLL-U file becomes one row per sentence
+  (`backend/app/services/conllu.py`), its treebank the file's name.
 - **Import from Hugging Face**: a public dataset of the Hub, as the Parquet
   files the Hub publishes for it, at most 4 GB
   (`backend/app/services/huggingface.py`). The import runs as an Argo
@@ -19,6 +21,22 @@ navigation and draws its pages. Other apps in Control's namespace read it at
   does not stop it: the backend records the workflow, follows it, and
   follows it again when it starts. Deleting an importing dataset cancels
   its workflow.
+- **Import of Universal Dependencies treebanks**: `POST /api/v1/datasets/ud`
+  with `{"treebanks": ["UD_German-GSD", ...], "tag": "r2.18", "name": ...}`
+  (MCP tool `datasets_import_ud`). The backend lists each treebank's
+  CoNLL-U files at the tag through the GitHub API and reads its licence (the
+  README's `License:` line, or the first line of `LICENSE.txt`), which the
+  dataset's `description` keeps; a missing tag or treebank, or one with no
+  `-ud-train`, `-ud-dev` or `-ud-test` file, is refused naming it
+  (`backend/app/services/ud.py`). The files become one dataset whose splits
+  `train`, `dev` and `test` each hold every treebank that has the split, as
+  an Argo workflow (`backend/app/jobs/ud_import.py`).
+- **Words**: a treebank's row is one sentence of syntactic words: a
+  multiword token's range and an empty node are left out, as Meep²'s
+  tagging reads them by default. Its columns are `tokens`, `lemma`, `upos`,
+  `xpos`, `feats` and `deprel` (lists of text, `_` kept as it is), `head`
+  (a list of numbers from 1, 0 for the root), `treebank`, `sent_id` and
+  `text`.
 - **Versions**: a dataset has numbered versions, 1, 2, ... An upload or an
   import makes version 1. Each version records its lineage: the version it
   was made from (none for an upload or an import) and what made it
@@ -41,8 +59,10 @@ navigation and draws its pages. Other apps in Control's namespace read it at
   rewrites in place the files of any version that lacks them.
 - **Rows and mapping**: the dataset page lists the versions and shows the
   rows of one, and maps its columns to examples: chat messages, ShareGPT
-  conversations, prompt and completion, instruction and output, or plain
-  text (`backend/app/services/mapping.py`). A version with a mapping can be
+  conversations, prompt and completion, instruction and output, plain text,
+  a shared text and candidates (`choice`), or a sentence's words and a label
+  of each (`words`: `tokens`, and any of `upos`, `xpos`, `feats`, `lemma`,
+  and `head` with `deprel`, the parser) (`backend/app/services/mapping.py`). A version with a mapping can be
   trained on.
 - **For training**: `GET /api/v1/datasets/{id}/training?version=N` gives a
   trainer the files of each split of a version, the mapping, and the

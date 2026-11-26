@@ -62,6 +62,7 @@ const dataset = (n: number) => ({
   columns,
   mapping,
   mlflow_run_id: `run-${n}`,
+  description: 'Universal Dependencies r2.18. UD_German-GSD: licence CC BY-SA 4.0',
 });
 
 beforeEach(() => {
@@ -106,5 +107,12 @@ describe('DatasetPage', () => {
       }),
     );
     expect(await screen.findByText(/version 1/)).toBeInTheDocument();
+  });
+
+  it('shows what the source says of itself, such as a treebank licence', async () => {
+    show();
+    expect(
+      await screen.findByText('Universal Dependencies r2.18. UD_German-GSD: licence CC BY-SA 4.0'),
+    ).toBeInTheDocument();
   });
 });

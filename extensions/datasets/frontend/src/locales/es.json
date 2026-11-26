@@ -189,7 +189,8 @@
     "prompt": "Prompt y respuesta",
     "instruction": "Instrucción, entrada y salida",
     "text": "Texto plano",
-    "choice": "Un texto común y candidatos"
+    "choice": "Un texto común y candidatos",
+    "words": "Las palabras de una oración y sus etiquetas"
   },
   "part": {
     "messages": "Turnos",
@@ -204,7 +205,14 @@
     "candidates": "Candidatos",
     "target": "Probabilidades objetivo",
     "right": "Candidatos correctos",
-    "none": "Candidato «ninguno» (su índice)"
+    "none": "Candidato «ninguno» (su índice)",
+    "tokens": "Palabras",
+    "upos": "Categoría gramatical (UPOS)",
+    "xpos": "Etiqueta del treebank (XPOS)",
+    "feats": "Rasgos (FEATS)",
+    "lemma": "Lema",
+    "head": "Palabra núcleo (desde 1, 0 para la raíz)",
+    "deprel": "Relación de dependencia"
   },
   "status": {
     "ready": "Listo",
