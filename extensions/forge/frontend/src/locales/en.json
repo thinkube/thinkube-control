@@ -322,7 +322,11 @@
     "preprocessBuilt": "Built for this run",
     "preprocessKey": "key {{key}}",
     "taskSummary": "Mill task {{file}} on {{node}}, {{gpus}} GPU(s)",
-    "millRun": "Its progress, samples and log in Mill"
+    "millRun": "Its progress, samples and log in Mill",
+    "smoothing": "Smoothing",
+    "smoothingNone": "none",
+    "smoothed": "Smoothed",
+    "smoothedLoss": "Training loss, smoothed"
   },
   "chat": {
     "title": "Ask the models",

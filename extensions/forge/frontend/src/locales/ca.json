@@ -322,7 +322,11 @@
     "preprocessBuilt": "Fetes per a aquesta execució",
     "preprocessKey": "clau {{key}}",
     "taskSummary": "Tasca de Mill {{file}} a {{node}}, {{gpus}} GPU",
-    "millRun": "El seu progrés, mostres i registre a Mill"
+    "millRun": "El seu progrés, mostres i registre a Mill",
+    "smoothing": "Suavitzat",
+    "smoothingNone": "cap",
+    "smoothed": "Suavitzada",
+    "smoothedLoss": "Pèrdua d'entrenament, suavitzada"
   },
   "chat": {
     "title": "Preguntar als models",

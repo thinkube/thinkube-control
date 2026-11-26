@@ -322,7 +322,11 @@
     "preprocessBuilt": "Hechos para esta ejecución",
     "preprocessKey": "clave {{key}}",
     "taskSummary": "Tarea de Mill {{file}} en {{node}}, {{gpus}} GPU",
-    "millRun": "Su progreso, muestras y registro en Mill"
+    "millRun": "Su progreso, muestras y registro en Mill",
+    "smoothing": "Suavizado",
+    "smoothingNone": "ninguno",
+    "smoothed": "Suavizada",
+    "smoothedLoss": "Pérdida de entrenamiento, suavizada"
   },
   "chat": {
     "title": "Preguntar a los modelos",
