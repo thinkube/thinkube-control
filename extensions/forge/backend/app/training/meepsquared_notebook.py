@@ -27,6 +27,7 @@ import threading
 import time
 from pathlib import Path
 
+import requests
 import thinkube_models as tkm
 import yaml
 
@@ -50,9 +51,20 @@ print(f"Forge run {RUN} ({P['name']}), {MODE}: dataset {D['name']}, split {D['tr
       f"({D['train']['rows']} rows), base {P['base_model']}")
 
 
-def send(path, name):
-    """A file into the forge/ folder of the run's MLflow run, through MLflow's artifact proxy."""
-    tkm._mlflow_client().log_artifact(P["mlflow_run_id"], str(path), "forge")
+def send(path, name, attempts=5):
+    """A file into the forge/ folder of the run's MLflow run, through MLflow's artifact proxy. MLflow answers
+    401 to a token whose issue time is ahead of its own clock, which it allows no margin for, and Keycloak
+    runs on another node with a clock of its own; a refused upload is made again with a new token, 2 seconds
+    later, up to attempts times, each refusal printed."""
+    for attempt in range(1, attempts + 1):
+        try:
+            tkm._mlflow_client().log_artifact(P["mlflow_run_id"], str(path), "forge")
+            return
+        except requests.exceptions.HTTPError as e:
+            if e.response is None or e.response.status_code != 401 or attempt == attempts:
+                raise
+            print(f"MLflow refused {name}, attempt {attempt} of {attempts}: {e}", flush=True)
+            time.sleep(2)
 
 
 def interrupted_again(call, attempts=5):
@@ -287,10 +299,13 @@ if _sessions.main_process():
 
 # %% Train: Meep² in its own process, its status sent to Forge while it runs
 # MLflow reads MLFLOW_TRACKING_TOKEN at each request and a Keycloak token
-# lasts minutes, so the training's process renews its own.
+# lasts minutes, so the training's process renews its own. A renewed token
+# replaces the one in use 2 seconds after Keycloak issued it: MLflow refuses a
+# token whose issue time is ahead of its own clock, and the two clocks are on
+# different nodes.
 LAUNCH = RUN_DIR / "launch.py"
 LAUNCH.write_text('''
-import os, runpy, sys, threading
+import os, runpy, sys, threading, time
 import thinkube_models as tkm
 
 os.environ["MLFLOW_TRACKING_TOKEN"] = tkm.get_mlflow_token()
@@ -298,7 +313,9 @@ os.environ["MLFLOW_TRACKING_TOKEN"] = tkm.get_mlflow_token()
 
 def renew():
     while not threading.Event().wait(120):
-        os.environ["MLFLOW_TRACKING_TOKEN"] = tkm.get_mlflow_token()
+        token = tkm.get_mlflow_token()
+        time.sleep(2)
+        os.environ["MLFLOW_TRACKING_TOKEN"] = token
 
 
 threading.Thread(target=renew, daemon=True).start()

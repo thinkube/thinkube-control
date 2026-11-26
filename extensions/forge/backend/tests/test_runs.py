@@ -57,6 +57,13 @@ def test_the_training_runs_meepsquared_with_a_status_file_and_a_stop_file():
     assert '["--resume"] if RESUME' in train
 
 
+def test_a_refused_upload_is_made_again_and_a_renewed_token_waits_before_it_is_used():
+    cells = runs.notebook()["cells"]
+    run, train = cells[0]["source"], cells[7]["source"]
+    assert "if e.response is None or e.response.status_code != 401 or attempt == attempts:\n                raise" in run
+    assert 'token = tkm.get_mlflow_token()\n        time.sleep(2)\n        os.environ["MLFLOW_TRACKING_TOKEN"] = token' in train
+
+
 def test_a_plan_or_training_on_several_gpus_is_launched_with_torchrun():
     cells = runs.notebook()["cells"]
     plan, train = cells[6]["source"], cells[7]["source"]
