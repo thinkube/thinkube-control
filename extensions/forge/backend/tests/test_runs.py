@@ -60,7 +60,9 @@ def test_the_training_runs_meepsquared_with_a_status_file_and_a_stop_file():
 def test_a_refused_upload_is_made_again_and_a_renewed_token_waits_before_it_is_used():
     cells = runs.notebook()["cells"]
     run, train = cells[0]["source"], cells[7]["source"]
-    assert "if e.response is None or e.response.status_code != 401 or attempt == attempts:\n                raise" in run
+    assert "if code == 401:" in run and "if refused == attempts:" in run
+    assert "except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, MlflowException) as e:" in run
+    assert "if outage == outage_attempts:\n            raise failure" in run
     assert 'token = tkm.get_mlflow_token()\n        time.sleep(2)\n        os.environ["MLFLOW_TRACKING_TOKEN"] = token' in train
 
 

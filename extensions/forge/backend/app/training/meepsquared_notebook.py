@@ -51,20 +51,41 @@ print(f"Forge run {RUN} ({P['name']}), {MODE}: dataset {D['name']}, split {D['tr
       f"({D['train']['rows']} rows), base {P['base_model']}")
 
 
-def send(path, name, attempts=5):
-    """A file into the forge/ folder of the run's MLflow run, through MLflow's artifact proxy. MLflow answers
-    401 to a token whose issue time is ahead of its own clock, which it allows no margin for, and Keycloak
-    runs on another node with a clock of its own; a refused upload is made again with a new token, 2 seconds
-    later, up to attempts times, each refusal printed."""
-    for attempt in range(1, attempts + 1):
+def send(path, name, attempts=5, outage_attempts=12, outage_pause=30):
+    """A file into the forge/ folder of the run's MLflow run, through MLflow's artifact proxy, made again when the
+    failure can clear on its own, each failure printed:
+    - MLflow answers 401 to a token whose issue time is ahead of its own clock, which it allows no margin for, and
+      Keycloak runs on another node with a clock of its own: again with a new token, 2 seconds later, up to
+      attempts times.
+    - The cluster's entry or MLflow is unreachable or answers 5xx (MLflow's own client then gives up with an
+      MlflowException after its retries): again outage_pause seconds later, up to outage_attempts times (6
+      minutes). The training goes on meanwhile in its own process; only its status upload waits."""
+    from mlflow.exceptions import MlflowException
+
+    refused = outage = 0
+    while True:
         try:
             tkm._mlflow_client().log_artifact(P["mlflow_run_id"], str(path), "forge")
             return
         except requests.exceptions.HTTPError as e:
-            if e.response is None or e.response.status_code != 401 or attempt == attempts:
+            code = e.response.status_code if e.response is not None else None
+            if code == 401:
+                refused += 1
+                if refused == attempts:
+                    raise
+                print(f"MLflow refused {name}, attempt {refused} of {attempts}: {e}", flush=True)
+                time.sleep(2)
+                continue
+            if code is None or code < 500:
                 raise
-            print(f"MLflow refused {name}, attempt {attempt} of {attempts}: {e}", flush=True)
-            time.sleep(2)
+            failure = e
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, MlflowException) as e:
+            failure = e
+        outage += 1
+        if outage == outage_attempts:
+            raise failure
+        print(f"MLflow not reached for {name}, attempt {outage} of {outage_attempts}: {failure}", flush=True)
+        time.sleep(outage_pause)
 
 
 def interrupted_again(call, attempts=5):
