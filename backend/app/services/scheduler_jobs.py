@@ -3,7 +3,7 @@
 
 """What runs at the Scheduler, as Control reads it at the Scheduler's routes for the parts of the platform."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List
 
 import httpx
 
@@ -14,8 +14,8 @@ class SchedulerError(Exception):
     """The Scheduler refused or did not answer; the message says which."""
 
 
-async def running_training() -> Optional[Dict[str, Any]]:
-    """A training that runs now: a resumable job of Forge's that holds its GPUs. None when no training runs."""
+async def running_trainings() -> List[Dict[str, Any]]:
+    """The trainings that run now, each on its node: resumable jobs of Forge's that hold their GPUs."""
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
             answer = await client.get(f"{SCHEDULER_URL}/jobs", params={"owner": "forge"})
@@ -23,5 +23,4 @@ async def running_training() -> Optional[Dict[str, Any]]:
         raise SchedulerError(f"the Scheduler did not answer: {e}") from e
     if answer.status_code >= 400:
         raise SchedulerError(f"the Scheduler answered {answer.status_code}: {answer.text[:300]}")
-    return next((j for j in answer.json()["jobs"] if j.get("resumable") and j["status"] in ("running", "stopping")),
-                None)
+    return [j for j in answer.json()["jobs"] if j.get("resumable") and j["status"] in ("running", "stopping")]

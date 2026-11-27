@@ -315,8 +315,8 @@ class FakeVenvDB:
 
 
 def custom_venv(name, archs):
-    return SimpleNamespace(id=uuid.uuid4(), name=name, packages=["numpy"], status="success", is_template=False,
-                           needs_gpu=True, architectures_built=list(archs), output=None, started_at=None, completed_at=None)
+    return SimpleNamespace(id=uuid.uuid4(), name=name, packages=["numpy"], node_packages={}, status="success",
+                           is_template=False, needs_gpu=True, architectures_built=list(archs), output=None, started_at=None, completed_at=None)
 
 
 def test_only_custom_venvs_missing_the_architecture_are_built(monkeypatch):
@@ -441,26 +441,147 @@ def test_the_reconciler_knows_a_running_package_update():
     asyncio.run(scenario())
 
 
-def test_an_update_is_refused_while_a_training_runs(monkeypatch):
-    from fastapi import HTTPException
+MEEP_OLD = "meepsquared @ git+https://github.com/thinkube/meepsquared@aaaa"
+MEEP_NEW = "meepsquared @ git+https://github.com/thinkube/meepsquared@bbbb"
+TRAINING_ON_TKAMD2 = {"node": "tkamd2", "name": "Forge run x: train", "started_at": "2026-11-24T10:00:00Z"}
 
+
+def _ask_update(monkeypatch, venv, package, nodes=None, trainings=(TRAINING_ON_TKAMD2,)):
+    """update_venv_package's answer, with the trainings given running; the update itself is not run."""
     from app.services import scheduler_jobs
 
-    venv = SimpleNamespace(id=uuid.uuid4(), name="meepsquared", status="success", output="ok", is_template=False,
-                           completed_at=None)
+    async def running():
+        return list(trainings)
 
-    async def training():
-        return {"node": "tkamd2", "name": "Forge run x: train", "started_at": "2026-11-24T10:00:00Z"}
+    started = []
+    monkeypatch.setattr(scheduler_jobs, "running_trainings", running)
+    monkeypatch.setattr(jv.detached, "start", lambda name, coroutine: (started.append(name), coroutine.close()))
+    answer = asyncio.run(jv.update_venv_package(venv.id, jv.UpdatePackageRequest(package=package, nodes=nodes),
+                                                db=FakeDB(venv), current_user={}))
+    return answer, started
 
-    monkeypatch.setattr(scheduler_jobs, "running_training", training)
+
+def _refusal(monkeypatch, venv, package, **kwargs):
+    from fastapi import HTTPException
+
     try:
-        asyncio.run(jv.update_venv_package(venv.id, jv.UpdatePackageRequest(package="meepsquared @ git+https://x@1"),
-                                           db=FakeDB(venv), current_user={}))
+        _ask_update(monkeypatch, venv, package, **kwargs)
     except HTTPException as e:
-        assert e.status_code == 409 and "a training runs on tkamd2 (Forge run x: train" in e.detail
-    else:
-        raise AssertionError("expected a refusal")
+        return e
+    raise AssertionError("expected a refusal")
+
+
+def test_an_update_of_every_node_is_refused_while_a_training_runs(monkeypatch):
+    venv = custom_venv("meepsquared", ["amd64", "arm64"])
+    e = _refusal(monkeypatch, venv, MEEP_NEW)
+    assert e.status_code == 409 and "a training runs on tkamd2 (Forge run x: train" in e.detail
+    assert "every node" in e.detail
     assert venv.status == "success"
+
+
+def test_an_update_of_a_node_where_a_training_runs_is_refused(monkeypatch):
+    venv = custom_venv("meepsquared", ["amd64", "arm64"])
+    e = _refusal(monkeypatch, venv, MEEP_NEW, nodes=["tkspark", "tkamd2"])
+    assert e.status_code == 409 and "a training runs on tkamd2" in e.detail
+    assert venv.status == "success"
+
+
+# The training runs on tkamd2, and tkspark's copy is updated
+def test_an_update_of_other_nodes_runs_while_a_training_runs(monkeypatch):
+    venv = custom_venv("meepsquared", ["amd64", "arm64"])
+    answer, started = _ask_update(monkeypatch, venv, MEEP_NEW, nodes=["tkspark"])
+    assert answer.status == "building" and "on tkspark" in answer.message
+    assert started == [f"venv-update:{venv.id}"] and venv.status == "building"
+
+
+def test_nodes_name_each_node_once(monkeypatch):
+    venv = custom_venv("meepsquared", ["amd64", "arm64"])
+    for nodes in ([], ["tkspark", "tkspark"], [" "]):
+        e = _refusal(monkeypatch, venv, MEEP_NEW, nodes=nodes, trainings=())
+        assert e.status_code == 400 and "each node to update once" in e.detail
+    assert venv.status == "success"
+
+
+def test_an_update_of_some_nodes_records_them_and_keeps_the_package_list(monkeypatch):
+    venv = custom_venv("meepsquared", ["amd64", "arm64"])
+    venv.packages = ["numpy==1.26.4", MEEP_OLD]
+    venv.status = "building"
+    received = {}
+
+    async def fake_playbook(v, playbook, extra_vars):
+        received.update(extra_vars)
+        return 0, [], "/tmp/thinkube-venvs/x/update-1.log"
+
+    monkeypatch.setattr(jv, "_run_venv_playbook", fake_playbook)
+    monkeypatch.setattr(jv, "SessionLocal", lambda: (lambda: FakeVenvDB(venv)))
+    asyncio.run(jv._execute_venv_package_update(str(venv.id), MEEP_NEW, ["tkspark"]))
+
+    assert received["only_nodes"] == ["tkspark"] and received["constraints"] == ["numpy==1.26.4"]
+    assert venv.packages == ["numpy==1.26.4", MEEP_OLD]
+    assert venv.node_packages == {"tkspark": [MEEP_NEW]}
+    assert venv.status == "success" and "on tkspark" in venv.output
+
+
+def test_an_update_of_every_node_passes_no_node_list(monkeypatch):
+    venv = custom_venv("meepsquared", ["amd64", "arm64"])
+    received = _run_package_update(monkeypatch, venv, MEEP_NEW, 0)
+    assert "only_nodes" not in received
+
+
+def test_the_record_of_an_update_of_some_nodes_then_of_every_node():
+    packages = ["numpy==1.26.4", MEEP_OLD]
+    packages, own = jv.recorded_update(packages, {}, MEEP_NEW, ["tkspark"])
+    assert packages == ["numpy==1.26.4", MEEP_OLD] and own == {"tkspark": [MEEP_NEW]}
+    assert jv.node_requirements(packages, own, "tkspark") == ["numpy==1.26.4", MEEP_NEW]
+    assert jv.node_requirements(packages, own, "tkamd2") == packages
+
+    # The other nodes catch up: the list says the new requirement and no node holds its own
+    packages, own = jv.recorded_update(packages, own, MEEP_NEW, None)
+    assert packages == ["numpy==1.26.4", MEEP_NEW] and own == {}
+
+
+def test_updating_a_node_back_to_the_package_list_forgets_its_own():
+    packages = ["numpy==1.26.4", MEEP_OLD]
+    _, own = jv.recorded_update(packages, {"tkspark": [MEEP_NEW]}, MEEP_OLD, ["tkspark"])
+    assert own == {}
+
+
+def test_nodes_that_pin_otherwise_are_not_updated_together():
+    from fastapi import HTTPException
+
+    packages = ["numpy==1.26.4", MEEP_OLD]
+    own = {"tkspark": ["numpy==2.0.0"]}
+    for nodes in (["tkamd2", "tkspark"], None):
+        try:
+            jv.update_constraints(packages, own, MEEP_NEW, nodes)
+        except HTTPException as e:
+            assert e.status_code == 409 and "tkspark" in e.detail and "on its own" in e.detail
+        else:
+            raise AssertionError("expected a refusal")
+    # One node at a time, each with its own pins
+    assert jv.update_constraints(packages, own, MEEP_NEW, ["tkspark"]) == ["numpy==2.0.0"]
+    assert jv.update_constraints(packages, own, MEEP_NEW, ["tkamd2"]) == ["numpy==1.26.4"]
+
+
+def test_a_build_makes_every_copy_hold_the_package_list(monkeypatch):
+    venv = custom_venv("meepsquared", ["amd64", "arm64"])
+    venv.node_packages = {"tkspark": [MEEP_NEW]}
+
+    async def fake_build(v):
+        return {"success": True, "output": "ok", "architectures": ["amd64", "arm64"]}
+
+    monkeypatch.setattr(jv, "_run_ansible_build", fake_build)
+    monkeypatch.setattr(jv, "SessionLocal", lambda: (lambda: FakeVenvDB(venv)))
+    asyncio.run(jv._execute_venv_build(str(venv.id)))
+    assert venv.status == "success" and venv.node_packages == {}
+
+
+def test_a_node_named_to_update_must_hold_a_copy():
+    from pathlib import Path
+
+    playbook = (Path(__file__).resolve().parents[2] / "ansible/playbooks/update_venv_package.yaml").read_text()
+    assert "only_nodes | difference(" in playbook
+    assert "a node named to update must hold one" in playbook and "exit 1" in playbook
 
 
 def test_update_jobs_are_kept_until_the_playbook_has_read_them():

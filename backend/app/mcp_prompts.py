@@ -220,6 +220,11 @@ Rules that the tools do not state:
   commit): pip install --upgrade of that one package on every node, about a minute. Poll
   `get_jupyter_venv` as for a build; a failed update leaves the venv as it was, status
   "success", with the failure in output.
+- Each node keeps its own copy of a venv. `update_venv_package` with nodes updates only
+  those nodes' copies, and is refused only while a training runs on one of them; without
+  nodes it updates every node and is refused while a training runs anywhere. After an
+  update of some nodes the package list is unchanged and node_packages says which node
+  holds which requirement instead; an update of every node or a build makes them one again.
 
 Steps:
 1. `get_venv_templates`, and `get_venv_template_details` with the template id when a

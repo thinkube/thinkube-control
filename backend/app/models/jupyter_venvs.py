@@ -25,6 +25,10 @@ class JupyterVenv(Base):
 
     # Build configuration
     packages = Column(JSON, nullable=False)  # List of packages to install
+    # The nodes whose copy holds another requirement than the package list's, after an update of some nodes only:
+    # {node: [requirement, ...]}, each in place of the list's requirement of the same name and environment marker.
+    # Empty when every copy holds the package list.
+    node_packages = Column(JSON, nullable=False, default=dict)
     status = Column(
         String(50), nullable=False, default="pending"
     )  # pending, building, success, failed, cancelled
@@ -60,6 +64,7 @@ class JupyterVenv(Base):
             "id": str(self.id),
             "name": self.name,
             "packages": self.packages,
+            "node_packages": self.node_packages or {},
             "status": self.status,
             "output": self.output,
             "is_template": self.is_template,

@@ -4,8 +4,8 @@
 ---
 # ansible/playbooks/update_venv_package.yaml
 #
-# Installs one package into a custom venv on every node that holds it, in
-# place: pip install --upgrade of that package, nothing else rebuilt. For a
+# Installs one package into a custom venv on every node that holds it, or on
+# the nodes named, in place: pip install --upgrade of that package, nothing else rebuilt. For a
 # package that changes often while the rest of the venv does not, such as one
 # installed from a repository at a commit, this takes a minute where a build
 # takes many.
@@ -14,8 +14,9 @@
 # own disk; the backend does not mount those disks, so the install runs as one
 # Job per node, on that node, in the notebook image, whose Python the venv
 # was made from. The disk is mounted at its host path, as the build mounts
-# it: the venv's scripts name their interpreter by that path. A node without
-# a copy of the venv is skipped by the Job.
+# it: the venv's scripts name their interpreter by that path. Without
+# only_nodes, a node without a copy of the venv is skipped by the Job; a node
+# named in only_nodes must hold one, and its Job fails when it does not.
 #
 # Required variables:
 #   - venv_name: name of the venv
@@ -25,6 +26,10 @@
 #     must keep; pip resolves with them as constraints, first without installing,
 #     so an update that would change a pin fails before anything changes
 #   - kubeconfig, harbor_registry, devpi_api_hostname, devpi_index_name
+#
+# Optional variables:
+#   - only_nodes: the nodes to update, by node name; each must be a node of the
+#     cluster. Omitted: every node.
 
 - name: Install one package into a custom venv on every node
   hosts: k8s_control_plane
@@ -51,9 +56,21 @@
       delegate_to: localhost
       register: all_nodes
 
+    - name: Check the nodes named
+      ansible.builtin.assert:
+        that:
+          - only_nodes | length > 0
+          - only_nodes | difference(all_nodes.resources | map(attribute='metadata.name') | list) | length == 0
+        fail_msg: >-
+          only_nodes names nodes the cluster does not have:
+          {{ only_nodes | difference(all_nodes.resources | map(attribute='metadata.name') | list) | join(', ') }}
+          (its nodes: {{ all_nodes.resources | map(attribute='metadata.name') | join(', ') }})
+      when: only_nodes is defined
+
     - name: List the nodes
       ansible.builtin.set_fact:
-        target_nodes: "{{ all_nodes.resources | map(attribute='metadata.name') | list }}"
+        target_nodes: "{{ only_nodes if only_nodes is defined else (all_nodes.resources | map(attribute='metadata.name') | list) }}"
+        copy_required: "{{ only_nodes is defined }}"
 
     - name: Remove update Jobs left by this venv
       kubernetes.core.k8s:
@@ -105,8 +122,13 @@
                         case "$ARCH" in aarch64) ARCH_NAME=arm64 ;; x86_64) ARCH_NAME=amd64 ;; *) ARCH_NAME="$ARCH" ;; esac
                         VENV="{{ venvs_host_path }}/{{ custom_venvs_subpath }}/{{ venv_name }}/$ARCH_NAME"
                         if [ ! -x "$VENV/bin/pip" ]; then
+                          {% if copy_required | bool %}
+                          echo "no copy of {{ venv_name }} on {{ item }} ($VENV): a node named to update must hold one"
+                          exit 1
+                          {% else %}
                           echo "no copy of {{ venv_name }} on $(hostname); nothing to update"
                           exit 0
+                          {% endif %}
                         fi
                         echo "=== Updating {{ venv_name }} ($ARCH_NAME) on $(hostname): {{ package }}"
                         EXTRA_INDEX="--extra-index-url https://{{ devpi_api_hostname }}/root/{{ devpi_index_name }}/+simple/"

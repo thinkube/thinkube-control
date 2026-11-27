@@ -142,6 +142,8 @@ class VenvResponse(BaseModel):
     id: str
     name: str
     packages: List[str]
+    # The nodes whose copy holds another requirement than the package list's, after an update of some nodes only
+    node_packages: Dict[str, List[str]] = {}
     status: str
     output: Optional[str]
     is_template: bool
@@ -590,6 +592,9 @@ async def update_venv_packages(
 class UpdatePackageRequest(BaseModel):
     """One package to install into a built venv, as a pip requirement"""
     package: str
+    # The nodes whose copy of the venv is updated, by node name; each must hold a copy. Omitted: every node that
+    # holds one.
+    nodes: Optional[List[str]] = None
 
 
 def requirement_name(spec: str) -> str:
@@ -629,6 +634,63 @@ def pinned_constraints(packages: List[str], package: str) -> List[str]:
     return pins
 
 
+def node_requirements(packages: List[str], node_packages: Dict[str, List[str]], node: str) -> List[str]:
+    """What a node's copy of the venv holds: the package list, with the node's own requirements in place of the
+    list's requirements of the same name and environment marker."""
+    own = node_packages.get(node, [])
+    replaced = {requirement_key(p) for p in own}
+    return [p for p in packages if requirement_key(p) not in replaced] + list(own)
+
+
+def update_constraints(packages: List[str], node_packages: Dict[str, List[str]], package: str,
+                       nodes: Optional[List[str]]) -> List[str]:
+    """The version pins an update of `package` keeps on the nodes it changes (every node when `nodes` is None).
+
+    The playbook passes one set of pins to every node it changes, so those
+    nodes must pin alike. A node that pins otherwise is updated on its own.
+    """
+    expected = pinned_constraints(packages, package)
+    changed = nodes if nodes is not None else sorted(node_packages)
+    by_node = {node: pinned_constraints(node_requirements(packages, node_packages, node), package)
+               for node in changed}
+    if nodes is not None and by_node:
+        expected = by_node[nodes[0]]
+    differ = sorted(node for node, pins in by_node.items() if pins != expected)
+    if differ:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"the copies on {', '.join(differ)} pin other versions than "
+                    f"{'the package list' if nodes is None else nodes[0]} ({node_packages}); "
+                    "update each of them on its own, with nodes"),
+        )
+    return expected
+
+
+def recorded_update(packages: List[str], node_packages: Dict[str, List[str]], package: str,
+                    nodes: Optional[List[str]]) -> tuple:
+    """(package list, node_packages) after `package` was installed on `nodes` (every node when None).
+
+    An update of every node puts the requirement in the package list and takes
+    it out of every node's own. An update of some nodes leaves the package list
+    as it is and records the requirement as those nodes' own, unless the list
+    already says it.
+    """
+    key = requirement_key(package)
+    if nodes is None:
+        kept = [p for p in packages if requirement_key(p) != key] + [package]
+        own = {node: [r for r in reqs if requirement_key(r) != key] for node, reqs in node_packages.items()}
+        return kept, {node: reqs for node, reqs in own.items() if reqs}
+    own = {node: list(reqs) for node, reqs in node_packages.items()}
+    listed = package in packages
+    for node in nodes:
+        reqs = [r for r in own.get(node, []) if requirement_key(r) != key] + ([] if listed else [package])
+        if reqs:
+            own[node] = reqs
+        else:
+            own.pop(node, None)
+    return list(packages), own
+
+
 @router.post("/{venv_id}/packages/update", response_model=BuildResponse, operation_id="update_venv_package")
 async def update_venv_package(
     venv_id: UUID,
@@ -636,7 +698,7 @@ async def update_venv_package(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user_dual_auth)
 ):
-    """Install one package into a built custom venv, in place, on every node that holds it.
+    """Install one package into a built custom venv, in place, on every node that holds it or on the nodes named.
 
     pip install --upgrade of that one requirement, nothing else rebuilt: a
     minute, where a build takes many. For a package that changes while the
@@ -646,8 +708,15 @@ async def update_venv_package(
     the same environment marker; a requirement for another platform stays.
     The venv's version pins ('name==version') hold during the install: an
     update that would change one fails with pip's conflict, before anything
-    is installed. Poll
-    get_jupyter_venv until status is success or failed.
+    is installed.
+
+    nodes names the nodes whose copy is updated (each node keeps its own copy
+    on its own disk); each must hold one. The update is refused while a
+    training runs on one of them, and only then: without nodes, while a
+    training runs on any node. After an update of some nodes the package list
+    is unchanged, and node_packages says which node holds which requirement in
+    place of the list's; an update of every node, or a build, makes them one
+    again. Poll get_jupyter_venv until status is success or failed.
     """
     venv = db.query(JupyterVenv).filter_by(id=venv_id).first()
     if not venv:
@@ -659,18 +728,29 @@ async def update_venv_package(
     package = request.package.strip()
     if not package:
         raise HTTPException(status_code=400, detail="package must be a pip requirement")
-    # A venv is not changed while a training runs: the update changes the venv on every node, under the training's
-    # process. A training is a resumable job of Forge's at the Scheduler.
+    nodes = request.nodes
+    if nodes is not None:
+        nodes = [n.strip() for n in nodes]
+        if not nodes or any(not n for n in nodes) or len(set(nodes)) != len(nodes):
+            raise HTTPException(status_code=400, detail="nodes names each node to update once; omit it for every node")
+    node_packages = dict(venv.node_packages or {})
+    update_constraints(venv.packages, node_packages, package, nodes)
+    # A node's copy is not changed while a training runs on that node, under the training's process. A training is
+    # a resumable job of Forge's at the Scheduler.
     from app.services import scheduler_jobs
     try:
-        training = await scheduler_jobs.running_training()
+        trainings = await scheduler_jobs.running_trainings()
     except scheduler_jobs.SchedulerError as e:
         raise HTTPException(status_code=502, detail=f"whether a training runs could not be read: {e}")
-    if training:
+    blocking = [t for t in trainings if nodes is None or t["node"] in nodes]
+    if blocking:
+        training = blocking[0]
+        scope = "every node" if nodes is None else ", ".join(nodes)
         raise HTTPException(
             status_code=409,
             detail=(f"a training runs on {training['node']} ({training['name']}, since {training.get('started_at')}): "
-                    "a venv is not changed while a training runs. Update it once the training has ended."),
+                    f"the update changes the venv on {scope}, and a node's copy is not changed while a training runs "
+                    "there. Update it once the training has ended, or name with nodes the nodes where none runs."),
         )
 
     venv.status = "building"
@@ -679,11 +759,12 @@ async def update_venv_package(
     venv.completed_at = None
     db.commit()
 
-    detached.start(f"venv-update:{venv.id}", _execute_venv_package_update(str(venv.id), package))
+    detached.start(f"venv-update:{venv.id}", _execute_venv_package_update(str(venv.id), package, nodes))
     return BuildResponse(
         build_id=str(venv.id),
         status="building",
-        message=f"Installing {requirement_name(package)} into {venv.name} on every node; poll get_jupyter_venv for its status",
+        message=(f"Installing {requirement_name(package)} into {venv.name} on "
+                 f"{'every node' if nodes is None else ', '.join(nodes)}; poll get_jupyter_venv for its status"),
         poll_url=f"/jupyter-venvs/{venv.id}",
     )
 
@@ -695,11 +776,14 @@ def venv_task_running(venv_id: str, status: str) -> bool:
     return detached.running(f"venv-build:{venv_id}") or detached.running(f"venv-update:{venv_id}")
 
 
-async def _execute_venv_package_update(venv_id: str, package: str) -> None:
-    """Install one package into the venv through update_venv_package.yaml and record it in the package list.
+async def _execute_venv_package_update(venv_id: str, package: str, nodes: Optional[List[str]] = None) -> None:
+    """Install one package into the venv through update_venv_package.yaml and record it: in the package list after
+    an update of every node, in node_packages after an update of some nodes (see update_venv_package).
 
     A failed update leaves the venv as it was, built and usable: the record
-    goes back to success and its output says what failed.
+    goes back to success and its output says what failed. A node the update
+    changed before another node failed keeps the new requirement and is not
+    recorded; the output names the log that says which nodes were changed.
     """
     db = SessionLocal()()
     try:
@@ -707,20 +791,24 @@ async def _execute_venv_package_update(venv_id: str, package: str) -> None:
         if not venv:
             logger.error(f"Venv {venv_id} not found")
             return
+        node_packages = dict(venv.node_packages or {})
+        extra_vars = {"venv_name": venv.name, "package": package,
+                      "constraints": update_constraints(venv.packages, node_packages, package, nodes)}
+        if nodes is not None:
+            extra_vars["only_nodes"] = nodes
         try:
-            return_code, _, log_file = await _run_venv_playbook(
-                venv, "update_venv_package.yaml",
-                {"venv_name": venv.name, "package": package, "constraints": pinned_constraints(venv.packages, package)})
+            return_code, _, log_file = await _run_venv_playbook(venv, "update_venv_package.yaml", extra_vars)
         except Exception as e:
             return_code, reason = 1, str(e)
         else:
-            reason = f"Update failed with return code {return_code}; the venv is as it was. Log: {log_file}"
+            reason = (f"Update failed with return code {return_code}; a copy whose update failed is as it was, and "
+                      f"the log says which nodes were changed. Log: {log_file}")
         name = requirement_name(package)
+        where = "every node" if nodes is None else ", ".join(nodes)
         if return_code == 0:
-            kept = [p for p in venv.packages if requirement_key(p) != requirement_key(package)]
-            venv.packages = kept + [package]
-            venv.output = f"Updated {name}. Log: {log_file}"
-            logger.info(f"Venv {venv.name}: {name} updated on every node")
+            venv.packages, venv.node_packages = recorded_update(venv.packages, node_packages, package, nodes)
+            venv.output = f"Updated {name} on {where}. Log: {log_file}"
+            logger.info(f"Venv {venv.name}: {name} updated on {where}")
         else:
             venv.output = reason
             logger.error(f"Venv {venv.name}: update of {name} failed: {reason}")
@@ -764,6 +852,8 @@ async def _execute_venv_build(venv_id: str) -> None:
                 )
                 archs = result.get("architectures", [])
                 venv.architectures_built = archs
+                # Every copy is built from the package list
+                venv.node_packages = {}
                 venv.architecture = archs[0] if archs else result.get("architecture", "unknown")
                 logger.info(f"Venv build succeeded for {venv.name} (architectures: {archs})")
             else:

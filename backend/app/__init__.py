@@ -139,6 +139,19 @@ async def app_lifespan(app: FastAPI):
             conn.commit()
             logger.info("Added needs_gpu column to jupyter_venvs table")
 
+    # jupyter_venvs tables made before an update could change some nodes only have no node_packages column. Their
+    # venvs were updated on every node at once, so every copy holds the package list.
+    with get_engine().connect() as conn:
+        if not conn.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='jupyter_venvs' AND column_name='node_packages'"
+            )
+        ).fetchone():
+            conn.execute(text("ALTER TABLE jupyter_venvs ADD COLUMN node_packages JSON NOT NULL DEFAULT '{}'"))
+            conn.commit()
+            logger.info("Added node_packages column to jupyter_venvs table")
+
     # template_deployments tables made before a run kept its build have no build column.
     with get_engine().connect() as conn:
         if not conn.execute(
