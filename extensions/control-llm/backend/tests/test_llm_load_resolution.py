@@ -53,7 +53,7 @@ def world(monkeypatch):
 
     gpu_nodes = {"tkamd2", "tkspark"}
 
-    async def check_can_load(estimated, node_name=None):
+    async def check_can_load(estimated, node_name=None, measured=False):
         return True, ""
 
     monkeypatch.setattr(trk, "llm_gpu_tracker", SimpleNamespace(

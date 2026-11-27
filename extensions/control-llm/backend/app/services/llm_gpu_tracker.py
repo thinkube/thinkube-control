@@ -582,18 +582,22 @@ class LLMGPUTracker:
         estimated_memory_gb: float,
         node_name: Optional[str] = None,
         slots_needed: int = 1,
+        measured: bool = False,
     ) -> Tuple[bool, str]:
+        """Whether the node's allocatable memory holds the model. An estimate from the model's size is checked
+        against the share the memory threshold leaves; a figure measured on the node (a calibration) already
+        holds the model's overhead and is checked against the whole allocatable memory."""
         if node_name:
-            return await self._check_node(node_name, estimated_memory_gb)
+            return await self._check_node(node_name, estimated_memory_gb, measured)
 
         for name in self._gpu_nodes:
-            ok, reason = await self._check_node(name, estimated_memory_gb)
+            ok, reason = await self._check_node(name, estimated_memory_gb, measured)
             if ok:
                 return True, name
         return False, "No GPU node has sufficient resources"
 
     async def _check_node(
-        self, node_name: str, estimated_memory_gb: float
+        self, node_name: str, estimated_memory_gb: float, measured: bool = False
     ) -> Tuple[bool, str]:
         node = self._gpu_nodes.get(node_name)
         if not node:
@@ -608,8 +612,16 @@ class LLMGPUTracker:
 
         allocatable_bytes = metrics.get("gpu_allocatable_bytes", 0)
         allocatable_gb = allocatable_bytes / (1024**3)
-        usable_gb = allocatable_gb * self._memory_threshold
+        if measured:
+            if estimated_memory_gb > allocatable_gb:
+                return False, (
+                    f"Insufficient GPU memory on {node_name}: "
+                    f"model measured at {estimated_memory_gb:.1f} GB, "
+                    f"allocatable {allocatable_gb:.1f} GB"
+                )
+            return True, "ok"
 
+        usable_gb = allocatable_gb * self._memory_threshold
         if estimated_memory_gb > usable_gb:
             return False, (
                 f"Insufficient GPU memory on {node_name}: "

@@ -59,3 +59,32 @@ def test_the_memory_share_is_rounded_up():
 def test_a_share_beyond_95_percent_is_refused():
     with pytest.raises(ValueError):
         _share_util(120.0, 121.7)
+
+
+@pytest.fixture
+def tracker(monkeypatch):
+    t = trk.LLMGPUTracker.__new__(trk.LLMGPUTracker)
+    t._memory_threshold = 0.85
+    t._gpu_nodes = {"tkspark": SimpleNamespace()}
+
+    async def fetch_node_metrics(name):
+        return {"gpu_allocatable_bytes": int(92.6 * GIB)}
+
+    monkeypatch.setattr(t, "fetch_node_metrics", fetch_node_metrics)
+    return t
+
+
+def test_a_measured_figure_is_checked_against_the_whole_allocatable_memory(tracker):
+    import asyncio
+
+    # Qwen3.8 Flash Next (Flare): 85.0 GiB measured on the DGX Spark, 92.6 GiB allocatable
+    assert asyncio.run(tracker.check_can_load(85.0, node_name="tkspark", measured=True)) == (True, "ok")
+    ok, reason = asyncio.run(tracker.check_can_load(93.0, node_name="tkspark", measured=True))
+    assert not ok and "measured at 93.0 GB" in reason
+
+
+def test_an_estimate_keeps_the_threshold_margin(tracker):
+    import asyncio
+
+    ok, reason = asyncio.run(tracker.check_can_load(85.0, node_name="tkspark"))
+    assert not ok and "usable at 85%" in reason

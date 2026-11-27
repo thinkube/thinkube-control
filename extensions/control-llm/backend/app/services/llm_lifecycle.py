@@ -797,7 +797,7 @@ class LLMLifecycleManager:
         # (metrics-based — catches real usage the budget bookkeeping can't see).
         # With the caller's GPUs, the engine finds out instead.
         can_load, reason = (True, None) if chosen else await llm_gpu_tracker.check_can_load(
-            estimated_memory, node_name=node
+            estimated_memory, node_name=node, measured=calibrated is not None
         )
         if not can_load:
             llm_model_registry.update_model_state(
