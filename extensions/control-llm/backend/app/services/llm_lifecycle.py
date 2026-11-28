@@ -594,6 +594,23 @@ class LLMLifecycleManager:
         if not can_load:
             return ModelLoadResponse(model_id=model_id, state=entry.state,
                                      message=f"Insufficient GPU resources on {node}: {reason}")
+        backend_id = f"{backend_type}-{node}"
+        # A pod that serves no model (left by a load that failed) is made again: it takes the backend's image and
+        # the memory limit of this load
+        if not any(a.backend_id == backend_id for a in llm_gpu_tracker._allocations.get(node, [])):
+            runs, _ = await asyncio.to_thread(llm_pod_manager.shared_pod, backend_type, node)
+            if runs and not await llm_pod_manager.delete_pod(backend_type, node, None):
+                return ModelLoadResponse(model_id=model_id, state=entry.state,
+                                         message=f"The {backend_type} pod on {node} serves no model and could not "
+                                                 "be deleted to be made again; see control-llm's log")
+        # On a node whose GPU memory is the system's, the pod's memory limit holds the model, as a vLLM pod's does
+        mem_limit = None
+        if llm_gpu_tracker.is_uma(node):
+            sizing = await llm_gpu_tracker.plan_sizing(node, estimated)
+            if not sizing.get("fits"):
+                return ModelLoadResponse(model_id=model_id, state=entry.state,
+                                         message=f"Insufficient GPU resources on {node}: {sizing.get('reason')}")
+            mem_limit = sizing["pod_mem_limit_gb"]
         # The pod's GPU is the Scheduler's to give, and to refuse when it does not hold this model too
         from app.services import gpu_holds
 
@@ -603,13 +620,13 @@ class LLMLifecycleManager:
             return ModelLoadResponse(model_id=model_id, state=entry.state, message=str(e))
         # The pod's Deployment exists before the model is marked loading: the reconcile takes a loading model
         # whose Deployment is absent for a failed load
-        created, _ = await llm_pod_manager.ensure_pod(backend_type, node, gpu_count=1, wait_ready=False, **pod_gpus)
+        created, _ = await llm_pod_manager.ensure_pod(backend_type, node, gpu_count=1, wait_ready=False,
+                                                      mem_limit_gb=mem_limit, **pod_gpus)
         if not created:
             if pod_gpus:
                 await gpu_holds.end(pod_gpus["hold_id"])
             return ModelLoadResponse(model_id=model_id, state=entry.state,
                                      message=f"The {backend_type} pod on {node} could not be created")
-        backend_id = f"{backend_type}-{node}"
         llm_model_registry.update_model_state(model_id, ModelState.loading, backend_id)
         asyncio.create_task(self._load_shared_background(model_id, backend_type, node, backend_id, estimated))
         return ModelLoadResponse(

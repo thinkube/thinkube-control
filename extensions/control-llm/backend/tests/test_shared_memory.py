@@ -35,3 +35,71 @@ def test_the_first_part_on_a_node_counts_its_base_and_the_next_its_own_weights(l
     assert lifecycle._shared_memory(MODELS["kubexlat/ja-parse"], "tkspark") == pytest.approx(1 / 16, abs=0.01)
     # Another node holds no copy of the base yet
     assert lifecycle._shared_memory(MODELS["kubexlat/ja-parse"], "tkamd2") == pytest.approx(3.06, abs=0.1)
+
+
+@pytest.fixture
+def placing(lifecycle, monkeypatch):
+    """A shared load up to the pod it asks for: the pod manager, the tracker's sizing and the holds faked."""
+    import asyncio
+
+    from app.services.llm_pod_manager import llm_pod_manager
+
+    calls = {"deleted": [], "ensured": []}
+    MODELS["kubexlat/ja-seg"].state = "deployable"
+
+    async def can_load(estimated, node_name):
+        return True, "ok"
+
+    async def sizing(node, target_gb, **_):
+        return {"fits": True, "pod_mem_limit_gb": 30}
+
+    async def delete_pod(backend_type, node, model_id):
+        calls["deleted"].append((backend_type, node, model_id))
+        return True
+
+    async def ensure_pod(backend_type, node, **kwargs):
+        calls["ensured"].append(kwargs)
+        return True, None
+
+    async def no_gpus(*a):
+        return {}
+
+    async def background(*a):
+        return None
+
+    monkeypatch.setattr(llm_gpu_tracker, "check_can_load", can_load)
+    monkeypatch.setattr(llm_gpu_tracker, "plan_sizing", sizing)
+    monkeypatch.setattr(llm_pod_manager, "shared_pod", lambda backend_type, node: (True, None))
+    monkeypatch.setattr(llm_pod_manager, "delete_pod", delete_pod)
+    monkeypatch.setattr(llm_pod_manager, "ensure_pod", ensure_pod)
+    monkeypatch.setattr(llm_model_registry, "update_model_state", lambda *a, **k: None)
+    monkeypatch.setattr(lifecycle, "_shared_pod_gpus", no_gpus)
+    monkeypatch.setattr(lifecycle, "_load_shared_background", background)
+
+    def load(uma):
+        monkeypatch.setattr(llm_gpu_tracker, "is_uma", lambda node: uma)
+
+        async def run():
+            response = await lifecycle._load_shared("kubexlat/ja-seg", "heads", "tkspark")
+            await asyncio.sleep(0)
+            return response
+
+        return asyncio.run(run())
+
+    return load, calls
+
+
+def test_a_shared_pod_that_serves_no_model_is_made_again_with_the_loads_memory_limit(placing):
+    load, calls = placing
+    load(uma=True)
+    assert calls["deleted"] == [("heads", "tkspark", None)]
+    assert calls["ensured"][0]["mem_limit_gb"] == 30
+
+
+def test_a_shared_pod_that_serves_a_model_is_kept(placing):
+    load, calls = placing
+    llm_gpu_tracker._allocations["tkspark"] = [NS(model_id="kubexlat/ja-parse", backend_id="heads-tkspark",
+                                                   estimated_memory_gb=3.0)]
+    load(uma=False)
+    assert calls["deleted"] == []
+    assert calls["ensured"][0]["mem_limit_gb"] is None
