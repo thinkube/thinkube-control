@@ -77,7 +77,7 @@ def placing(lifecycle, monkeypatch):
     monkeypatch.setattr(lifecycle, "_load_shared_background", background)
 
     def load(uma):
-        monkeypatch.setattr(llm_gpu_tracker, "is_uma", lambda node: uma)
+        monkeypatch.setattr(llm_gpu_tracker, "memory_type", lambda node: "uma" if uma else "discrete")
 
         async def run():
             response = await lifecycle._load_shared("kubexlat/ja-seg", "heads", "tkspark")

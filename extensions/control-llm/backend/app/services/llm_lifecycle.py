@@ -605,7 +605,7 @@ class LLMLifecycleManager:
                                                  "be deleted to be made again; see control-llm's log")
         # On a node whose GPU memory is the system's, the pod's memory limit holds the model, as a vLLM pod's does
         mem_limit = None
-        if llm_gpu_tracker.is_uma(node):
+        if llm_gpu_tracker.memory_type(node) == "uma":
             sizing = await llm_gpu_tracker.plan_sizing(node, estimated)
             if not sizing.get("fits"):
                 return ModelLoadResponse(model_id=model_id, state=entry.state,
