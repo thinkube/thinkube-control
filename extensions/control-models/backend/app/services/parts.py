@@ -21,6 +21,8 @@ artifacts/<x> there, the folder MLflow serves and the model servers read.
 """
 
 import json
+import math
+import struct
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Tuple
 
@@ -114,6 +116,16 @@ class Mlflow:
     def finish(self, run_id: str) -> None:
         self._call("POST", "runs/update", json={"run_id": run_id, "status": "FINISHED"})
 
+    def latest_folder(self, name: str, root: Path = MLFLOW_ROOT) -> Path:
+        """The model folder of the latest version of the registered model `name`, as the heads backend reads it."""
+        versions = self._call("GET", "model-versions/search", params={"filter": f"name='{name}'"}).get(
+            "model_versions", [])
+        if not versions:
+            raise FinetunedModelError(f"{name} has no model version in MLflow", 409)
+        run_id = max(versions, key=lambda v: int(v["version"]))["run_id"]
+        run = self._call("GET", "runs/get", params={"run_id": run_id})["run"]
+        return artifact_folder(run["info"]["artifact_uri"], root) / "model"
+
     def version(self, name: str, run_id: str) -> str:
         with httpx.Client(timeout=60) as http:
             resp = http.post(f"{self.url}/api/2.0/mlflow/registered-models/create", headers=self.headers,
@@ -123,6 +135,44 @@ class Mlflow:
                                       f"{resp.text[:300]}", 502)
         return self._call("POST", "model-versions/create", json={
             "name": name, "source": f"runs:/{run_id}/model", "run_id": run_id})["model_version"]["version"]
+
+
+# The bytes a parameter takes as the heads backend holds a base (meepserve.causal): NF4 is bitsandbytes' 4 bits a
+# weight of a linear layer and a float32 scale for each block of 64; what bitsandbytes leaves (embeddings, norms,
+# biases) and a bf16 base are bfloat16
+NF4_BYTES, NF4_BLOCK, SCALE_BYTES, BF16_BYTES = 0.5, 64, 4, 2
+HELD_WEIGHTS = ("nf4", "bf16")
+
+
+def _tensors(folder: Path):
+    """(name, shape) of every tensor of the safetensors files of `folder`, read from their headers."""
+    files = sorted(folder.glob("*.safetensors"))
+    if not files:
+        raise FinetunedModelError(f"{folder} has no .safetensors files to size the base from", 409)
+    for path in files:
+        with path.open("rb") as f:
+            size = struct.unpack("<Q", f.read(8))[0]
+            header = json.loads(f.read(size))
+        for name, value in header.items():
+            if name != "__metadata__":
+                yield name, value["shape"]
+
+
+def held_bytes(folder: Path, weights: str) -> int:
+    """The bytes of the base in `folder` held as `weights`: "nf4", the linear layers' weights (the 2-D weights
+    that are not embeddings) in NF4 and the rest in bfloat16, as bitsandbytes quantizes a Transformers model;
+    "bf16", every tensor in bfloat16."""
+    if weights not in HELD_WEIGHTS:
+        raise FinetunedModelError(f"{CONTRACT}: 'weights' is one of {list(HELD_WEIGHTS)}, not {weights!r}", 422)
+    total = 0.0
+    for name, shape in _tensors(folder):
+        n = math.prod(shape)
+        linear = len(shape) == 2 and name.endswith(".weight") and "embed" not in name and "lm_head" not in name
+        if weights == "nf4" and linear:
+            total += n * NF4_BYTES + math.ceil(n / NF4_BLOCK) * SCALE_BYTES
+        else:
+            total += n * BF16_BYTES
+    return int(total)
 
 
 def write_part(mlflow: Mlflow, entry: Dict[str, Any], files: Dict[str, bytes], root: Path = MLFLOW_ROOT) -> Dict:

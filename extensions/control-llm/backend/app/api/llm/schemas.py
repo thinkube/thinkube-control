@@ -82,6 +82,9 @@ class ModelEntry(BaseModel):
     is_finetuned: bool = False
     # A trained part's base model (task heads): the catalogue id of the model it runs on
     base_model: Optional[str] = None
+    # The bytes the part's base takes as the heads backend holds it for the part (in 4-bit NF4, say), when they
+    # are not the base's own weights: written by the part's registration from the base's files
+    base_weight_bytes: Optional[int] = None
     last_error: Optional[str] = None
 
     @model_validator(mode='after')

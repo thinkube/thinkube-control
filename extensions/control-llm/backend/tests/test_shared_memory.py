@@ -103,3 +103,9 @@ def test_a_shared_pod_that_serves_a_model_is_kept(placing):
     load(uma=False)
     assert calls["deleted"] == []
     assert calls["ensured"][0]["mem_limit_gb"] is None
+
+
+def test_a_part_whose_base_is_held_in_4_bits_counts_the_bytes_its_entry_gives(lifecycle):
+    held = NS(id="kubexlat/ja-subject-finder", base_model="FacebookAI/xlm-roberta-large", weight_bytes=GIB // 20,
+              base_weight_bytes=GIB // 2)
+    assert lifecycle._shared_memory(held, "tkamd2") == pytest.approx(0.5 + 0.05 + 1.0, abs=0.1)

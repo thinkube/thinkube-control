@@ -263,6 +263,7 @@ class LLMModelRegistry:
                 role=entry.get("role", "primary"),
                 is_finetuned=entry.get("is_finetuned", False),
                 base_model=entry.get("base_model"),
+                base_weight_bytes=entry.get("base_weight_bytes"),
                 state=initial_state,
                 backend_id=existing.backend_id if existing else None,
                 tier=existing.tier if existing else None,

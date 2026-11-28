@@ -540,7 +540,8 @@ class LLMLifecycleManager:
 
     def _shared_memory(self, entry, node: str) -> float:
         """A model's memory on a node's shared pod: its own weights and 1 GiB for its work, and its base's weights
-        when no model on the same base is on the node yet (the pod holds a base once)."""
+        when no model on the same base is on the node yet (the pod holds a base once): the bytes the part's entry
+        gives for its base as it is held (base_weight_bytes), else the base's own weights."""
         from app.services.llm_gpu_tracker import llm_gpu_tracker
         from app.services.llm_model_registry import llm_model_registry
 
@@ -554,7 +555,9 @@ class LLMLifecycleManager:
         base = llm_model_registry.get_model(base_id)
         if base is None:
             raise ValueError(f"{entry.id}'s base {base_id} is not in the catalogue")
-        return round((self._weight_gb(base) or 0.0) + own + 1.0, 1)
+        held = getattr(entry, "base_weight_bytes", None)
+        base_gb = held / (1024 ** 3) if held else (self._weight_gb(base) or 0.0)
+        return round(base_gb + own + 1.0, 1)
 
     async def _shared_pod_gpus(self, backend_type: str, node: str, gpu_count: int, estimated: float) -> dict:
         """What ensure_pod needs to start a node's pod that serves several models, before one more model is

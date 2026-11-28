@@ -68,3 +68,35 @@ def test_a_part_is_written_into_its_run_and_registered_under_its_id(tmp_path):
                       "base": "FacebookAI/xlm-roberta-large"}
     assert mlflow.calls == [("experiment", "model-registry"), ("run", "7", "part-kubexlat-ja-parse"), ("finish", "abc"),
                             ("version", "kubexlat-ja-parse", "abc")]
+
+
+def _safetensors(path, tensors):
+    """A safetensors file of `tensors` {name: shape}, its header only followed by zeros (bfloat16)."""
+    import json
+    import math
+    import struct
+
+    offset, header = 0, {}
+    for name, shape in tensors.items():
+        size = 2 * math.prod(shape)
+        header[name] = {"dtype": "BF16", "shape": shape, "data_offsets": [offset, offset + size]}
+        offset += size
+    raw = json.dumps(header).encode()
+    path.write_bytes(struct.pack("<Q", len(raw)) + raw + bytes(offset))
+
+
+def test_the_base_is_sized_as_the_heads_backend_holds_it(tmp_path):
+    from app.services import parts
+
+    _safetensors(tmp_path / "model-1.safetensors", {
+        "model.language_model.embed_tokens.weight": [1000, 64],
+        "model.language_model.layers.0.self_attn.q_proj.weight": [64, 64],
+        "model.language_model.layers.0.input_layernorm.weight": [64]})
+    _safetensors(tmp_path / "model-2.safetensors", {"model.language_model.layers.0.mlp.down_proj.weight": [64, 128]})
+    linear = 64 * 64 + 64 * 128
+    assert parts.held_bytes(tmp_path, "bf16") == 2 * (1000 * 64 + 64 + linear)
+    assert parts.held_bytes(tmp_path, "nf4") == 2 * (1000 * 64 + 64) + linear // 2 + 4 * (linear // 64)
+    with pytest.raises(parts.FinetunedModelError, match="'weights'"):
+        parts.held_bytes(tmp_path, "fp8")
+    with pytest.raises(parts.FinetunedModelError, match="no .safetensors"):
+        parts.held_bytes(tmp_path / "missing", "nf4")

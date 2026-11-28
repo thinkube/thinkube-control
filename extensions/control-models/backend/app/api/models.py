@@ -371,6 +371,11 @@ async def register_part(
                                                     "(models_mirror)")
     try:
         mlflow = parts.Mlflow(settings.MLFLOW_TRACKING_URI, await mlflow_token())
+        # A part whose base the heads backend holds in other weights than the base's own files (meepserve.json's
+        # "weights") gives the gateway the bytes it takes so: base_weight_bytes
+        if contract.get("weights") is not None:
+            base_folder = await asyncio.to_thread(mlflow.latest_folder, parts.registered_name(entry["base_model"]))
+            entry["base_weight_bytes"] = await asyncio.to_thread(parts.held_bytes, base_folder, contract["weights"])
         written = await asyncio.to_thread(parts.write_part, mlflow, entry, contents)
     except (finetuned_models.FinetunedModelError, MlflowDeleteError) as e:
         raise HTTPException(status_code=getattr(e, "status", 502), detail=str(e))
