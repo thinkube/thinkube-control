@@ -682,8 +682,12 @@ class LLMLifecycleManager:
         backend = llm_backend_discovery.get_backend(f"{backend_type}-{node}")
         if backend is None:
             return f"the {backend_type} pod on {node} is not running"
-        async with httpx.AsyncClient(timeout=120) as http:
-            resp = await http.post(f"{backend.url}{SHARED_POD_ADMIN}/models/unload", json={"model_id": model_id})
+        try:
+            async with httpx.AsyncClient(timeout=120) as http:
+                resp = await http.post(f"{backend.url}{SHARED_POD_ADMIN}/models/unload", json={"model_id": model_id})
+        except httpx.HTTPError as e:
+            # A pod that does not answer (a request it serves holds it) has not unloaded the model
+            return f"the pod did not answer the unload: {type(e).__name__}: {e}"
         if resp.status_code not in (200, 404):
             return f"HTTP {resp.status_code}: {resp.text[:300]}"
         entry = llm_model_registry.get_model(model_id)
