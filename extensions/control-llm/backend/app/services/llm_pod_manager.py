@@ -310,11 +310,12 @@ class LLMPodManager:
                 self._pod_selector(backend_type, node_name, model_id),
             )
             if pod_info and pod_info[2]:
-                # A shared pod (Ollama) serves other models: a load of one
-                # more model must not restart it for a newer image. It takes
-                # the image when it is next created.
+                # A shared pod (Ollama, the trained heads) that serves other
+                # models must not restart for a newer image on a load of one
+                # more: it takes the image when it is next created. One that
+                # serves none takes it now.
                 restarted = False
-                if not llm_backend_types.is_shared(backend_type):
+                if not llm_backend_types.is_shared(backend_type) or not self._serves_models(backend_type, node_name):
                     restarted = await loop.run_in_executor(
                         _k8s_executor,
                         self._check_and_sync_image,
@@ -589,6 +590,14 @@ class LLMPodManager:
         except Exception as e:
             logger.error(f"Failed to create Deployment for {backend_type} on {node_name}: {e}")
             return False
+
+    @staticmethod
+    def _serves_models(backend_type: str, node_name: str) -> bool:
+        """Whether the node's shared pod of the backend holds a model the gateway loaded on it."""
+        from app.services.llm_gpu_tracker import llm_gpu_tracker
+
+        backend_id = f"{backend_type}-{node_name}"
+        return any(a.backend_id == backend_id for a in llm_gpu_tracker._allocations.get(node_name, []))
 
     def _check_and_sync_image(self, backend_type: str, node_name: str, model_id: Optional[str] = None) -> bool:
         """Check if the node deployment image matches the base and patch if not.
