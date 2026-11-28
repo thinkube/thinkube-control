@@ -58,7 +58,7 @@ def test_a_shared_pod_takes_a_newer_image_only_when_it_serves_no_model(monkeypat
     """A shared pod serving models keeps its image on a further load; one serving none takes the base's image."""
     import asyncio
 
-    from app.services import llm_backend_types
+    from app.services.llm_backend_types import llm_backend_types
     from app.services.llm_gpu_tracker import llm_gpu_tracker
     from app.services.llm_pod_manager import ManagedPod
 
